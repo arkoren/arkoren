@@ -1,4 +1,4 @@
-<p align="center"><a href="https://charts.erik.cat"><img src="https://i.gyazo.com/b33ab534d6fdfa7d4eba2abd91a155c3.png"></a></p>
+<p align="center"><a href="https://erik.cat"><img src="https://i.imgur.com/pI1gfCZ.png"></a></p>
 <p align="center">
 <img src="https://img.shields.io/github/stars/arkoren/framework.svg?style=for-the-badge" alt="Stars">
 <img src="https://img.shields.io/github/release/arkoren/framework.svg?style=for-the-badge" alt="Release">
