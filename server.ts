@@ -1,6 +1,6 @@
-import { App } from '../arkoren/app.ts'
 import { routes } from './routes/web.ts'
+import { App } from '../framework/app.ts'
 
-const app = new App("127.0.0.1", 9000)
-app.routes(routes)
-app.start()
+new App("127.0.0.1", 9000)
+    .routes(routes)
+    .start()

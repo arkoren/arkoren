@@ -9,4 +9,4 @@
 ## What is arkoren?
 
 Arkoren aims to be one of the next generation web frameworks available. Written with Typescript it aims to be **type-safe**
-with a lot of features ported from *Laravel*. Arkoren is a very early stage of development, meaning it's not yet usable in any form.
+with a lot of features ported from *Laravel*. Arkoren is in a very early stage of development, meaning it's not yet usable in any form.

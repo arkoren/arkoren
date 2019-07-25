@@ -1,4 +1,5 @@
-import { Router } from '../../arkoren/http.ts'
+import Log from '../app/http/middleware/log.ts'
+import { Router } from '../../framework/http.ts'
 import { MainController } from '../app/http/controllers/main.ts'
 
 /**
@@ -9,11 +10,9 @@ import { MainController } from '../app/http/controllers/main.ts'
  */
 export function routes(route: Router) {
     route.get('/', MainController.index)
-    route.get('/another', MainController.another)
+    route.get('/another', MainController.another, { middleware: [Log] })
     route.get('/book/:name/:page', MainController.book)
-    /*
-    route.middleware(['a', 'b']).group(route => {
+    route.group({ middleware: [Log] }, route => {
         route.get('/test', MainController.index)
     })
-    */
 }

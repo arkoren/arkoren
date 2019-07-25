@@ -1,25 +1,13 @@
 import { Middleware, Request, Response } from '../../../../framework/http.ts'
 
 /**
- * Implements the TrimStrings middleware.
+ * Implements the Log middleware.
  *
  * @export
- * @class TrimStrings
+ * @class Log
  * @implements {Middleware}
  */
-export default class TrimStrings extends Middleware {
-
-    /**
-     * The names of the attributes that should not be trimmed.
-     *
-     * @protected
-     * @type {string[]}
-     * @memberof TrimStrings
-     */
-    protected except: string[] = [
-        'password',
-        'password_confirmation',
-    ]
+export default class Log extends Middleware {
 
     /**
      * Runs before the route handler.
@@ -28,7 +16,7 @@ export default class TrimStrings extends Middleware {
      * @memberof Log
      */
     before(request: Request) {
-        // ...
+        console.log('Log before...')
     }
 
     /**
@@ -39,7 +27,7 @@ export default class TrimStrings extends Middleware {
      * @memberof Log
      */
     after(request: Request, response: Response) {
-        // ...
+        console.log('Log after...')
     }
 
 }

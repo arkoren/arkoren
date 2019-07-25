@@ -1,5 +1,5 @@
-import { Request, Response } from '../../../../arkoren/http.ts'
 import { User } from '../../user.ts'
+import { Request, Response } from '../../../../framework/http.ts'
 
 export namespace MainController {
 

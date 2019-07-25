@@ -1,5 +1,5 @@
-import { IsMiddleware } from '../../../arkoren/http.ts'
 import TrimStrings from './middleware/trim_strings.ts'
+import { HTTPMiddleware } from '../../../framework/http.ts'
 
 /**
  * HTTP Kernel class.
@@ -13,23 +13,23 @@ export class Kernel {
      * The application's global HTTP middleware stack.
      *
      * @protected
-     * @type {IsMiddleware[]}
+     * @type {HTTPMiddleware[]}
      * @memberof Kernel
      */
-    protected middleware: IsMiddleware[] = [
-        new TrimStrings
+    protected middleware: HTTPMiddleware[] = [
+        TrimStrings
     ]
 
     /**
      * The application's route middleware groups.
      *
      * @protected
-     * @type {{ [key: string]: IsMiddleware[] }}
+     * @type {{ [key: string]: HTTPMiddleware[] }}
      * @memberof Kernel
      */
-    protected middleware_groups: { [key: string]: IsMiddleware[] } = {
+    protected middleware_groups: { [key: string]: HTTPMiddleware[] } = {
         'web': [
-            new TrimStrings
+            TrimStrings
         ]
     }
 
