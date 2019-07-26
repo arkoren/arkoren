@@ -7,7 +7,7 @@ import { Middleware, Request, Response } from '../../../../framework/http.ts'
  * @class Log
  * @implements {Middleware}
  */
-export default class Log extends Middleware {
+export class Log extends Middleware {
 
     /**
      * Runs before the route handler.

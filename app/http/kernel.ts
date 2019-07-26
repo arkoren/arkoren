@@ -1,5 +1,5 @@
-import TrimStrings from './middleware/trim_strings.ts'
-import { HTTPMiddleware } from '../../../framework/http.ts'
+import { TrimStrings } from './middleware/trim_strings.ts'
+import { HTTPMiddleware, Kernel as HTTPKernel } from '../../../framework/http.ts'
 
 /**
  * HTTP Kernel class.
@@ -7,7 +7,7 @@ import { HTTPMiddleware } from '../../../framework/http.ts'
  * @export
  * @class Kernel
  */
-export class Kernel {
+export class Kernel extends HTTPKernel {
 
     /**
      * The application's global HTTP middleware stack.
@@ -28,7 +28,7 @@ export class Kernel {
      * @memberof Kernel
      */
     protected middleware_groups: { [key: string]: HTTPMiddleware[] } = {
-        'web': [
+        web: [
             TrimStrings
         ]
     }

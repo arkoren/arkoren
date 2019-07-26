@@ -1,5 +1,5 @@
-import Log from '../app/http/middleware/log.ts'
 import { Router } from '../../framework/http.ts'
+import { Log } from '../app/http/middleware/log.ts'
 import { MainController } from '../app/http/controllers/main.ts'
 
 /**

@@ -7,7 +7,7 @@ import { Middleware, Request, Response } from '../../../../framework/http.ts'
  * @class TrimStrings
  * @implements {Middleware}
  */
-export default class TrimStrings extends Middleware {
+export class TrimStrings extends Middleware {
 
     /**
      * The names of the attributes that should not be trimmed.
