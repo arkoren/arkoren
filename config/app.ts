@@ -1,4 +1,7 @@
+import { RouteServiceProvider } from '../app/Http/Providers/RouteServiceProvider.ts'
+
 export default {
+
     /*
     |--------------------------------------------------------------------------
     | Application Name
@@ -47,5 +50,9 @@ export default {
     */
    'url': 'http://localhost',
    'asset_url': null,
+
+   'providers': [
+        RouteServiceProvider
+   ]
 
 }

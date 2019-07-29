@@ -1,6 +1,12 @@
-import { User } from '../../user.ts'
+import { User } from '../../User.ts'
 import { Request, Response } from '../../../../framework/http.ts'
 
+/**
+ * Defines the MainController.
+ *
+ * @export
+ * @controller MainController
+ */
 export namespace MainController {
 
     /**
