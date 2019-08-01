@@ -29,7 +29,7 @@ export class Kernel extends HTTPKernel {
      * @memberof Kernel
      */
     protected middleware_groups: { [key: string]: HTTPMiddleware[] } = {
-        'web': [
+        web: [
             TrimStrings
         ]
     }

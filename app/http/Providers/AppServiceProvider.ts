@@ -1,5 +1,4 @@
 import { Provider } from '../../../../framework/http.ts'
-import { routes } from '../../../routes/web.ts'
 
 /**
  * Route service provider.
@@ -8,7 +7,7 @@ import { routes } from '../../../routes/web.ts'
  * @class RouteServiceProvider
  * @extends {Provider}
  */
-export class RouteServiceProvider extends Provider {
+export class AppServiceProvider extends Provider {
 
     /**
      * Registers the provider to the service container.
@@ -26,9 +25,7 @@ export class RouteServiceProvider extends Provider {
      * @memberof RouteServiceProvider
      */
     boot() {
-        this.app
-            .router()
-            .group({ middleware: 'web' }, routes)
+        // ...
     }
 
 }

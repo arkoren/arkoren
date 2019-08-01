@@ -1,6 +1,19 @@
+import { isProvider } from '../../framework/http.ts'
+import { AppServiceProvider } from '../app/Http/Providers/AppServiceProvider.ts'
 import { RouteServiceProvider } from '../app/Http/Providers/RouteServiceProvider.ts'
 
 export default {
+
+    /*
+    |--------------------------------------------------------------------------
+    | Application Host and Port
+    |--------------------------------------------------------------------------
+    |
+    | These values are used to bind the HTTP application to a host and a port.
+    |
+    */
+    host: <string> '127.0.0.1',
+    port: <number> 9000,
 
     /*
     |--------------------------------------------------------------------------
@@ -12,7 +25,7 @@ export default {
     | any other location as required by the application or its packages.
     |
     */
-    'name': 'My Application',
+    name: <string> 'My Application',
 
     /*
     |--------------------------------------------------------------------------
@@ -24,7 +37,7 @@ export default {
     | services the application utilizes. Set this in your ".env" file.
     |
     */
-    'env': 'development',
+    env: <string> 'development',
 
     /*
     |--------------------------------------------------------------------------
@@ -36,7 +49,7 @@ export default {
     | application. If disabled, a simple generic error page is shown.
     |
     */
-   'debug': true,
+    debug: <boolean> true,
 
    /*
     |--------------------------------------------------------------------------
@@ -48,11 +61,33 @@ export default {
     | your application so that it is used when running Artisan tasks.
     |
     */
-   'url': 'http://localhost',
-   'asset_url': null,
+    url: <string> 'http://localhost',
+    asset_url: <string | null> null,
 
-   'providers': [
+    /*
+    |--------------------------------------------------------------------------
+    | Autoloaded Service Providers
+    |--------------------------------------------------------------------------
+    |
+    | The service providers listed here will be automatically loaded on the
+    | request to your application. Feel free to add your own services to
+    | this array to grant expanded functionality to your applications.
+    |
+    */
+    providers: <isProvider[]> [
+        /*
+         * Arkoren Framework Service Providers...
+         */
+
+        /*
+         * Package Service Providers...
+         */
+
+        /*
+         * Application Service Providers...
+         */
+        AppServiceProvider,
         RouteServiceProvider
-   ]
+    ]
 
 }

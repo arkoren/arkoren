@@ -3,11 +3,11 @@ import { Log } from '../app/Http/Middleware/Log.ts'
 import { MainController } from '../app/Http/Controllers/MainController.ts'
 
 /**
- * The application web router.
+ * The application web routes.
  *
  * @export
  */
-export function routes(route: Router) {
+export const routes = (route: Router) => {
     /**
      * You can register any application route in this function.
      * The middleware group called 'web' will be automatically
