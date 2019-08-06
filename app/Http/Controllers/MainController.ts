@@ -16,7 +16,7 @@ export namespace MainController {
      * @param {Request} req
      * @returns {Response}
      */
-    export function index(req: Request): Response {
+    export function index(): Response {
         return { name: 'Erik', age: 22 }
     }
 
@@ -24,10 +24,9 @@ export namespace MainController {
      * Another page for the controller.
      *
      * @export
-     * @param {Request} req
      * @returns {Response}
      */
-    export function another(req: Request): Response {
+    export function another(): Response {
         const name = (new User).getTable()
         return `<h1>User model table: ${name}</h1>`
     }
@@ -41,8 +40,8 @@ export namespace MainController {
      * @param {string} page
      * @returns {Response}
      */
-    export function book(req: Request, name: string, page: string): Response {
-        return `<h1>Book: ${name}, page ${page}</h1>`
+    export function book({ params }: Request): Response {
+        return `<h1>Book: ${params.name}, page ${params.page}</h1>`
     }
 
 }
