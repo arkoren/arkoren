@@ -14,9 +14,11 @@ export const routes = (route: Router) => {
      * assigned to all of the following routes.
      */
     route.get('/', MainController.index)
-    route.get('/another', MainController.another, { middleware: [Log] })
+    route.get('/data', MainController.data)
+    route.post('/data', MainController.data)
+    route.get('/another', MainController.another, { middleware: Log })
     route.get('/book/:name/:page', MainController.book)
-    route.group({ middleware: [Log] }, route => {
+    route.group({ middleware: Log }, route => {
         route.get('/test', MainController.index)
     })
 }

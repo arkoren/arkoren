@@ -13,11 +13,38 @@ export namespace MainController {
      * Index page for the controller.
      *
      * @export
-     * @param {Request} req
      * @returns {Response}
      */
     export function index(): Response {
-        return { name: 'Erik', age: 22 }
+        return `
+            <h1>GET Form example</h1>
+            <form action="/data" method="GET">
+                <input type="text" name="name" placeholder="name">
+                <input type="text" name="email" placeholder="email">
+                <input type="submit">
+            </form>
+            <h1>POST Form example</h1>
+            <form action="/data" method="POST">
+                <input type="text" name="name" placeholder="name">
+                <input type="text" name="email" placeholder="email">
+                <input type="submit">
+            </form>
+        `
+    }
+
+    /**
+     * Example data to post to.
+     *
+     * @export
+     * @param {Request} { request }
+     * @returns {Response}
+     */
+    export function data({ request }: Request): Response {
+        return {
+            method: request.method(),
+            name: request.input('name'),
+            email: request.input('email')
+        }
     }
 
     /**
@@ -27,17 +54,14 @@ export namespace MainController {
      * @returns {Response}
      */
     export function another(): Response {
-        const name = (new User).getTable()
-        return `<h1>User model table: ${name}</h1>`
+        return { table: (new User).getTable() }
     }
 
     /**
      * A page with two parameters.
      *
      * @export
-     * @param {Request} req
-     * @param {string} name
-     * @param {string} page
+     * @param {Request} { params }
      * @returns {Response}
      */
     export function book({ params }: Request): Response {
