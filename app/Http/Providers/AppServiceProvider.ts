@@ -4,7 +4,7 @@ import { Provider } from '../../../../framework/http.ts'
  * Route service provider.
  *
  * @export
- * @class RouteServiceProvider
+ * @class AppServiceProvider
  * @extends {Provider}
  */
 export class AppServiceProvider extends Provider {
@@ -12,7 +12,7 @@ export class AppServiceProvider extends Provider {
     /**
      * Registers the provider to the service container.
      *
-     * @memberof RouteServiceProvider
+     * @memberof AppServiceProvider
      */
     register() {
         // ...
@@ -22,7 +22,7 @@ export class AppServiceProvider extends Provider {
      * This method is called after all other service providers
      * have been registered.
      *
-     * @memberof RouteServiceProvider
+     * @memberof AppServiceProvider
      */
     boot() {
         // ...

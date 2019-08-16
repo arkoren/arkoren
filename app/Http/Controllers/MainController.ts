@@ -40,11 +40,11 @@ export namespace MainController {
      * @returns {Response}
      */
     export function data({ request }: Request): Response {
-        return {
-            method: request.method(),
-            name: request.input('name'),
-            email: request.input('email')
-        }
+        const attributes = request.validate({
+            'name': 'required',
+            'email': 'required'
+        })
+        return { method: request.method(), ...attributes }
     }
 
     /**
