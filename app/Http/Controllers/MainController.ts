@@ -19,14 +19,16 @@ export namespace MainController {
         return `
             <h1>GET Form example</h1>
             <form action="/data" method="GET">
-                <input type="text" name="name" placeholder="name">
-                <input type="text" name="email" placeholder="email">
+                <input type="text" name="name" placeholder="name"><br>
+                <input type="checkbox" name="tos"> Accept TOS<br>
+                <input type="text" name="money" placeholder="money"><br>
                 <input type="submit">
             </form>
             <h1>POST Form example</h1>
             <form action="/data" method="POST">
-                <input type="text" name="name" placeholder="name">
-                <input type="text" name="email" placeholder="email">
+                <input type="text" name="name" placeholder="name"><br>
+                <input type="checkbox" name="tos"> Accept TOS<br>
+                <input type="text" name="money" placeholder="money"><br>
                 <input type="submit">
             </form>
         `
@@ -42,7 +44,8 @@ export namespace MainController {
     export function data({ request }: Request): Response {
         const attributes = request.validate({
             'name': 'required',
-            'email': 'required'
+            'tos': 'accepted',
+            'balance': 'required|numeric|min:20|max:100'
         })
         return { method: request.method(), ...attributes }
     }
