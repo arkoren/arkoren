@@ -1,6 +1,6 @@
 import { Log } from './Middleware/Log.ts'
 import { TrimStrings } from './Middleware/TrimStrings.ts'
-import { HTTPMiddleware, Kernel as HTTPKernel } from '../../../framework/http.ts'
+import { HTTPMiddleware, Kernel as HTTPKernel } from '../../framework.ts'
 
 /**
  * HTTP Kernel class.

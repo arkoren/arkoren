@@ -1,4 +1,4 @@
-import { Router } from '../../framework/http.ts'
+import { Router } from '../framework.ts'
 import { Log } from '../app/Http/Middleware/Log.ts'
 import { MainController } from '../app/Http/Controllers/MainController.ts'
 

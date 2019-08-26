@@ -1,4 +1,4 @@
-import { Provider } from '../../../../framework/http.ts'
+import { Provider } from '../../../framework.ts'
 
 /**
  * Route service provider.

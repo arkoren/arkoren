@@ -1,5 +1,5 @@
 import { User } from '../../User.ts'
-import { Request, Response } from '../../../../framework/http.ts'
+import { Request, Response } from '../../../framework.ts'
 
 /**
  * Defines the MainController.
@@ -21,14 +21,14 @@ export namespace MainController {
             <form action="/data" method="GET">
                 <input type="text" name="name" placeholder="name"><br>
                 <input type="checkbox" name="tos"> Accept TOS<br>
-                <input type="text" name="money" placeholder="money"><br>
+                <input type="text" name="balance" placeholder="balance"><br>
                 <input type="submit">
             </form>
             <h1>POST Form example</h1>
             <form action="/data" method="POST">
                 <input type="text" name="name" placeholder="name"><br>
                 <input type="checkbox" name="tos"> Accept TOS<br>
-                <input type="text" name="money" placeholder="money"><br>
+                <input type="text" name="balance" placeholder="balance"><br>
                 <input type="submit">
             </form>
         `

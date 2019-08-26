@@ -1,4 +1,4 @@
-import { isProvider } from '../../framework/http.ts'
+import { isProvider } from '../framework.ts'
 import { AppServiceProvider } from '../app/Http/Providers/AppServiceProvider.ts'
 import { RouteServiceProvider } from '../app/Http/Providers/RouteServiceProvider.ts'
 

@@ -1,4 +1,4 @@
-import { Model } from '../../framework/orm.ts'
+import { Model } from '../framework.ts'
 
 /**
  * Represents the user model for the users table.

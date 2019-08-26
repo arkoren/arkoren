@@ -1,4 +1,4 @@
-import { TrimStrings as BaseTrimStrings } from '../../../../framework/middlewares.ts'
+import { TrimStrings as BaseTrimStrings } from '../../../framework.ts'
 
 /**
  * Implements the TrimStrings middleware.

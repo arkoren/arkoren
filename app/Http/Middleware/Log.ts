@@ -1,4 +1,4 @@
-import { Middleware, Request, Response, PossibleResponse } from '../../../../framework/http.ts'
+import { Middleware, Request, Response, PossibleResponse } from '../../../framework.ts'
 
 /**
  * Implements the Log middleware.

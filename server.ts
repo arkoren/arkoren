@@ -1,5 +1,5 @@
 import config from './config/app.ts'
-import { App } from '../framework/app.ts'
+import { App } from './framework.ts'
 import { Kernel as http_kernel } from './app/Http/Kernel.ts'
 
 /**
@@ -12,4 +12,5 @@ async function main() {
     await app.start()
 }
 
+// Start your amazing application.
 main()
