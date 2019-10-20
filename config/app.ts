@@ -75,15 +75,15 @@ export default {
     |
     */
     providers: <isProvider[]> [
-        /*
+        /**
          * Arkoren Framework Service Providers...
          */
 
-        /*
+        /**
          * Package Service Providers...
          */
 
-        /*
+        /**
          * Application Service Providers...
          */
         AppServiceProvider,
