@@ -18,6 +18,7 @@ use (
 	./driver/rabbitmq
 	./driver/redis
 	./driver/restate
+	./driver/smtp
 	./driver/sqlite
 	./driver/temporal
 	./driver/vault
