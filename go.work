@@ -25,6 +25,7 @@ use (
 	./driver/sqlite
 	./driver/temporal
 	./driver/vault
+	./driver/webpush
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key
