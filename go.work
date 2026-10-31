@@ -11,6 +11,7 @@ use (
 	./driver/cloudflare
 	./driver/filesystem
 	./driver/gcp
+	./driver/mailgun
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
