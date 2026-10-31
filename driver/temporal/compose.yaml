@@ -1,0 +1,13 @@
+# Services for the integration tests of arkoren.dev/driver/temporal. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  temporal:
+    image: temporalio/temporal:1.5.1
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--headless"]
+    ports:
+      - "127.0.0.1:17233:7233"
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
