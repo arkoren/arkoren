@@ -3,6 +3,9 @@
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.160.0
+    # This local test fixture writes to a checkout bind mount. The image's UID
+    # 10001 cannot create collector.log in a Linux runner's checkout directory.
+    user: "0:0"
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     ports:
       - "127.0.0.1:4317:4317"

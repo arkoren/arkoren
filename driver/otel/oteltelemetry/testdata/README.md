@@ -5,6 +5,12 @@ Contributor fixture for `TestCollectorReceivesFacadeTelemetry` in
 OTLP data to `/var/log/otel/collector.log`. By default, Compose mounts this source
 directory there and the test reads `testdata/collector.log`.
 
+The Compose collector runs as root only for this local test fixture: the image's
+default UID 10001 cannot create the output file in a Linux checkout owned by the
+runner. Do not reuse this fixture's user or source mount for production. The
+generated log is ignored by Git; remove it with the fixture's permissions when
+you no longer need it.
+
 To preserve an existing source log, have your integration runner replace the
 `/var/log/otel` mount with a fresh external host directory through a Compose
 override. The directory must be writable by the collector. Keep the collector
