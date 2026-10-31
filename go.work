@@ -20,6 +20,7 @@ use (
 	./driver/nats
 	./driver/oauth
 	./driver/openfeature
+	./driver/opensearch
 	./driver/paypal
 	./driver/postgres
 	./driver/postmark
