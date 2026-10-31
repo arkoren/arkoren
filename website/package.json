@@ -16,7 +16,7 @@
     "test:browser": "playwright test",
     "test:routing": "node --experimental-strip-types --test test/routing.test.ts",
     "test:interactions": "node --experimental-strip-types --test test/interactions.test.ts test/sidebar.test.ts test/archive.test.ts test/season.test.ts",
-    "test:docs": "node --experimental-strip-types --test test/docs.test.ts test/cache.test.ts test/guides.test.ts",
+    "test:docs": "node --experimental-strip-types --test test/docs.test.ts test/cache.test.ts test/guides.test.ts test/imports.test.ts",
     "test:blog": "node --experimental-strip-types --test test/blog.test.ts",
     "test:seo": "node --experimental-strip-types --test test/seo.test.ts",
     "preview": "astro preview",

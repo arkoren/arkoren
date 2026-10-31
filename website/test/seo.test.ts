@@ -19,6 +19,7 @@ import test from "node:test";
 import sharp from "sharp";
 import { breadcrumbData, canonicalURL, serializeStructuredData } from "../src/lib/site/seo.ts";
 import { required } from "./dom.ts";
+import { checkoutModules } from "./modules.ts";
 
 /**
  * JSON-LD variants emitted by the controlled local build. This is a test
@@ -327,9 +328,10 @@ test("the API catalog is indexed without local declarations or Markdown alternat
   const urls = [...index.matchAll(/\]\((https:\/\/pkg\.go\.dev\/[^)]+)\)/g)].map(
     (match) => match[1],
   );
-  if (existsSync(new URL("../../core/go.mod", import.meta.url))) {
-    assert.ok(urls.length > 0);
-  }
+  assert.deepEqual(
+    urls.toSorted(),
+    checkoutModules().map((path) => `https://pkg.go.dev/${path}`),
+  );
   for (const url of urls) {
     assert.match(
       url,

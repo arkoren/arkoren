@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,6 +16,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { required } from "../dom.ts";
+import { checkoutModules } from "../modules.ts";
 
 /** Software WebGL keeps surface picking available on headless CI runners. */
 test.use({ launchOptions: { args: ["--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] } });
@@ -634,31 +636,37 @@ test("mobile navigation reaches documentation and copy preserves snippet text", 
 test("the API catalog exposes canonical module links on narrow and wide screens", async ({
   page,
 }) => {
-  test.skip(
-    !existsSync(resolve(website, "../core/go.mod")),
-    "the Go modules are not in this checkout yet",
+  /** Expected links come from manifests, independently of the catalog renderer. */
+  const urls = checkoutModules().map((path) => `https://pkg.go.dev/${path}`);
+  await page.route("https://pkg.go.dev/**", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<h1>Canonical reference fixture</h1>",
+    }),
   );
   for (const width of [320, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`${origin}/docs/api`);
     if (width <= 860) await page.locator("[data-menu-toggle]").click();
     const tree = page.getByRole("navigation", { name: "API Reference", exact: true });
-    await expect(tree.locator('a[href="https://pkg.go.dev/arkoren.dev/core"]')).toBeVisible();
+    expect(
+      await tree
+        .locator('a[href^="https://pkg.go.dev/"]')
+        .evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort()),
+    ).toEqual(urls);
     const active = tree.locator('a[aria-current="page"]');
     await expect(active).toBeVisible();
     await expect(active).toHaveAttribute("href", "/docs/api");
-    const reference = page.locator('main a[href="https://pkg.go.dev/arkoren.dev/driver/redis"]');
-    await reference.focus();
-    await expect(reference).toBeFocused();
-    await page.route("https://pkg.go.dev/**", (route) =>
-      route.fulfill({
-        contentType: "text/html",
-        body: "<h1>Canonical reference fixture</h1>",
-      }),
-    );
-    await reference.press("Enter");
-    await expect(page).toHaveURL("https://pkg.go.dev/arkoren.dev/driver/redis");
-    await page.goBack();
+    await expect(page.locator('main a[href^="https://pkg.go.dev/"]')).toHaveCount(urls.length);
+    if (urls.length > 0) {
+      await expect(tree.locator(`a[href="${urls[0]}"]`)).toBeVisible();
+      const reference = page.locator(`main a[href="${urls[0]}"]`);
+      await reference.focus();
+      await expect(reference).toBeFocused();
+      await reference.press("Enter");
+      await expect(page).toHaveURL(urls[0]);
+      await page.goBack();
+    }
     if (width > 860) await expect(active).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
@@ -1203,10 +1211,26 @@ test("agents and the Go tool can fetch their discovery formats", async ({ reques
     expect(response.headers()["content-type"]).not.toContain("text/html");
     expect(await response.text()).not.toContain("<!DOCTYPE html>");
   }
-  // Before the Go modules land, import paths fall back to the 404 page. Go still
-  // reads its go-import tag, so module discovery works from either response.
-  const status = existsSync(resolve(website, "../core/go.mod")) ? 200 : 404;
-  for (const route of ["/core", "/driver/redis/rediscache", "/foundation/query"]) {
+  /**
+   * A module root needs its own manifest. A package landing page additionally
+   * needs non-test Go source; importing core must not imply Redis is available.
+   */
+  const routes = [
+    { route: "/core", manifest: "core/go.mod", hasPackage: true },
+    { route: "/foundation/query", manifest: "foundation/query/go.mod", hasPackage: true },
+    {
+      route: "/driver/redis/rediscache",
+      manifest: "driver/redis/go.mod",
+      hasPackage:
+        existsSync(resolve(website, "../driver/redis/rediscache")) &&
+        readdirSync(resolve(website, "../driver/redis/rediscache")).some(
+          (file) => file.endsWith(".go") && !file.endsWith("_test.go"),
+        ),
+    },
+  ];
+  for (const { route, manifest, hasPackage } of routes) {
+    /** Unknown paths still serve go-import metadata through the error page. */
+    const status = existsSync(resolve(website, "..", manifest)) && hasPackage ? 200 : 404;
     const response = await request.get(`${origin}${route}?go-get=1`);
     expect(response.status()).toBe(status);
     expect(await response.text()).toMatch(
