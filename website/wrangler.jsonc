@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Must match the Worker name in the Cloudflare dashboard.
+  "name": "arkoren",
+  "compatibility_date": "2026-10-31",
+  // Static files only: without a Worker script, requests are free and not
+  // counted against the Workers daily request limit.
+  "assets": {
+    "directory": "./dist",
+    // Serve dist/404.html with status 404, never the home page with 200.
+    "not_found_handling": "404-page",
+    // /docs serves docs.html, matching Astro's build.format "file".
+    "html_handling": "auto-trailing-slash",
+  },
+}

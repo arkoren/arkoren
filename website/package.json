@@ -48,6 +48,7 @@
     "happy-dom": "^21.0.4",
     "oxfmt": "^0.75.0",
     "pagefind": "^1.5.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "wrangler": "^4.156.0"
   }
 }
