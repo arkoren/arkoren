@@ -10,3 +10,11 @@ updates:
     directory: /website
     schedule:
       interval: weekly
+    ignore:
+      # @astrojs/check 0.9.12 supports TypeScript 5 and 6 only. Remove when it accepts 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # Markdown plugins must use the satteri version that @astrojs/markdown-satteri
+      # depends on (0.10 in 0.4.6). Remove when it moves to 0.11.
+      - dependency-name: satteri
+        versions: [">=0.11.0"]
