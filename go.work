@@ -19,6 +19,7 @@ use (
 	./driver/postmark
 	./driver/rabbitmq
 	./driver/redis
+	./driver/resend
 	./driver/restate
 	./driver/smtp
 	./driver/sqlite
