@@ -23,6 +23,7 @@ use (
 	./driver/openai
 	./driver/openfeature
 	./driver/opensearch
+	./driver/otel
 	./driver/paypal
 	./driver/postgres
 	./driver/postmark
