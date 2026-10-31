@@ -1,0 +1,14 @@
+# Services for the integration tests of arkoren.dev/driver/vault. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  vault:
+    image: vault:1.13.3
+    command: server -dev -dev-root-token-id=arkoren-integration -dev-listen-address=0.0.0.0:8200
+    cap_add: [IPC_LOCK]
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8200/v1/sys/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

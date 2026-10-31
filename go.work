@@ -20,6 +20,7 @@ use (
 	./driver/restate
 	./driver/sqlite
 	./driver/temporal
+	./driver/vault
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key
