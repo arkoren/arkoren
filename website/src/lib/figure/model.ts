@@ -22,7 +22,7 @@ export const parts = [
     detail:
       "Install a foundation module on its own. There is no Core dependency and no requirement to adopt the rest of the toolkit.",
     linked: ["core", "app"],
-    href: "/foundation",
+    href: "/docs/guides/about/introduction#what-ships-in-the-box",
   },
   {
     id: "core",

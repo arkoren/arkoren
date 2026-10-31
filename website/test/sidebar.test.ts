@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { Window } from "happy-dom";
@@ -30,38 +30,52 @@ test("navigation uses fixture folder metadata and page order without changing so
   assert.equal(tree[1].pages[0], pages[4]);
 });
 
+/** Checkout root whose module directories determine the reference catalog. */
+const repository = new URL("../../", import.meta.url);
+
+/**
+ * List library module paths from the module directories in the checkout.
+ * Before the Go modules are published the checkout has none, so the list is
+ * empty; afterwards it names core and every foundation and driver module.
+ * @returns Sorted module paths such as `arkoren.dev/driver/redis`.
+ */
+function checkoutModules(): string[] {
+  const areas = ["foundation", "driver"].filter((area) =>
+    existsSync(new URL(`${area}/`, repository)),
+  );
+  const roots = [
+    ...(existsSync(new URL("core/go.mod", repository)) ? ["core"] : []),
+    ...areas.flatMap((area) =>
+      readdirSync(new URL(`${area}/`, repository))
+        .filter((name) => existsSync(new URL(`${area}/${name}/go.mod`, repository)))
+        .map((name) => `${area}/${name}`),
+    ),
+  ];
+  return roots.map((root) => `arkoren.dev/${root}`).sort();
+}
+
 test("the reference catalog contains library module roots, never packages or tooling", () => {
   const groups = apiModules();
+  const patterns: Record<string, RegExp> = {
+    core: /^arkoren\.dev\/core$/,
+    foundation: /^arkoren\.dev\/foundation\/[^/]+$/,
+    drivers: /^arkoren\.dev\/driver\/[^/]+$/,
+  };
   assert.deepEqual(
     groups.map((group) => group.id),
-    ["core", "foundation", "drivers"],
+    Object.keys(patterns).filter((id) => groups.some((group) => group.id === id)),
   );
-  assert.deepEqual(
-    groups[0].modules.map((module) => module.path),
-    ["arkoren.dev/core"],
-  );
-  assert.deepEqual(
-    groups[1].modules.map((module) => module.path),
-    [
-      "arkoren.dev/foundation/certificate",
-      "arkoren.dev/foundation/collection",
-      "arkoren.dev/foundation/key",
-      "arkoren.dev/foundation/problem",
-      "arkoren.dev/foundation/query",
-      "arkoren.dev/foundation/validate",
-    ],
-  );
-  assert.ok(groups[2].modules.length > 0);
-  assert.equal(groups.flatMap((group) => group.modules).length, 44);
-  for (const module of groups[2].modules) {
-    assert.match(module.path, /^arkoren\.dev\/driver\/[^/]+$/);
+  for (const group of groups) {
+    assert.ok(group.modules.length > 0, group.id);
+    for (const module of group.modules) {
+      assert.match(module.path, required(patterns[group.id]));
+    }
   }
-  for (const module of groups.flatMap((group) => group.modules)) {
+  const modules = groups.flatMap((group) => group.modules);
+  assert.deepEqual(modules.map((module) => module.path).sort(), checkoutModules());
+  for (const module of modules) {
     assert.equal(module.url, `https://pkg.go.dev/${module.path}`);
-    const source = new URL(
-      `../../${module.path.slice("arkoren.dev/".length)}/go.mod`,
-      import.meta.url,
-    );
+    const source = new URL(`${module.path.slice("arkoren.dev/".length)}/go.mod`, repository);
     assert.equal(required(readFileSync(source, "utf8").match(/^module\s+(\S+)/m))[1], module.path);
   }
 });
@@ -89,15 +103,19 @@ test("legacy aliases preserve actual package identities and send concepts to gui
 
 test("every historical package redirect names a package in the checkout", () => {
   const redirects = legacyApiRedirects();
+  const modules = checkoutModules();
   for (const [route, target] of Object.entries(redirects)) {
     if (!target.startsWith("https://pkg.go.dev/")) continue;
-    const directory = target.slice("https://pkg.go.dev/arkoren.dev/".length);
-    const files = readdirSync(fileURLToPath(new URL(`../../${directory}/`, import.meta.url)));
+    assert.equal(redirects[route.replace(/\.md$/, "")], target);
+    const path = target.slice("https://pkg.go.dev/".length);
+    const owner = modules.find((module) => path === module || path.startsWith(`${module}/`));
+    if (owner === undefined) continue;
+    const directory = path.slice("arkoren.dev/".length);
+    const files = readdirSync(fileURLToPath(new URL(`${directory}/`, repository)));
     assert.ok(
       files.some((file) => file.endsWith(".go") && !file.endsWith("_test.go")),
       target,
     );
-    assert.equal(redirects[route.replace(/\.md$/, "")], target);
   }
 });
 

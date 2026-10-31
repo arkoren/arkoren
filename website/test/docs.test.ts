@@ -200,12 +200,14 @@ test("the API catalog and sidebar link to every public library module exactly on
   const repository = resolve(website, "..");
   const moduleFiles = [
     "core/go.mod",
-    ...["foundation", "driver"].flatMap((area) =>
-      readdirSync(resolve(repository, area))
-        .filter((name) => existsSync(resolve(repository, area, name, "go.mod")))
-        .map((name) => `${area}/${name}/go.mod`),
-    ),
-  ];
+    ...["foundation", "driver"]
+      .filter((area) => existsSync(resolve(repository, area)))
+      .flatMap((area) =>
+        readdirSync(resolve(repository, area))
+          .filter((name) => existsSync(resolve(repository, area, name, "go.mod")))
+          .map((name) => `${area}/${name}/go.mod`),
+      ),
+  ].filter((file) => existsSync(resolve(repository, file)));
   const expected = moduleFiles
     .map(
       (file) =>

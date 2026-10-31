@@ -327,7 +327,9 @@ test("the API catalog is indexed without local declarations or Markdown alternat
   const urls = [...index.matchAll(/\]\((https:\/\/pkg\.go\.dev\/[^)]+)\)/g)].map(
     (match) => match[1],
   );
-  assert.ok(urls.length > 0);
+  if (existsSync(new URL("../../core/go.mod", import.meta.url))) {
+    assert.ok(urls.length > 0);
+  }
   for (const url of urls) {
     assert.match(
       url,

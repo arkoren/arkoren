@@ -65,19 +65,23 @@ const modulePath = (gomod: string) => readFileSync(gomod, "utf8").match(/^module
  * Read library module declarations without loading packages or source files.
  * The repository's library boundary is core plus direct foundation and vendor
  * modules; command and private tooling modules are intentionally excluded.
- * Missing or malformed declarations fail the build instead of hiding entries.
+ * Module areas absent from the checkout contribute no entries, so the website
+ * can publish before the Go modules do. A present module directory with a
+ * missing or malformed declaration fails the build instead of hiding an entry.
  * @example
  * const urls = libraryModules().map((path) => `https://pkg.go.dev/${path}`);
  */
 export function libraryModules(): string[] {
   /** Module locations follow the repository's existing module boundaries. */
   const directories = [
-    "core",
-    ...["foundation", "driver"].flatMap((area) =>
-      readdirSync(join(REPO_ROOT, area), { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => `${area}/${entry.name}`),
-    ),
+    ...(existsSync(join(REPO_ROOT, "core")) ? ["core"] : []),
+    ...["foundation", "driver"]
+      .filter((area) => existsSync(join(REPO_ROOT, area)))
+      .flatMap((area) =>
+        readdirSync(join(REPO_ROOT, area), { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => `${area}/${entry.name}`),
+      ),
   ];
   return directories
     .map((directory) => {

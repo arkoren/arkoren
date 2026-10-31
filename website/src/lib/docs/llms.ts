@@ -34,7 +34,9 @@ async function guideSections(): Promise<string> {
 
 /** Module-only external reference links shared by both agent indexes. */
 function moduleSections(): string {
-  return apiModules()
+  const groups = apiModules();
+  if (groups.length === 0) return "No library modules are published yet.";
+  return groups
     .map(
       (group) =>
         `## ${group.title}\n\n` +
