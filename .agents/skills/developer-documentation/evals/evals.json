@@ -1,0 +1,118 @@
+{
+  "skill_name": "developer-documentation",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Improve the Application Lifecycle guide for both scanning and sustained understanding. Preserve technical claims, examples, links, failure behavior and cooperation requirements. Identify source-backed corrections separately from editorial changes. Compare the old and revised writing guidance using the same input snapshot.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/application/lifecycle-and-ownership.md"],
+      "expected_output": "A concept guide with a useful early lifecycle model, connected explanations and findable shutdown details, without new guarantees or blanket registration restrictions.",
+      "expectations": [
+        "Startup and shutdown contexts remain cooperative rather than forcibly interrupting hooks.",
+        "Rollback follows registration position and includes cleanup registered inside start hooks.",
+        "Ordinary shutdown budgets and additional telemetry cleanup are distinguished.",
+        "During startup, only the executing startup callback may register acquired cleanup; startup hooks, runners and checks must already be registered during composition.",
+        "The ordinary startup, supervision and shutdown path precedes exceptional registration and phase-control cases; each section answers a relevant next reader question."
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Improve Producing Jobs as a focused define-and-dispatch task. Keep the image scenario, establish collaborators, and explain the first useful result before optional policies. Preserve retry, timeout, durability and duplication constraints. Compare old and revised guidance with identical source inputs.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/queues/producing-jobs.md"],
+      "expected_output": "A connected task guide whose ordinary path is easy to locate and whose safety conditions precede the affected action.",
+      "expectations": [
+        "Retry counts remain total attempts, not additional attempts.",
+        "Timeout cancels the context but does not forcibly stop the handler; nil still acknowledges success.",
+        "Successful dispatch is acceptance, not execution; a failed send can still have queued a duplicate.",
+        "Commit-before-dispatch still has a crash-loss window; required durability constraints are retained."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Improve Responses for a reader choosing a helper or diagnosing a stream failure. Preserve the buffered/committed boundary, cancellation responsibilities and deadline exceptions; avoid a forced narrative for lookup entries. Compare old and revised guidance using identical input snapshots.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/http-fundamentals/responses.md"],
+      "expected_output": "A reference-oriented guide with direct lookup, coherent streaming explanations and exact error-rendering responsibilities.",
+      "expectations": [
+        "Buffered helpers return preparation errors before commitment; the router, not the helper, renders them.",
+        "A committed response cannot be replaced by a returned error.",
+        "Producer cancellation and shutdown duties remain explicit.",
+        "Wrapped ErrNotSupported fallback and initial-versus-later deadline failures retain their scope."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Select a current guide not used in the writing-rule examples and revise it using both old and new guidance. Preserve its conditions and security boundaries. Do not tune the rules on this page before the first comparison. Rotate the page when it has become a training example.",
+      "files": [],
+      "expected_output": "An independent transfer check, reported separately from the pages used to design the guidance.",
+      "expectations": [
+        "Shared prerequisites still apply to every alternative they originally controlled.",
+        "The revision does not strengthen a purpose or recommendation into a guarantee or requirement.",
+        "Presentation is assessed separately from fidelity; word count is not a readability verdict."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Edit every controlled fixture for human readers, keeping each identifier. Preserve all facts and uncertainty. If intended behavior is unknown, mark it unresolved and keep ambiguous instructions out of publishable prose. Keep effective passages unchanged when no improvement is needed. Do not consult the grading expectations while drafting.",
+      "files": ["evals/fixtures.md"],
+      "expected_output": "Clearer instructions and connected explanations without altered obligations, bounds, units, logical grouping or technical tokens.",
+      "expectations": [
+        "Both unknown actors and retry-selection scope in C are flagged, not guessed.",
+        "Mandatory ID reuse, recommended retention and possible outcomes in E preserve their strength.",
+        "Additional attempts, per-request scope and manual resubmission in F remain distinct.",
+        "The body prerequisite in H still controls both invalid-type and missing-header branches.",
+        "The seconds/minutes distinction and uncertainty in I are preserved.",
+        "D remains accurate and is not needlessly rewritten."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Document when and how to use the application package, organized into focused subpages. Assume the reader already has a Go application. Use the default writing settings.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/application/overview.md"],
+      "expected_output": "Concise package-usage guidance, not an app-building tutorial or hand-written index.",
+      "expectations": [
+        "Explains when application coordination is useful and when standalone packages suffice.",
+        "Uses existing collaborators named in prose; omits module creation, a complete main function, signal boilerplate and cumulative app wiring.",
+        "Examples are small, focused and tailored to the immediate need, without unrelated code or routine error checks; no default numeric line limit is imposed.",
+        "Page and section order follow the reader's questions and decisions, with related setup, constraints and results kept together instead of scattering one task across API-category pages.",
+        "Does not add a Contents heading, manual table of contents, or in-page index without an explicit request.",
+        "Retains ownership, timing and failure boundaries relevant to each shown operation."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Write a quickstart for the application package. Include a hand-written contents list and a complete runnable program; code blocks may contain up to 60 lines. Explain the observable result and cleanup.",
+      "files": [],
+      "expected_output": "An explicitly requested tutorial that honors the requested contents list and larger example limit instead of treating defaults as unconditional bans.",
+      "expectations": [
+        "Selects tutorial rather than package-usage mode because the request explicitly asks for it.",
+        "Includes an accurate hand-written contents list because it was requested.",
+        "The complete program handles consequential errors and shutdown ownership; fenced blocks do not exceed the requested 60-line limit."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Revise the Cache Overview examples to show how to construct and use a cache. Keep construction focused; explain how to give the cache a telemetry name as a separate optional variation. Preserve relevant expiry and lifecycle constraints.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/cache/overview.md"],
+      "expected_output": "A minimal memory driver plus cache.New baseline, with optional naming taught separately and lifecycle requirements stated without unrelated composition scaffolding.",
+      "expectations": [
+        "Baseline construction uses memorycache.New and cache.New without an optional builder callback.",
+        "Optional naming has a selection reason and a separate constructor callback; it does not mutate a published facade.",
+        "Ordinary cache usage does not require a Compose function, application telemetry extraction, probes, or bootstrap wiring in its example.",
+        "Expiry, ownership and any necessary lifecycle conditions remain accurate and adjacent to the affected operation.",
+        "Snippets retain necessary imports or named assumptions and observable results without becoming a sliced-up application."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Do a second pass over Cache Overview and remove unnecessary error checks from focused examples. In particular, the raw driver Get followed by CompareAndPut should illustrate the conditional update, not routine error propagation. Preserve the behavior being taught.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/cache/overview.md"],
+      "expected_output": "The conditional-update fragment keeps both error results visible without generic propagation branches, while retaining the rejected-update decision and accurate atomicity limits.",
+      "expectations": [
+        "Both the raw Get and CompareAndPut assignments retain err without routine if err != nil return branches.",
+        "The !applied branch still shows what to do when the guard changes or disappears.",
+        "The example does not replace errors with blank identifiers or add per-call omission comments.",
+        "The revision does not strip meaningful recovery checks, security checks, test assertions, or complete runnable-program error handling elsewhere.",
+        "The raw-byte comparison, physical key identity, and driver support constraints remain accurate."
+      ]
+    }
+  ]
+}
