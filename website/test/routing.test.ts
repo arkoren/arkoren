@@ -53,6 +53,22 @@ test("the shared navbar links to the changelog without marking it current on oth
   }
 });
 
+test("the go command reaches the import tags before any raw-text element", () => {
+  // The go command parses <head> as XML and stops at the first "<" inside a
+  // script or style, so its tags must precede them on every page it fetches.
+  for (const page of ["index.html", "404.html", "docs.html"]) {
+    const html = readFileSync(new URL(`../dist/${page}`, import.meta.url), "utf8");
+    const goImport = html.indexOf('<meta name="go-import"');
+    const goSource = html.indexOf('<meta name="go-source"');
+    assert.ok(goImport > 0 && goSource > 0, `${page}: missing go tags`);
+    for (const tag of ["<script", "<style"]) {
+      const first = html.indexOf(tag);
+      if (first === -1) continue;
+      assert.ok(Math.max(goImport, goSource) < first, `${page}: go tags follow ${tag}`);
+    }
+  }
+});
+
 test("only the homepage renders the navbar announcement hidden before scripts run", () => {
   for (const [page, isHidden] of [
     ["index.html", true],

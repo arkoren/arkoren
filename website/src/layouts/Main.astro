@@ -104,6 +104,9 @@ const xAccount = "@arkorendev";
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    {/* The go command parses <head> as XML and stops at the first script containing "<", so its tags come first. */}
+    <meta name="go-import" content={GO_IMPORT} />
+    <meta name="go-source" content={GO_SOURCE} />
     <script is:inline set:html={seasonalScript} />
     <meta name="description" content={description} />
     <meta name="robots" content={noindex ? "noindex" : "max-image-preview:large"} />
@@ -136,8 +139,6 @@ const xAccount = "@arkorendev";
     <meta name="twitter:image" content={socialImageURL.href} />
     <meta name="twitter:image:alt" content={shared.alt} />
     <meta name="generator" content={Astro.generator} />
-    <meta name="go-import" content={GO_IMPORT} />
-    <meta name="go-source" content={GO_SOURCE} />
     <meta name="theme-color" content="#151414" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     {/* Browsers use the first matching theme-color; Discord uses the last as its accent. */}
