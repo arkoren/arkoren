@@ -361,13 +361,6 @@ test("status matrices fit desktop columns and explain icons on hover, focus, and
 /** Prevent duplicate announcements and lost links during scrolling and navigation. */
 test("latest post hands off from the homepage hero to the sticky navbar", async ({ page }) => {
   /**
-   * Fast machines run the hand-off script before the first view-transition
-   * capture and can hide a missing server-rendered state, so slow the page
-   * down the way CI runners are.
-   */
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 6 });
-  /**
    * Sample the actual navigation snapshot, not just the underlying link. The
    * announcement's view-transition animations are paused and seeked to fixed
    * points, so slow runners cannot finish the short animation between frames.
