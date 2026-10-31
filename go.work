@@ -18,6 +18,7 @@ use (
 	./driver/mysql
 	./driver/nats
 	./driver/oauth
+	./driver/openfeature
 	./driver/paypal
 	./driver/postgres
 	./driver/postmark
