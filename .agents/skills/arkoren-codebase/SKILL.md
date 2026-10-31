@@ -682,8 +682,15 @@ without checkout prerequisites or prerelease fences. This policy applies even
 while the release-engineering state below is unreleased; keep contributor build
 instructions separate from consumer installation.
 
-Nothing is released yet. Before the first release, replace every `replace`
-directive and zero pseudo-version with released versions and drop `go.work`.
+Keep the committed root `go.work` for shared development. Its relative `use`
+paths name only imported modules and expand as modules land. Module manifests
+declare real dependency versions without local `replace` directives; verify
+each module with `GOWORK=off`, independently of the workspace. For future core
+imports, resolve canonical foundation pseudo-versions from the merged foundation
+import commit instead of inventing versions. Source imports create no release
+tags. The ignored `go.local.work` may retain excluded local modules; select it
+per command with `GOWORK="$PWD/go.local.work"` from the repository root, or use
+its absolute path elsewhere. Keep `go.local.work.sum` ignored.
 The website must answer `?go-get=1` on every path below `arkoren.dev` (a
 catch-all route) with
 `<meta name="go-import" content="arkoren.dev git https://github.com/arkoren/arkoren">`;
@@ -708,15 +715,15 @@ on pkg.go.dev; the website's API catalog links modules rather than copying them.
 | Change a contract's interface or documented behavior | The `Driver` doc comments, `<contract>test` suite, memory implementation, every vendor implementation found through grep/Go tooling, relevant guides and the service drivers page's compatibility matrix. |
 | Add a driver to an existing vendor module | Copy a sibling's layout; package doc comments and examples, README discoverability, Choosing a Driver, and the provider section and compatibility-matrix row on the contract's drivers guide. |
 | Add a vendor-local HTTP adapter without a service contract | Package doc comments/examples, the feature guide and Choosing a Driver's protocol-adapter catalog, and README discoverability. Update consumer safety rules; no memory driver is required. |
-| Add a vendor module | As above, plus `driver/<vendor>/go.mod` with `replace arkoren.dev/core => ../../core`, a `use` line in `go.work`, and `driver/<vendor>/compose.yaml` when tests need services (fixed `127.0.0.1` ports not used by another module). Never require another driver module. |
+| Add a vendor module | As above, plus `driver/<vendor>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, and `driver/<vendor>/compose.yaml` when tests need services (fixed `127.0.0.1` ports not used by another module). Verify with `GOWORK=off`; never require another driver module or add local replaces. |
 | Add a core package or middleware | Follow the boundary rules above; include `doc.go`, public examples and relevant consumer guides. Middleware takes `Middleware(required..., configure...)`. |
 | Change a public API | Update Go doc comments/examples, all callers, relevant consumer guides and affected contributor rules. Keep matching public `BuilderFunc` aliases consistent with drafts and callback signatures. |
-| Add an ark | `ark/<name>/go.mod` with `replace arkoren.dev/core => ../../core`, a `use` line in `go.work`, package docs/examples and relevant guides. It may not import `core/internal` or another ark. Update the Arks guide's availability statement and the website module catalog when the first ark ships. |
+| Add an ark | `ark/<name>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, package docs/examples and relevant guides. Verify with `GOWORK=off`; use no local replaces. It may not import `core/internal` or another ark. Update the Arks guide's availability statement and the website module catalog when the first ark ships. |
 | Add a driver or package that needs tables | Ship `Migrations()` with stable groups and short ids; validate `Builder.Instance`; use read-only readiness checks returning `ErrNotFound` and naming `Migrations()`. Tests must execute migrations before use and exercise two instances. Document application-owned migration execution in package docs and driver guides. Preserve existing group identities and test actual behavior rather than just source spelling. |
 | Add diagnostic MCP tools to a package | `MCPTools(prefix)` on the owner, direct tool/adapter tests, Go doc examples and diagnostic guides. Composition selects and authorizes tools. |
 | Change MCP CLI metadata or safe failures | The `cmd/arkoren` decoding and renderers, its end-to-end MCP tests, and the `guides/cli/` pages. |
 | Change a foundation module | The module's README, Go doc comments/examples and relevant guides; for `validate`, run `GOWORK=off go generate ./...` in it (a test fails on drift). |
-| Add, remove, or rename a module | Update `go.work`, relative replaces and the website module API catalog. Keep paths canonical for `scripts/ci-modules.sh`; run its fixtures through `make workflow-check` and inspect both emitted inventories. |
+| Add, remove, or rename a module | Update relative `use` paths in `go.work`, real dependency requirements and the website module API catalog. Keep paths canonical for `scripts/ci-modules.sh`; run its fixtures through `make workflow-check` and inspect both emitted inventories. |
 
 Refresh the only generated consumer documentation with:
 

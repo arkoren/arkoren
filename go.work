@@ -1,0 +1,10 @@
+go 1.27
+
+use (
+	./foundation/certificate
+	./foundation/collection
+	./foundation/key
+	./foundation/problem
+	./foundation/query
+	./foundation/validate
+)
