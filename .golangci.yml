@@ -1,0 +1,93 @@
+version: "2"
+
+# Shared lint configuration for every module in this repository.
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - depguard
+    - govet
+    - ineffassign
+    - misspell
+    - noctx
+    - revive
+    - sloglint
+    - staticcheck
+    - unused
+  settings:
+    # Routine vet is owned here, not duplicated by `make check`. Audit
+    # standalone `make vet` bypasses golangci-lint diagnostic/exclusion/version
+    # filtering. Toolchain defaults do not enable shadow or fieldalignment.
+    govet:
+      enable-all: true
+      disable:
+        # Struct field order follows documentation, not memory layout.
+        - fieldalignment
+        # Shadowing err in nested scopes is idiomatic Go.
+        - shadow
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (*os.File).Close
+    misspell:
+      # American spelling, as in the standard library: canceled, not cancelled.
+      locale: US
+    sloglint:
+      # Correlation with traces needs the context-aware slog methods.
+      context: all
+    depguard:
+      rules:
+        json-v2:
+          list-mode: original
+          files: ["$all"]
+          deny:
+            - pkg: encoding/json$
+              desc: use encoding/json/v2; the v1 import is not supported
+    revive:
+      rules:
+        - name: exported
+          arguments: [checkPrivateReceivers]
+        - name: package-comments
+        - name: receiver-naming
+        - name: var-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: error-naming
+        - name: error-strings
+        - name: context-as-argument
+        - name: blank-imports
+        - name: unexported-return
+        - name: time-naming
+        - name: unreachable-code
+        - name: redefines-builtin-id
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # PayPal requires this exact uppercase status/event token on the wire.
+      - path: (^|/)driver/paypal/
+        linters: [misspell]
+        text: '^`CANCELLED` is a misspelling of `CANCELED`$'
+      # Tests may skip docs, error checks, and context plumbing.
+      - path: _test\.go
+        linters: [errcheck, revive, noctx, bodyclose]
+      # Tests compare whole problem.Details values, which are errors.
+      - path: _test\.go
+        text: deepequalerrors
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - arkoren.dev
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -102,6 +102,13 @@ custom Markdown/editorial policy checks are retired; review source conventions
 and relative links explicitly. A rendered build is not proof of API correctness
 or editorial quality.
 
+During incremental source imports, `.github/workflows/imports.yml` uses
+`scripts/imported-modules.sh` to check only committed canonical modules, including
+an empty checkout inventory. Keep `ci-modules.sh` strict: it is the complete-source
+inventory. Replace the temporary import workflow with full CI/audit workflows
+only after the full inventory is published; scheduled audits remain held back.
+The separate website workflow and its required `website` job remain active.
+
 After workflow edits run `workflow-check` (discovery/Make fixtures and actionlint), the affected shared
 recipes, and inspect real GitHub CI results. There is no local workflow emulator.
 Routine CI checks every canonical module on isolated runners (six check jobs and

@@ -31,7 +31,13 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 Separate modules live only under `cmd/`, `driver/`, `ark/`, and `foundation/`,
 never below a `core/` path, so core can move its folders in a new major.
 
-`scripts/ci-modules.sh` owns CI inventory, not a Go dependency planner. It lists
+During incremental imports, `scripts/imported-modules.sh` supplies the temporary
+`imports.yml` workflow with available canonical modules; zero modules is valid.
+Validate the exact committed tree, since excluded local modules can hide missing
+dependencies. Keep the required `website` job in its separate workflow. Replace
+the import workflow with full CI/audits only when the complete inventory lands.
+
+`scripts/ci-modules.sh` owns the complete-source CI inventory, not a Go dependency planner. It lists
 core, the CLI and direct driver/foundation/optional ark roots;
 Compose markers select integration suites. Routine CI checks all modules,
 workflow tooling and rendered docs. The separate scheduled/manual audit owns
