@@ -21,9 +21,11 @@ import (
 // default audience of an ID token is the client ID and would make ID tokens
 // pass as bearer tokens. Errors are plain; [auth.Bearer] turns them into a
 // 401 challenge.
-// The error returned by the native verifier remains in the chain. A failing
-// lookup also retains context cancellation/deadline identity when it observes
-// either condition. Native diagnostics can contain claims; do not log them
+// After provider and audience checks, an ended context rejects verification,
+// including cached-key success and cancellation before identity publication.
+// Cancellation/deadline errors retain their identity for errors.Is. The error
+// returned by a failing native verifier also remains in the chain.
+// Native diagnostics can contain claims; do not log them
 // indiscriminately. TokenRejected carries only a fixed opaque classification
 // and no native cause.
 //
@@ -38,6 +40,14 @@ func (client *Client) Verify(ctx context.Context, token string) (Identity, error
 
 	if len(client.config.Audiences) == 0 {
 		return Identity{}, ErrNoAudiences
+	}
+
+	if err := ctx.Err(); err != nil {
+		client.config.Events.Emit(ctx, TokenRejected, TokenRejectedEvent{
+			Err: errBearerRejected,
+		})
+
+		return Identity{}, err
 	}
 
 	identity, err := client.verify(ctx, token, client.config.Audiences)
@@ -56,6 +66,14 @@ func (client *Client) Verify(ctx context.Context, token string) (Identity, error
 
 	if _, nonce := identity.Claims["nonce"]; nonce || strings.EqualFold(typ, "ID") {
 		err := errors.New("OIDC ID token used as bearer token")
+		client.config.Events.Emit(ctx, TokenRejected, TokenRejectedEvent{
+			Err: errBearerRejected,
+		})
+
+		return Identity{}, err
+	}
+
+	if err := ctx.Err(); err != nil {
 		client.config.Events.Emit(ctx, TokenRejected, TokenRejectedEvent{
 			Err: errBearerRejected,
 		})

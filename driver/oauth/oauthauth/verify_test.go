@@ -2,12 +2,15 @@ package oauthauth
 
 import (
 	"context"
+	"crypto"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/coreos/go-oidc/v3/oidc"
 
 	"arkoren.dev/core/http/auth"
 	"arkoren.dev/core/http/auth/authtest"
@@ -326,5 +329,141 @@ func TestVerifyPreservesExpiredDeadline(t *testing.T) {
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Verify expired deadline = %v", err)
+	}
+}
+
+// staticVerifierClient uses a real signed token and a local public key. Neither
+// discovery nor verification needs HTTP, so cancellation cannot race a key fetch.
+func staticVerifierClient(t *testing.T, provider Provider, key crypto.PublicKey) *Client {
+	t.Helper()
+
+	client, err := New(provider, testCipher(t), "cid", func(client *ClientBuilder) {
+		client.Audiences("cid")
+	})
+
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	client.ready.Store(&endpoints{
+		verifier: oidc.NewVerifier(provider.issuer, &oidc.StaticKeySet{
+			PublicKeys: []crypto.PublicKey{key},
+		}, &oidc.Config{ClientID: "cid"}),
+	})
+
+	return client
+}
+
+// TestVerifyRejectsCanceledContextWithLocalKey covers native verification that
+// succeeds without I/O even though the caller was already canceled.
+func TestVerifyRejectsCanceledContextWithLocalKey(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestProvider(t)
+	checked := false
+	configuration := OIDC(provider.server.URL)
+	configuration.identity = func(identity Identity) (Identity, error) {
+		checked = true
+
+		return identity, nil
+	}
+	client := staticVerifierClient(t, configuration, provider.key.Key)
+	token := provider.sign(nil)
+	provider.server.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	identity, err := client.Verify(ctx, token)
+
+	if !errors.Is(err, context.Canceled) || identity.Subject != "" || identity.Claims != nil {
+		t.Fatalf("Verify canceled local-key context = %+v, %v", identity, err)
+	}
+
+	if checked {
+		t.Fatal("Verify invoked the identity check after entry cancellation")
+	}
+}
+
+// TestVerifyRejectsExpiredContextWithLocalKey covers the same no-I/O path with
+// an already-expired deadline rather than a timing-dependent sleep.
+func TestVerifyRejectsExpiredContextWithLocalKey(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestProvider(t)
+	client := staticVerifierClient(t, OIDC(provider.server.URL), provider.key.Key)
+	token := provider.sign(nil)
+	provider.server.Close()
+	ctx, cancel := context.WithDeadline(t.Context(), time.Unix(1, 0))
+	t.Cleanup(cancel)
+
+	identity, err := client.Verify(ctx, token)
+
+	if !errors.Is(err, context.DeadlineExceeded) || identity.Subject != "" || identity.Claims != nil {
+		t.Fatalf("Verify expired local-key context = %+v, %v", identity, err)
+	}
+}
+
+// TestVerifyRejectsCancellationDuringIdentityCheck ensures a successful native
+// verification cannot publish an identity after a provider hook cancels the call.
+func TestVerifyRejectsCancellationDuringIdentityCheck(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestProvider(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	configuration := OIDC(provider.server.URL)
+	configuration.identity = func(identity Identity) (Identity, error) {
+		cancel()
+
+		return identity, nil
+	}
+	client := staticVerifierClient(t, configuration, provider.key.Key)
+	token := provider.sign(nil)
+	provider.server.Close()
+
+	identity, err := client.Verify(ctx, token)
+
+	if !errors.Is(err, context.Canceled) || identity.Subject != "" || identity.Claims != nil {
+		t.Fatalf("Verify canceled during identity check = %+v, %v", identity, err)
+	}
+}
+
+// TestVerifyCanceledContextPreservesUnsupported keeps the OAuth2 capability
+// error ahead of context errors without starting any provider or connection.
+func TestVerifyCanceledContextPreservesUnsupported(t *testing.T) {
+	t.Parallel()
+
+	client, err := New(GitHub(), testCipher(t), "cid")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = client.Verify(ctx, "token")
+
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Verify unsupported canceled context = %v", err)
+	}
+}
+
+// TestVerifyCanceledContextPreservesMissingAudiences keeps the API-audience
+// guard ahead of context errors without native discovery or signature work.
+func TestVerifyCanceledContextPreservesMissingAudiences(t *testing.T) {
+	t.Parallel()
+
+	client, err := New(OIDC("https://issuer.example.com"), testCipher(t), "cid")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = client.Verify(ctx, "token")
+
+	if !errors.Is(err, ErrNoAudiences) {
+		t.Fatalf("Verify missing audiences canceled context = %v", err)
 	}
 }
