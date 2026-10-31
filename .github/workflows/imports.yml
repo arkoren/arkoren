@@ -1,0 +1,134 @@
+name: Imported Go modules
+
+# Temporary during dependency-ordered imports. Replace with the held-back full
+# CI workflow once scripts/ci-modules.sh's complete inventory is committed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: imports-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOWORK: "off"
+
+jobs:
+  discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      modules: ${{ steps.matrix.outputs.modules }}
+      integration: ${{ steps.matrix.outputs.integration }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: matrix
+        run: bash scripts/imported-modules.sh >> "$GITHUB_OUTPUT"
+
+  tooling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+          cache: false
+      - run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: make workflow-check
+
+  check:
+    needs: discovery
+    if: needs.discovery.outputs.modules != '[]'
+    name: check ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      max-parallel: 6
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.discovery.outputs.modules) }}
+    env:
+      MODULE: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: |
+            ${{ matrix.module }}/go.mod
+            ${{ matrix.module }}/go.sum
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14
+          install-only: true
+          skip-cache: true
+      - name: Check standalone module
+        run: |
+          target=check
+          # Compose suites run full race tests in integration instead.
+          if [ -f "$MODULE/compose.yaml" ]; then target=lint; fi
+          make "$target" MODULE="$MODULE"
+
+  integration:
+    needs: discovery
+    if: needs.discovery.outputs.integration != '[]'
+    name: integration ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 23
+    strategy:
+      max-parallel: 3
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.discovery.outputs.integration) }}
+    env:
+      MODULE: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Select disposable Compose project
+        run: echo "COMPOSE_PROJECT_NAME=imports-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${MODULE//\//-}" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: |
+            ${{ matrix.module }}/go.mod
+            ${{ matrix.module }}/go.sum
+      - run: make integration MODULE="$MODULE"
+        timeout-minutes: 20
+      - name: Diagnostics and cleanup
+        if: always()
+        timeout-minutes: 2
+        env:
+          STATUS: ${{ job.status }}
+        run: |
+          # Never clean a default project if selection was canceled.
+          test -n "${COMPOSE_PROJECT_NAME:-}"
+          timeout --kill-after=5s 10s docker compose -f "$MODULE/compose.yaml" ps -a || true
+          if [ "$STATUS" != success ]; then
+            timeout --kill-after=5s 20s docker compose -f "$MODULE/compose.yaml" logs --no-color --tail 200 || true
+          fi
+          timeout --kill-after=5s 60s make cleanup MODULE="$MODULE"
+
+  gate:
+    name: Imported Go gate
+    if: always()
+    needs: [discovery, tooling, check, integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful tooling and every discovered module
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -e '
+            .discovery.result == "success" and .tooling.result == "success" and
+            (.check.result == (if .discovery.outputs.modules == "[]" then "skipped" else "success" end)) and
+            (.integration.result == (if .discovery.outputs.integration == "[]" then "skipped" else "success" end))
+          ' <<< "$RESULTS"
