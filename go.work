@@ -13,6 +13,7 @@ use (
 	./driver/gcp
 	./driver/launchdarkly
 	./driver/mailgun
+	./driver/mcp
 	./driver/meilisearch
 	./driver/mollie
 	./driver/mqtt
@@ -22,9 +23,11 @@ use (
 	./driver/openai
 	./driver/openfeature
 	./driver/opensearch
+	./driver/otel
 	./driver/paypal
 	./driver/postgres
 	./driver/postmark
+	./driver/prometheus
 	./driver/rabbitmq
 	./driver/redis
 	./driver/resend
