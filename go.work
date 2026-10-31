@@ -23,6 +23,7 @@ use (
 	./driver/restate
 	./driver/smtp
 	./driver/sqlite
+	./driver/stripe
 	./driver/temporal
 	./driver/vault
 	./driver/webpush
