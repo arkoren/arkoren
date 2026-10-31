@@ -11,16 +11,21 @@ use (
 	./driver/cloudflare
 	./driver/filesystem
 	./driver/gcp
+	./driver/mailgun
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
 	./driver/postgres
+	./driver/postmark
 	./driver/rabbitmq
 	./driver/redis
+	./driver/resend
 	./driver/restate
+	./driver/smtp
 	./driver/sqlite
 	./driver/temporal
 	./driver/vault
+	./driver/webpush
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key
