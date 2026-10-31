@@ -13,6 +13,7 @@ use (
 	./driver/gcp
 	./driver/launchdarkly
 	./driver/mailgun
+	./driver/mcp
 	./driver/meilisearch
 	./driver/mollie
 	./driver/mqtt
