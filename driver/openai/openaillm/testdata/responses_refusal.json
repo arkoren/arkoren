@@ -1,0 +1,17 @@
+{
+  "id": "resp_ref1",
+  "object": "response",
+  "created_at": 1760000000,
+  "status": "completed",
+  "model": "gpt-5.2",
+  "output": [
+    {
+      "id": "msg_4",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [{"type": "refusal", "refusal": "I can't help with that."}]
+    }
+  ],
+  "usage": {"input_tokens": 5, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 11}
+}

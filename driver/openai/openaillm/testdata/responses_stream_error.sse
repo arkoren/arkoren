@@ -1,0 +1,3 @@
+event: error
+data: {"type":"error","sequence_number":1,"code":"server_error","message":"boom","param":null}
+

@@ -1,0 +1,8 @@
+{
+  "id": "chatcmpl-3",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "gpt-5.2",
+  "choices": [{"index": 0, "finish_reason": "length", "message": {"role": "assistant", "content": "1 2 3"}}],
+  "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+}
