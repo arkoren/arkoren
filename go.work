@@ -3,6 +3,7 @@ go 1.27
 use (
 	./core
 	./driver/aes
+	./driver/chacha20
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key
