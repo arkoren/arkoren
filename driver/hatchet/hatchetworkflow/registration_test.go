@@ -1883,6 +1883,7 @@ func TestIntegrationDuplicateStartUsesRemainingLookupGrace(t *testing.T) {
 	}
 
 	driver, err := hatchetworkflow.NewDriver(host, func(driver *hatchetworkflow.DriverBuilder) {
+		driver.Prefix(prefix)
 		driver.LookupGrace(grace)
 	})
 
