@@ -1,0 +1,111 @@
+---
+import { readdirSync } from "node:fs";
+import type { GetStaticPaths } from "astro";
+import Docs from "../layouts/Docs.astro";
+import DocsPageHeader from "../components/docs/Header.astro";
+import CopyCommand from "../components/ui/Command.astro";
+import DocsLinkList from "../components/docs/Links.astro";
+import Tag from "../components/ui/Tag.astro";
+import Button from "../components/ui/Button.astro";
+import {
+  IMPORT_PREFIX,
+  REPOSITORY,
+  childrenOf,
+  importPaths,
+  type ImportPath,
+} from "../lib/docs/imports";
+
+/**
+ * One page per `arkoren.dev/...` import path, so `go get` resolves it (the
+ * `go-import` tag comes from the main layout) and a person who opens the path
+ * lands on a page of ours that links to the docs and to pkg.go.dev.
+ * @example
+ * // Astro calls this builder while prerendering /core/http/router.
+ * const paths = await getStaticPaths();
+ */
+export const getStaticPaths = (() => {
+  // Import paths share the site's root; fail the build if one shadows a route or public file.
+  const reserved = new Set([
+    ...readdirSync("src/pages").map((name) => name.replace(/\.(astro|ts)$/, "")),
+    ...readdirSync("public"),
+  ]);
+  return importPaths().map((item) => {
+    const route = item.path.slice(IMPORT_PREFIX.length + 1);
+    if (reserved.has(route.split("/")[0]))
+      throw new Error(
+        `import path ${item.path} collides with the site route /${route.split("/")[0]}`,
+      );
+    return { params: { importPath: route }, props: { item } };
+  });
+}) satisfies GetStaticPaths;
+
+interface Props {
+  item: ImportPath;
+}
+
+const { item } = Astro.props;
+const children = childrenOf(item.path);
+const kind = item.isPackage
+  ? "go package"
+  : item.module === item.path
+    ? "go module"
+    : "go directory";
+const description =
+  item.synopsis ??
+  (children.length > 0
+    ? `Groups ${children.length} import paths under ${item.path}.`
+    : `Part of ${item.module}.`);
+const goGet = item.isPackage || item.module === item.path ? `go get ${item.path}` : undefined;
+const importLine = item.isPackage ? `import "${item.path}"` : undefined;
+---
+
+<Docs
+  title={item.path}
+  description={description}
+  headings={children.length > 0 ? [{ depth: 2, slug: "below", text: "Below this path" }] : []}
+>
+  <DocsPageHeader slot="header" title={item.path} eyebrow={kind} titleClass="text-lg md:text-xl">
+    {description}
+    <Fragment slot="commands">
+      {(goGet || importLine) && (
+        <div class="grid gap-2 justify-self-stretch">
+          {[goGet, importLine]
+            .filter((line): line is string => line !== undefined)
+            .map((line) => (
+              <CopyCommand command={line} />
+            ))}
+        </div>
+      )}
+    </Fragment>
+    <div class="flex flex-wrap gap-2" slot="actions">
+      <Button href={`https://pkg.go.dev/${item.path}`}>View on pkg.go.dev</Button>
+      <Button variant="secondary" href="/docs">
+        Guides
+      </Button>
+      <Button variant="secondary" href={`${REPOSITORY}/tree/main/${item.dir}`}>
+        Source
+      </Button>
+    </div>
+    {item.module && item.module !== item.path && (
+      <Tag slot="meta" href={`/${item.module.slice(IMPORT_PREFIX.length + 1)}`}>
+        module {item.module}
+      </Tag>
+    )}
+  </DocsPageHeader>
+  {children.length > 0 && (
+    <section class="mt-12" id="below">
+      <span class="eyebrow mb-4 block">below this path</span>
+      <DocsLinkList
+        entries={children.map((child) => {
+          /** Directories and undocumented packages still get a useful label. */
+          const fallback = child.isPackage ? "Go package." : "Directory.";
+          return {
+            href: `/${child.path.slice(IMPORT_PREFIX.length + 1)}`,
+            title: child.path.slice(item.path.length + 1),
+            description: child.synopsis ?? (child.module === child.path ? "Go module." : fallback),
+          };
+        })}
+      />
+    </section>
+  )}
+</Docs>

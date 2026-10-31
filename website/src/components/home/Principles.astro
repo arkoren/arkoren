@@ -1,0 +1,55 @@
+---
+import Icon from "../ui/Icon.astro";
+import Intro from "./Intro.astro";
+
+/**
+ * The composition model in five short principles, shown before the
+ * architecture and the examples.
+ * @example <Principles />
+ */
+const principles = [
+  {
+    icon: "code",
+    title: "Familiar Go",
+    body: "Build on net/http, log/slog, and context. Keep standard types at your boundaries.",
+  },
+  {
+    icon: "layers",
+    title: "Explicit composition",
+    body: "Construct your dependencies and register your hooks. No required DI container or automatic discovery.",
+  },
+  {
+    icon: "plug",
+    title: "Your infrastructure",
+    body: "Install vendor modules separately. Use the facade, or reach the native client when you need it.",
+  },
+  {
+    icon: "flask",
+    title: "Shared conventions",
+    body: "Construction, errors, testing, lifecycle, and optional telemetry follow a consistent vocabulary.",
+  },
+  {
+    icon: "terminal",
+    title: "AI Ready",
+    body: "Offline agent skills, Markdown guides, and typed MCP tools give agents explicit context and interfaces.",
+  },
+] as const;
+---
+
+<section class="page-width py-12 sm:py-24" id="principles" aria-labelledby="principles-title">
+  <Intro id="principles-title" eyebrow="Coherence without the takeover." class="mb-8 sm:mb-12">
+    <Fragment slot="title">A toolkit, not a framework.</Fragment>
+    Libraries your application calls. Adopt one package or compose a service. The architecture stays
+    in plain Go, where you can read it.{" "}
+    <a href="/docs/guides/about/choosing-arkoren">Should I choose Arkoren?</a>
+  </Intro>
+  <ul class="cells list-none p-0 xl:grid-cols-5">
+    {principles.map((principle) => (
+      <li class="cell p-6 md:max-xl:last:col-span-2">
+        <Icon name={principle.icon} size={22} class="mb-4 text-accent-text" />
+        <h3 class="text-lg font-medium">{principle.title}</h3>
+        <p class="text-sm leading-relaxed text-muted">{principle.body}</p>
+      </li>
+    ))}
+  </ul>
+</section>

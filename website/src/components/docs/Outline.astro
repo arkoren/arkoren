@@ -1,0 +1,36 @@
+---
+import PageContents from "./Contents.astro";
+
+/**
+ * Shared section navigation in a desktop rail (from the xl breakpoint) or a
+ * native disclosure on narrower screens.
+ * @example <Outline headings={[{ depth: 2, slug: "top", text: "Overview" }]} variant="desktop" />
+ */
+interface Props {
+  /** Ordered headings, including the page's Overview destination. */
+  headings: { depth: number; slug: string; text: string }[];
+  /** Placement selects the responsive presentation, not a separate link list. */
+  variant: "desktop" | "mobile";
+  /** Accessible navigation name and visible disclosure label. */
+  label?: string;
+}
+
+/** Both placements share tracking; only the visible desktop list needs a marker. */
+const { headings, variant, label = "On this page" } = Astro.props;
+---
+
+{variant === "mobile" ? (
+  <details
+    class="mb-8 rounded-sm border border-line xl:hidden"
+    data-toc-mobile
+    data-pagefind-ignore
+  >
+    <summary class="cursor-pointer px-4 py-3 text-sm font-medium">{label}</summary>
+    <PageContents headings={headings} variant="mobile" label={label} />
+  </details>
+) : (
+  <div class="min-w-0 max-xl:hidden" data-pagefind-ignore>
+    <h2 class="eyebrow mb-3 lowercase">{label}</h2>
+    <PageContents headings={headings} variant="desktop" label={label} />
+  </div>
+)}

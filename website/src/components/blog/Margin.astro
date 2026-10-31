@@ -1,0 +1,66 @@
+---
+import type { CollectionEntry } from "astro:content";
+import Icon from "../ui/Icon.astro";
+
+/**
+ * Optional editorial material, independent of the article and its navigation:
+ * the author's desk note, a behind-the-post note and a reading shelf. A quiet
+ * rail rather than a stack of promotional cards; hidden below the xl breakpoint.
+ * @example <Margin authorName="Erik" authorDesk="Why I wrote this." class="w-60" />
+ */
+type Props = Pick<CollectionEntry<"blog">["data"], "authorDesk" | "behindPost" | "readingShelf"> & {
+  /** The displayed byline signs the author's desk note. */
+  authorName: string;
+  /** Placement in the page's reading layout. */
+  class?: string;
+};
+
+/** Defaults also support content cached before the margin fields were added. */
+const { authorDesk, behindPost, readingShelf = [], authorName, class: className } = Astro.props;
+---
+
+<aside
+  class:list={["grid min-w-0 gap-12 wrap-anywhere max-xl:hidden", className]}
+  aria-label="Reader’s margin"
+  data-blog-margin
+  data-pagefind-ignore
+>
+  {authorDesk && (
+    <section aria-label="Author’s desk">
+      <h2 class="eyebrow mb-3">author’s desk</h2>
+      <p class="mb-4 text-base leading-relaxed">{authorDesk}</p>
+      <span class="font-mono text-2xs text-accent-text fade">— {authorName}</span>
+    </section>
+  )}
+  {behindPost && (
+    <section aria-label="Behind the post">
+      <h2 class="eyebrow mb-3">behind the post</h2>
+      <h3 class="mb-2 text-base font-medium">{behindPost.title}</h3>
+      <p class="text-sm leading-relaxed text-muted">{behindPost.text}</p>
+    </section>
+  )}
+  {readingShelf.length > 0 && (
+    <section aria-label="Reading shelf">
+      <h2 class="eyebrow mb-3">reading shelf</h2>
+      <ol>
+        {readingShelf.map((link, index) => (
+          <li class="flex gap-2 border-t border-line py-3 first:border-t-0">
+            <span class="w-6 flex-none font-mono text-2xs text-accent-text fade" aria-hidden="true">
+              {String(index + 1).padStart(2, "0")}
+            </span>
+            <div>
+              <a
+                class="inline-flex items-center gap-1 text-sm font-medium no-underline"
+                href={link.href}
+              >
+                <span>{link.title}</span>
+                <Icon name="arrow-up-right" size={12} class="shrink-0" />
+              </a>
+              <p class="mt-1 text-xs leading-relaxed text-muted">{link.description}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )}
+</aside>

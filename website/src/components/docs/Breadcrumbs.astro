@@ -1,0 +1,31 @@
+---
+import type { Breadcrumb } from "../../lib/site/seo";
+
+/**
+ * Visible navigation also supplied to the page's BreadcrumbList schema. The
+ * last item is the current page and is not a link.
+ * @example <Breadcrumbs items={[{ name: "Home", href: "/" }, { name: "Docs", href: "/docs" }]} />
+ */
+interface Props {
+  items: Breadcrumb[];
+}
+const { items } = Astro.props;
+---
+
+<nav class="mb-4" aria-label="Breadcrumb" data-pagefind-ignore>
+  <ol class="crumbs flex flex-wrap gap-2 text-xs font-medium text-muted">
+    {items.map((item, index) => (
+      <li class="min-w-0 wrap-anywhere">
+        {index === items.length - 1 ? (
+          <span class="text-accent-text" aria-current="page">
+            {item.name}
+          </span>
+        ) : (
+          <a class="text-inherit no-underline hover:text-fg" href={item.href}>
+            {item.name}
+          </a>
+        )}
+      </li>
+    ))}
+  </ol>
+</nav>

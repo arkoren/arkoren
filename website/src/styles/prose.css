@@ -1,0 +1,359 @@
+/* Markdown, MDX and set:html output: docs guides and blog posts.
+
+   Everything here styles markup the authors do not control: elements emitted by
+   the Markdown renderer and classes emitted by src/plugins (callouts, table
+   wrappers, status matrices, heading anchors). Only theme tokens appear; the
+   scale lives in global.css. Shiki's palette switch sits at the end. */
+@layer components {
+  /* Long-form prose: Geist for reading and headings, Maple Mono for code, neutral links. */
+  .prose {
+    font-size: var(--text-base);
+    line-height: var(--leading-relaxed);
+    color: var(--color-fg);
+    overflow-wrap: break-word;
+  }
+
+  .prose > * {
+    margin: 0 0 --spacing(4);
+  }
+
+  .prose :is(h2, h3, h4) {
+    line-height: var(--leading-snug);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .prose h2 {
+    margin-top: --spacing(12);
+    padding-top: --spacing(8);
+    border-top: 1px solid var(--color-line);
+    font-size: var(--text-xl);
+    letter-spacing: var(--tracking-tighter);
+  }
+
+  .prose h3 {
+    margin-top: --spacing(8);
+    font-size: var(--text-lg);
+    letter-spacing: var(--tracking-tight);
+  }
+
+  .prose h4 {
+    margin-top: --spacing(6);
+    font-size: var(--text-base);
+  }
+
+  .prose > h2:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  /* Headings link to themselves (added by the docs layout); a "#" appears on hover. */
+  .doc-anchor,
+  .prose a.doc-anchor {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .doc-anchor::after {
+    content: "#";
+    margin-left: 0.3em;
+    color: var(--color-muted);
+    opacity: 0;
+    transition: opacity var(--duration-fast);
+  }
+
+  .doc-anchor:hover::after,
+  .doc-anchor:focus-visible::after {
+    opacity: 1;
+  }
+
+  .prose a {
+    color: var(--color-fg);
+    text-decoration: underline;
+    text-underline-offset: var(--underline-offset);
+  }
+
+  .prose a:not(.doc-anchor):hover {
+    color: var(--color-accent-text);
+    text-decoration-color: currentColor;
+  }
+
+  .prose :is(ul, ol) {
+    padding-left: --spacing(6);
+  }
+
+  .prose ul {
+    list-style: disc;
+  }
+
+  .prose ol {
+    list-style: decimal;
+  }
+
+  .prose li {
+    margin: --spacing(1) 0;
+  }
+
+  .prose li::marker {
+    color: var(--color-muted);
+  }
+
+  .prose :not(pre) > code {
+    padding: --spacing(0.5) --spacing(1);
+    background: var(--color-raised);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    font-size: 0.875em;
+    overflow-wrap: anywhere;
+  }
+
+  .prose pre {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: var(--leading-relaxed);
+    margin: 0;
+    padding: --spacing(4);
+    overflow-x: auto;
+    tab-size: 4;
+    background: var(--color-surface);
+    color: var(--color-fg);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+  }
+
+  /* scripts/copy.ts wraps each block in .copyable and floats its copy button in the corner. */
+  .prose .copyable {
+    position: relative;
+    margin-bottom: --spacing(4);
+  }
+
+  .copyable > .copy {
+    position: absolute;
+    top: --spacing(2);
+    right: --spacing(2);
+  }
+
+  .prose pre code {
+    font-size: inherit;
+  }
+
+  .prose blockquote {
+    margin-inline: 0;
+    padding-left: --spacing(4);
+    border-left: 2px solid var(--color-line-strong);
+    color: var(--color-muted);
+  }
+
+  /* GitHub alerts ("> [!NOTE]"), marked by plugins/callouts.ts. The label is drawn here. */
+  .prose blockquote.callout {
+    padding: --spacing(3) --spacing(4);
+    border: 1px solid --alpha(var(--callout-accent) / 20%);
+    border-left: 2px solid var(--callout-accent);
+    border-radius: var(--radius-sm);
+    background: --alpha(var(--callout-accent) / 5%);
+    color: var(--color-fg);
+  }
+
+  .prose blockquote.callout::before {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: var(--text-xs--line-height);
+    font-weight: var(--font-weight-medium);
+    display: block;
+    margin-bottom: --spacing(1);
+    color: var(--callout-accent);
+  }
+
+  .prose blockquote.callout > :first-child {
+    margin-top: 0;
+  }
+
+  .prose blockquote.callout > :last-child {
+    margin-bottom: 0;
+  }
+
+  .callout-note,
+  .callout-tip {
+    --callout-accent: var(--color-fg);
+  }
+
+  .callout-important,
+  .callout-warning,
+  .callout-caution {
+    --callout-accent: var(--color-accent);
+  }
+
+  .prose .callout-note::before {
+    content: "// note";
+  }
+
+  .prose .callout-tip::before {
+    content: "// tip";
+  }
+
+  .prose .callout-important::before {
+    content: "// important";
+  }
+
+  .prose .callout-warning::before {
+    content: "// warning";
+  }
+
+  .prose .callout-caution::before {
+    content: "// caution";
+  }
+
+  /* "Docs" links in table cells: plugins/callouts.ts emits .table-button because generated
+     Markdown cannot render the Astro Button component. Keep its compact neutral treatment here. */
+  .prose a.table-button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: --spacing(2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background-color: var(--color-raised);
+    font-size: var(--text-xs);
+    line-height: var(--text-xs--line-height);
+    font-weight: var(--font-weight-medium);
+    white-space: nowrap;
+    color: var(--color-fg);
+    text-decoration-line: none;
+    padding: --spacing(0.5) --spacing(2);
+    transition-property:
+      color, background-color, border-color, outline-color, text-decoration-color, fill, stroke;
+    transition-duration: var(--duration-fast);
+    transition-timing-function: var(--default-transition-timing-function);
+
+    @variant hover {
+      background-color: var(--color-raised-hover);
+    }
+
+    &:active {
+      translate: 0 1px;
+      background-color: var(--color-raised-hover);
+    }
+  }
+
+  .prose a.table-button:hover {
+    color: var(--color-fg);
+  }
+
+  .prose td:has(> a.table-button) {
+    min-width: 0;
+    text-align: right;
+  }
+
+  .prose hr {
+    border: 0;
+    border-top: 1px solid var(--color-line);
+  }
+
+  /* Tables never squeeze identifiers: code in a cell stays on one line and a table wider than the
+     column scrolls on the x axis. Prose cells still wrap, but never narrower than a readable measure. */
+  .prose .table-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .prose table {
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .prose :is(th, td) code {
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+
+  .prose td {
+    min-width: 20ch;
+  }
+
+  /* A table that scrolls fades at each edge that still hides columns, like a sliding row
+     ([data-slide] in motion.css): the docs layout sets data-overflow and the two fade widths from
+     the scroll position. */
+  .prose .table-scroll[data-overflow] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      black var(--fade-left),
+      black calc(100% - var(--fade-right)),
+      transparent
+    );
+  }
+
+  .prose :is(th, td) {
+    padding: --spacing(2) --spacing(3);
+    border: 1px solid var(--color-line);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .prose th {
+    font-size: var(--text-xs);
+    line-height: var(--text-xs--line-height);
+    font-weight: var(--font-weight-medium);
+    background: var(--color-surface);
+  }
+
+  /* Status matrices use compact icon cells rather than the prose table measure. */
+  .prose .status-matrix :is(th, td) {
+    min-width: 0;
+    padding: --spacing(1.5);
+    text-align: center;
+    vertical-align: middle;
+  }
+
+  .prose .status-matrix :is(th, td):first-child {
+    text-align: left;
+    padding-inline: --spacing(3);
+  }
+
+  .prose .status-matrix th {
+    overflow-wrap: normal;
+  }
+
+  .prose .status-matrix tbody th {
+    background: transparent;
+  }
+
+  .prose .status {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: --spacing(7);
+    height: --spacing(7);
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-fg);
+  }
+
+  .prose button.status {
+    cursor: help;
+    color: var(--color-accent-text);
+  }
+
+  /* Empty GFM headings make compact method indexes without visible headers. */
+  .prose thead:not(:has(th:not(:empty))) {
+    display: none;
+  }
+
+  /* Shiki emits both palettes at build time as custom properties; follow the OS theme. */
+  @media (prefers-color-scheme: dark) {
+    .astro-code,
+    .astro-code span {
+      color: var(--shiki-dark) !important;
+      background-color: var(--shiki-dark-bg) !important;
+      font-style: var(--shiki-dark-font-style) !important;
+      font-weight: var(--shiki-dark-font-weight) !important;
+      text-decoration: var(--shiki-dark-text-decoration) !important;
+    }
+  }
+}

@@ -1,0 +1,19 @@
+---
+/**
+ * A titled block of a docs overview page. Consecutive sections are set apart;
+ * the first one sits directly under the page header.
+ * @example <DocsSection id="api" title="API reference"><p>Find declarations on pkg.go.dev.</p></DocsSection>
+ */
+interface Props {
+  /** Anchor for the page's contents list and for links into the section. */
+  id: string;
+  title: string;
+}
+
+const { id, title } = Astro.props;
+---
+
+<section class="mt-12 first-of-type:mt-0" id={id}>
+  <h2 class="mt-2 mb-6 text-xl font-medium">{title}</h2>
+  <slot />
+</section>

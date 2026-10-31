@@ -1,0 +1,27 @@
+<script>
+  // Measures every [data-slide] row (see styles/motion.css): a track wider than its
+  // viewport gets data-overflow, the distance to slide, and a cycle length that
+  // keeps the sliding speed near 100px/s (a cycle is at least 2.5s).
+  const measure = () => {
+    for (const viewport of document.querySelectorAll<HTMLElement>("[data-slide]")) {
+      const track = viewport.firstElementChild as HTMLElement | null;
+      if (!track) continue;
+      const style = getComputedStyle(viewport);
+      const shift =
+        track.offsetWidth -
+        (viewport.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+      if (shift > 0) {
+        viewport.dataset.overflow = "";
+        viewport.style.setProperty("--shift", `${shift}px`);
+        // Each slide takes 30% of the cycle; the rest are the holds at either end.
+        viewport.style.setProperty("--cycle", `${Math.max(shift / 100 / 0.3, 2.5)}s`);
+      } else {
+        delete viewport.dataset.overflow;
+      }
+    }
+  };
+  measure();
+  document.fonts.ready.then(measure);
+  addEventListener("resize", measure);
+  document.addEventListener("toggle", measure, true);
+</script>

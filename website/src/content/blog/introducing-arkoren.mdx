@@ -1,0 +1,572 @@
+---
+title: "Introducing Arkoren"
+description: "Arkoren is an open-source Go toolkit for building and running applications: from input checks and database queries to background jobs, orderly shutdown, and investigating slow requests."
+publishedAt: 2026-10-18
+updatedAt: 2026-10-28
+category: Announcements
+authorDesk: "I want less plumbing, not less control. Arkoren is my attempt to make the repetitive work reusable while leaving the important decisions in plain Go: what runs, what it depends on, and how it stops."
+behindPost:
+    title: "One feature, several boundaries."
+    text: "The article follows a publishing feature from input and storage to background work and running the service. Keeping the feature familiar leaves more room to look at how the pieces meet."
+readingShelf:
+    - title: The quickstart
+      description: "A running service, then one change at a time."
+      href: /docs/guides/first-steps/quickstart
+    - title: The API reference
+      description: "The individual pieces, without the narrative."
+      href: /docs/api/core/application
+    - title: The source
+      description: "The implementation behind the interfaces."
+      href: https://github.com/arkoren/arkoren
+explore:
+    - title: Build your first service
+      description: "Take the quickstart from a new project to a working endpoint."
+      href: /docs/guides/first-steps/quickstart
+    - title: Explore the contracts
+      description: "Find the pieces you need, without adopting everything else."
+      href: /docs/api/core/application
+author:
+    name: Erik C. Forés
+    title: Sr. Cloud Technical Lead
+    url: https://erik.cat
+    avatar: ../../assets/images/authors/erik-avatar.webp
+    company:
+        name: HP
+        url: https://hp.com/
+banner:
+    src: ../../assets/images/blog/introducing-arkoren.svg
+    alt: "Introducing Arkoren: the wordmark and stepped A logo on a subtle rose grid."
+    width: 1200
+    height: 400
+---
+
+import BadgeRow from "../../components/ui/Badges.astro";
+import ContractCard from "../../components/home/Contract.astro";
+import ContractGrid from "../../components/home/Contracts.astro";
+import { foundation, middleware } from "../../lib/docs/catalog";
+
+**TL;DR:** Arkoren is an open-source toolkit for building and running applications
+in Go. It connects HTTP, data, and background work with shared error handling,
+telemetry, and lifecycle management. Use it together or bring in one piece at a
+time. Use Go 1.27 or later. Start with the [installation guide](/docs/guides/first-steps/installation),
+then follow [the quickstart](/docs/guides/first-steps/quickstart).
+
+---
+
+Arkoren brings those pieces together as ordinary Go libraries.
+
+Most features start small: a handler, a query, a response. They rarely stay
+that way. A second screen wants the same data sorted differently. An import
+tool wants to create the same records without going through the API. Saving a
+record starts to trigger work elsewhere, and none of it should slow down the
+person who clicked the button. The process itself needs care too: its
+connections must be ready before traffic arrives and still open while the last
+requests finish. Months later, a message lands in the team channel: "Is
+publishing slow for anyone else?"
+
+The feature has not changed much, but the work around it has grown. Arkoren is
+built to reduce that repeated work.
+
+## The cost of assembling it yourself
+
+Go gives you an excellent standard library, and the ecosystem gives you a
+library for almost everything else. A typical service picks a router, a SQL
+helper, a migration tool, a validation library, a job queue, and a tracing setup.
+It also needs a way to start workers, check dependencies, and shut down cleanly.
+Each choice is reasonable on its own.
+
+The cost shows up between them. Validation errors and database errors reach
+the client in different shapes. Traces stop at the edge of a library that was
+never instrumented. Workers lose their dependencies before they finish stopping.
+Every service in the company wires the same pieces together in a slightly
+different way, and every new developer learns that wiring again.
+
+Arkoren gives those pieces one design. They share the same error format, the
+same telemetry, and the same way of configuring things. Startup and shutdown are
+explicit too, so the code you write between the pieces can shrink.
+
+## Get started
+
+Install the `arkoren` command, then create a project:
+
+```sh
+go install arkoren.dev/cmd/arkoren@latest
+arkoren new hello --module example.com/hello
+```
+
+`arkoren new` writes an HTTP service with configuration, health probes,
+lifecycle wiring, and tests. The [quickstart](/docs/guides/first-steps/quickstart)
+takes it from there: routes, a cache, and error responses.
+Follow the [installation guide](/docs/guides/first-steps/installation) to resolve
+dependencies before building the generated service.
+
+## One feature, beyond the endpoint
+
+To see where the pieces fit, consider something familiar: an application that
+lets people write and publish articles.
+
+### The table you need to change
+
+The article needs a title and a publishing status. Later, it might need an
+author, an index, or a new constraint. Those changes need to be reviewable and
+repeatable, not a series of manual edits to different databases.
+
+The schema builder gives that work a place in your code:
+
+```go
+import "arkoren.dev/foundation/query/schema"
+
+articles := schema.Create("articles", func(table *schema.Table) {
+	table.ID()
+	table.String("title", 200)
+	table.String("status", 20).Default("draft")
+})
+```
+
+You keep the definition with your migrations and see the intended change in a
+code review. For supported operations, the builder handles the SQL differences
+between PostgreSQL, MySQL, and SQLite, including when you use SQLite locally and
+another database in production.
+
+### The change every environment needs
+
+A definition is only useful once it reaches the database, and it has to reach
+every database: your laptop, CI, staging, and production. Each one must end up
+with the same tables, and none of them should apply the same change twice.
+
+A migration wraps the definition with a stable name and a way to undo it:
+
+```go
+import "arkoren.dev/core/service/database/migrate"
+
+createArticles := migrate.NewMigration("create-articles", func(migration *migrate.MigrationBuilder) {
+	migration.Up(migrate.Schema(articles))
+	migration.Down(migrate.Schema(schema.Drop("articles")))
+})
+```
+
+With a started database facade named `db` and an operation context named `ctx`,
+the migrator applies the migrations that have not run yet, in the order you add
+them. These focused snippets keep error results visible; check each error before
+using its result in application code:
+
+```go
+migrator := migrate.New(db)
+err := migrator.Add(createArticles)
+err = migrator.Up(ctx)
+```
+
+It records each applied migration in the database, so running `Up` again does
+nothing until you add a new one. When the article later needs an author, you
+append an `add-articles-author` migration rather than editing the first. A
+database lock keeps two instances that start together from applying the same
+migration twice. Run `Up` at startup during development, or as a separate
+deploy step in production. The
+[migrations guide](/docs/guides/database/migrations) covers rollbacks,
+failures, and rolling deploys.
+
+### The query that keeps growing
+
+A list of articles starts with one query. Soon it needs a status filter,
+sorting, and a limit. Another screen needs almost the same thing. If you
+assemble SQL strings by hand, each variation is another place to keep the
+conditions and their parameters in sync.
+
+The query builder keeps that intent together:
+
+```go
+import "arkoren.dev/foundation/query"
+
+published := query.Table("articles", func(statement *query.Builder) {
+	statement.Where("status", "published")
+	statement.OrderByDesc("id")
+	statement.Limit(20)
+})
+```
+
+When the next screen needs a different view, call `published.Derive` with
+another builder callback. The query used elsewhere does not change. Values are
+passed separately from the SQL, rather than interpolated into it. You can run
+the result through Arkoren's database package or build a statement for your
+existing database code, without adopting an ORM.
+
+The [query](/docs/guides/database/query-builder) and
+[schema](/docs/guides/database/schema-builder) guides cover the details.
+
+### The input checks you keep rewriting
+
+An empty title should not reach the database. A title made of spaces should
+not pass because it has a length. A missing status should mean draft. Writing
+those checks once is easy; keeping them consistent across an API, an import
+job, and an admin tool is the recurring part.
+
+Use your own struct for the article:
+
+```go
+type Article struct {
+	ID     int64  `db:"id" json:"id"`
+	Title  string `db:"title" json:"title"`
+	Status string `db:"status" json:"status"`
+}
+```
+
+Arkoren's validation library lets you describe its input rules once:
+
+```go
+import "arkoren.dev/foundation/validate"
+
+var input = validate.Struct(func(object *validate.StructBuilder[Article]) {
+	object.Field("Title", func(title *validate.StringBuilder[string]) {
+		title.Trim()
+		title.Required()
+		title.Max(200)
+	})
+	object.Field("Status", func(status *validate.StringBuilder[string]) {
+		status.OneOf("draft", "published")
+		status.Default("draft")
+	})
+})
+```
+
+The schema cleans up input, applies defaults, and reports the fields that need
+attention. The same rules work outside a request, so a new way to create an
+article does not mean another copy of its input checks.
+
+### The errors your clients have to decipher
+
+Rejecting bad input is only half the job. The person who submitted it needs to
+know what to fix. The developer building your frontend needs to find that
+explanation without handling a different response shape for every endpoint.
+
+Arkoren answers with Problem Details, a standard format for HTTP errors. When
+a title made only of spaces fails the schema above, the client receives a
+`422` that names the field and the rule it broke:
+
+```json
+{
+	"type": "tag:arkoren.dev,2026-09:core:http/request:validation-failed",
+	"title": "Validation failed",
+	"status": 422,
+	"instance": "/articles",
+	"errors": {
+		"/title": [
+			{
+				"code": "required",
+				"message": "is required"
+			}
+		]
+	}
+}
+```
+
+Your frontend recognizes the problem by its `type` instead of parsing a
+message that might change. Errors you define for your own conditions, such as a missing article or a
+conflict, use the same format, so clients have one shape to handle. Internal
+causes remain available to logging and tracing but are not included in the response.
+
+### Where the pieces meet
+
+These pieces meet in a handler. Assume `db` is your started PostgreSQL or SQLite
+database, with a migration containing the `articles` table already applied, and
+`r` is the incoming request. Here is the successful path from input to a saved
+article; routine error checks are omitted to keep the connection visible:
+
+```go
+import "arkoren.dev/core/http/request"
+
+article, err := request.ParseJSON(r, input)
+
+insert := query.Table("articles", func(statement *query.Builder) {
+	statement.Insert(query.Values(article, query.Except("id")))
+	statement.Returning("id")
+})
+
+article.ID, err = db.Find[int64](r.Context(), insert)
+```
+
+`request.ParseJSON` decodes and validates; `query.Values` uses the struct's `db`
+tags; `Find` runs the insert and reads its returned ID. A title of `"  Hello  "`
+becomes `"Hello"`, and an omitted status becomes `"draft"`.
+
+In the handler, check each error before continuing. Return failures to the
+router to render as Problem Details; write successful results with
+`response.JSON`. A title made only of spaces fails before the database call.
+The [quickstart](/docs/guides/first-steps/quickstart) shows the complete handler
+and routing pattern. Your application still decides what publishing means.
+
+### The work that should not hold up publishing
+
+Once an author publishes an article, readers need to find it in search and
+subscribers may need a notification. Neither task should make the author wait
+for every external service or email recipient.
+
+A queue lets the publishing code hand that work to a worker. Start with a job:
+a name, the data the worker needs, and how hard to try.
+
+```go
+import (
+	"time"
+
+	"arkoren.dev/core/service/queue"
+)
+
+type IndexArticle struct {
+	ArticleID int64 `json:"article_id"`
+}
+
+var IndexArticleJob = queue.NewJob[IndexArticle]("index-article", func(job *queue.JobBuilder) {
+	job.Retry(3)
+	job.Timeout(30 * time.Second)
+})
+```
+
+With a queue dispatcher named `dispatcher` configured for your chosen backend,
+the handler dispatches the job after saving the article and returns:
+
+```go
+err = dispatcher.Dispatch(ctx, IndexArticleJob, IndexArticle{ArticleID: article.ID})
+```
+
+The worker registers a function on a queue consumer named `consumer` connected
+to the same backend. Import `context` from the standard library for the handler.
+Here `search` is application code with an `Index(context.Context, int64) error`
+method, not Arkoren's search facade. The handler receives the decoded payload
+and asks that application service to index the article:
+
+```go
+err := consumer.Handle(IndexArticleJob, func(ctx context.Context, job IndexArticle) error {
+	return search.Index(ctx, job.ArticleID)
+})
+```
+
+For ordinary indexing failures, this job requests up to three attempts in total.
+The consumer enforces that limit when the driver reports attempt counts;
+otherwise the backend's redelivery policy controls the limit. The
+[queue guide](/docs/guides/queues/producing-jobs) covers queues, backoff, and
+payload design.
+
+Successful dispatch means the driver accepted the job, not that the worker
+finished it. Durability depends on the driver; an in-memory queue does not
+survive a restart. Saving an article and dispatching a job are also separate
+operations, not an automatic transaction. If losing that handoff is unacceptable,
+your application needs a durable handoff strategy.
+
+For reactions inside the same process, such as recording that an article was
+published, use an [event](/docs/guides/events/overview). The publishing code
+announces what happened without knowing every listener:
+
+```go
+import "arkoren.dev/core/event"
+
+var Published = event.NewTopic[Article]("article.published")
+```
+
+Create an event bus and register listeners before the first emission. With a
+`*slog.Logger` named `logger` and the standard-library `context` import, another
+part of the application can register a reaction:
+
+```go
+bus := event.New()
+_, err := bus.Listen(Published, func(ctx context.Context, article Article) error {
+	logger.InfoContext(ctx, "article published", "id", article.ID)
+	return nil
+})
+```
+
+After registration succeeds, the publishing code emits the event through that
+same bus, using its operation context and saved article:
+
+```go
+bus.Emit(ctx, Published, article)
+```
+
+Event listeners run synchronously and are not durable: events separate
+responsibilities, while queues move work out of the request.
+
+### The service around the feature
+
+The handler and worker now depend on a database and a queue. They need those
+dependencies available before doing useful work, and still available while
+finishing it.
+
+Arkoren's [application lifecycle](/docs/guides/application/lifecycle-and-ownership)
+gives startup, long-running work, health checks, and shutdown one place to meet.
+Create the app with `application.New`, then pass a composer—a plain
+`func(*application.Composer)`—to `app.Run`. In that callback, construct your
+dependencies and register their lifecycle work. For an existing router named
+`routes` and a cancellation context named `ctx`, the server wiring is:
+
+```go
+app := application.New()
+err := app.Run(ctx, func(compose *application.Composer) {
+	listener := server.New(routes)
+	compose.Cleanup(listener.Stop)
+	compose.Startup(listener.Start)
+	compose.Run(listener.Serve)
+})
+```
+
+This excerpt uses `arkoren.dev/core/application` and
+`arkoren.dev/core/http/server`; handle the returned error in your entry point.
+All composers finish before any startup hook runs. Register dependency startup
+before the listener's startup, and register cleanup as soon as you own each
+resource. Cleanup is active immediately, even if a later composition step or
+startup hook fails; it does not depend on the matching startup hook being reached.
+
+Register readiness checks with `compose.Check` so a running process is not mistaken for
+one that can serve requests. Runners and check monitoring begin after startup
+succeeds. On shutdown, the application cancels its runners and waits for
+them to return, letting the server drain requests and workers finish. It then
+runs cleanup in reverse registration order, before stopping telemetry.
+Workers must honor cancellation,
+and dependency cleanup must follow their use. The lifecycle makes that ordering
+explicit; it does not infer it from your objects.
+
+### The slow request your logs cannot explain
+
+Now publishing works, but a request sometimes takes two seconds.
+The request log tells you it was slow. It does not tell you whether the time
+went into a database query, a cache lookup, or a call to another service.
+
+With telemetry enabled, those operations appear together in a trace of the
+request. Arkoren's components record their own operations, so you do not wrap
+each database or cache call yourself. You follow where the time went and
+connect the request to its logs, instead of adding timing statements and
+matching log lines by hand.
+
+Metrics answer the next question: was that one slow request, or is it
+happening across the application? The OpenTelemetry and Prometheus drivers send
+that information to your monitoring tools. For local investigation, the
+diagnostic MCP tools let you explore recent traces and logs without setting up a tracing
+backend first.
+
+With [request tracing enabled](/docs/guides/observability/request-tracing),
+the [diagnostic tools on a loopback MCP endpoint](/docs/guides/observability/exposing-diagnostics),
+and the [CLI connected to it](/docs/guides/cli/connecting),
+take the request's trace ID from its `traceresponse` response header and inspect
+it. Substitute that ID for the example below:
+
+```sh
+arkoren telemetry:trace 4bf92f3577b34da6a3ce929d0e0e4736
+```
+
+The result includes the spans and logs for that trace, so you can distinguish a
+slow insert from a slow queue dispatch. Diagnostic tools also expose health,
+events, and registered routes. Keep them off the public router: this is access to
+the running application's internals.
+
+The same CLI helps scripts and coding agents work from evidence rather than
+guesses. Before sending test requests, they can wait for readiness:
+
+```sh
+arkoren app:ready --wait --timeout 30s
+```
+
+The [diagnosis guide](/docs/guides/observability/diagnosing-an-application) connects these
+operations into a development loop.
+
+## What's included
+
+The publishing story used a handful of pieces. Arkoren includes many more,
+grouped the same way you will reach for them.
+
+### One interface, many drivers
+
+Each service defines a contract: an interface and a conformance suite every
+driver must pass. Many also include an in-process driver for development;
+database code can use SQLite, mail has a log driver, and language-model tests
+use a scripted fake. Drivers live in
+their own modules, so you install only the vendors you use, and switching one
+does not change the code that calls it.
+
+<ContractGrid class="my-8 xl:grid-cols-2" />
+
+### The HTTP path
+
+Around those services sits the request path: a router with error-returning
+handlers, request and response helpers, sessions, signed links, authentication
+with OpenID Connect and OAuth2 login, authorization rules, and middleware you
+add one route or one router at a time:
+
+<BadgeRow class="my-6" items={middleware} label="Middleware packages" />
+
+### Useful even without Arkoren
+
+The query builder, validation, and Problem Details from the articles example
+are foundation modules. They import only the standard library and work in any
+Go program.
+
+<div class="cells cells-2 my-8">
+	{foundation.map((module) => (
+		<ContractCard
+			name={module.name}
+			href={`/docs/api/foundation/${module.name}`}
+			note={`arkoren.dev/foundation/${module.name}`}
+			body={module.body}
+		/>
+	))}
+</div>
+
+## Bring in one piece at a time
+
+You can add any of these modules to an existing project without adopting
+Arkoren's router or changing how the application is organized.
+
+When your next feature needs a background job, a cache, or file storage, those
+pieces are available too. In-process drivers and test helpers let you test
+application behavior without a collection of running services. Driver modules
+connect the same code to your chosen infrastructure when you need it.
+
+There is no required folder structure, hosted platform, or commitment to a
+microservice architecture. Start with the part that earns its place.
+
+## Managing dependencies
+
+Each Arkoren module is versioned independently. Commit `go.mod` and `go.sum`,
+review changes before updating dependencies, and run your application's tests
+before deploying an upgrade.
+
+## What's next
+
+Before Arkoren grows, it needs to settle. The work on the way to 1.0 is about
+the foundations that are already here:
+
+- **Refine the API.** Feedback from users informs which designs stay
+  and which change.
+- **Improve performance.** Measure the hot paths, such as routing, validation,
+  query building, and telemetry, and make them faster.
+- **Optimize what exists.** Reduce allocations, dependencies, and rough edges
+  before adding more on top.
+
+There are no built-in [arks](/docs/guides/core-concepts/arks) yet, but some are
+coming very soon. These opt-in modules provide domain features, rather than
+only the mechanisms used to build them. The concept guide distinguishes arks
+from core packages and drivers; it does not advertise an installable module yet.
+
+## Thanks
+
+Arkoren would not look the way it does without
+[Laravel](https://laravel.com). Taylor Otwell and the Laravel community showed
+how much a framework can give back when its pieces are designed together, and
+how readable builders for queries, schemas, and validation can be. Much of
+Arkoren is an attempt to bring that experience to Go, in a way that feels
+natural to Go developers.
+
+Thanks also to the [OpenTelemetry](https://opentelemetry.io) project, whose
+standards Arkoren's telemetry follows, to the authors of
+[RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), which defines Problem
+Details, and to the Go team for a standard library that Arkoren's core can
+depend on alone.
+
+## Get involved
+
+Arkoren is open source, and your feedback helps shape it. I'm
+especially interested in feedback from developers who build HTTP services in
+Go: what feels natural, what feels foreign, and what you would expect to find
+but don't.
+
+**[Start with the quickstart](/docs/guides/first-steps/quickstart)**, read the
+[code on GitHub](https://github.com/arkoren/arkoren), or
+[open an issue](https://github.com/arkoren/arkoren/issues) with what you find.
+
+I'd love to see what you build with it.

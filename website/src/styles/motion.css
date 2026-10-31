@@ -1,0 +1,587 @@
+/* Keyframes and choreography that utilities cannot express.
+
+   Durations and easings come from the theme (--duration-*, --ease-*); the
+   multi-second loops below are artwork timing, not interaction timing, and stay
+   next to their keyframes. Season keyframes are used by season.css. */
+
+/* Page transition: a newly visible announcement enters independently of the header. */
+@keyframes nav-news-enter {
+  from {
+    opacity: 0;
+    translate: 0 --spacing(1.5);
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes nav-news-exit {
+  from {
+    opacity: 1;
+    translate: 0 0;
+  }
+  to {
+    opacity: 0;
+    translate: 0 --spacing(1.5);
+  }
+}
+
+/* One-line rows that clip: [data-slide] is the viewport, its first child the
+   track. A track wider than its viewport fades at each edge that still hides
+   content. On hover or focus of the viewport, or of an ancestor marked
+   [data-slide-host], it slides left to show the rest, holds, slides back to
+   the start, holds, and repeats; the edge fades follow it (left fade while
+   content is hidden on the left, right fade while it is hidden on the right).
+   --shift (distance) and --cycle (one round trip) come from Slide.astro. */
+@property --fade-left {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --fade-right {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@layer components {
+  [data-renderer="webgl"] .bench-viewport > svg {
+    display: none;
+  }
+  .bench-viewport {
+    height: var(--figure-height);
+    overflow: hidden;
+    cursor: grab;
+    touch-action: pan-y;
+    &[data-dragging] {
+      cursor: grabbing;
+    }
+    & .iso,
+    & svg {
+      height: 100%;
+    }
+    & > svg,
+    & > canvas {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  }
+  .bench-screw {
+    fill: var(--color-figure-edge);
+    stroke: none;
+  }
+  [data-slide] {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  [data-slide] > :first-child {
+    display: inline-flex;
+  }
+
+  [data-slide][data-overflow] {
+    --fade-right: --spacing(6);
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      black var(--fade-left),
+      black calc(100% - var(--fade-right)),
+      transparent
+    );
+  }
+
+  :is(
+    [data-slide]:is(:hover, :focus-visible),
+    [data-slide-host]:is(:hover, :focus-within) [data-slide]
+  )[data-overflow] {
+    animation: slide-fade var(--cycle, 3s) ease-in-out infinite;
+  }
+
+  :is(
+      [data-slide]:is(:hover, :focus-visible),
+      [data-slide-host]:is(:hover, :focus-within) [data-slide]
+    )[data-overflow]
+    > :first-child {
+    animation: slide-row var(--cycle, 3s) ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-slide],
+    [data-slide] > :first-child {
+      animation: none !important;
+    }
+  }
+}
+
+/* The shared status tooltip (components/ui/Tooltip.astro) fades and rises in; the layout and
+   colors are utilities on the element. */
+@layer components {
+  .tooltip {
+    opacity: 1;
+    translate: 0 0;
+    transition:
+      opacity var(--duration-fast) ease,
+      translate var(--duration-fast) ease,
+      display var(--duration-fast) allow-discrete;
+  }
+
+  .tooltip[hidden] {
+    opacity: 0;
+    translate: 0 --spacing(0.75);
+  }
+
+  @starting-style {
+    .tooltip:not([hidden]) {
+      opacity: 0;
+      translate: 0 --spacing(0.75);
+    }
+  }
+}
+
+@keyframes slide-row {
+  0%,
+  10% {
+    translate: 0 0;
+  }
+  40%,
+  60% {
+    translate: calc(-1 * var(--shift, 0px)) 0;
+  }
+  90%,
+  100% {
+    translate: 0 0;
+  }
+}
+
+/* Same timing as slide-row: the left fade grows as the track leaves the start,
+   the right fade shrinks as it reaches the end, and back. */
+@keyframes slide-fade {
+  0%,
+  10% {
+    --fade-left: 0px;
+    --fade-right: --spacing(6);
+  }
+  16%,
+  34% {
+    --fade-left: --spacing(6);
+    --fade-right: --spacing(6);
+  }
+  40%,
+  60% {
+    --fade-left: --spacing(6);
+    --fade-right: 0px;
+  }
+  66%,
+  84% {
+    --fade-left: --spacing(6);
+    --fade-right: --spacing(6);
+  }
+  90%,
+  100% {
+    --fade-left: 0px;
+    --fade-right: --spacing(6);
+  }
+}
+
+/* Hero artwork (components/home/Artwork.astro). The loop uses only transforms, opacity and a
+   short dash traveling over each static wire; its multi-second timing is artwork, not interaction. */
+@layer components {
+  .art-guides {
+    stroke-opacity: 0.35;
+  }
+
+  .art-wires {
+    stroke-opacity: 0.65;
+  }
+
+  .art-back {
+    stroke-opacity: 0.5;
+  }
+
+  .art-depth {
+    stroke-opacity: 0.6;
+  }
+
+  .art-front {
+    fill: currentColor;
+    fill-opacity: 0.22;
+    stroke-opacity: 0.88;
+  }
+
+  .art-module-body {
+    fill: currentColor;
+    fill-opacity: 0.16;
+    stroke-opacity: 0.82;
+  }
+
+  .art-module-content {
+    stroke-opacity: 0.9;
+    pointer-events: none;
+  }
+
+  .art-nodes,
+  .art-node {
+    fill: currentColor;
+    fill-opacity: 0.9;
+    stroke: none;
+  }
+
+  .art-caption {
+    fill: currentColor;
+    fill-opacity: 0.85;
+    stroke: none;
+    /* SVG user units, not CSS pixels: the artwork scales with its viewBox. */
+    font: 3.4px var(--font-mono);
+  }
+
+  /* Only the eight decorative assemblies receive hover input; guide lines cannot intercept it. */
+  .art-part {
+    pointer-events: all;
+  }
+
+  .art-part path,
+  .art-part rect,
+  .art-part text {
+    transition:
+      fill-opacity var(--duration-fast) ease,
+      stroke-opacity var(--duration-fast) ease,
+      color var(--duration-fast) ease;
+  }
+
+  .art-signals {
+    stroke-width: 0.85;
+    stroke-linecap: round;
+    pointer-events: none;
+  }
+
+  .art-signal {
+    stroke-dasharray: 3 97;
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+
+  .art-module-pulse {
+    fill: none;
+    stroke-opacity: 0.8;
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+    pointer-events: none;
+  }
+
+  .art-orbits {
+    stroke-width: 0.45;
+    stroke-opacity: 0.75;
+    pointer-events: none;
+  }
+
+  .art-orbit {
+    stroke-dasharray: 4 3 1 3;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* The loop uses only transforms, opacity, and a short dash traveling over each static wire. */
+  @media (prefers-reduced-motion: no-preference) {
+    .art-piece {
+      animation: art-float 4.8s ease-in-out infinite;
+      animation-delay: var(--motion-delay, 0s);
+    }
+    .art-signal {
+      animation: art-signal 2.4s linear infinite;
+      animation-delay: var(--motion-delay, 0s);
+    }
+    .art-module-pulse {
+      animation: art-pulse 3.6s ease-out infinite;
+      animation-delay: var(--motion-delay, 0s);
+    }
+    .art-orbit {
+      animation: art-orbit 4.8s linear infinite;
+      animation-direction: var(--motion-direction, normal);
+    }
+  }
+
+  @media (hover: hover) {
+    .art-part:hover .art-front,
+    .art-part:hover .art-module-body {
+      fill-opacity: 0.8;
+      stroke-opacity: 1;
+    }
+    .art-part:hover .art-back,
+    .art-part:hover .art-depth {
+      stroke-opacity: 1;
+    }
+    .art-module:hover .art-module-content {
+      color: var(--color-accent);
+      fill-opacity: 1;
+      stroke-opacity: 1;
+    }
+    .art-part:hover .art-caption {
+      fill-opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .art-part path,
+    .art-part rect,
+    .art-part text {
+      transition: none;
+    }
+  }
+}
+
+@keyframes art-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2.8px);
+  }
+}
+
+@keyframes art-signal {
+  0% {
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+  12%,
+  82% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes art-pulse {
+  0%,
+  45%,
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  55% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  90% {
+    opacity: 0;
+    transform: scale(1.24);
+  }
+}
+
+@keyframes art-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The 404 artwork (components/home/Missing.astro). */
+@layer components {
+  .missing-piece {
+    stroke-dasharray: 5 6;
+  }
+
+  .missing-pulse {
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .missing-piece {
+      animation: missing-trace 2s linear infinite;
+    }
+    .missing-socket {
+      animation: missing-float 4s ease-in-out infinite;
+    }
+    .missing-pulse {
+      animation: missing-pulse 4s ease-out infinite;
+    }
+  }
+}
+
+@keyframes missing-trace {
+  to {
+    stroke-dashoffset: -22;
+  }
+}
+
+@keyframes missing-float {
+  0%,
+  100% {
+    transform: translateY(8px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes missing-pulse {
+  0%,
+  20% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  30% {
+    opacity: 0.6;
+  }
+  75%,
+  100% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+@keyframes spider-drop {
+  from {
+    transform: translateY(-115px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes spider-rise {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-115px);
+  }
+}
+
+@keyframes spider-swing {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  25% {
+    transform: rotate(9deg);
+  }
+  75% {
+    transform: rotate(-9deg);
+  }
+}
+
+/* Each loop starts and ends off-screen, so its reset cannot flash into view. */
+@keyframes ghost-flight {
+  0% {
+    transform: translate(-100px, 62vh) rotate(-8deg);
+  }
+  25% {
+    transform: translate(25vw, 42vh) rotate(6deg);
+  }
+  50% {
+    transform: translate(52vw, 57vh) rotate(-6deg);
+  }
+  75% {
+    transform: translate(78vw, 30vh) rotate(7deg);
+  }
+  100% {
+    transform: translate(calc(100vw + 100px), 44vh) rotate(-8deg);
+  }
+}
+
+@keyframes ghost-flight-high {
+  0% {
+    transform: translate(-100px, 18vh) rotate(6deg);
+  }
+  30% {
+    transform: translate(30vw, 32vh) rotate(-7deg);
+  }
+  65% {
+    transform: translate(65vw, 12vh) rotate(5deg);
+  }
+  100% {
+    transform: translate(calc(100vw + 100px), 26vh) rotate(-6deg);
+  }
+}
+
+@keyframes ghost-flight-low {
+  0% {
+    transform: translate(-100px, 83vh) rotate(-5deg);
+  }
+  35% {
+    transform: translate(35vw, 66vh) rotate(8deg);
+  }
+  70% {
+    transform: translate(70vw, 86vh) rotate(-7deg);
+  }
+  100% {
+    transform: translate(calc(100vw + 100px), 72vh) rotate(5deg);
+  }
+}
+/* The Anatomy workbench is precomputed SVG. Only its dial pointer moves in JS. */
+@layer components {
+  .iso-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    & path,
+    & circle {
+      vector-effect: non-scaling-stroke;
+    }
+  }
+  .iso-fill {
+    fill: var(--color-figure-paper);
+    stroke: none;
+  }
+  .iso-top {
+    fill: var(--color-figure-top);
+    stroke: none;
+  }
+  .iso-shade {
+    stroke: none;
+  }
+  .iso-shade[data-shade="0"] {
+    fill: var(--color-figure-shade-0);
+  }
+  .iso-shade[data-shade="1"] {
+    fill: var(--color-figure-shade-1);
+  }
+  .iso-shade[data-shade="2"] {
+    fill: var(--color-figure-shade-2);
+  }
+  .iso-shade[data-shade="3"] {
+    fill: var(--color-figure-shade-3);
+  }
+  .iso-line {
+    fill: none;
+    stroke: var(--color-figure-edge);
+    stroke-width: var(--figure-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .iso-line[data-tone="faint"],
+  .iso-line[data-tone="lo"] {
+    stroke: var(--color-figure-groove);
+  }
+  .iso-line[data-tone="hi"],
+  .iso-line[data-tone="lit"] {
+    stroke: var(--color-fg);
+  }
+  .iso-dots circle {
+    fill: var(--color-figure-edge);
+    stroke: none;
+  }
+  [data-assembly]:not([data-assembly="stand"]) {
+    cursor: pointer;
+  }
+  [data-assembly][data-active] .iso-top {
+    fill: color-mix(in oklab, var(--color-figure-top), var(--color-accent-text) 18%);
+  }
+  [data-assembly][data-active] .iso-line {
+    stroke: var(--color-accent-text);
+  }
+  [data-assembly][data-linked] .iso-line[data-tone="mid"] {
+    stroke: var(--color-fg);
+  }
+}

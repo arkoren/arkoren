@@ -1,0 +1,21 @@
+---
+/**
+ * The small rose label used for categories, release dates and metadata links.
+ * It highlights on hover when it is a link, or sits inside one. Renders an
+ * anchor when an href is given, otherwise a span.
+ * @example <Tag>Release</Tag>
+ * @example <Tag href="/llms.txt">llms.txt</Tag>
+ */
+interface Props {
+  /** Makes the tag a link. */
+  href?: string;
+  class?: string;
+}
+
+const { href, class: className } = Astro.props;
+const Element = href === undefined ? "span" : "a";
+---
+
+<Element href={href} class:list={["tag", className]}>
+  <slot />
+</Element>

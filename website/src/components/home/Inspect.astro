@@ -1,0 +1,64 @@
+---
+import Link from "../ui/Link.astro";
+import Note from "./Note.astro";
+import Step from "./Step.astro";
+import Terminal from "./Terminal.astro";
+
+/**
+ * Step 04: diagnostics for operators and agents, with the access caveat.
+ * @example <Inspect />
+ */
+---
+
+<Step id="inspect" number="04" label="Inspect / operators & agents">
+  <div class="grid items-center gap-8 lg:grid-cols-stage-flip lg:gap-12">
+    <div class="min-w-0 lg:order-2">
+      <h2 id="inspect-title" class="mb-6 text-section font-medium">
+        A running service.
+        <br />
+        Something to go on.
+      </h2>
+      <p class="mb-4 text-sm leading-relaxed text-muted">
+        Expose selected health, readiness, routes, and bounded traces, logs, and metrics as
+        protected MCP tools. Operators and agents discover the same catalog.
+      </p>
+      <p class="mb-4 text-sm leading-relaxed text-muted">
+        Attach capture before startup and publish only the tools you intend to expose. Retained
+        records are evidence, not a complete history.
+      </p>
+      <Link href="/docs/guides/observability/exposing-diagnostics">
+        Publish selected diagnostics
+      </Link>
+    </div>
+    <Terminal class="lg:order-1" title="Operator terminal" note="Command examples">
+      <div class="p-4 text-xs text-muted sm:p-6">
+        <p>
+          First{" "}
+          <a class="text-code-accent" href="/docs/guides/cli/connecting">
+            connect and authenticate the CLI
+          </a>
+          . These commands assume default diagnostic groups.
+        </p>
+        <pre
+          class="my-4 max-w-full overflow-x-auto font-mono text-xs leading-relaxed text-fg"
+          tabindex="0"
+          role="region"
+          aria-label="Discover tools, wait for readiness, and inspect error traces"
+        ><code><span class="text-muted"># Discover the actual catalog</span>
+arkoren tools --json
+
+<span class="text-muted"># Continue only if the wait succeeds</span>
+arkoren app:ready --wait --timeout 30s
+
+<span class="text-muted"># Inspect retained failed traces</span>
+arkoren telemetry:traces --status error --since 5m</code></pre>
+        <p>Failed waits exit nonzero. Actions are not automatically replayed.</p>
+      </div>
+    </Terminal>
+  </div>
+  <Note icon="shield">
+    <strong class="font-medium text-fg">Exposure is an application decision.</strong> Authenticate
+    callers and authorize resources. Even read-only diagnostics can contain private application
+    data. <a href="/docs/guides/mcp/securing-mcp">Set the boundary.</a>
+  </Note>
+</Step>

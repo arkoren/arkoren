@@ -1,0 +1,21 @@
+---
+import Icon from "../ui/Icon.astro";
+
+/**
+ * A short aside on the journey: an icon beside one paragraph, tinted with the
+ * accent. Put the lead sentence in a <strong>.
+ * @example <Note icon="shield"><strong>Exposure is a decision.</strong> Authenticate callers.</Note>
+ */
+interface Props {
+  icon: "code" | "shield";
+}
+
+const { icon } = Astro.props;
+---
+
+<aside class="mt-8 flex gap-3 border-l-2 border-accent-text bg-accent-text/10 p-4 sm:gap-4 sm:px-6 sm:py-4">
+  <Icon name={icon} class="mt-1 flex-none text-accent-text" />
+  <p class="text-xs leading-relaxed text-muted sm:text-sm">
+    <slot />
+  </p>
+</aside>

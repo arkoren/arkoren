@@ -1,0 +1,35 @@
+---
+/**
+ * Shared author attribution for archive entries and individual posts.
+ * @example <Author name="Erik" title="Maintainer" company="Arkoren" companyURL="https://arkoren.dev" />
+ */
+interface Props {
+  name: string;
+  title?: string;
+  company?: string;
+  companyURL?: string;
+}
+
+const { name, title, company, companyURL } = Astro.props;
+---
+
+<span class="grid min-w-0 text-sm font-medium text-fg">
+  <span>{name}</span>
+  {(title || company) && (
+    <small class="text-xs font-normal text-muted">
+      {title}
+      {company && (
+        <Fragment>
+          {title && " at "}
+          {companyURL ? (
+            <a class="text-fg no-underline hover:text-accent-text" href={companyURL}>
+              {company}
+            </a>
+          ) : (
+            company
+          )}
+        </Fragment>
+      )}
+    </small>
+  )}
+</span>

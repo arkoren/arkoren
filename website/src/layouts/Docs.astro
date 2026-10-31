@@ -1,0 +1,129 @@
+---
+import Site from "./Site.astro";
+import Sidebar from "../components/docs/Sidebar.astro";
+import Outline from "../components/docs/Outline.astro";
+import Breadcrumbs from "../components/docs/Breadcrumbs.astro";
+import Version from "../components/docs/Version.astro";
+import { breadcrumbData, canonicalURL, type Breadcrumb, type SocialImage } from "../lib/site/seo";
+
+/**
+ * Shell shared by every docs page: the sidebar, a content column between
+ * borders, and a right "on this page" rail built from `headings`. The rail
+ * shows from the xl breakpoint and the sidebar folds into a menu below lg.
+ * Pages that have a raw Markdown twin pass `raw` so crawlers and agents find it
+ * through `<link rel="alternate" type="text/markdown">`.
+ */
+interface Props {
+  title: string;
+  description: string;
+  /** Shared image; defaults to the site's rose card. */
+  image?: SocialImage;
+  headings?: { depth: number; slug: string; text: string }[];
+  raw?: string;
+  breadcrumbs?: Breadcrumb[];
+}
+
+const { title, description, image, headings = [], raw } = Astro.props;
+/** Breadcrumb URLs use the same production origin as the shared metadata. */
+const site = Astro.site;
+if (site === undefined) throw new Error("site must be configured");
+/** Astro's prerender URL can contain the output filename rather than the route. */
+const pathname = canonicalURL(Astro.url.pathname, site).pathname;
+/** Temporary documentation batch date, until release metadata supplies it. */
+const releaseDate = "2026-10-25";
+/** Index and import pages get a useful baseline; content pages pass their tree. */
+const breadcrumbs = Astro.props.breadcrumbs ?? [
+  { name: "Home", href: "/" },
+  ...(pathname === "/docs" ? [] : [{ name: "Documentation", href: "/docs" }]),
+  { name: title, href: pathname },
+];
+// The rail always has an entry: the page's top, then its sections.
+const rail = [
+  { depth: 2, slug: "top", text: "Overview" },
+  ...headings.filter((h) => h.depth === 2 || h.depth === 3),
+];
+---
+
+<Site
+  title={`${title} · arkoren`}
+  socialTitle={title}
+  description={description}
+  image={image}
+  structuredData={[breadcrumbData(breadcrumbs, site)]}
+>
+  {raw && <link slot="head" rel="alternate" type="text/markdown" href={raw} />}
+  <div class="block lg:page-width lg:grid lg:cols-docs-narrow xl:cols-docs">
+    <aside
+      class="flex flex-col border-b border-line p-4 lg:stick-below-header lg:overflow-hidden lg:border-b-0 lg:py-8 lg:pr-4 lg:pl-0"
+      data-docs-sidebar
+    >
+      <Sidebar />
+    </aside>
+    <main
+      class="min-w-0 border-line px-4 pt-8 pb-18 *:mx-auto *:max-w-prose lg:border-x lg:px-8 lg:pb-24 max-xl:lg:border-r-0"
+      id="top"
+      data-pagefind-body
+    >
+      <Breadcrumbs items={breadcrumbs} />
+      <slot name="header" />
+      <div class="xl:hidden">
+        <Version date={releaseDate} />
+        {headings.length > 0 && <Outline headings={rail} variant="mobile" />}
+      </div>
+      <slot />
+    </main>
+    <aside class="stick-below-header overflow-y-auto py-8 pl-4 max-xl:hidden" data-docs-rail>
+      <Version date={releaseDate} />
+      <Outline headings={rail} variant="desktop" />
+    </aside>
+  </div>
+  <script>
+    import { initCopyControls } from "../scripts/copy";
+    // Desktop shows the nav tree permanently; narrow screens fold it behind a toggle.
+    const menu = document.querySelector<HTMLDetailsElement>("[data-menu]");
+    const rootStyle = getComputedStyle(document.documentElement);
+    const wide = matchMedia(`(min-width: ${rootStyle.getPropertyValue("--breakpoint-lg")})`);
+    const sync = () => menu && (menu.open = wide.matches);
+    sync();
+    wide.addEventListener("change", sync);
+
+    // Clickable headings: each one links to itself, so a click puts its id in the URL to share.
+    // The page title links to the top of the page. The browser scrolls to the hash on arrival.
+    const anchored = [
+      ...document.querySelectorAll<HTMLElement>(
+        "[data-docs-head] h1, .prose :is(h2, h3, h4, h5, h6)[id]",
+      ),
+    ];
+    for (const heading of anchored) {
+      const link = Object.assign(document.createElement("a"), {
+        className: "doc-anchor",
+        href: `#${heading.id || "top"}`,
+      });
+      link.append(...heading.childNodes);
+      heading.append(link);
+    }
+
+    // Tables wider than the column scroll on the x axis. The edge that still hides columns fades (styles/prose.css),
+    // growing to 1.5rem (spacing 6) as the table scrolls away from it, the same fade as the sliding rows.
+    const edge = parseFloat(rootStyle.fontSize) * 1.5;
+    const fade = (table: HTMLElement) => {
+      const hidden = table.scrollWidth - table.clientWidth;
+      if (hidden < 1) {
+        delete table.dataset.overflow;
+        return;
+      }
+      table.dataset.overflow = "";
+      table.style.setProperty("--fade-left", `${Math.min(table.scrollLeft, edge)}px`);
+      table.style.setProperty("--fade-right", `${Math.min(hidden - table.scrollLeft, edge)}px`);
+    };
+    const tables = [...document.querySelectorAll<HTMLElement>(".prose .table-scroll")];
+    const fadeAll = () => tables.forEach(fade);
+    for (const table of tables)
+      table.addEventListener("scroll", () => fade(table), { passive: true });
+    fadeAll();
+    document.fonts.ready.then(fadeAll);
+    addEventListener("resize", fadeAll);
+
+    initCopyControls(document);
+  </script>
+</Site>

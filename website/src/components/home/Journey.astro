@@ -1,0 +1,37 @@
+---
+import Icon from "../ui/Icon.astro";
+
+/**
+ * The service journey as a four-cell navigation bar: each cell jumps to the
+ * matching step further down the home page (Build, Test, Run, Inspect).
+ * @example <Journey />
+ */
+const steps = [
+  { id: "build", title: "Build", hint: "Start with what you know" },
+  { id: "test", title: "Test", hint: "Prove the behavior" },
+  { id: "run", title: "Run", hint: "Choose the infrastructure" },
+  { id: "inspect", title: "Inspect", hint: "Operators & agents" },
+];
+---
+
+<nav class="page-width mt-8" aria-label="The service journey">
+  <ol class="grid gap-px overflow-hidden rounded-sm border border-line bg-line sm:grid-cols-2 lg:grid-cols-4">
+    {steps.map((step, index) => (
+      <li class="bg-surface">
+        <a
+          class="flex h-full items-center gap-4 px-4 py-4 no-underline transition-colors duration-fast hover:bg-raised hover:text-fg lg:px-6 lg:py-4"
+          href={`#${step.id}`}
+        >
+          <span class="font-mono text-lg text-accent-text">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          <span class="grid min-w-0 gap-1">
+            <strong class="text-lg font-medium">{step.title}</strong>
+            <small class="text-xs text-muted">{step.hint}</small>
+          </span>
+          <Icon name="arrow-right" class="ml-auto flex-none" />
+        </a>
+      </li>
+    ))}
+  </ol>
+</nav>

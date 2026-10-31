@@ -1,0 +1,89 @@
+---
+import Announcement from "./Announcement.astro";
+import Search from "./Search.astro";
+import SeasonToggle from "../season/Toggle.astro";
+import SeasonSpider from "../season/Spider.astro";
+import SeasonPumpkin from "../season/Pumpkin.astro";
+import { getBlogPosts } from "../../lib/blog/posts";
+
+/**
+ * Sticky site header: the logo, the section links ending with GitHub, the
+ * latest blog post, the seasonal toggle and search, which spans the docs "on
+ * this page" column. The link for the section being viewed is marked as the
+ * current page. Below the lg breakpoint the links fold into a menu.
+ * @example <Header />
+ */
+const repo = "https://github.com/arkoren/arkoren";
+// Static builds (build.format "file") report the page as ".../name.html"; compare routes without it.
+const path = Astro.url.pathname.replace(/\.html$/, "");
+const links = [
+  {
+    href: "/docs",
+    label: "Documentation",
+    current: path === "/docs" || path.startsWith("/docs/"),
+  },
+  { href: "/blog", label: "Blog", current: path === "/blog" || path.startsWith("/blog/") },
+  { href: "/changelog", label: "Changelog", current: path === "/changelog" },
+  { href: repo, label: "GitHub", current: false },
+];
+/** The newest published post, teased between the links and search. */
+const [latest] = await getBlogPosts();
+---
+
+<header data-header class="sticky top-0 z-10 border-b border-line bg-bg">
+  <div class="flex h-header items-center gap-4 gutter-x">
+    <a
+      href="/"
+      class="relative flex self-stretch bg-accent fade focus-visible:-outline-offset-2"
+      aria-label="Arkoren home"
+    >
+      {/* The original 72 px Strata geometry inherits the live palette. */}
+      <svg class="block size-header" width="72" height="72" viewBox="0 0 72 72" aria-hidden="true">
+        <path
+          class="fill-on-accent"
+          d="M30.155 16H41.845L46.236 26H25.764ZM23.569 31H48.431L52.821 41H19.179ZM16.984 46H29.525L25.434 56H12.594ZM42.475 46H55.016L59.406 56H46.566Z"
+        />
+      </svg>
+      <SeasonPumpkin />
+    </a>
+    <nav aria-label="Primary" class="max-lg:hidden">
+      <ul class="flex gap-3">
+        {links.map((l) => (
+          <li>
+            <a
+              href={l.href}
+              class="flex items-center gap-1 rounded-sm px-3 py-1.5 text-sm font-medium text-fg no-underline transition-colors hover:bg-raised max-xl:px-2 current:bg-raised"
+              aria-current={l.current ? "page" : undefined}
+            >
+              {l.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+    <div data-header-actions class="flex min-w-0 flex-1 items-center justify-end gap-4">
+      {latest && <Announcement post={latest} hero={path === "/"} />}
+      <SeasonToggle class="max-lg:hidden" />
+      <Search />
+    </div>
+    <details data-mobile-nav class="lg:hidden">
+      <summary class="cursor-pointer py-1 text-sm font-medium">Menu</summary>
+      <nav
+        aria-label="Mobile primary"
+        class="absolute inset-x-4 top-full rounded-sm border border-line bg-bg p-3 shadow-lift"
+      >
+        {links.map((link) => (
+          <a
+            class="flex items-center gap-1 rounded-sm p-3 text-sm font-medium text-fg no-underline transition-colors hover:bg-raised current:bg-raised"
+            href={link.href}
+            aria-current={link.current ? "page" : undefined}
+          >
+            {link.label}
+          </a>
+        ))}
+        <SeasonToggle mobile />
+      </nav>
+    </details>
+  </div>
+  <SeasonSpider />
+</header>

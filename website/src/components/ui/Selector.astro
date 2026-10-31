@@ -1,0 +1,28 @@
+---
+import type { HTMLAttributes } from "astro/types";
+
+/**
+ * Share an inset selection surface without changing control semantics.
+ * Slot links for navigation or buttons for panels, keeping their ARIA state
+ * and behavior with the caller. The surface recognizes current, selected,
+ * and pressed controls (see styles/global.css, `.selector`).
+ * @example
+ * <Selector aria-label="Panels" role="tablist">
+ *   <button type="button" role="tab" aria-selected="true">One</button>
+ * </Selector>
+ */
+type Props = HTMLAttributes<"div">;
+
+/** Forward labels, roles, and data hooks to the selection group. */
+const { class: className, ...attributes } = Astro.props;
+---
+
+<div class:list={["selector", className]} data-selector {...attributes}>
+  <span class="selector-indicator" data-selector-indicator aria-hidden="true"></span>
+  <slot />
+</div>
+
+<script>
+  import { initSegmentedSelector } from "../../scripts/selector";
+  document.querySelectorAll<HTMLElement>("[data-selector]").forEach(initSegmentedSelector);
+</script>

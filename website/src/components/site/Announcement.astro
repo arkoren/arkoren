@@ -1,0 +1,73 @@
+---
+import type { CollectionEntry } from "astro:content";
+import Icon from "../ui/Icon.astro";
+import Tag from "../ui/Tag.astro";
+import { blogRoute } from "../../lib/blog/posts";
+
+/**
+ * The newest blog post, teased in the header between the links and search.
+ * On the home page the hero carries the same announcement, so this one stays
+ * hidden and inert until the hero scrolls under the header (see the script).
+ * Hidden below the xl breakpoint, where the header has no room for it.
+ * @example <Announcement post={latest} hero={path === "/"} />
+ */
+interface Props {
+  post: CollectionEntry<"blog">;
+  /** The page shows the hero announcement, so start hidden. */
+  hero: boolean;
+}
+
+const { post, hero } = Astro.props;
+---
+
+<a
+  class="group flex min-w-0 items-center gap-2 rounded-sm px-3 py-1.5 text-xs font-medium text-muted no-underline transition-reveal hover:bg-raised hover:text-fg data-hero-visible:pointer-events-none data-hero-visible:invisible data-hero-visible:translate-y-1.5 data-hero-visible:opacity-0 max-xl:hidden"
+  href={blogRoute(post)}
+  data-news
+  data-hero-visible={hero ? "" : undefined}
+  inert={hero}
+>
+  <Tag class="flex-none">{post.data.category}</Tag>
+  <span class="min-w-0 truncate">{post.data.title}</span>
+  <Icon
+    name="arrow-right"
+    size={14}
+    class="flex-none transition-transform group-hover:translate-x-0.5"
+  />
+</a>
+
+<script>
+  /** Hand off the announcement when the hero clears the sticky header. */
+  function setupNewsHandoff() {
+    const hero = document.querySelector<HTMLElement>("[data-home-hero]");
+    const news = document.querySelector<HTMLAnchorElement>("[data-news]");
+    const header = document.querySelector<HTMLElement>("[data-header]");
+    if (hero === null || news === null || header === null) return;
+
+    /** Keep hidden announcements out of keyboard and assistive navigation. */
+    function updateVisibility() {
+      if (hero === null || news === null || header === null) return;
+      const bounds = hero.getBoundingClientRect();
+      const isHeroVisible =
+        bounds.bottom > header.getBoundingClientRect().bottom && bounds.top < window.innerHeight;
+      news.toggleAttribute("data-hero-visible", isHeroVisible);
+      news.inert = isHeroVisible;
+    }
+
+    /** Rebuild the viewport boundary if the sticky header changes height. */
+    let observer: IntersectionObserver | undefined;
+    const resizeObserver = new ResizeObserver(() => {
+      observer?.disconnect();
+      observer = new IntersectionObserver(updateVisibility, {
+        rootMargin: `-${header.getBoundingClientRect().height}px 0px 0px 0px`,
+      });
+      observer.observe(hero);
+      updateVisibility();
+    });
+    resizeObserver.observe(header);
+    window.addEventListener("pageshow", updateVisibility);
+    updateVisibility();
+  }
+
+  setupNewsHandoff();
+</script>

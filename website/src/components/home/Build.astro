@@ -1,0 +1,65 @@
+---
+import Link from "../ui/Link.astro";
+import Note from "./Note.astro";
+import Panel from "./Panel.astro";
+import Step from "./Step.astro";
+
+/**
+ * Step 01: a first handler written in plain Go, plus the pointer to the
+ * bundled agent skill.
+ * @example <Build />
+ */
+
+/** Focused JSON handler; the quickstart covers router setup. */
+const handlerCode = `type Greeting struct {
+	Name string \`json:"name"\`
+}
+
+routes.Post("/hello", func(w http.ResponseWriter, r *http.Request) error {
+	input, err := request.JSON[Greeting](r, request.Strict())
+	if err != nil {
+		// The router renders invalid JSON as a 400 Problem Details response.
+		return err
+	}
+
+	return response.JSON(w, http.StatusOK, map[string]string{
+		"message": "Hello, " + input.Name + "!",
+	})
+})`;
+---
+
+<Step id="build" number="01" label="Build / start with what you know">
+  <div class="grid items-center gap-8 lg:grid-cols-stage lg:gap-12">
+    <div class="min-w-0">
+      <h2 id="build-title" class="mb-6 text-section font-medium">
+        Your first handler.
+        <br />
+        Still just Go.
+      </h2>
+      <p class="mb-4 text-sm leading-relaxed text-muted">
+        Keep standard HTTP requests and responses. Return errors to the router; it renders them
+        centrally as Problem Details.
+      </p>
+      <p class="mb-4 text-sm leading-relaxed text-muted">
+        Add typed validation, authentication, plain-Go authorization, browser protections, HTML, and
+        SSE as your application grows.
+      </p>
+      <Link href="/docs/guides/first-steps/quickstart">Start with the quickstart</Link>
+    </div>
+    <Panel
+      title="router.go"
+      note="Route excerpt"
+      code={handlerCode}
+      label="Typed JSON greeting handler using standard HTTP types"
+    >
+      <Fragment slot="caption">
+        Typed JSON in, JSON out. Malformed input and unknown fields return errors to the router.
+      </Fragment>
+    </Panel>
+  </div>
+  <Note icon="code">
+    <strong class="font-medium text-fg">Bring your coding agent along.</strong> Generated projects
+    include a managed skill with guides and canonical API links, plus your own editable{" "}
+    <code class="text-fg">AGENTS.md</code>.
+  </Note>
+</Step>

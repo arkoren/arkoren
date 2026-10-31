@@ -1,0 +1,28 @@
+---
+/**
+ * A terminal-style frame: a mono title bar over free-form content, for shell
+ * commands and the surrounding explanation.
+ * @example <Terminal title="Operator terminal" note="Command examples">…</Terminal>
+ */
+interface Props {
+  title: string;
+  note: string;
+  class?: string;
+}
+
+const { title, note, class: className } = Astro.props;
+---
+
+<figure
+  class:list={[
+    "min-w-0 overflow-hidden rounded-sm border border-line bg-surface text-fg",
+    className,
+  ]}
+  data-code-surface
+>
+  <figcaption class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-4 font-mono text-2xs sm:px-6">
+    <span>{title}</span>
+    <span class="text-muted">{note}</span>
+  </figcaption>
+  <slot />
+</figure>

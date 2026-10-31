@@ -1,0 +1,33 @@
+---
+/**
+ * Shared documentation title and lead, with commands, actions, and metadata
+ * slots kept in their existing order. The default slot contains inline lead
+ * content. Pass this component in Docs' header slot to retain title anchoring.
+ * @example <DocsPageHeader slot="header" title="Cache">Store values.</DocsPageHeader>
+ */
+interface Props {
+  /** The single page heading; Docs enhances it with a top-of-page anchor. */
+  title: string;
+  /** Optional family label shown before the title. */
+  eyebrow?: string;
+  /** Replaces the default title size, for long monospace import paths. */
+  titleClass?: string;
+}
+/** Rich lead markup belongs to the caller, not an HTML string prop. */
+const { title, eyebrow, titleClass = "text-xl" } = Astro.props;
+---
+
+<header class="mb-8 grid justify-items-start gap-4 border-b border-line pb-8" data-docs-head>
+  {eyebrow && <span class="eyebrow">{eyebrow}</span>}
+  <h1 class:list={["font-medium wrap-anywhere", titleClass]}>{title}</h1>
+  <p class="text-base text-muted md:text-lg">
+    <slot />
+  </p>
+  <slot name="commands" />
+  <slot name="actions" />
+  {Astro.slots.has("meta") && (
+    <div class="flex flex-wrap gap-2">
+      <slot name="meta" />
+    </div>
+  )}
+</header>

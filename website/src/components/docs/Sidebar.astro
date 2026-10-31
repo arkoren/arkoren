@@ -1,0 +1,160 @@
+---
+import Group from "./Group.astro";
+import Icon from "../ui/Icon.astro";
+import SegmentedSelector from "../ui/Selector.astro";
+import { getGuideSections, guideLabel, guideRoute } from "../../lib/docs/guides";
+import { apiModules } from "../../lib/docs/api";
+
+/**
+ * Left navigation for every docs page: authored guide groups or canonical
+ * library module links. The area selector switches trees without replacing
+ * the article. Guide groups holding
+ * the current page start open; the rest are
+ * collapsed so the long lists stay short.
+ * On narrow screens the whole tree sits behind a "Browse docs" disclosure.
+ * @example <DocsSidebar />
+ */
+// Static builds (build.format "file") report the page as ".../name.html"; compare routes without it.
+const path = Astro.url.pathname.replace(/\.html$/, "");
+/** API routes select the reference tree; other docs routes show guides. */
+const isAPI = path === "/docs/api";
+const sections = await getGuideSections();
+const families = apiModules();
+const current = (href: string) => (href === path ? "page" : undefined);
+---
+
+<nav
+  class="mb-8 flex-none bg-bg max-lg:mb-4"
+  aria-label="Documentation navigation"
+  data-pagefind-ignore
+>
+  <SegmentedSelector class="w-full" role="group" aria-label="Documentation area">
+    <button
+      type="button"
+      class="flex-auto"
+      data-doc-area="guides"
+      aria-pressed={!isAPI ? "true" : "false"}
+      aria-controls="doc-guides-tree"
+    >
+      Guides
+    </button>
+    <button
+      type="button"
+      class="flex-auto"
+      data-doc-area="api"
+      aria-pressed={isAPI ? "true" : "false"}
+      aria-controls="doc-api-tree"
+    >
+      API Reference
+    </button>
+  </SegmentedSelector>
+  <noscript>
+    <p class="mt-2 text-xs">
+      <a href="/docs">Guide index</a> · <a href="/docs/api">API Reference</a>
+    </p>
+  </noscript>
+</nav>
+<details class="group/menu min-h-0 overflow-y-auto max-lg:overflow-visible" data-menu open>
+  <summary
+    class="flex list-none justify-between rounded-sm border border-line-strong px-3 py-2 text-sm font-medium lg:hidden"
+    data-menu-toggle
+  >
+    Browse docs
+    <span class="text-muted group-open/menu:hidden" aria-hidden="true">
+      +
+    </span>
+    <span class="hidden text-muted group-open/menu:inline" aria-hidden="true">
+      -
+    </span>
+  </summary>
+  <nav
+    class="grid gap-4 text-sm max-lg:mt-4 max-lg:max-h-120 max-lg:overflow-y-auto"
+    id="doc-guides-tree"
+    data-doc-panel="guides"
+    aria-label="Guides"
+    hidden={isAPI}
+  >
+    {sections.map((s) => (
+      <section>
+        <h3 class="mb-1 px-2 text-xs font-semibold">{s.title}</h3>
+        {s.groups.map((group) => (
+          <details
+            class="group/branch"
+            open={
+              (group.meta.id === "about/index" && path === "/docs") ||
+              group.pages.some((g) => guideRoute(g) === path)
+            }
+          >
+            <Group label={group.meta.data.title} />
+            <ul class="ml-3 border-l border-line pl-2">
+              {group.meta.id === "about/index" && (
+                <li>
+                  <a class="tree-link" href="/docs" aria-current={current("/docs")}>
+                    Overview
+                  </a>
+                </li>
+              )}
+              {group.pages.map((g) => (
+                <li>
+                  <a
+                    class="tree-link"
+                    href={guideRoute(g)}
+                    aria-current={current(guideRoute(g))}
+                    title={g.data.title}
+                    data-slide
+                  >
+                    <span>{guideLabel(g)}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ))}
+      </section>
+    ))}
+  </nav>
+  <nav
+    class="grid gap-4 text-sm max-lg:mt-4 max-lg:max-h-120 max-lg:overflow-y-auto"
+    id="doc-api-tree"
+    data-doc-panel="api"
+    aria-label="API Reference"
+    hidden={!isAPI}
+  >
+    <a class="tree-link font-medium" href="/docs/api" aria-current={current("/docs/api")}>
+      <span>Module catalog</span>
+    </a>
+    {families.map((family) => (
+      <section>
+        <h3 class="mb-1 px-2 text-xs font-semibold">{family.title}</h3>
+        <ul>
+          {family.modules.map((module) => (
+            <li>
+              <a
+                class="tree-link flex items-center gap-1.5 font-semibold hover:bg-transparent"
+                href={module.url}
+              >
+                <span>{module.path}</span>
+                <Icon name="arrow-up-right" size={14} />
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))}
+  </nav>
+</details>
+
+<script>
+  import { initDocsSidebar, revealCurrentDoc } from "../../scripts/sidebar";
+
+  initDocsSidebar(document);
+
+  /** Recheck the selected row when fonts or viewport changes alter its layout. */
+  function reveal() {
+    revealCurrentDoc(document);
+  }
+
+  reveal();
+  document.fonts.ready.then(reveal);
+  addEventListener("resize", reveal);
+</script>

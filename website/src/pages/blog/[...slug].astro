@@ -1,0 +1,285 @@
+---
+import type { GetStaticPaths, ImageMetadata } from "astro";
+import type { SvgComponent } from "astro/types";
+import { render } from "astro:content";
+import { Image, getImage } from "astro:assets";
+import Site from "../../layouts/Site.astro";
+import Icon from "../../components/ui/Icon.astro";
+import Outline from "../../components/docs/Outline.astro";
+import Tag from "../../components/ui/Tag.astro";
+import Button from "../../components/ui/Button.astro";
+import BlogAuthor from "../../components/blog/Author.astro";
+import BlogMargin from "../../components/blog/Margin.astro";
+import { blogDate, getBlogPosts, readingMinutes } from "../../lib/blog/posts";
+import { canonicalURL, type SocialImage } from "../../lib/site/seo";
+import { ARTICLE_SIZES, blogCard, cardImage, cardPath } from "../../lib/og/image";
+import publisherLogo from "../../assets/images/logo/logo-rose-on-white.png";
+import logo from "../../assets/images/logo/logo-white-on-rose.svg?url";
+
+/** Generate real HTML for every published post, including nested filenames. */
+export const getStaticPaths = (async () =>
+  (await getBlogPosts()).map((post) => ({
+    params: { slug: post.id },
+    props: { post },
+  }))) satisfies GetStaticPaths;
+
+const { post } = Astro.props;
+const { Content, headings } = await render(post);
+const sections = headings.filter((heading) => heading.depth === 2);
+/** Desktop and mobile navigation use identical section destinations. */
+const contents = [{ depth: 2, slug: "top", text: "Overview" }, ...sections];
+/** Reserve the outer column only when a post supplies editorial material. */
+const hasReaderMargin = Boolean(
+  post.data.authorDesk || post.data.behindPost || post.data.readingShelf?.length,
+);
+/** Cached dev entries can predate the optional reading-list schema defaults. */
+const explore = post.data.explore ?? [];
+/** Match the shared container, including its wider desktop breakpoint. */
+const bannerSizes = "(min-width: 1680px) 1440px, (min-width: 1232px) 1200px, calc(100vw - 32px)";
+/** Keep vectors intact; cap raster candidates at the source and 2x display size. */
+const bannerSource = post.data.banner?.src;
+/** Discover SVG components with Astro metadata, which matches in dev and builds. */
+const bannerComponents = import.meta.glob<SvgComponent & ImageMetadata>(
+  "../../assets/images/**/*.svg",
+  {
+    eager: true,
+    import: "default",
+  },
+);
+/** Raster and remote banners keep the standard image-rendering path. */
+const Banner = Object.values(bannerComponents).find(
+  (component) => component.src === bannerSource?.src,
+);
+/** Deduplicate candidates when several requested widths exceed the source. */
+const bannerWidths =
+  bannerSource && bannerSource.format !== "svg"
+    ? [
+        ...new Set(
+          [320, 480, 640, 960, 1200, 1600, 1920, 2400].map((width) =>
+            Math.min(width, bannerSource.width),
+          ),
+        ),
+      ]
+    : undefined;
+/** Article identities must use the same public origin as their canonical page. */
+const site = Astro.site;
+if (site === undefined) throw new Error("site must be configured");
+/** A post shares its own ogImage when it has one; otherwise its generated card. */
+const override = post.data.ogImage;
+const overrideImage = override && (await getImage({ src: override.src }));
+const card = blogCard(post);
+const image: SocialImage =
+  override && overrideImage
+    ? {
+        src: overrideImage.src,
+        alt: override.alt,
+        width: override.src.width,
+        height: override.src.height,
+        type: override.src.format === "jpg" ? "image/jpeg" : `image/${override.src.format}`,
+      }
+    : cardImage(card);
+/** Google recommends 16:9, 4:3, and 1:1 article images; a custom ogImage stands alone. */
+const articleImages = override
+  ? [new URL(image.src, site).href]
+  : ARTICLE_SIZES.map((size) => new URL(cardPath(card, size), site).href);
+const { author: writer } = post.data;
+const author =
+  writer.name === "Arkoren"
+    ? { "@type": "Organization", name: "Arkoren", url: new URL("/", site).href }
+    : { "@type": "Person", name: writer.name, ...(writer.url ? { url: writer.url } : {}) };
+const minutes = readingMinutes(post);
+/** Article facts are taken from the same frontmatter displayed on the page. */
+const article = {
+  "@type": "BlogPosting",
+  "@id": `${canonicalURL(Astro.url.pathname, site).href}#article`,
+  headline: post.data.title,
+  description: post.data.description,
+  mainEntityOfPage: canonicalURL(Astro.url.pathname, site).href,
+  datePublished: post.data.publishedAt.toISOString(),
+  ...(post.data.updatedAt ? { dateModified: post.data.updatedAt.toISOString() } : {}),
+  author,
+  publisher: {
+    "@type": "Organization",
+    name: "Arkoren",
+    url: new URL("/", site).href,
+    logo: {
+      "@type": "ImageObject",
+      url: new URL(publisherLogo.src, site).href,
+      width: publisherLogo.width,
+      height: publisherLogo.height,
+    },
+  },
+  articleSection: post.data.category,
+  image: articleImages,
+};
+---
+
+<Site
+  title={`${post.data.title} · arkoren`}
+  socialTitle={post.data.title}
+  description={post.data.description}
+  image={image}
+  type="article"
+  structuredData={[article]}
+>
+  <Fragment slot="head">
+    <meta property="article:published_time" content={post.data.publishedAt.toISOString()} />
+    {/* Discord reads og:pubdate, not article:published_time, for the preview's date. */}
+    <meta property="og:pubdate" content={post.data.publishedAt.toISOString()} />
+    <meta property="article:section" content={post.data.category} />
+    {post.data.updatedAt && (
+      <meta property="article:modified_time" content={post.data.updatedAt.toISOString()} />
+    )}
+    {writer.url && <meta property="article:author" content={writer.url} />}
+    {/* Slack shows up to two label and value pairs under a link preview. */}
+    <meta name="twitter:label1" content="Written by" />
+    <meta name="twitter:data1" content={writer.name} />
+    <meta name="twitter:label2" content="Reading time" />
+    <meta name="twitter:data2" content={`${minutes} min read`} />
+  </Fragment>
+  <main class="page-width pt-12 pb-18 sm:pb-24" id="top" data-pagefind-body>
+    {post.data.banner && (
+      <figure class="mb-12" data-banner>
+        {Banner ? (
+          <Banner
+            class="block h-auto w-full rounded-sm"
+            role="img"
+            aria-label={post.data.banner.alt}
+            aria-labelledby={undefined}
+            width={post.data.banner.width}
+            height={post.data.banner.height}
+          />
+        ) : (
+          <Image
+            class="block h-auto w-full rounded-sm"
+            src={post.data.banner.src}
+            alt={post.data.banner.alt}
+            width={post.data.banner.width}
+            height={post.data.banner.height}
+            widths={bannerWidths}
+            sizes={bannerWidths ? bannerSizes : undefined}
+            loading="eager"
+            fetchpriority="high"
+            decoding="async"
+          />
+        )}
+      </figure>
+    )}
+    <a
+      class="mb-12 inline-flex items-center gap-2 font-mono text-xs no-underline"
+      href="/blog"
+      data-pagefind-ignore
+    >
+      ← All posts
+    </a>
+    <article>
+      <header class="max-w-article pb-12" data-blog-header>
+        <Tag href={`/blog?${new URLSearchParams({ category: post.data.category })}`}>
+          {post.data.category}
+        </Tag>
+        <h1 class="mt-6 mb-4 text-display font-medium wrap-anywhere">{post.data.title}</h1>
+        <div class="mb-6 flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs text-muted">
+          <time datetime={post.data.publishedAt.toISOString()}>
+            {blogDate(post.data.publishedAt)}
+          </time>
+          <span>{readingMinutes(post)} min read</span>
+          {post.data.updatedAt && <span>Updated {blogDate(post.data.updatedAt)}</span>}
+        </div>
+        <p class="max-w-measure text-base text-muted sm:text-lg">{post.data.description}</p>
+        <div class="mt-8 flex max-w-full items-center gap-3">
+          {writer.avatar ? (
+            <Image
+              class="size-11 flex-none rounded-full object-cover"
+              src={writer.avatar}
+              width={44}
+              height={44}
+              widths={[44, 88]}
+              sizes="44px"
+              alt=""
+              data-avatar
+            />
+          ) : (
+            <img class="size-11 flex-none" src={logo} width="44" height="44" alt="" />
+          )}
+          <BlogAuthor
+            name={writer.name}
+            title={writer.title}
+            company={writer.company?.name}
+            companyURL={writer.company?.url}
+          />
+        </div>
+      </header>
+      <div
+        class="border-t border-line pt-12 xl:flex xl:items-start xl:justify-between xl:gap-12"
+        data-blog-reading
+      >
+        <aside
+          data-blog-aside
+          class="stick-below-header -mt-8 w-rail flex-none overflow-y-auto pt-8 max-xl:hidden xl:order-2"
+          data-pagefind-ignore
+        >
+          <Outline headings={contents} variant="desktop" />
+        </aside>
+        {hasReaderMargin && (
+          <BlogMargin
+            class="w-60 flex-none xl:order-3"
+            authorName={writer.name}
+            authorDesk={post.data.authorDesk}
+            behindPost={post.data.behindPost}
+            readingShelf={post.data.readingShelf ?? []}
+          />
+        )}
+        <div class="max-w-body min-w-0 flex-1 xl:order-1" data-blog-body>
+          <Outline headings={contents} variant="mobile" />
+          <div class="prose blog-prose">
+            <Content />
+          </div>
+          {explore.length > 0 && (
+            <nav
+              class="mt-18 border-t-2 border-fg pt-6"
+              aria-label="Keep exploring"
+              data-blog-explore
+              data-pagefind-ignore
+            >
+              <span class="eyebrow">keep exploring</span>
+              <ol class="mt-6">
+                {explore.map((link, index) => (
+                  <li class="border-b border-line">
+                    <a class="group flex items-baseline gap-4 py-6 no-underline" href={link.href}>
+                      <span class="w-7 flex-none font-mono text-2xs text-accent-text fade">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span class="min-w-0 flex-1">
+                        <strong class="block text-lg font-medium fade group-hover:text-accent-text">
+                          {link.title}
+                        </strong>
+                        <small class="mt-2 block text-sm text-muted">{link.description}</small>
+                      </span>
+                      <Icon name="arrow-up-right" size={18} />
+                    </a>
+                  </li>
+                ))}
+              </ol>
+            </nav>
+          )}
+          <footer
+            class="mt-18 rounded-sm border border-t-2 border-line border-t-accent bg-surface p-6 fade sm:p-8"
+            data-pagefind-ignore
+          >
+            <span class="eyebrow">keep building</span>
+            <h2 class="my-4 text-xl font-medium">From the notes to the code.</h2>
+            <p class="text-muted">Explore the toolkit, or come back for the next update.</p>
+            <div class="mt-6 flex flex-wrap gap-3">
+              <Button href="/docs">
+                Explore the docs <Icon name="arrow-right" class="icon-nudge" />
+              </Button>
+              <Button variant="secondary" href="/blog">
+                All posts
+              </Button>
+            </div>
+          </footer>
+        </div>
+      </div>
+    </article>
+  </main>
+</Site>

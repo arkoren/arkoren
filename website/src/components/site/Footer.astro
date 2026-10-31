@@ -1,0 +1,64 @@
+---
+/**
+ * Site footer: three link columns (the toolkit, development, the project) and a legal line.
+ * @example <Footer />
+ */
+const repo = "https://github.com/arkoren/arkoren";
+
+/** Footer columns; each heading names a destination group. */
+const columns = [
+  {
+    title: "toolkit",
+    links: [
+      { href: "/#principles", label: "Principles" },
+      { href: "/#run", label: "Contracts" },
+      { href: "/#build", label: "HTTP" },
+      { href: "/#toolkit", label: "Foundation" },
+    ],
+  },
+  {
+    title: "develop",
+    links: [
+      { href: "/docs/guides/first-steps/quickstart", label: "Get started" },
+      { href: "/docs#guides", label: "Guides" },
+      { href: "/#test", label: "Testing" },
+      { href: "/docs", label: "Docs" },
+      { href: "/docs/api", label: "API reference" },
+      { href: "/docs/guides/agent-skills/working-with-agents", label: "Use with your agent" },
+    ],
+  },
+  {
+    title: "project",
+    links: [
+      { href: "/blog", label: "Blog" },
+      { href: repo, label: "GitHub" },
+      { href: `${repo}/issues`, label: "Issues" },
+      { href: `${repo}/blob/main/LICENSE`, label: "License" },
+    ],
+  },
+];
+---
+
+<footer class="mx-auto max-w-wide border-t border-line px-6 pt-18 pb-8">
+  <div class="grid grid-cols-2 gap-8 sm:grid-cols-3">
+    {columns.map((column) => (
+      <section>
+        <h2 class="eyebrow mb-3 text-muted lowercase">{column.title}</h2>
+        <ul>
+          {column.links.map((link) => (
+            <li>
+              <a class="block py-1.5 text-sm no-underline" href={link.href}>
+                {link.label}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))}
+  </div>
+  <p class="mt-18 flex flex-wrap gap-x-6 gap-y-2 border-t border-line pt-6 text-xs text-muted">
+    <span>© 2026 arkoren</span>
+    <span>MIT license</span>
+    <span>arkoren.dev</span>
+  </p>
+</footer>

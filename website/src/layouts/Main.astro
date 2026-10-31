@@ -1,0 +1,163 @@
+---
+import "../styles/global.css";
+import { stripTypeScriptTypes } from "node:module";
+import seasonalSource from "../scripts/season.ts?raw";
+import SeasonGhosts from "../components/season/Ghosts.astro";
+import { GO_IMPORT, GO_SOURCE } from "../lib/docs/imports";
+import Slide from "../components/ui/Slide.astro";
+import ArchiveWarning from "../components/docs/Archive.astro";
+import {
+  canonicalURL,
+  serializeStructuredData,
+  type SocialImage,
+  type StructuredData,
+} from "../lib/site/seo";
+import { socialImage } from "../lib/site/brand";
+
+interface Props {
+  title: string;
+  description: string;
+  /** Title for social cards, without the site name that `title` carries for tabs. */
+  socialTitle?: string;
+  /** Shared image; pages without one share the site's rose card. */
+  image?: SocialImage;
+  canonical?: string;
+  /** Error pages remain navigable but must not appear in search results. */
+  noindex?: boolean;
+  type?: "website" | "article";
+  structuredData?: StructuredData[];
+}
+
+/** Strip types at build time so the pre-paint script stays synchronous. */
+const seasonalScript = stripTypeScriptTypes(seasonalSource);
+
+const {
+  title,
+  description,
+  socialTitle = title,
+  image,
+  canonical,
+  noindex = false,
+  type = "website",
+  structuredData = [],
+} = Astro.props;
+
+/** Canonical metadata requires the production origin configured in Astro. */
+const site = Astro.site;
+if (site === undefined) throw new Error("site must be configured");
+
+/** Use the public route, not the static build's .html filename, when sharing. */
+const pageURL = canonicalURL(canonical ?? Astro.url.pathname, site);
+
+/** One stable identity connects the project, its documentation, and its source. */
+const websiteURL = new URL("/", site).href;
+const graph: StructuredData[] = [
+  {
+    "@type": "WebSite",
+    "@id": `${websiteURL}#website`,
+    name: "Arkoren",
+    url: websiteURL,
+    about: { "@id": `${websiteURL}#software` },
+  },
+  {
+    "@type": "WebPage",
+    "@id": pageURL.href,
+    url: pageURL.href,
+    name: title,
+    description,
+    isPartOf: { "@id": `${websiteURL}#website` },
+  },
+  ...structuredData,
+];
+if (canonicalURL(Astro.url.pathname, site).pathname === "/")
+  graph.push({
+    "@type": "SoftwareSourceCode",
+    "@id": `${websiteURL}#software`,
+    name: "Arkoren",
+    description,
+    url: websiteURL,
+    codeRepository: "https://github.com/arkoren/arkoren",
+    programmingLanguage: "Go",
+    license: "https://github.com/arkoren/arkoren/blob/main/LICENSE",
+    sameAs: ["https://github.com/arkoren/arkoren"],
+  });
+
+/** Verification tokens are optional, public, and read only when building. */
+const googleVerification = import.meta.env.PUBLIC_GOOGLE_SITE_VERIFICATION;
+const bingVerification = import.meta.env.PUBLIC_BING_SITE_VERIFICATION;
+
+/** Pages without their own card share the full-resolution rose card with the Strata logo. */
+const shared: SocialImage = image ?? {
+  src: socialImage.src,
+  alt: "Arkoren's stepped A logo and wordmark on a rose grid. Less framework. More Go.",
+  width: 1200,
+  height: 630,
+  type: "image/png",
+};
+const socialImageURL = new URL(shared.src, site);
+
+/** The site's X account; it attributes every shared card. */
+const xAccount = "@arkorendev";
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script is:inline set:html={seasonalScript} />
+    <meta name="description" content={description} />
+    <meta name="robots" content={noindex ? "noindex" : "max-image-preview:large"} />
+    <link rel="canonical" href={pageURL.href} />
+    <link rel="sitemap" type="application/xml" href="/sitemap-index.xml" />
+    <link rel="describedby" type="text/plain" href="/llms.txt" title="Agent documentation index" />
+    {googleVerification && <meta name="google-site-verification" content={googleVerification} />}
+    {bingVerification && <meta name="msvalidate.01" content={bingVerification} />}
+    <script
+      type="application/ld+json"
+      set:html={serializeStructuredData({
+        "@context": "https://schema.org",
+        "@graph": graph,
+      })}
+    />
+    <meta property="og:type" content={type} />
+    <meta property="og:site_name" content="Arkoren" />
+    <meta property="og:title" content={socialTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={pageURL.href} />
+    <meta property="og:image" content={socialImageURL.href} />
+    <meta property="og:image:type" content={shared.type} />
+    <meta property="og:image:width" content={String(shared.width)} />
+    <meta property="og:image:height" content={String(shared.height)} />
+    <meta property="og:image:alt" content={shared.alt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content={xAccount} />
+    <meta name="twitter:title" content={socialTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={socialImageURL.href} />
+    <meta name="twitter:image:alt" content={shared.alt} />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="go-import" content={GO_IMPORT} />
+    <meta name="go-source" content={GO_SOURCE} />
+    <meta name="theme-color" content="#151414" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    {/* Browsers use the first matching theme-color; Discord uses the last as its accent. */}
+    <meta name="theme-color" content="#c70036" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap"
+    />
+    <slot name="head" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <slot />
+    <SeasonGhosts />
+    <Slide />
+    <ArchiveWarning />
+  </body>
+</html>

@@ -1,0 +1,37 @@
+---
+import { Code } from "astro:components";
+import { codeThemes } from "../../lib/site/theme";
+
+/**
+ * A captioned Go excerpt: a title and note above, the highlighted code, and an
+ * optional caption slot below. The code is a focusable region so keyboard
+ * users can scroll long lines.
+ * @example <Panel title="router.go" note="Route excerpt" label="Greeting handler" code={source} />
+ */
+interface Props {
+  title: string;
+  note: string;
+  code: string;
+  /** Accessible name of the code region. */
+  label: string;
+  class?: string;
+}
+
+const { title, note, code, label, class: className } = Astro.props;
+---
+
+<figure
+  class:list={["min-w-0 overflow-hidden rounded-sm border border-line bg-surface", className]}
+  data-code-surface
+>
+  <figcaption class="flex flex-wrap justify-between gap-2 border-b border-line px-4 py-3 font-mono text-2xs sm:px-4">
+    <span>{title}</span>
+    <span class="text-muted">{note}</span>
+  </figcaption>
+  <Code code={code} lang="go" themes={codeThemes} tabindex="0" role="region" aria-label={label} />
+  {Astro.slots.has("caption") && (
+    <div class="border-t border-line px-4 py-3 text-xs text-muted sm:px-6 sm:py-4">
+      <slot name="caption" />
+    </div>
+  )}
+</figure>

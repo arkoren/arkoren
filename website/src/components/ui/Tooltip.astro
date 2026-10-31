@@ -1,0 +1,19 @@
+---
+/**
+ * Shared tooltip surface, rendered outside content scroll containers.
+ * Status triggers share one description and its hover, focus, and tap behavior.
+ * @example <Tooltip />
+ */
+---
+
+<div
+  id="doc-status-tooltip"
+  class="tooltip fixed z-100 max-w-70 rounded-sm border border-fg bg-fg px-3 py-2 text-xs font-medium wrap-anywhere text-bg shadow-lift"
+  role="tooltip"
+  hidden
+></div>
+
+<script>
+  import { initStatusTooltips } from "../../scripts/tooltips";
+  initStatusTooltips(document);
+</script>

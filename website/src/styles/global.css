@@ -1,0 +1,945 @@
+/* The arkoren.dev design system: the one place where every token, scale and
+   element default is defined. Utilities and the other stylesheets reference theme variables
+   only; no literal colors or sizes appear outside this file (and the artwork's SVG geometry).
+
+   Structure
+     1. Imports       tailwindcss, then prose.css (Markdown output), motion.css (keyframes and
+                      SVG choreography), season.css (Halloween palette and decorations)
+     2. @theme        the only scale: type, spacing, color, radius, breakpoints, motion, layout
+     3. Variants      state that lives on <html> or an element's ARIA attributes
+     4. Fonts         self-hosted Maple Mono; Geist loads from layouts/Main.astro
+     5. @layer base   element defaults, color scheme, reduced motion, view-transition names
+     6. @layer components   buttons, tags, fields, selector, search results, dialog, sidebar rows
+     7. Utilities     layout widths, grids, durations and transitions the scale cannot express
+     8. Page transitions   cross-document view-transition at-rules (cannot sit in a layer)
+
+   Dark is the default design; light follows prefers-color-scheme through light-dark(). */
+
+@import "tailwindcss" source(none);
+/* Tailwind looks for classes only here: markup, client scripts (classes added at runtime), Markdown
+   plugins (classes emitted into guides) and the blog's MDX. Guide Markdown, tests and docs never
+   contribute candidates. */
+@source "../components";
+@source "../layouts";
+@source "../pages";
+@source "../scripts";
+@source "../plugins";
+@source "../content/blog";
+@import "./prose.css";
+@import "./motion.css";
+@import "./season.css";
+
+/* Static: emit every token as a custom property even when no utility uses it, because the
+   plain CSS files and inline SVG read them with var(). */
+@theme static {
+  /* Reset the Tailwind defaults so only the scales below exist. */
+  --*: initial;
+
+  /* Fonts. Consolidated from two stacks that were repeated in 114 shorthands. */
+  --font-sans: "Geist", system-ui, sans-serif;
+  --font-mono: "Maple Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --default-font-family: var(--font-sans);
+  --default-mono-font-family: var(--font-mono);
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Type: 8 steps replace 28 font sizes and 78 font shorthands. Each step carries its line-height
+     (and, for large steps, tracking), so `text-sm` alone sets a complete style.
+     9-11 px -> 2xs; 12-13 -> xs; 14 -> sm; 15-17 -> base; 18-20 -> lg; 22-32 -> xl; headings
+     above that are the fluid section (home headings), display and hero steps. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.6;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.5;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.5;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.4;
+  --text-lg--letter-spacing: var(--tracking-tight);
+  --text-xl: 1.75rem;
+  --text-xl--line-height: 1.2;
+  --text-xl--letter-spacing: var(--tracking-tighter);
+  --text-section: clamp(1.75rem, 3.7vw, 3rem);
+  --text-section--line-height: 1.1;
+  --text-section--letter-spacing: var(--tracking-tighter);
+  --text-display: clamp(2.25rem, 5vw, 4rem);
+  --text-display--line-height: 1.08;
+  --text-display--letter-spacing: var(--tracking-display);
+  --text-hero: clamp(3rem, 6vw, 5rem);
+  --text-hero--line-height: 1.02;
+  --text-hero--letter-spacing: var(--tracking-display);
+
+  /* Tracking: 23 letter-spacings (px and em) -> 4 values in em, so it scales with the step. */
+  --tracking-tight: -0.02em;
+  --tracking-tighter: -0.035em;
+  --tracking-display: -0.05em;
+  --tracking-wide: 0.06em;
+
+  /* Leading: 16 line-heights -> 3. */
+  --leading-snug: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+
+  /* Shared link underline distance; prose and base anchors use the same offset. */
+  --underline-offset: 3px;
+
+  /* Spacing: one 4px unit. The old --space-N tokens are N * 4px and map to multiples; stray px
+     values (3, 5, 10, 14, 18, 20, 22 ...) snap to the nearest multiple. */
+  --spacing: 0.25rem;
+
+  /* Radius: a single 2px radius replaces --radius-xs/sm/md, which were all 2px. */
+  --radius-sm: 2px;
+  --radius-full: 9999px;
+
+  /* Breakpoints: 12 media widths -> 5. 600/640 -> 540 or 720; 900-1080 -> 860 or 1100. */
+  --breakpoint-sm: 540px;
+  --breakpoint-md: 720px;
+  --breakpoint-lg: 860px;
+  --breakpoint-xl: 1100px;
+  --breakpoint-2xl: 1680px;
+
+  /* Layout: page content width (wide from 2xl up), docs columns and the sticky header. The
+     columns grow with the page, see --page-width in @layer base. */
+  --container-page: 1200px;
+  --container-wide: 1480px;
+  --sidebar-width: 240px;
+  --sidebar-width-wide: 280px;
+  --rail-width: 200px;
+  --rail-width-wide: 240px;
+  --header-height: 72px;
+
+  /* Motion: 33 transition declarations -> 2 durations and 2 easings. Fast is for interaction,
+     slow is for theme and season color fades. */
+  --duration-fast: 200ms;
+  --duration-slow: 500ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.64, 0, 0.78, 0);
+  --default-transition-duration: var(--duration-fast);
+  --default-transition-timing-function: ease;
+
+  --shadow-lift: 0 12px 24px --alpha(var(--color-black) / 13%);
+
+  /* Colors: semantic, dark first. Every value is light-dark(light, dark); `color-scheme:
+     light dark` on :root (see @layer base) makes it follow the OS. Replaces 17 stray hex colors
+     and the alpha variants: use the /opacity modifier (bg-accent/10) instead.
+       bg/surface/raised  page, panel and control fills   (was background-100/200/300)
+       fg/muted           text and secondary text         (was foreground-*, text-secondary/tertiary)
+       line/line-strong   hairlines and strong borders    (was border-100, border-100-solid, border-200)
+       accent*            brand rose; accent-text is the legible tint on the page background
+       ink                text on the inverse button      (was on-primary) */
+  --color-bg: light-dark(#fdfcfa, #151414);
+  --color-surface: light-dark(#fdfdfc, #191817);
+  --color-raised: light-dark(#f9f7f6, #2a2927);
+  --color-raised-hover: color-mix(in oklab, var(--color-raised), var(--color-fg) 6%);
+  --color-fg: light-dark(#262626, #f0e3de);
+  --color-muted: light-dark(#707070, #9a9390);
+  --color-line: light-dark(#f0f0f0, #353333);
+  --color-line-strong: light-dark(#cccccc, #f0e3de);
+  --color-accent: #c70036;
+  --color-accent-strong: #a5002c;
+  --color-accent-deep: #8b0024;
+  --color-accent-soft: #ffe4e6;
+  --color-accent-text: light-dark(#c70036, #e34568);
+  --color-on-accent: #fffbf5;
+  --color-ink: #1f1f1f;
+  --color-selection: light-dark(var(--color-accent-soft), oklch(35% 0.105 12.094));
+  --color-on-selection: light-dark(var(--color-accent), #fffbf5);
+  --color-ring: light-dark(#262626, #d4d4d4);
+  --color-code-accent: light-dark(#b42332, #eb626b);
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  /* Workbench solids: four face tones retain volume in both OS schemes. */
+  --color-figure-paper: light-dark(#f3f0eb, #201e1d);
+  --color-figure-highlight: color-mix(in oklab, var(--color-surface), #c70036 10%);
+  --color-figure-top: light-dark(#fffdfa, #383330);
+  --color-figure-metal: light-dark(#ded8d0, #70665e);
+  --color-figure-shade-0: light-dark(#c3bbb3, #171615);
+  --color-figure-shade-1: light-dark(#d5cdc5, #211f1d);
+  --color-figure-shade-2: light-dark(#e1d9d1, #292623);
+  --color-figure-shade-3: light-dark(#eae3dc, #302c28);
+  --color-figure-edge: light-dark(#77716a, #8d8177);
+  --color-figure-groove: light-dark(#aaa096, #554b43);
+  --figure-stroke: 0.6px;
+  --figure-height: clamp(18rem, 55svh, 36rem);
+
+  /* The Halloween pumpkin's artwork (components/season/Pumpkin.astro). */
+  --color-pumpkin: #ee8525;
+  --color-pumpkin-leaf: #648c44;
+  --color-pumpkin-outline: #73340f;
+  --color-pumpkin-rib: #b85113;
+  --color-pumpkin-face: #492509;
+
+  /* The sticky header's height as a spacing step: h-header, size-header. */
+  --spacing-header: var(--header-height);
+
+  /* Reading measures and dialog widths. */
+  --container-prose: 76ch;
+  --container-measure: 60ch;
+  --container-article: 56rem;
+  --container-body: 45rem;
+  --container-search: 40rem;
+  --container-prompt: 35rem;
+  --container-guide: 15rem;
+
+  /* The blog masthead's hard-offset shadows. */
+  --shadow-offset: 6px 6px 0 var(--color-line);
+  --shadow-offset-accent: 6px 6px 0 --alpha(var(--color-accent-text) / 30%);
+}
+
+/* Variants for state that lives on <html> (see scripts/season.ts) or on a control's ARIA
+   attributes (aria-current marks the link to the page or section being viewed). */
+@custom-variant season-ready (&:where([data-season-ready], [data-season-ready] *));
+@custom-variant current (&[aria-current]:not([aria-current="false"]));
+
+/* Maple Mono v7.9, self-hosted under the SIL Open Font License. */
+@font-face {
+  font-family: "Maple Mono";
+  src: url("/fonts/maple-mono/MapleMono-Regular.ttf.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Maple Mono";
+  src: url("/fonts/maple-mono/MapleMono-Medium.ttf.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Maple Mono";
+  src: url("/fonts/maple-mono/MapleMono-SemiBold.ttf.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Maple Mono";
+  src: url("/fonts/maple-mono/MapleMono-Bold.ttf.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Maple Mono";
+  src: url("/fonts/maple-mono/MapleMono-Italic.ttf.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Maple Mono";
+  src: url("/fonts/maple-mono/MapleMono-BoldItalic.ttf.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    color-scheme: light dark;
+    /* Content width and docs columns widen together on big screens. */
+    --page-width: var(--container-page);
+    --side-width: var(--sidebar-width);
+    --rail: var(--rail-width);
+
+    @variant 2xl {
+      --page-width: var(--container-wide);
+      --side-width: var(--sidebar-width-wide);
+      --rail: var(--rail-width-wide);
+    }
+  }
+
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: calc(var(--header-height) + --spacing(4));
+  }
+
+  body {
+    background-color: var(--color-bg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    color: var(--color-fg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background-color: var(--color-selection);
+    color: var(--color-on-selection);
+  }
+
+  /* Preflight resets links to inherit; restore the underline that unstyled links rely on. */
+  a {
+    color: var(--color-fg);
+    text-decoration-line: underline;
+    text-underline-offset: var(--underline-offset);
+  }
+
+  a:where(:hover) {
+    color: var(--color-accent-text);
+  }
+
+  a:focus-visible,
+  button:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      transition: none !important;
+    }
+  }
+
+  /* Page transitions: the header, docs sidebar and announcement keep their own names so they stay
+     put while the content crossfades. The announcement leaves the transition while the hero shows. */
+  [data-header] {
+    view-transition-name: header;
+  }
+
+  [data-docs-sidebar] {
+    view-transition-name: doc-side;
+  }
+
+  [data-news] {
+    view-transition-name: nav-news;
+  }
+
+  [data-news][data-hero-visible] {
+    view-transition-name: none;
+  }
+
+  input[type="search"]::-webkit-search-cancel-button {
+    display: none;
+  }
+}
+
+/* Shared primitives and generated markup. Button layout and colors live in its Astro
+   component; only its descendant icon choreography needs a selector here.
+     .tag                                          a small rose label, or a link styled as one
+     .field                                        the search and filter input treatment
+     .eyebrow                                      a mono "// " label above a heading
+     .cells  .cell                                 a bordered grid with shared 1px edges */
+@layer components {
+  .btn {
+    & .icon-nudge {
+      transition:
+        transform var(--duration-fast) var(--default-transition-timing-function),
+        translate var(--duration-fast) var(--default-transition-timing-function),
+        scale var(--duration-fast) var(--default-transition-timing-function),
+        rotate var(--duration-fast) var(--default-transition-timing-function);
+    }
+
+    &:hover .icon-nudge {
+      translate: --spacing(0.5) 0;
+    }
+  }
+
+  .tag {
+    display: inline-block;
+    border: 1px solid --alpha(var(--color-accent-text) / 30%);
+    border-radius: var(--radius-sm);
+    background-color: --alpha(var(--color-accent-text) / 10%);
+    padding: --spacing(1) --spacing(2);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--text-2xs--line-height);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-accent-text);
+    text-decoration-line: none;
+    transition-property:
+      color, background-color, border-color, outline-color, text-decoration-color, fill, stroke;
+    transition-duration: var(--duration-fast);
+    transition-timing-function: var(--default-transition-timing-function);
+  }
+
+  /* A tag highlights when it is the link, or when the link around it is hovered. */
+  :is(a.tag:hover, a:hover > .tag) {
+    border-color: var(--color-accent-text);
+    color: var(--color-accent-text);
+  }
+
+  .field {
+    display: flex;
+    min-height: --spacing(10);
+    align-items: center;
+    gap: --spacing(2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background-color: var(--color-raised);
+    padding: --spacing(1.5) --spacing(3);
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-muted);
+    transition-property:
+      color, background-color, border-color, outline-color, text-decoration-color, fill, stroke;
+    transition-duration: var(--duration-fast);
+    transition-timing-function: var(--default-transition-timing-function);
+
+    &:focus-within {
+      outline: 2px solid var(--color-ring);
+      outline-offset: 2px;
+    }
+
+    @variant hover {
+      background-color: var(--color-raised-hover);
+    }
+
+    & > svg {
+      flex: none;
+    }
+
+    & input {
+      margin: 0;
+      width: 100%;
+      min-width: 0;
+      flex: 1;
+      border: 0;
+      background-color: transparent;
+      padding: 0;
+      color: var(--color-fg);
+      outline-width: 0;
+      font: inherit;
+      letter-spacing: inherit;
+    }
+
+    & input::placeholder {
+      color: var(--color-muted);
+      opacity: 1;
+    }
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: var(--text-xs--line-height);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-accent-text);
+
+    &::before {
+      color: var(--color-muted);
+      content: "// ";
+    }
+  }
+
+  /* One column, two from md, four from xl. Cells share their 1px edges: each cell overlaps its
+     neighbour's border, and the frame draws the outer edge. */
+  .cells {
+    position: relative;
+    margin-inline: auto;
+    display: grid;
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+    border: 1px solid var(--color-line);
+    max-width: var(--page-width);
+
+    @variant md {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    @variant xl {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    & > * {
+      margin-right: -1px;
+      margin-bottom: -1px;
+      border-right: 1px solid var(--color-line);
+      border-bottom: 1px solid var(--color-line);
+    }
+
+    /* Stacked grids read as one: the second drops its top edge. */
+    & + & {
+      border-top-width: 0;
+    }
+  }
+
+  .cells-2 {
+    @variant xl {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .cell {
+    display: grid;
+    align-content: start;
+    gap: --spacing(2);
+    padding: --spacing(8);
+  }
+
+  /* A cell that links: the hover fill stays inside the shared edges. */
+  a.cell {
+    position: relative;
+    isolation: isolate;
+    color: var(--color-fg);
+    text-decoration-line: none;
+
+    &:focus-visible {
+      outline-offset: -2px;
+    }
+
+    &::before {
+      pointer-events: none;
+      position: absolute;
+      inset: 1px 0 0 1px;
+      z-index: -10;
+      content: "";
+    }
+
+    &:hover::before {
+      background-color: var(--color-surface);
+    }
+  }
+
+  /* Selector: navigation links, filters and panel tabs on one inset surface. A sliding
+     indicator (scripts/selector.ts) follows the control that ARIA marks as current, selected or
+     pressed. --selector-font-size and --selector-padding-inline let a caller resize it. */
+  .selector {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    width: fit-content;
+    max-width: 100%;
+    min-width: 0;
+    align-items: stretch;
+    gap: --spacing(1.5);
+    overflow-x: auto;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-surface);
+    padding: --spacing(1.5);
+    font-weight: var(--font-weight-bold);
+    font-size: var(--selector-font-size, var(--text-xs));
+    line-height: var(--leading-normal);
+
+    &[hidden] {
+      display: none;
+    }
+
+    & > :is(a, button) {
+      position: relative;
+      z-index: 1;
+      display: inline-flex;
+      flex: none;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      gap: --spacing(2);
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      background-color: transparent;
+      padding-block: --spacing(1);
+      white-space: nowrap;
+      color: var(--color-muted);
+      text-decoration-line: none;
+      padding-inline: var(--selector-padding-inline, --spacing(2));
+      font: inherit;
+
+      @variant hover {
+        color: var(--color-fg);
+      }
+
+      &:focus-visible {
+        outline-offset: -2px;
+      }
+    }
+
+    & > :is(a, button):hover :is(span, strong, code) {
+      color: inherit;
+    }
+
+    &
+      > :is(
+        [aria-current]:not([aria-current="false"]),
+        [aria-selected="true"],
+        [aria-pressed="true"]
+      ) {
+      border-color: var(--color-line);
+      background-color: var(--color-raised);
+      color: var(--color-fg);
+    }
+  }
+
+  .selector-indicator {
+    pointer-events: none;
+    visibility: hidden;
+    position: absolute;
+    inset-block: --spacing(1.5);
+    left: 0;
+    z-index: 0;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-raised);
+  }
+
+  /* Once the script measured the selected control, the indicator replaces its own fill. */
+  .selector[data-selector-ready] {
+    & > .selector-indicator {
+      visibility: visible;
+    }
+
+    &
+      > :is(
+        [aria-current]:not([aria-current="false"]),
+        [aria-selected="true"],
+        [aria-pressed="true"]
+      ) {
+      border-color: transparent;
+      background-color: transparent;
+    }
+  }
+
+  .selector[data-selector-animate] > .selector-indicator {
+    transition-duration: var(--duration-fast);
+    transition-timing-function: var(--ease-out);
+    transition-property: transform, width;
+  }
+
+  /* Copy button: a quiet bordered control on code blocks and command lines. */
+  .copy {
+    cursor: pointer;
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-bg);
+    padding: --spacing(0.5) --spacing(2);
+    font-size: var(--text-xs);
+    line-height: var(--text-xs--line-height);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-muted);
+    transition-property:
+      color, background-color, border-color, outline-color, text-decoration-color, fill, stroke;
+    transition-duration: var(--duration-fast);
+    transition-timing-function: var(--default-transition-timing-function);
+
+    @variant hover {
+      background-color: var(--color-raised);
+      color: var(--color-fg);
+    }
+
+    &:disabled {
+      cursor: wait;
+    }
+  }
+
+  /* Shiki output outside prose: Astro's <Code> renders pre.astro-code. */
+  .astro-code {
+    margin: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    padding: --spacing(4);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: var(--leading-relaxed);
+    tab-size: 4;
+
+    & code {
+      font-size: inherit;
+    }
+  }
+
+  /* A row of the docs sidebar: a page link or a group summary. */
+  .tree-link {
+    display: block;
+    overflow: hidden;
+    border-left: 2px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: --spacing(1) --spacing(2);
+    white-space: nowrap;
+    color: var(--color-muted);
+    text-decoration-line: none;
+
+    @variant hover {
+      background-color: var(--color-raised);
+      color: var(--color-fg);
+    }
+
+    @variant current {
+      background-color: var(--color-raised);
+      color: var(--color-fg);
+    }
+  }
+
+  /* Breadcrumb trail: a slash precedes every item but the first. */
+  .crumbs > li + li::before {
+    margin-right: --spacing(2);
+    content: "/";
+  }
+
+  /* Modal surfaces: the search dialog and the archive warning. */
+  .dialog {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-surface);
+    color: var(--color-fg);
+
+    &::backdrop {
+      background: --alpha(var(--color-bg) / 70%);
+      backdrop-filter: blur(2px);
+    }
+  }
+
+  /* A search result, built by the search script from Pagefind's output: a page, or a section of
+     it when marked data-sub. Excerpts mark the matches with <mark>. */
+  .search-hit {
+    display: block;
+    border-radius: var(--radius-sm);
+    padding: --spacing(2) --spacing(3);
+    color: var(--color-fg);
+    text-decoration-line: none;
+
+    @variant hover {
+      background-color: var(--color-raised);
+    }
+
+    &:focus-visible {
+      background-color: var(--color-raised);
+      outline-width: 0;
+    }
+
+    &[data-sub] {
+      margin-left: --spacing(4);
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      border-left: 1px solid var(--color-line);
+    }
+
+    & b {
+      display: block;
+      font-size: var(--text-sm);
+      line-height: var(--text-sm--line-height);
+      font-weight: var(--font-weight-medium);
+    }
+
+    &[data-sub] b {
+      font-size: var(--text-xs);
+      line-height: var(--text-xs--line-height);
+      color: var(--color-muted);
+    }
+
+    & p {
+      margin-top: --spacing(0.5);
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      font-size: var(--text-xs);
+      line-height: var(--text-xs--line-height);
+      color: var(--color-muted);
+    }
+
+    & mark {
+      border-radius: var(--radius-sm);
+      background-color: --alpha(var(--color-accent-text) / 30%);
+      color: var(--color-fg);
+    }
+  }
+
+  /* "On this page" list in the rail. contents.ts slides one marker to the current entry
+     (data-marker); without it the current entry draws its own. */
+  .toc-list {
+    position: relative;
+    border-left: 1px solid var(--color-line);
+
+    &[data-marker]::before {
+      position: absolute;
+      top: 0;
+      left: -1px;
+      width: 1px;
+      background-color: var(--color-accent-text);
+      content: "";
+      height: var(--marker-height);
+      translate: 0 var(--marker-top);
+      transition:
+        translate var(--duration-fast) ease,
+        height var(--duration-fast) ease,
+        background-color var(--duration-slow) ease;
+    }
+
+    &:not([data-marker]) a[aria-current="location"]::before {
+      position: absolute;
+      inset-block: 0;
+      left: -1px;
+      width: 1px;
+      background-color: var(--color-accent-text);
+      content: "";
+    }
+  }
+
+  /* An MDX blog post: a longer reading rhythm and rose links on top of .prose. */
+  .blog-prose {
+    & > p:first-child {
+      font-size: var(--text-lg);
+      line-height: var(--text-lg--line-height);
+      letter-spacing: var(--text-lg--letter-spacing);
+    }
+
+    & > h2:not(:first-child) {
+      margin-top: --spacing(14);
+      padding-top: --spacing(14);
+    }
+
+    & > :is(h3, h4, h5, h6):not(:first-child) {
+      margin-top: --spacing(12);
+    }
+
+    & > hr {
+      margin-block: --spacing(12);
+    }
+
+    & a:not(.cell) {
+      color: var(--color-accent-text);
+      text-decoration-color: --alpha(var(--color-accent-text) / 30%);
+    }
+
+    /* Contract cards reuse the landing page's cells; their notes are quiet, not code chips. */
+    & .cell code {
+      border: 0;
+      background-color: transparent;
+      padding: 0;
+      font-size: var(--text-xs);
+      line-height: var(--text-xs--line-height);
+    }
+
+    & img {
+      display: block;
+      height: auto;
+      max-width: 100%;
+      border-radius: var(--radius-sm);
+    }
+  }
+}
+
+/* A colored surface that reaches slightly beyond the page-width column. */
+@utility page-width-wide {
+  width: min(var(--page-width) + --spacing(24), 100% - --spacing(8));
+  margin-inline: auto;
+}
+
+/* Faint 24px grid lines drawn over an accent surface. */
+@utility bg-grid {
+  background-image:
+    linear-gradient(--alpha(var(--color-white) / 7%) 1px, transparent 1px),
+    linear-gradient(90deg, --alpha(var(--color-white) / 7%) 1px, transparent 1px);
+  background-size: --spacing(6) --spacing(6);
+}
+
+/* Copy beside a figure: the figure gets the wider column. */
+@utility grid-cols-stage {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+}
+
+@utility grid-cols-main-aside {
+  grid-template-columns: minmax(0, 1fr) var(--sidebar-width-wide);
+}
+
+@utility grid-cols-stage-flip {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+}
+
+/* Page content width with a 16px gutter on small screens, aligned with the header's content. */
+@utility page-width {
+  width: min(var(--page-width), 100% - --spacing(8));
+  margin-inline: auto;
+}
+
+/* Padding that aligns a full-bleed bar's content with the page-width column. */
+@utility gutter-x {
+  padding-inline: max(--spacing(4), calc((100% - var(--page-width)) / 2));
+}
+
+/* Sticks below the header (and its 1px border) and scrolls on its own when taller than the rest. */
+@utility stick-below-header {
+  position: sticky;
+  top: calc(var(--header-height) + 1px);
+  align-self: start;
+  max-height: calc(100dvh - var(--header-height) - 1px);
+}
+
+/* The docs "on this page" column, which widens with the page. */
+@utility w-rail {
+  width: var(--rail);
+}
+
+/* Docs shell columns: sidebar, article, rail. */
+@utility cols-guides {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--container-guide)), 1fr));
+}
+
+@utility cols-docs {
+  grid-template-columns: var(--side-width) minmax(0, 1fr) var(--rail);
+}
+
+@utility cols-docs-narrow {
+  grid-template-columns: var(--side-width) minmax(0, 1fr);
+}
+
+/* Tailwind has no duration namespace in the theme: duration-fast and duration-slow map to
+   --duration-* for markup utilities; custom CSS reads the same tokens directly. */
+@utility duration-* {
+  transition-duration: --value(--duration-*);
+}
+
+/* The announcement's handoff: it fades and drops while the hero shows. */
+@utility transition-reveal {
+  transition-property: color, background-color, opacity, translate, visibility;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: ease;
+}
+
+/* Color changes that follow the seasonal palette slowly instead of snapping. */
+@utility fade {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: ease;
+
+  @variant season-ready {
+    transition-duration: var(--duration-slow);
+  }
+}
+
+/* Page transitions: opt in to cross-document view transitions. At-rules like this one cannot
+   sit inside a cascade layer. The names are set where the persistent elements live (legacy.css). */
+@view-transition {
+  navigation: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @view-transition {
+    navigation: none;
+  }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--duration-fast);
+}
+
+/* A newly visible announcement enters independently of the persistent header. When both pages
+   show it, retain the normal shared-element transition. */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-new(nav-news):only-child {
+    animation: nav-news-enter var(--duration-fast) ease both;
+  }
+  ::view-transition-old(nav-news):only-child {
+    animation: nav-news-exit var(--duration-fast) ease both;
+  }
+}

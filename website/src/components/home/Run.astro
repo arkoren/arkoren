@@ -1,0 +1,115 @@
+---
+import { Code } from "astro:components";
+import { codeThemes } from "../../lib/site/theme";
+import Intro from "./Intro.astro";
+import Panel from "./Panel.astro";
+import Step from "./Step.astro";
+
+/**
+ * Step 03: one facade, two drivers, and the explicit process lifecycle.
+ * @example <Run />
+ */
+
+/** Equivalent facade types expose a stable application boundary, not identical backends. */
+const memoryCode = `store := cache.New(memorycache.New())`;
+const redisCode = `driver := rediscache.New(func(store *rediscache.Builder) {
+	store.Addr("cache:6379")
+})
+store := cache.New(driver)`;
+
+/**
+ * Application-owned keys carry their value type.
+ * Both driver choices above use this same definition and facade call.
+ */
+const applicationCode = `home := cache.NewKey[string]("greetings.home")
+
+err := store.Put(ctx, home, "hello")`;
+
+/**
+ * Explicit lifecycle registration belongs to the application's composition root.
+ * Run invokes the composer before startup; driver construction is shown above.
+ */
+const lifecycleCode = `app := application.New()
+err := app.Run(ctx, func(compose *application.Composer) {
+	compose.Cleanup(driver.Stop)
+	compose.Startup(driver.Start)
+	compose.Check("cache", driver.Ping)
+})`;
+
+const fine = "text-xs leading-relaxed text-muted";
+---
+
+<Step id="run" number="03" label="Run / choose the infrastructure">
+  <Intro id="run-title">
+    <Fragment slot="title">
+      One interface,
+      <br />
+      many drivers.
+    </Fragment>
+    Your application calls a facade. A driver connects it to the backend. Change the wiring—not the
+    boundary your business logic depends on.
+  </Intro>
+  <div class="mt-8 grid gap-6 lg:mt-12 lg:grid-cols-2">
+    <Panel
+      title="Start in process"
+      note="Memory cache"
+      code={memoryCode}
+      label="Memory cache wiring"
+    />
+    <Panel
+      title="Choose shared infrastructure"
+      note="Redis cache"
+      code={redisCode}
+      label="Redis cache wiring"
+    />
+  </div>
+  <div class="mt-6 mb-8 rounded-sm border border-line bg-surface p-4 sm:p-6">
+    <p class="mb-3 text-xs text-accent-text">Same facade. Same application call.</p>
+    <Code
+      class="p-0"
+      code={applicationCode}
+      lang="go"
+      themes={codeThemes}
+      tabindex="0"
+      role="region"
+      aria-label="Typed cache key and unchanged application call"
+    />
+  </div>
+  <div class="grid items-center gap-6 lg:grid-cols-2">
+    <div>
+      <h3 class="mb-4 text-lg font-medium">Own the process lifetime.</h3>
+      <p class="mb-4 text-sm text-muted">
+        Register startup, cleanup, and readiness checks explicitly. The application lifecycle
+        coordinates probes and graceful shutdown.
+      </p>
+      <a class="text-sm" href="/docs/guides/application/lifecycle-and-ownership">
+        Follow the lifecycle ↗
+      </a>
+    </div>
+    <Panel
+      title="Composition excerpt"
+      note="Redis lifecycle"
+      code={lifecycleCode}
+      label="Explicit driver lifecycle registration"
+    />
+  </div>
+  <p class:list={[fine, "my-6"]}>
+    These focused excerpts assume an operation context named <code class="text-fg">ctx</code>;
+    handle returned errors. <code class="text-fg">Run</code> waits for cancellation or runner
+    completion, then runs cleanup. Review durability, capabilities, and lifecycle when changing
+    drivers. Native clients stay accessible.{" "}
+    <a href="/docs/guides/core-concepts/facades-and-drivers">See imports and complete wiring.</a>
+  </p>
+  <div class="grid gap-6 border-t border-line pt-6 text-sm text-muted lg:grid-cols-2">
+    <p>
+      <strong class="block font-medium text-fg">Across service calls.</strong> SQL transactions
+      travel through context; nested transactions use savepoints.{" "}
+      <a href="/docs/guides/database/transactions">Compose a transaction ↗</a>
+    </p>
+    <p>
+      <strong class="block font-medium text-fg">Across process boundaries.</strong> Opt into
+      vendor-neutral telemetry and trace propagation through queues and broadcasts.{" "}
+      <a href="/docs/guides/observability/telemetry">Choose telemetry ↗</a>
+    </p>
+  </div>
+</Step>

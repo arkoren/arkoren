@@ -1,0 +1,28 @@
+---
+import Button from "../ui/Button.astro";
+import Icon from "../ui/Icon.astro";
+import Link from "../ui/Link.astro";
+
+/**
+ * The two ways in, shared by the hero and the closing section: start a new
+ * service, or add Arkoren to an existing project. Built for accent surfaces.
+ * @example <Actions />
+ */
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+---
+
+<div class:list={["flex flex-wrap items-center gap-x-6 gap-y-4", className]}>
+  <Button href="/docs/guides/first-steps/quickstart" variant="inverse" class="px-6 py-3">
+    Build a new service <Icon name="arrow-right" />
+  </Button>
+  <Link
+    href="/docs/guides/first-steps/existing-project"
+    class="text-on-accent hover:text-on-accent"
+  >
+    Use in an existing project
+  </Link>
+</div>

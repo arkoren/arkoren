@@ -1,0 +1,59 @@
+---
+import Actions from "./Actions.astro";
+import Install from "./Install.astro";
+import Link from "../ui/Link.astro";
+import Terminal from "./Terminal.astro";
+
+/**
+ * The closing section on an accent surface: add one package to an existing
+ * module, with the install command beside the pitch.
+ * @example <Start />
+ */
+
+/** Install core in an existing module without generating application files. */
+const installCommand = "go get arkoren.dev/core";
+---
+
+<section
+  class="page-width-wide rounded-sm bg-accent text-on-accent"
+  id="start"
+  aria-labelledby="start-title"
+>
+  <div class="page-width grid items-center gap-8 py-8 sm:py-12 lg:grid-cols-2 lg:gap-12">
+    <div>
+      <p class="eyebrow mb-4 text-on-accent before:text-on-accent/70">Start where you are</p>
+      <h2 id="start-title" class="mb-6 text-section font-medium">
+        Add a package.
+        <br />
+        Keep your application.
+      </h2>
+      <p class="mb-8 text-sm leading-relaxed">
+        Add Arkoren to your existing Go application. Keep your router, startup code, and layout. No
+        CLI or generated service required.
+      </p>
+      <Actions />
+    </div>
+    <Terminal title="Start in your terminal" note="Go 1.27+">
+      <p class="px-4 pt-4 text-xs text-muted sm:px-6">
+        Run beside your existing <code>go.mod</code>.
+      </p>
+      <Install
+        class="mx-4 my-4 sm:mx-6"
+        command={installCommand}
+        label="Core installation command"
+      />
+      <div class="px-4 pb-6 text-xs text-muted sm:px-6">
+        <p class="mb-4">
+          Then run the complete cache example in the guide. Import only the packages you need; your
+          application keeps its own entry point.
+        </p>
+        <Link
+          class="text-xs text-code-accent"
+          href="/docs/guides/first-steps/existing-project#running-a-cache-example"
+        >
+          Run the example
+        </Link>
+      </div>
+    </Terminal>
+  </div>
+</section>

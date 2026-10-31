@@ -1,0 +1,113 @@
+---
+import Docs from "../../layouts/Docs.astro";
+import DocsPageHeader from "../../components/docs/Header.astro";
+import DocsLinkList from "../../components/docs/Links.astro";
+import DocsSection from "../../components/docs/Section.astro";
+import Tag from "../../components/ui/Tag.astro";
+import { getGuideSections, guideLabel, guideRoute } from "../../lib/docs/guides";
+
+const sections = await getGuideSections();
+/** Stable anchors for the overview's section links. */
+const sectionSlug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+---
+
+<Docs
+  breadcrumbs={[
+    { name: "Home", href: "/" },
+    { name: "Guides", href: "/docs#guides" },
+    { name: "Meet Arkoren", href: "/docs#guide-about" },
+    { name: "Overview", href: "/docs" },
+  ]}
+  headings={[
+    { depth: 2, slug: "first-steps", text: "First steps" },
+    { depth: 2, slug: "guides", text: "Guides" },
+    ...sections.map((section) => ({
+      depth: 3,
+      slug: sectionSlug(section.title),
+      text: section.title,
+    })),
+    { depth: 2, slug: "api", text: "API reference" },
+  ]}
+  title="Documentation"
+  description="Guides and the API reference for Arkoren, a modular Go toolkit, as web pages, raw Markdown, and an installable agent skill."
+>
+  <DocsPageHeader slot="header" title="Documentation">
+    Start with a working service, add Arkoren to an existing project, or find the guide for your
+    next feature. The API reference covers individual packages, functions, and options.
+    <Tag slot="meta" href="/llms.txt">
+      llms.txt
+    </Tag>
+    <Tag slot="meta" href="/llms-full.txt">
+      Bulk guides archive
+    </Tag>
+  </DocsPageHeader>
+
+  <DocsSection id="first-steps" title="First steps">
+    <p class="mb-6 text-muted">
+      For a new service, start with the quickstart. It walks through installing the CLI, creating a
+      project, and serving your first request, then adds routes, a cache counter, and error
+      responses. You need Go 1.27 or later; no database or message broker is required.
+    </p>
+    <DocsLinkList
+      entries={[
+        {
+          href: "/docs/guides/first-steps/quickstart",
+          title: "Build your first service",
+          description: "Follow the quickstart from a new project to a running HTTP service.",
+        },
+        {
+          href: "/docs/guides/first-steps/existing-project",
+          title: "Add to an existing project",
+          description: "Keep your router and project structure. Start with one Arkoren package.",
+        },
+      ]}
+    />
+    <p class="mt-6 text-muted">
+      Still deciding? <a href="/docs/guides/about/choosing-arkoren">Should I Choose Arkoren?</a>{" "}
+      explains where it fits and which trade-offs to consider.
+    </p>
+  </DocsSection>
+
+  <DocsSection id="guides" title="Guides">
+    <p class="mb-6 text-muted">
+      Read the <a href="/docs/guides/about/introduction">introduction</a> for the ideas behind
+      Arkoren, or choose the area you need below. Each guide explains when to use a feature, how to
+      set it up, and what behavior to expect.
+    </p>
+    {sections.map((section) => (
+      <section class="mt-8" id={sectionSlug(section.title)} data-guide-section>
+        <h3 class="text-lg font-medium">{section.title}</h3>
+        <div class="mt-6 grid cols-guides gap-4">
+          {section.groups.map((group) => (
+            <section
+              class="rounded-sm border border-line bg-surface p-4"
+              id={`guide-${group.meta.id.split("/")[0]}`}
+            >
+              <h4 class="mb-1 text-base font-medium text-accent-text fade">
+                {group.meta.data.title}
+              </h4>
+              <p class="mb-3 text-sm text-muted">{group.meta.data.description}</p>
+              <ul class="grid gap-1 text-sm">
+                {group.pages.map((guide) => (
+                  <li>
+                    <a class="no-underline" href={guideRoute(guide)}>
+                      {guideLabel(guide)}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+      </section>
+    ))}
+  </DocsSection>
+
+  <DocsSection id="api" title="API reference">
+    <p class="text-muted">
+      Find canonical Go declarations and package examples on pkg.go.dev. The{" "}
+      <a href="/docs/api">API module catalog</a> links to core, foundation, and vendor driver
+      modules.
+    </p>
+  </DocsSection>
+</Docs>

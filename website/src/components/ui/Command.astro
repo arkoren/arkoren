@@ -1,0 +1,29 @@
+---
+/**
+ * A documentation command with a progressive copy control. Clipboard failures
+ * are reported on the button; the visible command stays selectable without JS.
+ * @example <CopyCommand command="go get arkoren.dev/core" />
+ */
+interface Props {
+  /** Exact clipboard text, also displayed as escaped code. */
+  command: string;
+  class?: string;
+}
+
+const { command, class: className } = Astro.props;
+---
+
+<div
+  class:list={[
+    "flex items-center gap-3 rounded-sm border border-line bg-surface py-2 pr-2 pl-4 text-sm font-medium",
+    className,
+  ]}
+>
+  <span class="text-accent-text select-none" aria-hidden="true">
+    &gt;
+  </span>
+  <code class="min-w-0 flex-1 overflow-x-auto whitespace-nowrap">{command}</code>
+  <button type="button" class="copy" data-copy={command} aria-live="polite">
+    copy
+  </button>
+</div>

@@ -1,0 +1,22 @@
+---
+import type { ComponentProps } from "astro/types";
+import Main from "./Main.astro";
+import Header from "../components/site/Header.astro";
+import Footer from "../components/site/Footer.astro";
+import Tooltip from "../components/ui/Tooltip.astro";
+
+/**
+ * Visible site chrome around a page-owned main element. Metadata goes unchanged
+ * to the document layout, including article fields and the named head slot.
+ * @example <Site title="Docs" description="Toolkit documentation"><main>…</main></Site>
+ */
+type Props = ComponentProps<typeof Main>;
+---
+
+<Main {...Astro.props}>
+  <slot name="head" slot="head" />
+  <Header />
+  <slot />
+  <Footer />
+  <Tooltip />
+</Main>

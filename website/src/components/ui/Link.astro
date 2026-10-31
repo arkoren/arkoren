@@ -1,0 +1,32 @@
+---
+import Icon from "./Icon.astro";
+
+/**
+ * A call-to-action link: medium-weight text followed by an arrow that nudges
+ * on hover. Colors come from the caller, so it also works on accent surfaces.
+ * @example <Link href="/docs">Read the docs</Link>
+ * @example <Link href="https://pkg.go.dev" icon="arrow-up-right">pkg.go.dev</Link>
+ */
+interface Props {
+  href: string;
+  /** Trailing icon; defaults to the right arrow. */
+  icon?: "arrow-right" | "arrow-up-right";
+  /** Icon size in CSS pixels; defaults to 16. */
+  size?: number;
+  class?: string;
+}
+
+const { href, icon = "arrow-right", size, class: className } = Astro.props;
+---
+
+<a
+  href={href}
+  class:list={["group inline-flex items-center gap-2 text-sm font-medium no-underline", className]}
+>
+  <slot />
+  <Icon
+    name={icon}
+    size={size}
+    class="transition-transform duration-fast group-hover:translate-x-0.5"
+  />
+</a>

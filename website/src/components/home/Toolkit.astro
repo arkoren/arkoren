@@ -1,0 +1,102 @@
+---
+import Icon from "../ui/Icon.astro";
+import Intro from "./Intro.astro";
+
+/**
+ * The system in four pieces: the application, the core capabilities, the
+ * chosen drivers and the independent foundations.
+ * @example <Toolkit />
+ */
+const capabilities = [
+  ["HTTP", "/docs/guides/http-fundamentals/routing"],
+  ["Database", "/docs/guides/database/overview"],
+  ["Queues", "/docs/guides/queues/overview"],
+  ["Workflows", "/docs/guides/workflows/overview"],
+  ["Storage", "/docs/guides/file-storage/overview"],
+  ["Payments", "/docs/guides/payments/overview"],
+  ["All capabilities ↗", "/docs/guides/drivers/choosing-a-driver"],
+];
+const foundations = ["query", "validate", "problem", "collection"];
+
+/** The shared look of the three equal cards. */
+const card = "min-w-0 rounded-sm border p-6 sm:p-8";
+const plain = "border-line bg-surface";
+const body = "mb-4 text-sm leading-relaxed text-muted";
+---
+
+<section class="page-width" id="toolkit" aria-labelledby="toolkit-title">
+  <Intro id="toolkit-title" eyebrow="The system, in pieces" class="mb-8 sm:mb-12">
+    <Fragment slot="title">
+      A toolkit that takes
+      <br />
+      the shape of your app.
+    </Fragment>
+    Start with one capability. Add another when the work calls for it. Your domain is the center—not
+    a framework’s application model.
+  </Intro>
+  <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <article
+      class:list={[card, "border-accent bg-accent text-on-accent md:col-span-2 xl:col-span-1"]}
+    >
+      <p class="eyebrow mb-4 text-on-accent before:text-on-accent/70">Your application</p>
+      <h3 class="mb-4 text-xl font-medium">
+        Your domain.
+        <br />
+        Your composition root.
+      </h3>
+      <p class="mb-4 text-sm leading-relaxed">
+        Keep your types, handlers, and business rules. Pass dependencies explicitly to the code that
+        needs them.
+      </p>
+      <div class="mt-6 flex flex-wrap gap-x-4 gap-y-3 border-t border-white/25 pt-4 text-xs">
+        <code>net/http</code>
+        <code>log/slog</code>
+        <code>context</code>
+      </div>
+    </article>
+    <article class:list={[card, plain]}>
+      <p class="eyebrow mb-4">Core capabilities</p>
+      <h3 class="mb-4 text-xl font-medium">One connected toolkit.</h3>
+      <p class={body}>
+        HTTP, authentication, data, background work, and observability—with consistent boundaries.
+      </p>
+      <div class="flex flex-wrap gap-x-4 gap-y-3 text-xs">
+        {capabilities.map(([name, href]) => (
+          <a href={href}>{name}</a>
+        ))}
+      </div>
+    </article>
+    <article class:list={[card, plain]}>
+      <p class="eyebrow mb-4">Chosen drivers</p>
+      <h3 class="mb-4 text-xl font-medium">
+        Add the backend.
+        <br />
+        Not every backend.
+      </h3>
+      <p class={body}>
+        Vendor integrations live in separate modules. Core has no third-party dependencies; it uses
+        the standard library and Arkoren’s own foundations.
+      </p>
+      <a
+        class="inline-flex items-center gap-2 text-xs"
+        href="/docs/guides/drivers/choosing-a-driver"
+      >
+        Choose your infrastructure <Icon name="arrow-right" />
+      </a>
+    </article>
+    <article class="col-span-full flex flex-wrap items-center justify-between gap-6 rounded-sm border border-line bg-raised px-8 py-6">
+      <div>
+        <p class="eyebrow mb-2">Independent foundations</p>
+        <h3 class="mb-2 text-lg font-medium">Useful outside Arkoren, too.</h3>
+        <p class="text-sm text-muted">
+          Standalone modules with standard-library dependencies only.
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-x-4 gap-y-3 font-mono text-xs">
+        {foundations.map((name) => (
+          <a href={`https://pkg.go.dev/arkoren.dev/foundation/${name}`}>{name}</a>
+        ))}
+      </div>
+    </article>
+  </div>
+</section>

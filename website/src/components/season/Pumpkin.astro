@@ -1,0 +1,40 @@
+---
+/**
+ * The pumpkin that sits on the logo's corner while Halloween mode is on. It
+ * shows and hides with the season (see styles/season.css, `.pumpkin`) and
+ * never takes pointer input. Place it inside a relatively positioned logo.
+ * @example <Pumpkin />
+ */
+---
+
+<svg
+  class="pumpkin pointer-events-none absolute top-1 -right-2 z-1"
+  viewBox="0 0 36 36"
+  width="32"
+  height="32"
+  aria-hidden="true"
+  focusable="false"
+  fill="none"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M18 11c-2-4 0-7 4-8" stroke="var(--color-pumpkin-leaf)" stroke-width="3" />
+  <path d="M19 8c4-5 8-3 8-3-1 4-4 5-8 3Z" fill="var(--color-pumpkin-leaf)" />
+  <path
+    d="M18 12C5 5 0 27 11 31c3 1 4-1 7-1s4 2 7 1C36 27 31 5 18 12Z"
+    fill="var(--color-pumpkin)"
+    stroke="var(--color-pumpkin-outline)"
+    stroke-width="1.5"
+  />
+  <path
+    d="M14 12c-5 4-6 13-2 18m10-18c5 4 6 13 2 18"
+    stroke="var(--color-pumpkin-rib)"
+    stroke-width="1.2"
+  />
+  <path
+    d="m9 19 6-2-2 6Zm18 0-6-2 2 6ZM12 26l3 1 3-2 3 2 3-1"
+    fill="var(--color-pumpkin-face)"
+    stroke="var(--color-pumpkin-face)"
+    stroke-width="1.2"
+  />
+</svg>

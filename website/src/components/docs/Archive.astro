@@ -1,0 +1,41 @@
+---
+import Button from "../ui/Button.astro";
+---
+
+<dialog
+  class="dialog m-auto w-full max-w-prompt gap-4 overflow-y-auto p-6 open:grid"
+  data-archive-warning
+  aria-labelledby="archive-warning-title"
+  aria-describedby="archive-warning-description archive-warning-path"
+>
+  <h2 id="archive-warning-title" class="text-lg font-medium">
+    Open a bulk documentation archive?
+  </h2>
+  <p id="archive-warning-description" class="text-muted">
+    This file contains every guide in its scope, not API declarations. Loading it all into an agent
+    can exhaust its context window and increase processing time and cost. For coding tasks, start
+    with the index and read only the relevant pages.
+  </p>
+  <p id="archive-warning-path" class="text-muted">
+    <code class="wrap-anywhere" data-archive-path></code>
+  </p>
+  <p class="text-muted">
+    Use the full archive for offline indexing, bulk processing, or deliberate large-context use.
+  </p>
+  <a class="justify-self-start" data-archive-index href="/llms.txt">
+    Browse the index instead
+  </a>
+  <div class="mt-2 flex flex-wrap justify-end gap-3">
+    <Button variant="secondary" data-archive-cancel>
+      Cancel
+    </Button>
+    <Button data-archive-open href="/llms-full.txt">
+      Open archive
+    </Button>
+  </div>
+</dialog>
+
+<script>
+  import { initArchiveWarning } from "../../scripts/archive";
+  initArchiveWarning(document);
+</script>

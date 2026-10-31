@@ -1,0 +1,36 @@
+---
+/**
+ * One numbered stop on the home page's service journey. Steps stack along a
+ * vertical rule; the number sits on the rule and the label names the stop.
+ * The heading inside the slot must have the id `<id>-title`.
+ * @example
+ * <Step id="build" number="01" label="Build / start with what you know">
+ *   <h2 id="build-title">Your first handler.</h2>
+ * </Step>
+ */
+interface Props {
+  /** Anchor id, targeted by the journey bar. */
+  id: string;
+  /** Two-digit ordinal shown on the rule. */
+  number: string;
+  label: string;
+}
+
+const { id, number, label } = Astro.props;
+---
+
+<section
+  id={id}
+  aria-labelledby={`${id}-title`}
+  class="relative ml-3.5 scroll-mt-25 border-l border-accent-text/30 pb-14 pl-6.5 last:border-l-transparent last:pb-8 sm:ml-5.5 sm:pb-20 md:pl-12 xl:pl-18"
+>
+  <span
+    class="absolute top-0 left-0 grid size-7 -translate-x-1/2 place-items-center rounded-full border border-accent-text/30 bg-bg font-mono text-2xs text-accent-text sm:size-11 sm:text-xs"
+    aria-hidden="true"
+    data-step-number
+  >
+    {number}
+  </span>
+  <p class="eyebrow mb-7 pt-1.5 sm:pt-3">{label}</p>
+  <slot />
+</section>

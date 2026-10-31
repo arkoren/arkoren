@@ -1,0 +1,55 @@
+---
+import Link from "../ui/Link.astro";
+import Panel from "./Panel.astro";
+import Step from "./Step.astro";
+
+/**
+ * Step 02: testing against memory drivers and recording fakes.
+ * @example <Test />
+ */
+
+/** The application-owned signup example proves dispatch, not email delivery. */
+const testCode = `func TestRegisterSendsWelcome(t *testing.T) {
+	t.Parallel()
+
+	fake := queuetest.New()
+	signup := NewSignup(queue.NewDispatcher(fake))
+
+	if err := signup.Register(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fake.AssertDispatchedCount(t, Welcome, 1)
+}`;
+---
+
+<Step id="test" number="02" label="Test / prove the behavior">
+  <div class="grid items-center gap-8 lg:grid-cols-stage-flip lg:gap-12">
+    <div class="min-w-0 lg:order-2">
+      <h2 id="test-title" class="mb-6 text-section font-medium">
+        Keep the code.
+        <br />
+        Replace the dependency.
+      </h2>
+      <p class="mb-4 text-sm leading-relaxed text-muted">
+        Use memory drivers for local state and recording fakes for outbound work. Test the real
+        facade without starting a broker or making an external request.
+      </p>
+      <p class="mb-4 text-sm leading-relaxed text-muted">
+        Each service contract also ships a conformance suite to check drivers against shared rules.
+      </p>
+      <Link href="/docs/guides/testing/fakes">Test with recording fakes</Link>
+    </div>
+    <Panel
+      class="lg:order-1"
+      title="signup_test.go"
+      note="Application-level test"
+      code={testCode}
+      label="Recording a welcome job in a signup test"
+    >
+      <Fragment slot="caption">
+        <code class="text-fg">NewSignup</code> and <code class="text-fg">Welcome</code> belong to
+        your app. This proves dispatch, not email delivery.
+      </Fragment>
+    </Panel>
+  </div>
+</Step>

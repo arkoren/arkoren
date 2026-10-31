@@ -1,0 +1,53 @@
+{
+  "name": "arkoren.dev",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "assets:brand": "node --experimental-strip-types scripts/brand.ts",
+    "dev": "astro dev",
+    "build": "npm run guides:check && astro build && pagefind --site dist",
+    "guides:generate": "node --experimental-strip-types scripts/guides.ts",
+    "guides:check": "node --experimental-strip-types scripts/guides.ts --check",
+    "check": "astro check",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "test": "npm run test:static && npm run test:browser",
+    "test:static": "npm run fmt:check && npm run test:docs && npm run test:blog && npm run test:seo && npm run test:interactions && npm run test:routing",
+    "test:browser": "playwright test",
+    "test:routing": "node --experimental-strip-types --test test/routing.test.ts",
+    "test:interactions": "node --experimental-strip-types --test test/interactions.test.ts test/sidebar.test.ts test/archive.test.ts test/season.test.ts",
+    "test:docs": "node --experimental-strip-types --test test/docs.test.ts test/cache.test.ts test/guides.test.ts",
+    "test:blog": "node --experimental-strip-types --test test/blog.test.ts",
+    "test:seo": "node --experimental-strip-types --test test/seo.test.ts",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/markdown-satteri": "^0.4.6",
+    "@astrojs/mdx": "^8.1.2",
+    "@astrojs/sitemap": "^3.7.4",
+    "@resvg/resvg-js": "^2.6.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^7.4.4",
+    "satori": "^0.63.2",
+    "satteri": "^0.10.5",
+    "tailwindcss": "^4.3.3",
+    "three": "^0.187.0"
+  },
+  "engines": {
+    "node": ">=26.13.0"
+  },
+  "allowScripts": {
+    "esbuild": true
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.12",
+    "@astrojs/compiler-rs": "^0.5.2",
+    "@playwright/test": "^1.64.1",
+    "@types/three": "^0.187.0",
+    "happy-dom": "^21.0.4",
+    "oxfmt": "^0.75.0",
+    "pagefind": "^1.5.2",
+    "typescript": "^6.0.3"
+  }
+}

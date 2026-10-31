@@ -1,0 +1,28 @@
+---
+import Contract from "./Contract.astro";
+import { contracts as allContracts, type Contract as ContractData } from "../../lib/docs/catalog";
+
+/**
+ * The contract cards in a `.cells` grid, each linking to its overview guide
+ * and listing its drivers. Pass `class="cells-2"` for a narrow column.
+ * @example <Contracts class="cells-2" />
+ */
+interface Props {
+  contracts?: readonly ContractData[];
+  class?: string;
+}
+
+const { contracts = allContracts, class: className } = Astro.props;
+---
+
+<div class:list={["cells", className]}>
+  {contracts.map((contract) => (
+    <Contract
+      name={contract.name}
+      href={`/docs/guides/${contract.guide}`}
+      note={`${contract.drivers.length} ${contract.drivers.length === 1 ? "driver" : "drivers"}`}
+      body={contract.body}
+      badges={contract.drivers}
+    />
+  ))}
+</div>

@@ -1,0 +1,85 @@
+---
+import Install from "./Install.astro";
+import Intro from "./Intro.astro";
+import Terminal from "./Terminal.astro";
+
+/**
+ * The AI-ready evidence: what the coding agent gets, what the runtime
+ * assistant gets, and the command that installs the offline skill.
+ * @example <Agents />
+ */
+
+/** Install the CLI's bundled consumer guides in the current project. */
+const skillCommand = "arkoren skills install";
+
+const fine = "mb-4 text-xs leading-relaxed text-muted";
+const links = "mt-4 flex flex-wrap gap-x-4 gap-y-3 text-xs";
+---
+
+<section
+  class="page-width scroll-mt-25 pt-8 pb-12 sm:pt-12 sm:pb-18"
+  id="agents"
+  aria-labelledby="agents-title"
+>
+  <Intro id="agents-title" eyebrow="Context to build. Tools to use." class="mb-8 sm:mb-12">
+    <Fragment slot="title">
+      AI Ready.
+      <br />
+      Built in by design.
+    </Fragment>
+    Give your AI coding agent the same guides you read. Expose selected application operations as
+    typed Model Context Protocol (MCP) tools. Two different interfaces, with your architecture and
+    access policies still yours.
+  </Intro>
+  <div class="grid border-y border-line lg:grid-cols-2">
+    <article class="py-8 lg:pr-8">
+      <p class="eyebrow">For the coding agent</p>
+      <h3 class="mt-4 mb-4 text-lg font-medium">The same references you read.</h3>
+      <p class="mb-4 text-sm leading-relaxed text-muted">
+        The bundled skill includes guides, examples, pitfalls, and canonical API links. The CLI
+        installs it offline; local edits block managed updates. Your{" "}
+        <code class="text-fg">AGENTS.md</code> remains yours.
+      </p>
+      <p class={fine}>
+        Keep the CLI’s documentation snapshot aligned with your modules. Discovery varies by agent;
+        point it at the installed skill when needed.
+      </p>
+      <div class={links}>
+        <a href="/docs/guides/agent-skills/working-with-agents">Set up your agent ↗</a>
+        <a href="/llms.txt">llms.txt ↗</a>
+        <a href="/docs/guides/agent-skills/working-with-agents.md">Raw Markdown ↗</a>
+      </div>
+    </article>
+    <article class="border-t border-line py-8 lg:border-t-0 lg:border-l lg:pl-8">
+      <p class="eyebrow">For the runtime assistant</p>
+      <h3 class="mt-4 mb-4 text-lg font-medium">Your handlers. A chosen tool surface.</h3>
+      <p class="mb-4 text-sm leading-relaxed text-muted">
+        Define immutable, typed MCP tools without a protocol SDK in your application logic. Register
+        them through an optional HTTP adapter that validates input and encoded output without
+        replaying handlers.
+      </p>
+      <p class={fine}>
+        Authentication, capability availability, and resource authorization stay application-owned.
+        Native SDK registrations are outside the managed checks.
+      </p>
+      <div class={links}>
+        <a href="/docs/guides/mcp/tools">Define application tools ↗</a>
+        <a href="/docs/guides/mcp/availability-and-authorization">Choose access policies ↗</a>
+      </div>
+    </article>
+  </div>
+  <Terminal class="mt-8" title="Bring your coding agent" note="Offline agent skill">
+    <div class="grid items-center gap-4 p-4 text-xs text-muted sm:p-6 lg:grid-cols-2 lg:gap-8">
+      <p>
+        With the{" "}
+        <a class="text-code-accent" href="/docs/guides/cli/overview#installing-the-cli">
+          Arkoren CLI installed
+        </a>
+        , run from your project root. The guides are copied to{" "}
+        <code class="text-fg">.agents/skills/arkoren/</code>; your dependencies and{" "}
+        <code class="text-fg">AGENTS.md</code> stay unchanged.
+      </p>
+      <Install command={skillCommand} label="Agent skill installation command" />
+    </div>
+  </Terminal>
+</section>

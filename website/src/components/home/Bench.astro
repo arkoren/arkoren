@@ -1,0 +1,103 @@
+---
+import { rackFallback } from "../../lib/figure/fallback";
+import { parts } from "../../lib/figure/model";
+---
+
+<figure class="page-width py-12 sm:py-18" data-bench aria-labelledby="bench-heading">
+  <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <p class="eyebrow mb-2">Inside the toolkit</p>
+      <h2 id="bench-heading" class="text-xl font-medium">
+        Your code makes the connections.
+      </h2>
+    </div>
+    <p class="max-w-measure text-sm text-muted">
+      Familiar building blocks. Focused libraries. An application that stays yours.
+    </p>
+  </div>
+  <div class="overflow-clip rounded-sm border border-line bg-surface">
+    <div class="grid xl:grid-cols-2">
+      <div class="flex min-h-0 min-w-0 flex-col">
+        <div
+          class="bench-viewport relative min-h-0 min-w-0 focus-visible:outline xl:flex-1"
+          data-bench-stage
+          tabindex="0"
+          role="group"
+          aria-label="Workbench camera. Drag or use arrow keys to orbit; scroll or use plus and minus to zoom; Home resets the view."
+        >
+          <svg
+            class="iso-svg"
+            viewBox="0 0 620 620"
+            role="img"
+            aria-label="A logo-shaped instrument: Standard Go and Foundations form two feet, Arkoren Core the middle, and your application the top dial."
+          >
+            <g set:html={rackFallback()} />
+          </svg>
+        </div>
+        <div class="flex flex-wrap justify-between gap-2 px-4 py-3 font-mono text-xs text-muted">
+          <span>
+            Drag to orbit · <span class="hidden xl:inline">scroll to zoom · </span>hover to explore
+          </span>
+        </div>
+      </div>
+      <aside
+        class="grid min-w-0 grid-cols-1 gap-px border-t border-line bg-line sm:grid-cols-2 xl:border-t-0 xl:border-l"
+        data-bench-content
+        aria-label="Workbench parts"
+      >
+        {parts.map((part, index) => (
+          <article
+            class="relative flex min-w-0 flex-col bg-surface p-6 transition-colors duration-fast ease-out data-active:bg-figure-highlight"
+            id={`bench-${part.id}`}
+            aria-labelledby={`bench-heading-${part.id}`}
+            data-bench-card={part.id}
+          >
+            <button
+              type="button"
+              class="absolute inset-0 focus-visible:outline"
+              data-bench-part={part.id}
+              aria-pressed="false"
+              aria-labelledby={`bench-heading-${part.id}`}
+            />
+            <div class="pointer-events-none relative flex flex-1 flex-col">
+              <p class="mb-3 font-mono text-2xs text-accent-text">
+                {String(index + 1).padStart(2, "0")} / {part.object}
+              </p>
+              <h3 id={`bench-heading-${part.id}`} class="mb-3 text-base font-medium">
+                {part.title}
+              </h3>
+              <p class="mb-4 text-sm leading-relaxed text-muted">{part.text}</p>
+              <ul class="mb-4 flex flex-wrap gap-2" aria-label="Examples">
+                {part.examples.map((example) => (
+                  <li class="rounded-sm border border-line bg-raised px-2 py-1 font-mono text-2xs">
+                    {example}
+                  </li>
+                ))}
+              </ul>
+              <p class="mb-4 text-sm leading-relaxed">{part.relation}</p>
+              <a
+                class="pointer-events-auto relative mt-auto text-sm text-accent-text"
+                href={part.href}
+              >
+                Explore {part.title.toLowerCase()} →
+              </a>
+            </div>
+          </article>
+        ))}
+      </aside>
+    </div>
+  </div>
+  <figcaption class="mt-4 max-w-prose text-sm leading-relaxed text-muted">
+    The logo becomes a physical instrument: independent foundations, focused Core libraries and your
+    application above. The three bands describe ownership, not mandatory runtime layers. Vendor
+    drivers remain separate modules selected by your app.
+  </figcaption>
+  <noscript>
+    <p class="mt-4 text-sm">Enable JavaScript to rotate the instrument and select its parts.</p>
+  </noscript>
+</figure>
+
+<script>
+  import { initBench } from "../../scripts/bench";
+  for (const figure of document.querySelectorAll<HTMLElement>("[data-bench]")) initBench(figure);
+</script>

@@ -1,0 +1,13 @@
+# Cloudflare Pages/Workers static assets. Other hosts need equivalent rules.
+/docs/guides/*.md
+  Content-Type: text/markdown; charset=utf-8
+  Link: <https://arkoren.dev/docs/guides/:splat>; rel="canonical"
+
+# Noindex controls search indexing, not agent access or link following.
+/*llms.txt
+  Content-Type: text/plain; charset=utf-8
+  X-Robots-Tag: noindex
+
+/*llms-full.txt
+  Content-Type: text/plain; charset=utf-8
+  X-Robots-Tag: noindex

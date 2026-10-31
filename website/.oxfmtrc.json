@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "tabWidth": 2,
+  "useTabs": false,
+  "printWidth": 100,
+  "semi": true,
+  "singleQuote": false,
+  "astro": true,
+  "sortPackageJson": false,
+  "sortTailwindcss": { "stylesheet": "./src/styles/global.css" },
+  "ignorePatterns": [
+    "dist/",
+    "node_modules/",
+    "package-lock.json",
+    "test-results/",
+    "public/",
+    "src/content/**",
+    "**/*.md",
+    "**/*.mdx"
+  ]
+}

@@ -1,0 +1,18 @@
+---
+/**
+ * Documentation batch metadata shared by desktop and narrow-screen rails.
+ * @example <Version date="2026-10-25" />
+ */
+interface Props {
+  /** ISO calendar date of the documentation release. */
+  date: string;
+}
+/** The layout supplies release metadata; this component only presents it. */
+const { date } = Astro.props;
+---
+
+<div class="mb-6" data-version data-pagefind-ignore>
+  <time class="tag whitespace-nowrap" datetime={date} aria-label={`Documentation release ${date}`}>
+    v{date}
+  </time>
+</div>

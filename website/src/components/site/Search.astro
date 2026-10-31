@@ -1,0 +1,159 @@
+---
+import Icon from "../ui/Icon.astro";
+/**
+ * Docs search: a header button (and the "/" or Cmd/Ctrl+K shortcut) that opens a
+ * dialog searching the Pagefind index built from dist/ after `astro build`
+ * (`npm run build`). Results list the page and its best matching sections,
+ * which link to heading anchors. Under `astro dev` there is no index, so the
+ * dialog never requests it (the request would fall through to the catch-all
+ * import-path route) and says search needs a build instead.
+ */
+const indexed = import.meta.env.PROD;
+---
+
+<button
+  type="button"
+  class="field w-rail cursor-pointer max-lg:w-auto max-lg:flex-1"
+  data-search-open
+  aria-haspopup="dialog"
+>
+  <Icon name="search" size={14} />
+  <span>Search</span>
+  <kbd class="ml-auto rounded-sm border border-line px-1.5 font-sans text-2xs font-medium text-muted max-lg:hidden">
+    /
+  </kbd>
+</button>
+
+<dialog
+  class="dialog m-auto mt-18 max-h-140 w-full max-w-search flex-col overflow-hidden open:flex"
+  data-search
+  data-indexed={indexed ? "" : undefined}
+  aria-label="Search the documentation"
+>
+  <form method="dialog" class="flex items-center gap-3 border-b border-line px-4 py-3 text-muted">
+    <Icon name="search" size={16} />
+    <input
+      type="search"
+      class="min-w-0 flex-1 bg-transparent text-fg outline-0"
+      placeholder="Search the docs"
+      aria-label="Search the docs"
+      autocomplete="off"
+      spellcheck="false"
+      data-search-input
+    />
+    <button
+      type="submit"
+      class="cursor-pointer rounded-sm border border-line px-1.5 font-sans text-2xs font-medium text-muted"
+      aria-label="Close search"
+    >
+      esc
+    </button>
+  </form>
+  <p class="px-4 py-3 text-sm text-muted empty:py-0" data-search-status aria-live="polite"></p>
+  <ol class="overflow-y-auto p-2 empty:hidden" data-search-results></ol>
+</dialog>
+
+<script is:inline type="module">
+  const dialog = document.querySelector("[data-search]");
+  const input = dialog.querySelector("[data-search-input]");
+  const list = dialog.querySelector("[data-search-results]");
+  const status = dialog.querySelector("[data-search-status]");
+
+  // The index only exists in built output, so load it lazily and remember a failure.
+  let engine;
+  const load = () =>
+    (engine ??=
+      "indexed" in dialog.dataset
+        ? import("/pagefind/pagefind.js").catch(() => null)
+        : Promise.resolve(null));
+
+  // Pagefind URLs end in .html in this build; links use the extensionless routes.
+  const route = (url) => url.replace(/\.html(?=$|#)/, "");
+
+  const open = () => {
+    if (dialog.open) return;
+    dialog.showModal();
+    input.select();
+    void load();
+  };
+
+  document.querySelector("[data-search-open]")?.addEventListener("click", open);
+  addEventListener("keydown", (event) => {
+    const typing =
+      event.target instanceof HTMLElement &&
+      event.target.closest("input, textarea, [contenteditable]");
+    if ((event.key === "k" && (event.metaKey || event.ctrlKey)) || (event.key === "/" && !typing)) {
+      event.preventDefault();
+      open();
+    }
+  });
+  // A click on the backdrop (the dialog element itself) closes it.
+  dialog.addEventListener("click", (event) => event.target === dialog && dialog.close());
+
+  const item = (href, title, excerpt, sub) => {
+    const li = document.createElement("li");
+    const a = Object.assign(document.createElement("a"), {
+      className: "search-hit",
+      href: route(href),
+    });
+    a.toggleAttribute("data-sub", sub);
+    const b = Object.assign(document.createElement("b"), { textContent: title });
+    // Pagefind builds excerpts from our own pages and marks matches with <mark>.
+    const p = Object.assign(document.createElement("p"), { innerHTML: excerpt });
+    a.append(b, p);
+    a.addEventListener("click", () => dialog.close());
+    li.append(a);
+    return li;
+  };
+
+  input.addEventListener("input", async () => {
+    const query = input.value.trim();
+    const pagefind = await load();
+    if (!pagefind) {
+      status.textContent = "Search is available on the built site (npm run build).";
+      return;
+    }
+    if (query === "") {
+      list.replaceChildren();
+      status.textContent = "";
+      return;
+    }
+    const search = await pagefind.debouncedSearch(query);
+    if (search === null) return; // superseded by a newer query
+    const pages = await Promise.all(search.results.slice(0, 8).map((r) => r.data()));
+    list.replaceChildren(
+      ...pages.flatMap((page) => [
+        item(page.url, page.meta.title ?? page.url, page.excerpt, false),
+        ...page.sub_results
+          .filter((s) => s.url !== page.url)
+          .slice(0, 3)
+          .map((s) => item(s.url, s.title, s.excerpt, true)),
+      ]),
+    );
+    status.textContent = pages.length === 0 ? `No results for “${query}”.` : "";
+  });
+
+  // Arrow keys move between results; Enter on the input opens the first one.
+  dialog.addEventListener("keydown", (event) => {
+    /**
+     * Search inputs consume Escape to clear their text. Close explicitly so
+     * keyboard dismissal also works while a query is present.
+     */
+    if (event.key === "Escape") {
+      event.preventDefault();
+      dialog.close();
+      return;
+    }
+    const links = [...list.querySelectorAll("a")];
+    const index = links.indexOf(document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const next = event.key === "ArrowDown" ? index + 1 : index - 1;
+      if (next < 0) input.focus();
+      else links[Math.min(next, links.length - 1)]?.focus();
+    } else if (event.key === "Enter" && document.activeElement === input && links[0]) {
+      event.preventDefault();
+      links[0].click();
+    }
+  });
+</script>

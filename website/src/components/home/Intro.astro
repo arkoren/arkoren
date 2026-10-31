@@ -1,0 +1,32 @@
+---
+/**
+ * The header of a home section: an optional eyebrow and the heading on one
+ * side, a short description on the other. The heading goes in the `title`
+ * slot, the description in the default slot.
+ * @example
+ * <Intro id="principles-title" eyebrow="Coherence">
+ *   <Fragment slot="title">A toolkit, not a framework.</Fragment>
+ *   Libraries your application calls.
+ * </Intro>
+ */
+interface Props {
+  /** Id of the h2, referenced by the section's aria-labelledby. */
+  id: string;
+  eyebrow?: string;
+  class?: string;
+}
+
+const { id, eyebrow, class: className } = Astro.props;
+---
+
+<header class:list={["grid items-end gap-4 lg:grid-cols-2 lg:gap-16", className]}>
+  <div>
+    {eyebrow && <p class="eyebrow mb-4">{eyebrow}</p>}
+    <h2 id={id} class="text-section font-medium">
+      <slot name="title" />
+    </h2>
+  </div>
+  <p class="max-w-measure text-sm leading-relaxed text-muted">
+    <slot />
+  </p>
+</header>

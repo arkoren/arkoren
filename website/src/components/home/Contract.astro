@@ -1,0 +1,29 @@
+---
+import Badges from "../ui/Badges.astro";
+
+/**
+ * One linked cell of a `.cells` grid: a name with a muted note beside it, a
+ * summary, and an optional badge row pinned to the bottom that slides while
+ * the cell is hovered or focused.
+ * @example <Contract name="Cache" href="/docs/guides/cache/overview" note="3 drivers" body="Typed keys." badges={["redis"]} />
+ */
+interface Props {
+  name: string;
+  href: string;
+  /** Muted text beside the name, such as "3 drivers" or a module path. */
+  note: string;
+  body: string;
+  badges?: readonly string[];
+}
+
+const { name, href, note, body, badges } = Astro.props;
+---
+
+<a class="group cell flex min-w-0 flex-col gap-3 px-8 pt-6 pb-8" data-slide-host href={href}>
+  <h3 class="flex flex-wrap items-baseline justify-between gap-2 text-base font-medium transition-colors duration-fast group-hover:text-accent-text">
+    {name}
+    <code class="font-normal wrap-anywhere text-muted">{note}</code>
+  </h3>
+  <p class="text-sm text-muted">{body}</p>
+  {badges && <Badges class="mt-auto pt-1" items={badges} label={`${name} drivers`} />}
+</a>

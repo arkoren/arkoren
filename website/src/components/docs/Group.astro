@@ -1,0 +1,38 @@
+---
+/**
+ * Summary row of a collapsible sidebar group: a chevron (Lucide "chevron-right")
+ * that turns when the group is open, and a label that slides when it is too
+ * long for the sidebar, like the links next to it. The parent `<details>` must
+ * carry the `group/branch` class so the chevron can follow its open state.
+ * @example <details class="group/branch"><Group label="Database" /></details>
+ */
+interface Props {
+  label: string;
+}
+
+const { label } = Astro.props;
+---
+
+<summary
+  class="tree-link flex cursor-pointer list-none items-center gap-1.5"
+  title={label}
+  data-slide-host
+>
+  <svg
+    class="flex-none text-muted transition-transform group-open/branch:rotate-90"
+    viewBox="0 0 24 24"
+    width="12"
+    height="12"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="m9 18 6-6-6-6"></path>
+  </svg>
+  <span class="min-w-0" data-slide>
+    <span>{label}</span>
+  </span>
+</summary>

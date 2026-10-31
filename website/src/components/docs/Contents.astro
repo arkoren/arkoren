@@ -1,0 +1,66 @@
+---
+/**
+ * Section links with shared active-location tracking. Multiple copies read the
+ * same heading positions; the desktop rail adds a moving marker. Without
+ * JavaScript, native fragments and the initial Overview remain usable.
+ * @example <PageContents headings={[{ depth: 2, slug: "top", text: "Overview" }]} variant="desktop" />
+ */
+interface Props {
+  /** Ordered heading destinations; third-level entries are visually indented. */
+  headings: { depth: number; slug: string; text: string }[];
+  /** The rail (with a marker) or the disclosure shown on narrow screens. */
+  variant: "desktop" | "mobile";
+  /** Accessible navigation name; defaults to On this page. */
+  label?: string;
+}
+
+/** Classes per placement; the lists differ only in density and marker. */
+const styles = {
+  desktop: {
+    list: "toc-list",
+    item: "relative",
+    link: "block px-3 py-1 text-xs text-muted no-underline hover:text-fg current:text-accent-text",
+    sub: "pl-6",
+  },
+  mobile: {
+    list: "px-4 pb-3",
+    item: "",
+    link: "block py-1 text-sm text-muted no-underline hover:text-fg current:text-accent-text",
+    sub: "pl-4",
+  },
+};
+
+/** Initial state stays useful before the shared enhancement measures headings. */
+const { headings, variant, label = "On this page" } = Astro.props;
+const style = styles[variant];
+---
+
+<nav
+  class="min-w-0"
+  aria-label={label}
+  data-page-contents
+  data-contents-marker={variant === "desktop" ? "" : undefined}
+>
+  <ul class={style.list}>
+    {headings.map((heading) => (
+      <li class:list={[style.item, heading.depth === 3 && style.sub]}>
+        <a
+          class:list={[style.link, "fade"]}
+          href={`#${heading.slug}`}
+          aria-current={heading.slug === "top" ? "location" : undefined}
+          data-slide-host
+          title={heading.text}
+        >
+          <span class="block min-w-0" data-slide>
+            <span>{heading.text}</span>
+          </span>
+        </a>
+      </li>
+    ))}
+  </ul>
+</nav>
+
+<script>
+  import { initPageContents } from "../../scripts/contents";
+  document.querySelectorAll<HTMLElement>("[data-page-contents]").forEach(initPageContents);
+</script>

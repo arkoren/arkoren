@@ -1,0 +1,28 @@
+---
+/**
+ * A one-line row of neutral badges, such as a contract's drivers. A row wider
+ * than its space clips with a fade and slides to show the rest on hover or
+ * focus of the row, or of an ancestor marked data-slide-host (see Slide.astro).
+ * @example <Badges items={["redis", "memory"]} label="cache drivers" />
+ */
+interface Props {
+  items: readonly string[];
+  /** Accessible name of the list, such as "cache drivers". */
+  label: string;
+  class?: string;
+}
+
+const { items, label, class: className } = Astro.props;
+---
+
+<div class={className} data-slide>
+  <ul class="m-0 flex list-none gap-1 p-0" aria-label={label}>
+    {items.map((item) => (
+      <li class="m-0">
+        <span class="inline-flex items-center gap-1 rounded-sm bg-raised px-2 py-0.5 text-xs font-medium text-fg">
+          {item}
+        </span>
+      </li>
+    ))}
+  </ul>
+</div>

@@ -1,0 +1,53 @@
+---
+import type { HTMLAttributes } from "astro/types";
+
+/**
+ * Complete color treatments, kept separate from layout so each button emits
+ * only one fill and border choice. State colors retain the same contrast.
+ */
+const variants = {
+  primary:
+    "border-accent bg-accent text-on-accent hover:border-accent-strong hover:bg-accent-strong hover:text-on-accent active:border-accent-deep active:bg-accent-deep",
+  secondary:
+    "border-transparent bg-raised text-fg hover:border-transparent hover:bg-raised-hover hover:text-fg active:border-transparent active:bg-raised-hover",
+  inverse:
+    "border-on-accent bg-on-accent text-ink hover:border-accent-soft hover:bg-accent-soft hover:text-ink active:border-accent-soft active:bg-accent-soft",
+} as const;
+
+/**
+ * A button-styled control: an anchor when `href` is given, otherwise a native
+ * button. Merge extra utilities through `class` (for example `px-6 py-3`).
+ * @example <Button href="/docs" variant="secondary">Read the docs</Button>
+ * @example <Button type="submit">Save</Button>
+ *
+ * Anything an anchor accepts, plus the variant and the native button type.
+ * Remaining attributes (aria-*, data-*, target …) go to the rendered element.
+ */
+interface Props extends HTMLAttributes<"a"> {
+  /** Fill style: the accent button, the quiet raised button, or the light button for accent surfaces. */
+  variant?: keyof typeof variants;
+  /** Native button type; only used when no href is given. Defaults to "button". */
+  type?: "button" | "submit" | "reset";
+}
+
+const { href, variant = "primary", type = "button", class: className, ...rest } = Astro.props;
+/**
+ * Layout and interaction utilities shared by anchors and native buttons.
+ * The btn hook only coordinates the optional icon's descendant motion in CSS.
+ */
+const classes = [
+  "btn relative inline-flex items-center justify-center gap-2 rounded-sm border px-3 py-1.5 text-sm font-medium whitespace-nowrap no-underline transition-colors duration-fast active:translate-y-px",
+  variants[variant],
+  className,
+];
+---
+
+{href === undefined ? (
+  <button type={type} class:list={classes} {...rest}>
+    <slot />
+  </button>
+) : (
+  <a href={href} class:list={classes} {...rest}>
+    <slot />
+  </a>
+)}

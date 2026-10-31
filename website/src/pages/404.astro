@@ -1,0 +1,88 @@
+---
+import Site from "../layouts/Site.astro";
+import Missing from "../components/home/Missing.astro";
+import Button from "../components/ui/Button.astro";
+import Icon from "../components/ui/Icon.astro";
+
+/** Where a lost reader can go next. */
+const destinations = [
+  {
+    icon: "terminal",
+    href: "/docs/guides/first-steps/quickstart",
+    title: "Start building",
+    hint: "Get your first service running.",
+  },
+  {
+    icon: "code",
+    href: "/docs/api",
+    title: "API reference",
+    hint: "Find the package you need.",
+  },
+  {
+    icon: "layers",
+    href: "/blog",
+    title: "From the blog",
+    hint: "Explore the ideas behind Arkoren.",
+  },
+] as const;
+---
+
+<Site
+  title="Page not found · arkoren"
+  socialTitle="Page not found"
+  description="This page could not be found. Find your way back to Arkoren's documentation, API reference, or home page."
+  canonical="/404"
+  noindex
+>
+  <main class="page-width pt-12 pb-18 lg:pt-18 lg:pb-24" id="main-content" data-pagefind-ignore>
+    <section
+      class="grid items-center gap-8 md:grid-cols-2 lg:gap-18"
+      aria-labelledby="not-found-title"
+    >
+      <div>
+        <p class="eyebrow">404 · page not found</p>
+        <h1 id="not-found-title" class="my-6 text-display font-medium">
+          One piece
+          <br />
+          is missing.
+        </h1>
+        <p class="max-w-110 text-base leading-relaxed text-muted">
+          This page may have moved, or the link may be incorrect. The rest of the toolkit is right
+          where you left it.
+        </p>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <Button href="/docs" class="px-6 py-3">
+            Explore the docs <Icon name="arrow-right" class="icon-nudge" />
+          </Button>
+          <Button href="/" variant="secondary" class="px-6 py-3">
+            Back to home
+          </Button>
+        </div>
+        <p class="mt-4 text-xs text-muted">Looking for a package? Try search in the header.</p>
+      </div>
+      <div class="w-full max-w-110 min-w-0">
+        <Missing />
+      </div>
+    </section>
+
+    <nav class="mt-8 md:mt-18" aria-label="Find your next page">
+      <ul class="grid divide-y divide-line border-y border-line md:grid-cols-3 md:divide-x md:divide-y-0">
+        {destinations.map((destination) => (
+          <li>
+            <a
+              class="flex min-w-0 items-center gap-4 p-4 no-underline hover:bg-raised hover:text-fg md:p-6"
+              href={destination.href}
+            >
+              <Icon name={destination.icon} size={20} class="flex-none text-accent-text" />
+              <span>
+                <strong class="block text-sm font-medium">{destination.title}</strong>
+                <span class="block text-xs text-muted">{destination.hint}</span>
+              </span>
+              <Icon name="arrow-up-right" class="ml-auto flex-none text-muted" />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  </main>
+</Site>

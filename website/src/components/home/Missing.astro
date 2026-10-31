@@ -1,0 +1,25 @@
+---
+/**
+ * The 404 artwork: the digits 4-0-4 with the zero missing, a dashed outline
+ * where it belongs and a socket that floats and pulses above it. Decorative;
+ * the loop is defined in styles/motion.css and stops for reduced motion.
+ * @example <Missing />
+ */
+---
+
+<svg class="block h-auto w-full" viewBox="0 0 440 280" fill="none" aria-hidden="true">
+  <g
+    class="fill-accent-text/10 text-accent-text"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linejoin="round"
+  >
+    <path d="M114 68H88l-42 88v22h68v26h26v-26h14v-24h-14v-40h-26v40H76z" />
+    <rect class="missing-piece fill-none" x="180" y="68" width="80" height="136" rx="4" />
+    <path d="M354 68h-26l-42 88v22h68v26h26v-26h14v-24h-14v-40h-26v40h-38z" />
+  </g>
+  <g class="missing-socket text-muted" stroke="currentColor" stroke-width="1.5">
+    <rect class="missing-pulse" x="208" y="124" width="24" height="24" />
+    <path d="M208 124h24v24h-24zM220 118v6m0 24v6m-18-18h6m24 0h6" />
+  </g>
+</svg>

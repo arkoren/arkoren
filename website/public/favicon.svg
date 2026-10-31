@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" role="img" aria-label="arkoren">
+  <rect width="100" height="100" fill="#c70036"/>
+  <g transform="translate(12 12) scale(.76)" fill="#fffbf5">
+    <path d="M40 8H60L69 28H31Z"/>
+    <path d="M27 38H73L82 58H18Z"/>
+    <path d="M14 68H38L29 90H4ZM62 68H86L96 90H71Z"/>
+  </g>
+</svg>

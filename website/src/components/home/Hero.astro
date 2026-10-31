@@ -1,0 +1,68 @@
+---
+import type { CollectionEntry } from "astro:content";
+import Icon from "../ui/Icon.astro";
+import { blogDate, blogRoute } from "../../lib/blog/posts";
+import Actions from "./Actions.astro";
+import Artwork from "./Artwork.astro";
+
+/**
+ * The home page's first screen: the pitch, the newest post as an
+ * announcement, the two ways in, and the construction artwork. The root
+ * carries `data-home-hero`, which the header watches to hand its own
+ * announcement over once this one scrolls away.
+ * @example <Hero latest={posts[0]} />
+ */
+interface Props {
+  /** The newest published post; the announcement is omitted without one. */
+  latest?: CollectionEntry<"blog">;
+}
+
+const { latest } = Astro.props;
+---
+
+<section
+  class="page-width-wide rounded-sm bg-accent bg-grid text-on-accent"
+  aria-labelledby="hero-title"
+  data-home-hero
+>
+  <div class="page-width grid items-center gap-12 py-8 sm:min-h-135 sm:py-16 xl:grid-cols-3">
+    <div class="grid min-w-0 justify-items-start gap-6 xl:col-span-2">
+      {latest && (
+        <a
+          class="group inline-flex max-w-full items-center gap-3 rounded-sm border border-white/30 py-1 pr-1 pl-3 text-xs font-medium text-on-accent no-underline hover:text-on-accent sm:gap-4"
+          href={blogRoute(latest)}
+          data-hero-news
+        >
+          <time
+            class="flex-none whitespace-nowrap"
+            datetime={latest.data.publishedAt.toISOString()}
+          >
+            {blogDate(latest.data.publishedAt)}
+          </time>
+          <span>{latest.data.title}</span>
+          <span class="grid size-7 flex-none place-items-center rounded-sm bg-on-accent text-ink transition-transform duration-fast group-hover:translate-x-0.5">
+            <Icon name="arrow-right" />
+          </span>
+        </a>
+      )}
+      <h1 id="hero-title" class="text-display font-medium">
+        Less framework.
+        <br />
+        More Go.
+      </h1>
+      <p class="max-w-measure text-base sm:text-lg">
+        Start with the standard library. Add only what you need. Your architecture, your
+        dependencies, your decisions.
+      </p>
+      <Actions />
+      <p class="text-xs">Start with one package. No CLI or generated project required.</p>
+      <a
+        class="inline-flex items-center gap-2 text-xs text-on-accent underline-offset-4 hover:text-on-accent"
+        href="#agents"
+      >
+        Built to work with AI agents <Icon name="arrow-right" size={14} />
+      </a>
+    </div>
+    <Artwork />
+  </div>
+</section>

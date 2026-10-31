@@ -1,0 +1,351 @@
+---
+import Site from "../../layouts/Site.astro";
+import Icon from "../../components/ui/Icon.astro";
+import Tag from "../../components/ui/Tag.astro";
+import BlogAuthor from "../../components/blog/Author.astro";
+import SegmentedSelector from "../../components/ui/Selector.astro";
+import {
+  blogDate,
+  blogRecord,
+  blogRoute,
+  getBlogPosts,
+  readingMinutes,
+} from "../../lib/blog/posts";
+
+/** Categories and their counts come exclusively from published Markdown posts. */
+const posts = await getBlogPosts();
+const categories = [...new Set(posts.map((post) => post.data.category))].sort((a, b) =>
+  a.localeCompare(b, "en"),
+);
+
+/** The masthead's stack of bars; the last one is the rose accent. */
+const logBars = [
+  "border-fg bg-surface shadow-offset",
+  "w-5/6 border-fg bg-surface shadow-offset",
+  "w-2/3 border-fg bg-surface shadow-offset",
+  "w-1/2 border-accent bg-accent-text/10 shadow-offset-accent",
+];
+---
+
+<Site
+  title="Blog · arkoren"
+  socialTitle="Blog"
+  description="Announcements, changelogs, and engineering notes from Arkoren."
+>
+  <main class="page-width pt-12 pb-18 sm:pb-24 lg:pt-18" id="top">
+    <header class="flex items-end justify-between gap-12 pb-12 sm:pb-18">
+      <div>
+        <span class="eyebrow">the arkoren blog</span>
+        <h1 class="my-6 text-hero font-medium">
+          Notes from
+          <br />
+          the workshop
+        </h1>
+        <p class="max-w-measure text-base text-muted md:text-lg">
+          What’s new, what’s changed, and the thinking behind the toolkit.
+        </p>
+      </div>
+      <div
+        class="grid w-40 flex-none justify-items-start gap-2 pb-1 font-mono text-2xs tracking-wide text-muted max-sm:hidden lg:w-60"
+        aria-hidden="true"
+      >
+        <div class="mb-6 grid w-35 -skew-y-12 gap-3 lg:w-46">
+          {logBars.map((bar) => (
+            <span class:list={["h-5 border", bar]} />
+          ))}
+        </div>
+        <span>ARKOREN / FIELD NOTES</span>
+        <span>BUILD. REFINE. REPEAT.</span>
+      </div>
+    </header>
+
+    <section class="border-t-2 border-fg" aria-labelledby="archive-title" data-blog-archive>
+      <div class="flex items-center justify-between gap-4 py-6 max-sm:flex-wrap">
+        <h2 class="text-lg font-medium" id="archive-title">
+          The journal
+        </h2>
+        <form
+          class="field w-75 max-w-full min-w-0 max-sm:w-full"
+          role="search"
+          aria-label="Search blog posts"
+          action="/blog"
+          method="get"
+          hidden
+        >
+          <label class="sr-only" for="blog-search">
+            Search the journal
+          </label>
+          <Icon name="search" size={14} />
+          <input
+            id="blog-search"
+            name="q"
+            type="search"
+            placeholder="Search the journal…"
+            autocomplete="off"
+          />
+          <button
+            type="submit"
+            class="grid h-6 w-5 flex-none cursor-pointer place-items-center rounded-sm text-muted hover:text-fg"
+            aria-label="Search posts"
+          >
+            <Icon name="arrow-right" size={16} />
+          </button>
+        </form>
+      </div>
+      <div
+        class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-line py-2"
+        data-blog-controls
+        hidden
+      >
+        <nav class="max-w-full min-w-0" aria-label="Post categories">
+          <SegmentedSelector class="text-sm">
+            <a href="/blog" data-blog-category="" aria-current="true">
+              All posts <span class="font-mono text-2xs opacity-70">{posts.length}</span>
+            </a>
+            {categories.map((category) => (
+              <a href={`/blog?${new URLSearchParams({ category })}`} data-blog-category={category}>
+                {category}{" "}
+                <span class="font-mono text-2xs opacity-70">
+                  {posts.filter((post) => post.data.category === category).length}
+                </span>
+              </a>
+            ))}
+          </SegmentedSelector>
+        </nav>
+        <button
+          class="ml-auto flex-none cursor-pointer py-3 font-mono text-xs whitespace-nowrap text-muted hover:text-fg"
+          type="button"
+          data-blog-sort="newest"
+          aria-label="Order: newest first. Change to oldest first."
+        >
+          Newest first ↓
+        </button>
+      </div>
+      <noscript>
+        <p class="py-4 text-muted">
+          All posts are listed below, newest first. Enable JavaScript to search, sort, or filter
+          them.
+        </p>
+      </noscript>
+      <div
+        class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 pt-6 pb-4"
+        hidden
+        data-blog-results
+      >
+        <p
+          class="font-mono text-xs wrap-anywhere text-muted"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-blog-count
+        ></p>
+        <button
+          class="cursor-pointer text-xs text-fg underline underline-offset-4"
+          type="button"
+          data-blog-reset
+        >
+          Clear filters <span aria-hidden="true">↗</span>
+        </button>
+      </div>
+      <div class="border-b border-line" data-blog-list>
+        {posts.map((post, index) => (
+          <article
+            class="flex flex-col gap-4 border-t border-line py-8 sm:flex-row sm:gap-8 sm:py-12"
+            data-blog-post
+            data-id={post.id}
+            data-title={post.data.title}
+            data-category={post.data.category}
+            data-published-at={post.data.publishedAt.valueOf()}
+            data-search={blogRecord(post).text}
+          >
+            <div class="flex justify-between gap-4 font-mono text-xs text-muted sm:w-30 sm:flex-none sm:flex-col sm:justify-start lg:w-45">
+              <span class="text-2xs text-accent-text fade" aria-hidden="true">
+                /{String(posts.length - index).padStart(3, "0")}
+              </span>
+              <time datetime={post.data.publishedAt.toISOString()}>
+                {blogDate(post.data.publishedAt)}
+              </time>
+            </div>
+            <div class="min-w-0 flex-1">
+              <Tag href={`/blog?${new URLSearchParams({ category: post.data.category })}`}>
+                {post.data.category}
+              </Tag>
+              <h3 class="mt-4 mb-3 text-xl font-medium wrap-anywhere">
+                <a
+                  class="flex items-baseline justify-between gap-3 text-fg no-underline hover:text-accent-text sm:gap-6"
+                  href={blogRoute(post)}
+                >
+                  {post.data.title}
+                  <Icon name="arrow-up-right" size={24} class="flex-none text-muted" />
+                </a>
+              </h3>
+              <p class="mb-6 max-w-measure text-base leading-relaxed text-muted">
+                {post.data.description}
+              </p>
+              <span class="flex flex-wrap items-center gap-3 text-xs text-muted">
+                <BlogAuthor name={post.data.author.name} />
+                <span class="text-line-strong" aria-hidden="true">
+                  /
+                </span>
+                <span>{readingMinutes(post)} min read</span>
+              </span>
+            </div>
+          </article>
+        ))}
+      </div>
+      <div
+        class="border-b border-line px-4 py-18 text-center"
+        hidden={posts.length > 0}
+        data-blog-empty
+      >
+        <span class="eyebrow">nothing here, yet</span>
+        <h3 class="my-2 text-xl font-medium">No posts found.</h3>
+        <p class="text-muted">Try another search or choose a different category.</p>
+      </div>
+      <footer class="flex flex-wrap justify-between gap-4 pt-6 font-mono text-xs text-muted">
+        <span>Less noise. More building.</span>
+        <a
+          class="inline-flex items-center gap-2 text-fg no-underline hover:text-accent-text"
+          href="https://github.com/arkoren/arkoren"
+        >
+          Follow the code <Icon name="arrow-up-right" />
+        </a>
+      </footer>
+    </section>
+  </main>
+</Site>
+
+<script>
+  import {
+    blogStateURL,
+    nextBlogSort,
+    readBlogState,
+    selectBlogPosts,
+    type BlogRecord,
+    type BlogState,
+  } from "../../lib/blog/state";
+
+  /** Enhance a complete static archive; post content never requires JavaScript. */
+  function setupBlogArchive() {
+    const archive = document.querySelector<HTMLElement>("[data-blog-archive]");
+    const form = archive?.querySelector<HTMLFormElement>("form");
+    const search = form?.querySelector<HTMLInputElement>('[name="q"]');
+    const controls = archive?.querySelector<HTMLElement>("[data-blog-controls]");
+    const categoryLinks = [
+      ...(archive?.querySelectorAll<HTMLAnchorElement>("[data-blog-category]") ?? []),
+    ];
+    const sort = archive?.querySelector<HTMLButtonElement>("[data-blog-sort]");
+    const list = archive?.querySelector<HTMLElement>("[data-blog-list]");
+    const count = archive?.querySelector<HTMLElement>("[data-blog-count]");
+    const empty = archive?.querySelector<HTMLElement>("[data-blog-empty]");
+    const reset = archive?.querySelector<HTMLButtonElement>("[data-blog-reset]");
+    const results = archive?.querySelector<HTMLElement>("[data-blog-results]");
+    if (
+      !archive ||
+      !form ||
+      !search ||
+      !controls ||
+      !sort ||
+      !list ||
+      !count ||
+      !empty ||
+      !reset ||
+      !results
+    )
+      return;
+
+    const categories = categoryLinks.map((link) => link.dataset.blogCategory ?? "");
+    /** The text control announces both the current order and its next action. */
+    const sortLabels = {
+      newest: { label: "Newest first", symbol: "↓" },
+      oldest: { label: "Oldest first", symbol: "↑" },
+      title: { label: "Title A–Z", symbol: "↕" },
+    };
+    const posts = [...list.querySelectorAll<HTMLElement>("[data-blog-post]")].map(
+      (element) =>
+        ({
+          id: element.dataset.id ?? "",
+          title: element.dataset.title ?? "",
+          category: element.dataset.category ?? "",
+          publishedAt: Number(element.dataset.publishedAt),
+          text: element.dataset.search ?? "",
+          element,
+        }) satisfies BlogRecord & { element: HTMLElement },
+    );
+
+    /** Read the URL on load and history changes so controls never drift from results. */
+    function renderArchive() {
+      if (!search || !sort || !list || !count || !empty || !reset) return;
+      const state = readBlogState(new URLSearchParams(location.search), categories);
+      search.value = state.q;
+      for (const link of categoryLinks) {
+        const category = link.dataset.blogCategory ?? "";
+        if (category === state.category) link.setAttribute("aria-current", "true");
+        else link.removeAttribute("aria-current");
+        link.href = blogStateURL(new URL(location.href), { ...state, category }).href;
+      }
+      const order = sortLabels[state.sort];
+      sort.dataset.blogSort = state.sort;
+      sort.textContent = `${order.label} ${order.symbol}`;
+      sort.setAttribute(
+        "aria-label",
+        `Order: ${order.label}. Change to ${sortLabels[nextBlogSort(state.sort)].label.toLowerCase()}.`,
+      );
+      const matches = selectBlogPosts(posts, state);
+      for (const post of posts) post.element.hidden = true;
+      for (const post of matches) {
+        post.element.hidden = false;
+        list.append(post.element);
+      }
+      count.textContent =
+        `${matches.length} ${matches.length === 1 ? "post" : "posts"}` +
+        (state.category !== "" ? ` in ${state.category}` : "") +
+        (state.q !== "" ? ` matching “${state.q}”` : "");
+      empty.hidden = matches.length !== 0;
+      reset.hidden = state.q === "" && state.category === "" && state.sort === "newest";
+    }
+
+    /** Commit one shareable state per action without a network request or reload. */
+    function commitControls(changes: Partial<BlogState> = {}) {
+      if (!search) return;
+      const state = readBlogState(new URLSearchParams(location.search), categories);
+      const url = blogStateURL(new URL(location.href), {
+        ...state,
+        q: search.value.trim(),
+        ...changes,
+      });
+      if (url.href !== location.href) history.pushState(null, "", url);
+      renderArchive();
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      commitControls();
+    });
+    for (const link of categoryLinks) {
+      link.addEventListener("click", (event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+          return;
+        event.preventDefault();
+        commitControls({ category: link.dataset.blogCategory ?? "" });
+      });
+    }
+    sort.addEventListener("click", () => {
+      const state = readBlogState(new URLSearchParams(location.search), categories);
+      commitControls({ sort: nextBlogSort(state.sort) });
+    });
+    search.addEventListener("search", () => commitControls());
+    reset.addEventListener("click", () => {
+      commitControls({ q: "", category: "", sort: "newest" });
+      search.focus();
+    });
+    window.addEventListener("popstate", renderArchive);
+    window.addEventListener("pageshow", renderArchive);
+    renderArchive();
+    form.hidden = false;
+    controls.hidden = false;
+    results.hidden = false;
+  }
+
+  setupBlogArchive();
+</script>

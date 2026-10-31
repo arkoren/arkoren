@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Arkoren — a modular Go toolkit</title>
+  <desc id="desc">A cream badge with a rose stepped A beside an oversized cream Arkoren wordmark on a rose grid. Less framework. More Go.</desc>
+  <defs>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#fff" stroke-opacity=".1"/>
+    </pattern>
+    <style>
+      .sans { font-family: Geist, Arial, sans-serif; }
+      .mono { font-family: 'Maple Mono', monospace; }
+    </style>
+  </defs>
+  <rect width="1200" height="630" fill="#c70036"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <text class="mono" x="90" y="94" font-size="30" font-weight="700" letter-spacing="1" fill="#fffbf5">A MODULAR GO TOOLKIT</text>
+  <image href="../logo/logo-rose-on-white.svg" x="90" y="163" width="172" height="172"/>
+  <text class="sans" x="302" y="334" font-size="240" font-weight="600" letter-spacing="-14" fill="#fffbf5">arkoren</text>
+  <g class="sans" font-size="46" letter-spacing="-.9" fill="#fffbf5">
+    <text x="90" y="427">Less framework.</text>
+    <text x="90" y="485" fill-opacity=".75">More Go.</text>
+  </g>
+  <!-- Registration marks echo the landing page's technical illustration. -->
+  <g fill="none" stroke="#fff" stroke-opacity=".3">
+    <path d="M82 151H100M90 143V161M1094 151H1112M1103 143V161M82 349H100M90 341V359M1094 349H1112M1103 341V359"/>
+  </g>
+  <path d="M90 540H1110" stroke="#fff" stroke-opacity=".3"/>
+  <g class="mono" font-size="28" font-weight="700" fill="#fffbf5">
+    <text x="90" y="584">STANDARD LIBRARY FIRST.</text>
+    <text x="1110" y="584" text-anchor="end">arkoren.dev ↗</text>
+  </g>
+</svg>

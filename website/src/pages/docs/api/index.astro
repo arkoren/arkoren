@@ -1,0 +1,44 @@
+---
+import Docs from "../../../layouts/Docs.astro";
+import DocsPageHeader from "../../../components/docs/Header.astro";
+import DocsSection from "../../../components/docs/Section.astro";
+import Tag from "../../../components/ui/Tag.astro";
+import { apiModules } from "../../../lib/docs/api";
+
+/** Local module metadata determines the catalog, without network probes. */
+const groups = apiModules();
+---
+
+<Docs
+  title="API reference"
+  description="Canonical Go API reference for Arkoren library modules on pkg.go.dev."
+  headings={groups.map((group) => ({ depth: 2, slug: group.id, text: group.title }))}
+>
+  <DocsPageHeader slot="header" title="API reference">
+    pkg.go.dev is the canonical reference for Go declarations, package documentation, and examples.
+    Choose a library module below, then browse its packages.
+    <Tag slot="meta" href="/docs/api/llms.txt">
+      llms.txt
+    </Tag>
+  </DocsPageHeader>
+  <p class="mb-12" role="note">
+    These links identify the canonical reference locations. Some modules may not yet be published or
+    indexed by pkg.go.dev; their pages can return “not found”. This catalog does not indicate
+    release or indexing availability.
+  </p>
+  {groups.map((group) => (
+    <DocsSection id={group.id} title={group.title}>
+      <ul class="grid gap-1">
+        {group.modules.map((module) => (
+          <li>
+            <a href={module.url}>{module.path}</a>
+          </li>
+        ))}
+      </ul>
+    </DocsSection>
+  ))}
+  <p class="mt-12 text-muted">
+    For setup and usage, read the <a href="/docs#guides">guides</a>. Local API Markdown and bulk API
+    exports are retired; use pkg.go.dev for reference.
+  </p>
+</Docs>

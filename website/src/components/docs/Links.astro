@@ -1,0 +1,34 @@
+---
+/**
+ * Documentation destinations rendered as a grid of two-line link cells.
+ * Entries are plain text; routing and description selection stay with pages.
+ * @example
+ * <DocsLinkList entries={[{
+ *   href: "/docs/api", title: "API reference", description: "Canonical library module reference",
+ * }]} />
+ */
+interface Props {
+  /** Ordered destinations; an empty array renders an empty list. */
+  entries: {
+    /** Site-relative or external destination, passed through without rewriting. */
+    href: string;
+    /** Primary, bold link label. */
+    title: string;
+    /** Secondary description, escaped by Astro. */
+    description: string;
+  }[];
+}
+/** Preserve the caller's catalog order and native link navigation. */
+const { entries } = Astro.props;
+---
+
+<ul class="cells cells-2">
+  {entries.map((entry) => (
+    <li>
+      <a class="cell h-full gap-1 px-6 py-4" href={entry.href}>
+        <b class="text-sm font-medium wrap-anywhere">{entry.title}</b>
+        <span class="text-sm text-muted">{entry.description}</span>
+      </a>
+    </li>
+  ))}
+</ul>

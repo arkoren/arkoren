@@ -1,0 +1,28 @@
+---
+/**
+ * A small, fixed decorative layer shared by every page, outside page layout.
+ * Three ghosts drift across the viewport in Halloween mode; sizes and flight
+ * paths live in styles/season.css and styles/motion.css.
+ * @example <Ghosts />
+ */
+const ghosts = [0, 1, 2];
+---
+
+<div class="ghosts pointer-events-none fixed inset-0 z-2 text-fg" aria-hidden="true">
+  {ghosts.map(() => (
+    <svg
+      class="ghost pointer-events-none fixed top-0 left-0 h-auto"
+      viewBox="0 0 60 70"
+      width="60"
+      height="70"
+      focusable="false"
+    >
+      <path d="M10 60V29a20 20 0 0 1 40 0v31l-8-6-6 6-6-6-6 6-6-6Z" fill="currentColor" />
+      <g fill="var(--color-bg)">
+        <ellipse cx="23" cy="29" rx="3" ry="5" />
+        <ellipse cx="37" cy="29" rx="3" ry="5" />
+        <ellipse cx="30" cy="42" rx="3" ry="4" />
+      </g>
+    </svg>
+  ))}
+</div>

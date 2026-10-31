@@ -1,0 +1,28 @@
+---
+import { Code } from "astro:components";
+import { codeThemes } from "../../lib/site/theme";
+
+/**
+ * A highlighted Go excerpt in a captioned frame.
+ * @example <Code file="main.go" note="excerpt" code={source} />
+ */
+interface Props {
+  file: string;
+  code: string;
+  note?: string;
+  class?: string;
+}
+
+const { file, code, note, class: className } = Astro.props;
+---
+
+<figure
+  class:list={["min-w-0 overflow-hidden rounded-sm border border-line bg-surface", className]}
+  data-code-surface
+>
+  <figcaption class="flex items-center justify-between gap-4 border-b border-line bg-surface px-4 py-2 text-xs font-medium text-muted">
+    <span>{file}</span>
+    {note && <span>{note}</span>}
+  </figcaption>
+  <Code code={code.trim()} lang="go" themes={codeThemes} />
+</figure>

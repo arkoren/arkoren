@@ -1,0 +1,47 @@
+---
+import Site from "../layouts/Site.astro";
+import Agents from "../components/home/Agents.astro";
+import Build from "../components/home/Build.astro";
+import Bench from "../components/home/Bench.astro";
+import Hero from "../components/home/Hero.astro";
+import Inspect from "../components/home/Inspect.astro";
+import Journey from "../components/home/Journey.astro";
+import Principles from "../components/home/Principles.astro";
+import Run from "../components/home/Run.astro";
+import Start from "../components/home/Start.astro";
+import Test from "../components/home/Test.astro";
+import Toolkit from "../components/home/Toolkit.astro";
+import { getBlogPosts } from "../lib/blog/posts";
+
+/** The hero and navbar promote the same newest published post. */
+const [latest] = await getBlogPosts();
+---
+
+<Site
+  title="Less framework. More Go. · arkoren"
+  socialTitle="Less framework. More Go."
+  description="A modular Go toolkit for backend services and AI agents. Explicit composition, swappable drivers, offline coding-agent skills, and typed MCP tools."
+>
+  <main class="pt-4 pb-8 sm:pt-6 sm:pb-16">
+    <Hero latest={latest} />
+    <Journey />
+    <Principles />
+    <Toolkit />
+    <Bench />
+    <div class="page-width pt-12 sm:pt-24">
+      <Build />
+      <Test />
+      <Run />
+      <Inspect />
+    </div>
+    <Agents />
+    <Start />
+  </main>
+</Site>
+
+<script>
+  import { initCopyControls } from "../scripts/copy";
+
+  /** Share clipboard behavior between core and agent-skill installation. */
+  initCopyControls(document);
+</script>

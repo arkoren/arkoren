@@ -1,0 +1,65 @@
+---
+import type { GetStaticPaths } from "astro";
+import { render } from "astro:content";
+import Docs from "../../../layouts/Docs.astro";
+import DocsPageHeader from "../../../components/docs/Header.astro";
+import Tag from "../../../components/ui/Tag.astro";
+import { getGuides, guidePlace, guideRoute, guideSlug } from "../../../lib/docs/guides";
+import { cardImage, guideCard } from "../../../lib/og/image";
+
+export const getStaticPaths = (async () =>
+  (await getGuides()).map((entry) => ({
+    params: { slug: guideSlug(entry) },
+    props: { entry },
+  }))) satisfies GetStaticPaths;
+
+const { entry } = Astro.props;
+const { Content, headings } = await render(entry);
+const { section, previous, next } = await guidePlace(entry);
+/** Section links target the same group cards used by the documentation index. */
+const breadcrumbs = [
+  { name: "Home", href: "/" },
+  { name: "Guides", href: "/docs#guides" },
+  { name: section.data.title, href: `/docs#guide-${section.id.split("/")[0]}` },
+  { name: entry.data.title, href: guideRoute(entry) },
+];
+/** Previous and next links share one card treatment. */
+const pagerLink = "grid gap-1 rounded-sm border border-line p-4 no-underline hover:border-accent";
+---
+
+<Docs
+  title={entry.data.title}
+  description={entry.data.description}
+  headings={headings}
+  image={cardImage(guideCard(entry, section.data.title))}
+  raw={`${guideRoute(entry)}.md`}
+  breadcrumbs={breadcrumbs}
+>
+  <DocsPageHeader slot="header" title={entry.data.title}>
+    {entry.data.description}
+    <Tag slot="meta" href={`${guideRoute(entry)}.md`}>
+      Markdown
+    </Tag>
+  </DocsPageHeader>
+  <article class="prose" data-pagefind-weight="2">
+    <Content />
+  </article>
+  <nav
+    class="mt-12 grid gap-4 border-t border-line pt-8 sm:grid-cols-2"
+    aria-label="Previous and next guides"
+    data-pagefind-ignore
+  >
+    {previous && (
+      <a class={pagerLink} href={guideRoute(previous)} rel="prev">
+        <span class="text-xs font-medium text-muted">previous</span>
+        <b class="text-base font-medium">{previous.data.title}</b>
+      </a>
+    )}
+    {next && (
+      <a class:list={[pagerLink, "text-right sm:col-start-2"]} href={guideRoute(next)} rel="next">
+        <span class="text-xs font-medium text-muted">next</span>
+        <b class="text-base font-medium">{next.data.title}</b>
+      </a>
+    )}
+  </nav>
+</Docs>

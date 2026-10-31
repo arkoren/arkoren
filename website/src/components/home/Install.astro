@@ -1,0 +1,43 @@
+---
+import { Code } from "astro:components";
+import { codeThemes } from "../../lib/site/theme";
+
+/**
+ * A shell command with a copy button. The command is highlighted as bash; the
+ * button is wired by scripts/copy.ts through its `data-copy` attribute.
+ * @example <Install command="go get arkoren.dev/core" label="Core installation command" />
+ */
+interface Props {
+  command: string;
+  /** Accessible name for the command; the copy button is named "Copy <label>". */
+  label: string;
+  class?: string;
+}
+
+const { command, label, class: className } = Astro.props;
+---
+
+<div
+  class:list={[
+    "flex items-center gap-3 overflow-hidden rounded-sm border border-line pr-4",
+    className,
+  ]}
+>
+  <Code
+    class="min-w-0 flex-1"
+    code={command}
+    lang="bash"
+    themes={codeThemes}
+    tabindex="0"
+    role="region"
+    aria-label={label}
+  />
+  <button
+    type="button"
+    class="copy flex-none"
+    data-copy={command}
+    aria-label={`Copy ${label.toLowerCase()}`}
+  >
+    Copy
+  </button>
+</div>

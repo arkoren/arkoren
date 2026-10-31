@@ -1,0 +1,169 @@
+/* Seasonal mode (Halloween): palette swap, color fades and decorations.
+
+   The palette swap only reassigns semantic color tokens, so every utility and
+   component follows it. The fade below animates the rendered properties of every
+   element rather than interpolated custom properties, which SVG fills and borders
+   do not follow; it needs no knowledge of component class names. Keyframes live in
+   motion.css. */
+
+/* Palette tokens change atomically; light-dark() keeps the light variant beside the dark one. */
+@layer base {
+  :root[data-season="halloween"] {
+    --color-accent: #b9480a;
+    --color-accent-strong: #a53d06;
+    --color-accent-deep: #833008;
+    --color-accent-soft: #fff4e6;
+    --color-accent-text: light-dark(#9c3907, #ffad66);
+    --color-selection: light-dark(#ffead5, #67330f);
+    --color-on-selection: light-dark(#833008, #ffd4ad);
+  }
+}
+
+@layer components {
+  /* The fade. scripts/season.ts sets data-season-fading on <html> for the length of one palette
+     change: every element then transitions its colors slowly, whatever markup it has, and
+     Tailwind's transition utilities follow through --default-transition-duration. Outside that
+     window hover and focus transitions keep their fast timing. The :where() keeps specificity at
+     zero so decorations with their own transitions (below) win. */
+  @media (prefers-reduced-motion: no-preference) {
+    :root[data-season-fading] {
+      --default-transition-duration: var(--duration-slow);
+    }
+
+    :where([data-season-fading] *, [data-season-fading] ::before, [data-season-fading] ::after) {
+      transition-property:
+        color, background-color, border-color, outline-color, text-decoration-color, box-shadow,
+        fill, stroke, stop-color;
+      transition-duration: var(--duration-slow);
+      transition-timing-function: ease;
+    }
+  }
+
+  :root[data-season="halloween"] .blog-banner-wash-start {
+    stop-color: var(--color-accent);
+  }
+  :root[data-season="halloween"] .blog-banner-wash-end {
+    stop-color: var(--color-accent-deep);
+  }
+
+  /* Decorations. Layout (position, size) is in utilities on the components; the states that
+     depend on the season live here. */
+
+  /* The pumpkin on the logo. Separate artwork overlaps the edge without changing the logo or its
+     hit area. */
+  .pumpkin {
+    visibility: hidden;
+    opacity: 0;
+    transform: translateY(calc(-1.5 * var(--spacing))) rotate(8deg) scale(0.8);
+    transform-origin: 50% 80%;
+  }
+  :root[data-season="halloween"] .pumpkin {
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0) rotate(24deg) scale(1);
+  }
+
+  /* Only the spider's button is interactive; decorations stay outside layout. */
+  .spider-control {
+    visibility: hidden;
+  }
+  :root[data-season="halloween"] .spider-control {
+    visibility: visible;
+  }
+  .spider {
+    visibility: hidden;
+    opacity: 0;
+  }
+  :root[data-season="halloween"] .spider {
+    visibility: visible;
+    opacity: 1;
+  }
+  .spider-swing {
+    transform-origin: 25px 78px;
+  }
+
+  .ghosts {
+    view-transition-name: seasonal-ghosts;
+    contain: paint;
+    visibility: hidden;
+    opacity: 0;
+  }
+  .ghost {
+    width: clamp(--spacing(8), 4vw, --spacing(15));
+  }
+  .ghost:nth-child(2) {
+    width: clamp(--spacing(6.5), 3vw, --spacing(11));
+  }
+  .ghost:nth-child(3) {
+    width: clamp(--spacing(9.5), 5vw, --spacing(18));
+  }
+  /* Keep the live ghosts separate from the page crossfade, without a doubled trail. */
+  ::view-transition-old(seasonal-ghosts) {
+    display: none;
+  }
+  ::view-transition-new(seasonal-ghosts) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    :root[data-season="halloween"] .ghosts {
+      visibility: visible;
+      opacity: 0.08;
+    }
+    .pumpkin {
+      transition:
+        opacity var(--duration-slow) ease,
+        visibility var(--duration-slow),
+        transform var(--duration-slow) var(--ease-out);
+    }
+    .ghosts {
+      transition:
+        opacity var(--duration-slow) ease,
+        visibility var(--duration-slow),
+        color var(--duration-slow) ease;
+    }
+    .spider-control {
+      pointer-events: none;
+      transition: visibility 0s 1.4s;
+    }
+    :root[data-season="halloween"] .spider-control {
+      pointer-events: auto;
+      transition-delay: 0s;
+    }
+    /* Retract fully before hiding; entering remains immediate so the drop is visible. */
+    .spider {
+      transition:
+        opacity 0s 1.4s,
+        visibility 0s 1.4s,
+        color var(--duration-slow) ease;
+    }
+    :root[data-season="halloween"] .spider {
+      transition-delay: 0s;
+    }
+    :root[data-season-ready][data-season="normal"] .spider-drop {
+      animation: spider-rise 1.4s var(--ease-in) both;
+    }
+    :root[data-season="halloween"] .spider-drop {
+      animation: spider-drop 1.4s var(--ease-out) both;
+      animation-delay: calc(0ms - var(--season-elapsed, 0ms));
+    }
+    :root[data-season="halloween"] .spider-swing {
+      animation: spider-swing 3s ease-in-out 1.1s 1 both;
+      animation-delay: calc(1100ms - var(--season-elapsed, 0ms));
+    }
+    /* Keep flight running through the fade instead of snapping back to the origin. */
+    .ghost {
+      animation: ghost-flight 48s linear infinite;
+      animation-delay: calc(-12s - var(--season-elapsed, 0ms));
+    }
+    .ghost:nth-child(2) {
+      animation: ghost-flight-high 63s linear -36s infinite reverse;
+      animation-delay: calc(-36s - var(--season-elapsed, 0ms));
+    }
+    .ghost:nth-child(3) {
+      animation: ghost-flight-low 77s linear -54s infinite;
+      animation-delay: calc(-54s - var(--season-elapsed, 0ms));
+    }
+  }
+}

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
+  <title id="title">Introducing Arkoren</title>
+  <desc id="desc">Arkoren's wordmark and stepped Strata A on a subtle rose grid.</desc>
+  <defs>
+    <linearGradient id="wash" x2="1" y2="1">
+      <stop class="blog-banner-wash-start" stop-color="#c70036"/>
+      <stop class="blog-banner-wash-end" offset="1" stop-color="#a5002c"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#fff1f2" stroke-opacity=".08"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="400" fill="url(#wash)"/>
+  <rect width="1200" height="400" fill="url(#grid)"/>
+  <path d="M48 48H1152V352H48Z" fill="none" stroke="#fff1f2" stroke-opacity=".18"/>
+  <g fill="#fffbf5">
+    <text x="85" y="150" font-family="Maple Mono, monospace" font-size="16" letter-spacing="3">INTRODUCING</text>
+    <text x="78" y="260" font-family="Geist, Arial, sans-serif" font-size="112" font-weight="600" letter-spacing="-6">arkoren</text>
+  </g>
+  <g transform="translate(850 101) scale(2)" fill="#fff1f2" fill-opacity=".8">
+    <path d="M40 8H60L69 28H31Z"/>
+    <path d="M27 38H73L82 58H18Z"/>
+    <path d="M14 68H38L29 90H4ZM62 68H86L96 90H71Z"/>
+  </g>
+</svg>
