@@ -1,0 +1,25 @@
+# Services for the integration tests of arkoren.dev/driver/mysql. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  mysql:
+    image: mysql:9.7.2
+    environment:
+      MYSQL_DATABASE: arkoren_integration
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_ROOT_PASSWORD: arkoren-integration
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      # Initialization uses a socket-only temporary server. Require the final
+      # TCP listener, configured credentials, and intended test database before
+      # Compose releases the integration tests; a socket ping proves none of them.
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$${MYSQL_ROOT_PASSWORD}" mysql
+          --protocol=TCP --host=127.0.0.1 --port=3306 --user=root
+          --database="$${MYSQL_DATABASE}" --connect-timeout=2
+          --batch --skip-column-names --execute="SELECT 1"
+      interval: 3s
+      timeout: 5s
+      retries: 20
