@@ -1805,12 +1805,13 @@ func TestIntegrationPhysicalSignalEvictionRestore(t *testing.T) {
 	}
 }
 
-// TestIntegrationStartUsesRemainingLookupGrace delays only native inventory
-// visibility, not submission, execution, or the detail response. The real engine
-// owns the physical run and retained input. Start must verify it through the last
-// part of its configured grace, without enlarging that window. The public
-// protocol companion separately checks that submission happens exactly once.
-func TestIntegrationStartUsesRemainingLookupGrace(t *testing.T) {
+// TestIntegrationDuplicateStartUsesRemainingLookupGrace delays discovery of an
+// already visible native run. Establishing that precondition separates the
+// adapter's retry window from unbounded native indexing latency. The hiding
+// deadline begins before the duplicate command, not after its first response:
+// response latency must not move visibility beyond the driver's grace. The
+// protocol companion covers first submission and the final backoff window.
+func TestIntegrationDuplicateStartUsesRemainingLookupGrace(t *testing.T) {
 	// grace includes a tail beyond the first 310ms of exponential backoff.
 	const grace = 500 * time.Millisecond
 	// visibilityDelay exposes real inventory inside that tail, not beyond grace.
@@ -1838,8 +1839,6 @@ func TestIntegrationStartUsesRemainingLookupGrace(t *testing.T) {
 		if response.StatusCode != http.StatusOK {
 			return nil
 		}
-
-		visibleAt.CompareAndSwap(0, time.Now().Add(visibilityDelay).UnixNano())
 
 		if time.Now().UnixNano() >= visibleAt.Load() {
 			return nil
@@ -1870,18 +1869,32 @@ func TestIntegrationStartUsesRemainingLookupGrace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner, _ := startRunner(t, registry, func(runner *hatchetworkflow.RunnerBuilder) {
-		runner.LookupGrace(grace)
-	})
+	runner, host := startRunner(t, registry)
 
 	client := workflow.NewClient(runner.Driver())
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	t.Cleanup(cancel)
 
-	run, err := client.Start(ctx, echo, fmt.Sprintf("visibility-%d", time.Now().UnixNano()), "visible")
+	id := fmt.Sprintf("visibility-%d", time.Now().UnixNano())
+	run, err := client.Start(ctx, echo, id, "visible")
 
 	if err != nil {
-		t.Fatalf("Start missed native visibility inside its configured grace: %v (hidden listings=%d)", err, hidden.Load())
+		t.Fatalf("establish visible native run: %v", err)
+	}
+
+	driver, err := hatchetworkflow.NewDriver(host, func(driver *hatchetworkflow.DriverBuilder) {
+		driver.LookupGrace(grace)
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	duplicate := workflow.NewClient(driver)
+	visibleAt.Store(time.Now().Add(visibilityDelay).UnixNano())
+
+	if _, err := duplicate.Start(ctx, echo, id, "replacement"); !errors.Is(err, workflow.ErrAlreadyStarted) {
+		t.Fatalf("duplicate Start missed retained native run: %v (hidden listings=%d)", err, hidden.Load())
 	}
 
 	if output, err := run.Result(ctx); err != nil || output != "visible!" {
