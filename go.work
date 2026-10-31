@@ -16,6 +16,7 @@ use (
 	./driver/mysql
 	./driver/nats
 	./driver/postgres
+	./driver/postmark
 	./driver/rabbitmq
 	./driver/redis
 	./driver/restate
