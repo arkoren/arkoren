@@ -12,9 +12,12 @@ use (
 	./driver/filesystem
 	./driver/gcp
 	./driver/mailgun
+	./driver/mollie
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
+	./driver/oauth
+	./driver/paypal
 	./driver/postgres
 	./driver/postmark
 	./driver/rabbitmq
@@ -23,6 +26,7 @@ use (
 	./driver/restate
 	./driver/smtp
 	./driver/sqlite
+	./driver/stripe
 	./driver/temporal
 	./driver/vault
 	./driver/webpush
