@@ -6,8 +6,17 @@ and no root module. `core/` is `arkoren.dev/core`: application lifecycle,
 `<contract>test` conformance suites. `driver/<vendor>` holds one module per
 vendor; `ark/<name>` holds opt-in domain features (none yet);
 `foundation/<name>` holds stdlib-only libraries. `cmd/arkoren` is the consumer
-CLI; `scripts/` holds workflow fixtures. `go.work` joins modules for development;
-relative `replace` directives link them until releases exist.
+CLI; `scripts/` holds workflow fixtures. The committed `go.work` joins only
+imported modules for shared development. Module
+manifests declare real dependency versions, with no local `replace` directives;
+`GOWORK=off` checks remain the independent-module authority.
+
+During the incremental import, the ignored `go.local.work` preserves the full
+local workspace. Select it per command with `GOWORK="$PWD/go.local.work"` from
+the repository root (or use its absolute path from another directory). Keep
+its checksum file ignored too; do not change global Go environment settings.
+Future core imports must require canonical foundation pseudo-versions resolved
+from the merged foundation import commit. This import creates no release tags.
 
 ## Find code before reading it
 
