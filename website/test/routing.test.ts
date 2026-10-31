@@ -53,6 +53,24 @@ test("the shared navbar links to the changelog without marking it current on oth
   }
 });
 
+test("only the homepage renders the navbar announcement hidden before scripts run", () => {
+  for (const [page, isHidden] of [
+    ["index.html", true],
+    ["blog.html", false],
+    ["docs.html", false],
+  ] as const) {
+    const window = new Window();
+    try {
+      window.document.write(readFileSync(new URL(`../dist/${page}`, import.meta.url), "utf8"));
+      const news = required(window.document.querySelector("[data-news]"));
+      assert.equal(news.hasAttribute("data-hero-visible"), isHidden, page);
+      assert.equal(news.hasAttribute("inert"), isHidden, page);
+    } finally {
+      window.close();
+    }
+  }
+});
+
 test("the former app HTML API route redirects to application", () => {
   const html = readFileSync(new URL("../dist/docs/api/core/app.html", import.meta.url), "utf8");
   assert.match(

@@ -14,8 +14,9 @@ import { getBlogPosts } from "../../lib/blog/posts";
  * @example <Header />
  */
 const repo = "https://github.com/arkoren/arkoren";
-// Static builds (build.format "file") report the page as ".../name.html"; compare routes without it.
-const path = Astro.url.pathname.replace(/\.html$/, "");
+// Static builds (build.format "file") report the page as ".../name.html" and the home page as
+// "/index.html"; compare routes without either.
+const path = Astro.url.pathname.replace(/\/index\.html$/, "/").replace(/\.html$/, "");
 const links = [
   {
     href: "/docs",

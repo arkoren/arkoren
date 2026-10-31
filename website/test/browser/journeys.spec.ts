@@ -360,14 +360,34 @@ test("status matrices fit desktop columns and explain icons on hover, focus, and
 
 /** Prevent duplicate announcements and lost links during scrolling and navigation. */
 test("latest post hands off from the homepage hero to the sticky navbar", async ({ page }) => {
-  /** Sample the actual navigation snapshot, not just the underlying link. */
+  /**
+   * Fast machines run the hand-off script before the first view-transition
+   * capture and can hide a missing server-rendered state, so slow the page
+   * down the way CI runners are.
+   */
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 6 });
+  /**
+   * Sample the actual navigation snapshot, not just the underlying link. The
+   * announcement's view-transition animations are paused and seeked to fixed
+   * points, so slow runners cannot finish the short animation between frames.
+   */
   await page.addInitScript(() => {
     window.addEventListener("pagereveal", (event) => {
       window.newsRevealFrames = (async () => {
         if (!event.viewTransition) return [];
         await event.viewTransition.ready;
+        const animations = document.getAnimations().filter((animation) => {
+          const effect = animation.effect;
+          return effect instanceof KeyframeEffect && effect.pseudoElement?.endsWith("(nav-news)");
+        });
+        for (const animation of animations) animation.pause();
         const frames = [];
-        for (let frame = 0; frame < 20; frame++) {
+        for (const progress of [0.25, 0.5, 0.75]) {
+          for (const animation of animations) {
+            const duration = Number(animation.effect?.getComputedTiming().duration ?? 0);
+            animation.currentTime = duration * progress;
+          }
           const style = getComputedStyle(
             document.documentElement,
             "::view-transition-new(nav-news)",
@@ -382,8 +402,8 @@ test("latest post hands off from the homepage hero to the sticky navbar", async 
             oldOpacity: Number(oldStyle.opacity),
             oldTranslate: oldStyle.translate,
           });
-          await new Promise(requestAnimationFrame);
         }
+        for (const animation of animations) animation.play();
         return frames;
       })();
     });
