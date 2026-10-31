@@ -8,6 +8,7 @@ use (
 	./driver/azure
 	./driver/bcrypt
 	./driver/chacha20
+	./driver/cloudflare
 	./driver/filesystem
 	./driver/gcp
 	./driver/mqtt
