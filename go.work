@@ -16,6 +16,7 @@ use (
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
+	./driver/oauth
 	./driver/paypal
 	./driver/postgres
 	./driver/postmark

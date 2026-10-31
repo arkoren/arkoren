@@ -1,0 +1,54 @@
+{
+  "realm": "arkoren-integration",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "arkoren-integration",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "clientAuthenticatorType": "client-secret",
+      "secret": "arkoren-integration-secret",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "arkoren-integration-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "arkoren-integration",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ],
+      "redirectUris": [
+        "http://localhost/*"
+      ],
+      "webOrigins": [
+        "http://localhost"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "arkoren-test",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Arkoren",
+      "lastName": "Test",
+      "email": "arkoren-test@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "arkoren-test-password",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}
