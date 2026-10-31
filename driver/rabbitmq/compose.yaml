@@ -1,0 +1,15 @@
+# Services for the integration tests of arkoren.dev/driver/rabbitmq. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  rabbitmq:
+    image: rabbitmq:4.3.5-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: arkoren
+      RABBITMQ_DEFAULT_PASS: integration
+    ports:
+      - "127.0.0.1:5672:5672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_listener", "5672"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
