@@ -1,0 +1,26 @@
+# Services for the integration tests of arkoren.dev/driver/restate. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  restate:
+    image: docker.restate.dev/restatedev/restate:1.7.12
+    environment:
+      # Cap the invocation retry backoff so a dead endpoint of an earlier
+      # test run does not block virtual object queues for long.
+      RESTATE_DEFAULT_RETRY_POLICY__INITIAL_INTERVAL: 50ms
+      RESTATE_DEFAULT_RETRY_POLICY__MAX_INTERVAL: 1s
+      # Opt in only on a fresh, uniquely named disposable integration project.
+      # These flags apply persistent partition features; never enable them on
+      # an existing cluster. The retention feature requires server >= 1.7.8.
+      RESTATE_EXPERIMENTAL_ENABLE_PREFLIGHT_INVOCATION_TERMINATION_RETENTION: "${ARKOREN_RESTATE_PREFLIGHT_RETENTION:-false}"
+      # Native scoped concurrency limits provide the queued-workflow fixture.
+      RESTATE_EXPERIMENTAL_ENABLE_VQUEUES: "${ARKOREN_RESTATE_VQUEUES:-false}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:18080:8080"
+      - "127.0.0.1:19070:9070"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9070/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -13,6 +13,7 @@ use (
 	./driver/postgres
 	./driver/rabbitmq
 	./driver/redis
+	./driver/restate
 	./driver/sqlite
 	./foundation/certificate
 	./foundation/collection
