@@ -8,6 +8,7 @@ use (
 	./driver/chacha20
 	./driver/filesystem
 	./driver/mysql
+	./driver/nats
 	./driver/postgres
 	./driver/rabbitmq
 	./driver/redis
