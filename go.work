@@ -13,7 +13,9 @@ use (
 	./driver/postgres
 	./driver/rabbitmq
 	./driver/redis
+	./driver/restate
 	./driver/sqlite
+	./driver/temporal
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key
