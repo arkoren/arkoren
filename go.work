@@ -9,6 +9,7 @@ use (
 	./driver/bcrypt
 	./driver/chacha20
 	./driver/filesystem
+	./driver/gcp
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
