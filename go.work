@@ -12,6 +12,7 @@ use (
 	./driver/filesystem
 	./driver/gcp
 	./driver/mailgun
+	./driver/mollie
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
