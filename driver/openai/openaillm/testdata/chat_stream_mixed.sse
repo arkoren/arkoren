@@ -1,0 +1,11 @@
+data: {"id":"chat-initial","model":"chat-model","choices":[{"index":0,"delta":{"content":"A","tool_calls":[{"index":1,"id":"call_second","type":"function","function":{"name":"second","arguments":""}}]}}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_first","type":"function","function":{"name":"first","arguments":"{}"}}]}}]}
+
+data: {"choices":[{"index":0,"delta":{"content":"B","refusal":"No.","tool_calls":[{"index":1,"function":{"arguments":"{\"x\":1}"}}]}}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}
+
+data: {"id":"chat-final","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},"completion_tokens_details":{"reasoning_tokens":4}}}
+
+data: [DONE]

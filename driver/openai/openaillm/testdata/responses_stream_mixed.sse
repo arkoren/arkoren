@@ -1,0 +1,17 @@
+data: {"type":"response.reasoning_summary_text.delta","delta":"Summary"}
+
+data: {"type":"response.reasoning_text.delta","delta":"Thought"}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"orphan","delta":"{}"}
+
+data: {"type":"response.output_item.added","item":{"type":"message","id":"message"}}
+
+data: {"type":"response.output_item.added","item":{"type":"function_call","id":"item","call_id":"call","name":"lookup"}}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"item","delta":"{}"}
+
+data: {"type":"response.output_text.delta","delta":"partial"}
+
+data: {"type":"response.incomplete","response":{"id":"resp-mixed","model":"responses-model","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"First"},{"type":"summary_text","text":"Second"}],"encrypted_content":"opaque:state"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final"},{"type":"refusal","refusal":"No."}]},{"type":"function_call","call_id":"call","name":"lookup","arguments":""}],"usage":{"input_tokens":11,"output_tokens":7,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},"output_tokens_details":{"reasoning_tokens":4}}}}
+
+data: {"type":"response.output_text.delta","delta":"must not escape"}

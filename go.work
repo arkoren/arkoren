@@ -11,12 +11,17 @@ use (
 	./driver/cloudflare
 	./driver/filesystem
 	./driver/gcp
+	./driver/launchdarkly
 	./driver/mailgun
+	./driver/meilisearch
 	./driver/mollie
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
 	./driver/oauth
+	./driver/openai
+	./driver/openfeature
+	./driver/opensearch
 	./driver/paypal
 	./driver/postgres
 	./driver/postmark

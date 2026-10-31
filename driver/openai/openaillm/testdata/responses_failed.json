@@ -1,0 +1,9 @@
+{
+  "id": "resp_fail1",
+  "object": "response",
+  "created_at": 1760000000,
+  "status": "failed",
+  "model": "gpt-5.2",
+  "error": {"code": "rate_limit_exceeded", "message": "slow down"},
+  "output": []
+}

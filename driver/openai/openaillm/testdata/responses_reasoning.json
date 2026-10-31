@@ -1,0 +1,23 @@
+{
+  "id": "resp_reason1",
+  "object": "response",
+  "created_at": 1760000000,
+  "status": "completed",
+  "model": "gpt-5.2",
+  "output": [
+    {
+      "id": "rs_abc123",
+      "type": "reasoning",
+      "summary": [{"type": "summary_text", "text": "Multiply 17 by 3."}],
+      "encrypted_content": "gAAAAB:opaque=="
+    },
+    {
+      "id": "msg_2",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [{"type": "output_text", "text": "51", "annotations": []}]
+    }
+  ],
+  "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 30, "output_tokens_details": {"reasoning_tokens": 25}, "total_tokens": 40}
+}
