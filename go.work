@@ -2,6 +2,7 @@ go 1.27
 
 use (
 	./core
+	./driver/aes
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key
