@@ -1,6 +1,7 @@
 go 1.27
 
 use (
+	./core
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key

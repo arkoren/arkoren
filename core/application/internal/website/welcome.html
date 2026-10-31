@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <!-- Monochrome Strata favicon adapts to the browser theme without asset requests. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2072%2072%22%3E%3Cstyle%3Epath%7Bfill%3A%23262626%7D%40media%28prefers-color-scheme%3Adark%29%7Bpath%7Bfill%3A%23f0e3de%7D%7D%3C%2Fstyle%3E%3Cpath%20d%3D%22M30.155%2016H41.845L46.236%2026H25.764ZM23.569%2031H48.431L52.821%2041H19.179ZM16.984%2046H29.525L25.434%2056H12.594ZM42.475%2046H55.016L59.406%2056H46.566Z%22%2F%3E%3C%2Fsvg%3E">
+  <title>{{if .Name}}Welcome to {{.Name}}{{else}}Welcome to your application{{end}}</title>
+  <style>
+    /* Website typography, embedded so the page needs no external assets. */
+    @font-face { font-family: Geist; src: url("{{.GeistRegular}}") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+    @font-face { font-family: Geist; src: url("{{.GeistMedium}}") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+    @font-face { font-family: "Maple Mono"; src: url("{{.MapleMedium}}") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+    :root {
+      color-scheme: dark;
+      --background-100: #151414;
+      --background-200: #191817;
+      --background-300: #2a2927;
+      --foreground-100: #f0e3de;
+      --text-secondary: #9a9390;
+      --border-100-solid: #353333;
+      --primary-100: #c70036;
+      --primary-200: #a5002c;
+      --primary-muted: #e34568;
+      --primary-alpha-10: #c700361a;
+      --light-foreground: #fffbf5;
+      --ring: #d4d4d4;
+      --radius-sm: 2px;
+      --container-max: 1200px;
+      --font-sans: Geist, system-ui, sans-serif;
+      --font-mono: "Maple Mono", ui-monospace, monospace;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --background-100: #fdfcfa;
+        --background-200: #fdfdfc;
+        --background-300: #f9f7f6;
+        --foreground-100: #262626;
+        --text-secondary: #707070;
+        --border-100-solid: #f0f0f0;
+        --primary-muted: var(--primary-100);
+        --light-foreground: #ffffff;
+        --ring: #262626;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100svh;
+      display: grid;
+      place-items: center;
+      padding: clamp(16px, 5svh, 48px) 24px;
+      background: var(--background-100);
+      color: var(--foreground-100);
+      font: 400 16px/1.5 var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+    }
+    main { display: flex; flex-direction: column; width: 100%; max-width: var(--container-max); max-height: 100%; min-height: 0; }
+    /* Keep the Strata mark neutral to distinguish the scaffold from the docs. */
+    .brand { display: block; width: 72px; margin: 0 0 24px; color: var(--foreground-100); }
+    .brand:hover { color: var(--foreground-100); }
+    .brand svg { display: block; width: 72px; height: 72px; }
+    .welcome { min-height: 0; overflow: auto; padding-block: 8px; }
+    .section-intro { display: grid; grid-template-columns: 1.1fr 1fr; align-items: end; gap: 48px; margin-bottom: 32px; }
+    h1 { margin: 0 0 16px; font-size: clamp(32px, 3.7vw, 48px); font-weight: 500; line-height: 1.1; letter-spacing: -1.7px; overflow-wrap: anywhere; }
+    .section-intro h1 { margin-bottom: 0; }
+    .intro { max-width: 53ch; margin: 0; color: var(--text-secondary); font-size: 15px; line-height: 1.7; }
+    a { color: inherit; text-underline-offset: 4px; }
+    a:hover { color: var(--primary-muted); }
+    a:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
+    .atlas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .atlas article { min-width: 0; padding: 28px; background: var(--background-200); border: 1px solid var(--border-100-solid); border-radius: var(--radius-sm); }
+    .atlas h2 { margin: 0 0 16px; font-size: 25px; font-weight: 500; line-height: 1.2; letter-spacing: -.5px; }
+    .atlas p { margin: 0 0 24px; color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
+    .atlas .eyebrow { margin-bottom: 20px; color: var(--primary-muted); font: 500 11px/1.6 var(--font-mono); }
+    .atlas a { display: inline-block; padding-block: 8px; font-size: 13px; }
+    .atlas .application { background: var(--primary-100); border-color: var(--primary-100); color: #fffbf5; }
+    .application p, .application .eyebrow { color: #fffbf5; }
+    .application a:hover { color: #fffbf5; }
+    footer { flex-shrink: 0; margin-top: 24px; color: var(--text-secondary); font-size: 12px; }
+    @media (min-width: 1680px) {
+      :root { --container-max: 1440px; }
+    }
+    @media (max-width: 900px) {
+      .section-intro { gap: 24px; }
+      .atlas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .atlas .application { grid-column: 1 / -1; }
+    }
+    @media (max-width: 600px) {
+      body { padding: 16px 24px; }
+      .section-intro, .atlas { grid-template-columns: 1fr; }
+      .atlas article { padding: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="welcome" aria-labelledby="welcome-heading">
+      <a href="https://arkoren.dev" aria-label="Arkoren home" class="brand">
+        <!-- Original artwork from website/src/components/site/Header.astro. The link names the decorative mark. -->
+        <svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72" aria-hidden="true" focusable="false">
+          <path fill="currentColor" d="M30.155 16H41.845L46.236 26H25.764ZM23.569 31H48.431L52.821 41H19.179ZM16.984 46H29.525L25.434 56H12.594ZM42.475 46H55.016L59.406 56H46.566Z" />
+        </svg>
+      </a>
+      <header class="section-intro">
+        <h1 id="welcome-heading">{{if .Name}}Welcome to {{.Name}}{{else}}Welcome to your application{{end}}</h1>
+        <p class="intro">This is your starting page. Make it your own, write your first endpoint, and add capabilities as you need them. Here’s where to begin.</p>
+      </header>
+      <div class="atlas">
+        <article class="application">
+          <p class="eyebrow">Start here</p>
+          <h2>Make this app<br>your own.</h2>
+          <p>Follow the quickstart to see how your application fits together, run it locally, and start building your first feature.</p>
+          <a href="https://arkoren.dev/docs/guides/first-steps/quickstart">Get started <span aria-hidden="true">→</span></a>
+        </article>
+        <article>
+          <p class="eyebrow">Your first endpoint</p>
+          <h2>A route, a handler.<br>A response.</h2>
+          <p>Give your application something to do. Learn to register a route, read a request, and return a response using familiar Go types.</p>
+          <a href="https://arkoren.dev/docs/guides/http-fundamentals/routing">Explore routing <span aria-hidden="true">→</span></a>
+        </article>
+        <article>
+          <p class="eyebrow">When you’re ready</p>
+          <h2>Find your<br>next building block.</h2>
+          <p>Need a database, authentication, or background jobs? Find guides and examples for your next feature. You don’t need to learn everything at once.</p>
+          <a href="https://arkoren.dev/docs">Browse documentation <span aria-hidden="true">↗</span></a>
+        </article>
+      </div>
+    </section>
+    <footer>Built with <a href="https://arkoren.dev">Arkoren</a> · A modular Go toolkit · <a href="https://github.com/arkoren/arkoren">GitHub <span aria-hidden="true">↗</span></a></footer>
+  </main>
+</body>
+</html>

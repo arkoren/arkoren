@@ -1,0 +1,25 @@
+Swagger UI 5.34.0 (2026-10-19), Apache-2.0.
+Upstream: https://github.com/swagger-api/swagger-ui
+Tag: v5.34.0
+Commit: a3d333d7e99611288312d597c4023ee10df721e0
+
+Unmodified files downloaded from:
+https://raw.githubusercontent.com/swagger-api/swagger-ui/v5.34.0/dist/swagger-ui-bundle.js
+https://raw.githubusercontent.com/swagger-api/swagger-ui/v5.34.0/dist/swagger-ui.css
+https://raw.githubusercontent.com/swagger-api/swagger-ui/v5.34.0/LICENSE
+https://raw.githubusercontent.com/swagger-api/swagger-ui/v5.34.0/NOTICE
+
+SHA-256:
+3f6abf70480db7e07914df4c98a77385f22ea585eaf457a3e6415ba0eae2d167  swagger-ui-bundle.js
+c3cfe8248c4b0b89673600fb829924eafbac6de4bc4b2b06f5f5243483074d0a  swagger-ui.css
+cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  LICENSE
+0d20d1adef18aee3f40dd258172155521ce702ac445cb5f7b7d60ed32dad2fb2  NOTICE
+
+OpenAPI 3.2 compatibility evidence:
+https://github.com/swagger-api/swagger-ui/blob/v5.34.0/README.md#compatibility
+The compatibility matrix lists 3.2.0 starting with Swagger UI 5.32.0.
+https://github.com/swagger-api/swagger-ui/releases/tag/v5.34.0
+Release notes include OAS 3.2 additionalOperations support.
+
+Only the bundle and stylesheet are served. Source maps, standalone preset,
+upstream example initializer, and OAuth redirect page are intentionally absent.
