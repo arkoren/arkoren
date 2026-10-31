@@ -2,6 +2,11 @@ go 1.27
 
 use (
 	./core
+	./driver/aes
+	./driver/argon2
+	./driver/bcrypt
+	./driver/chacha20
+	./driver/filesystem
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key
