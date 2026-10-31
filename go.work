@@ -7,8 +7,12 @@ use (
 	./driver/bcrypt
 	./driver/chacha20
 	./driver/filesystem
+	./driver/mqtt
 	./driver/mysql
+	./driver/nats
 	./driver/postgres
+	./driver/rabbitmq
+	./driver/redis
 	./driver/sqlite
 	./foundation/certificate
 	./foundation/collection

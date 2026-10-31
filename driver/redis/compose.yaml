@@ -1,0 +1,12 @@
+# Services for the integration tests of arkoren.dev/driver/redis. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  redis:
+    image: redis:8.8.2
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

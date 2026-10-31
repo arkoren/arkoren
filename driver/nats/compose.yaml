@@ -1,0 +1,8 @@
+# Services for the integration tests of arkoren.dev/driver/nats. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  nats:
+    image: nats:2.14.6
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "127.0.0.1:4222:4222"
