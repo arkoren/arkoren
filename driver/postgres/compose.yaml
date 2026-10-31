@@ -1,0 +1,15 @@
+# Services for the integration tests of arkoren.dev/driver/postgres. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  postgres:
+    image: postgres:15.19
+    environment:
+      POSTGRES_DB: arkoren_integration
+      POSTGRES_PASSWORD: arkoren-integration
+    ports:
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d arkoren_integration"]
+      interval: 3s
+      timeout: 5s
+      retries: 20

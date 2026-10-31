@@ -7,6 +7,9 @@ use (
 	./driver/bcrypt
 	./driver/chacha20
 	./driver/filesystem
+	./driver/mysql
+	./driver/postgres
+	./driver/sqlite
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key
