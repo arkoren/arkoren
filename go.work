@@ -4,9 +4,13 @@ use (
 	./core
 	./driver/aes
 	./driver/argon2
+	./driver/aws
+	./driver/azure
 	./driver/bcrypt
 	./driver/chacha20
+	./driver/cloudflare
 	./driver/filesystem
+	./driver/gcp
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
@@ -16,6 +20,7 @@ use (
 	./driver/restate
 	./driver/sqlite
 	./driver/temporal
+	./driver/vault
 	./foundation/certificate
 	./foundation/collection
 	./foundation/key

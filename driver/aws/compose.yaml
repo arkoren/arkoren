@@ -1,0 +1,71 @@
+# Services for the integration tests of arkoren.dev/driver/aws. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  ministack-broadcast:
+    image: ministackorg/ministack:1.5.8
+    ports:
+      - "127.0.0.1:14567:4566"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4566/_ministack/health')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  ministack-mail:
+    image: ministackorg/ministack:1.5.8
+    environment:
+      AWS_ACCESS_KEY_ID: "000000000000"
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "127.0.0.1:14569:4566"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4566/_ministack/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  ministack-queue:
+    image: ministackorg/ministack:1.5.8
+    ports:
+      - "127.0.0.1:14568:4566"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4566/_ministack/health')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  ministack-secret:
+    image: ministackorg/ministack:1.5.8
+    environment:
+      AWS_ACCESS_KEY_ID: "000000000000"
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "127.0.0.1:4567:4566"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4566/_ministack/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  ministack-storage:
+    image: ministackorg/ministack:1.5.8
+    ports:
+      - "127.0.0.1:14566:4566"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4566/_ministack/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+  minio-storage:
+    # The original Docker Hub repository is unavailable; see fixtures/minio/README.md.
+    build:
+      context: ./fixtures/minio
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: "000000000000"
+      MINIO_ROOT_PASSWORD: arkoren-integration
+    ports:
+      - "127.0.0.1:9001:9000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
