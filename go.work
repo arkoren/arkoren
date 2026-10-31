@@ -5,6 +5,7 @@ use (
 	./driver/aes
 	./driver/argon2
 	./driver/aws
+	./driver/azure
 	./driver/bcrypt
 	./driver/chacha20
 	./driver/filesystem
