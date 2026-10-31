@@ -11,6 +11,7 @@ use (
 	./driver/cloudflare
 	./driver/filesystem
 	./driver/gcp
+	./driver/launchdarkly
 	./driver/mailgun
 	./driver/mollie
 	./driver/mqtt
