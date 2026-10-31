@@ -1,0 +1,44 @@
+# Services for the integration tests of arkoren.dev/driver/hatchet. Start them
+# from this directory with: docker compose up -d --wait
+services:
+  hatchet-postgres:
+    image: postgres:15.19
+    environment:
+      POSTGRES_USER: hatchet
+      POSTGRES_PASSWORD: hatchet
+      POSTGRES_DB: hatchet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hatchet -d hatchet"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+  hatchet:
+    # First RetryAfter-capable engine release (SDK MinEngineVersion.RetryAfter).
+    # Source tag v0.111.0: fd1ba5f4b931b270fcbe8e2ddf29f1646c2d5552.
+    # https://github.com/hatchet-dev/hatchet/blob/v0.111.0/sdks/go/engine_version.go
+    # Multi-architecture registry manifest; arm64 child is
+    # sha256:2c1ff67111aa8ce2cda67d9173ff914504ba2f2e30589eb05376c5b28eaecfd2.
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-lite:v0.111.0@sha256:0776a420bc6af14cc0ca4e5ddb0f6ad6e64375ccbeb2accdc1a88c9877969085
+    depends_on:
+      hatchet-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://hatchet:hatchet@hatchet-postgres:5432/hatchet?sslmode=disable
+      SERVER_AUTH_COOKIE_DOMAIN: localhost
+      SERVER_AUTH_COOKIE_INSECURE: "t"
+      SERVER_AUTH_SET_EMAIL_VERIFIED: "t"
+      SERVER_GRPC_BIND_ADDRESS: 0.0.0.0
+      SERVER_GRPC_INSECURE: "t"
+      SERVER_GRPC_BROADCAST_ADDRESS: localhost:17077
+      SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: localhost:7077
+      SERVER_GRPC_PORT: "7077"
+      SERVER_URL: http://localhost:18888
+      SERVER_DEFAULT_ENGINE_VERSION: V1
+    ports:
+      - "127.0.0.1:17077:7077"
+      - "127.0.0.1:18888:8888"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8888/api/ready"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
