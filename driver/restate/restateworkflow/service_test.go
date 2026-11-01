@@ -408,9 +408,16 @@ func edgeMeta(e *edge) {
 const endpointPort = "19080"
 
 // TestIntegration serves the conformance and edge definitions from one
-// endpoint and runs both suites against it.
+// endpoint and runs both suites against it. Ownership-entry observations are
+// retained locally and printed only on conformance failure, before edge tests
+// and invocation cleanup.
+// The test is intentionally nonparallel while its SDK default logger is wrapped.
+//
+//	go test -race -run '^TestIntegration$' ./restateworkflow
 func TestIntegration(t *testing.T) {
-	registry := workflowtest.Registry(t, edgeDefinitions()...)
+	trace := &ownershipTrace{started: time.Now()}
+	captureOwnershipLogs(t, trace)
+	registry := ownershipRegistry(t, trace)
 
 	var runner *restateworkflow.Runner
 
@@ -437,6 +444,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	t.Run("conformance", func(t *testing.T) {
+		registerOwnershipDiagnostics(t, trace, client.Query)
 		workflowtest.Run(t, func(*testing.T) workflow.Driver {
 			return driver
 		}, workflowtest.WithoutChild())
