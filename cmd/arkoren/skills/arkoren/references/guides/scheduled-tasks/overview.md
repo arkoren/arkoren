@@ -7,6 +7,11 @@ order: 10
 
 # Scheduled Tasks Overview
 
+> [!NOTE]
+> Hatchet references on this page describe a pending, unpublished integration,
+> not available support. Its [retained notes](drivers.md#hatchet) are development
+> context; choose memory, Temporal, or Restate for an available driver.
+
 ## Introduction
 
 Most applications have work that nobody asks for at the moment it happens:
@@ -20,8 +25,8 @@ The service splits the work in two. The **scheduler**, `*schedule.Scheduler`,
 owns *what* runs: the entries you add and the task handlers you register. A
 **driver** owns *when* it runs: timers, persistence, and coordination between
 processes. The [memory driver](drivers.md#memory) keeps timers in the process
-and suits development and a single replica. The [Temporal](drivers.md#temporal),
-[Hatchet](drivers.md#hatchet), and [Restate](drivers.md#restate) drivers hand
+and suits development and a single replica. The [Temporal](drivers.md#temporal)
+and [Restate](drivers.md#restate) drivers hand
 the timing to an engine, coordinating ticks across replicas and retaining
 deferred tasks across worker restarts. This does not guarantee exactly-once
 handler effects. Your entries and handlers do not change when you switch,

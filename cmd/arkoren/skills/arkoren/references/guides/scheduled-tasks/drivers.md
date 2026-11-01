@@ -1,7 +1,7 @@
 ---
 title: Scheduler Drivers
 nav: Drivers
-description: Choose between the memory, Temporal, Hatchet, and Restate scheduler drivers, and install, wire, and configure each, with a local server.
+description: Choose between the memory, Temporal, and Restate scheduler drivers, with pending Hatchet integration notes.
 order: 40
 ---
 
@@ -13,7 +13,7 @@ Choose memory when independent process-local timers and disposable deferred
 tasks are enough. Every replica runs every entry, so memory suits development,
 tests, and single-replica deployments, not shared scheduling.
 
-Choose Temporal, Hatchet, or Restate when replicas need coordinated ticks or
+Choose Temporal or Restate when replicas need coordinated ticks or
 deferred tasks must survive worker restarts. Start with the engine your team
 already operates, then check its time-zone, retry, and missed-tick behavior
 below. Shared timing does not guarantee exactly-once handler effects.
@@ -22,6 +22,9 @@ for using the scheduler, and [Choosing a Driver](../drivers/choosing-a-driver.md
 for every service's drivers side by side.
 
 ## Compatibility matrix
+
+Hatchet is pending and unpublished. It is excluded from this matrix; references
+to Hatchet below describe retained development context, not available support.
 
 Compare scheduling exposed through Arkoren, not every engine feature. Shared
 ticks coordinate the same entry across application replicas; they do not promise
@@ -32,7 +35,6 @@ state, not that engine data loss is recoverable.
 | --- | --- | --- | --- | --- | --- |
 | [Memory](#memory) | No | No | Yes | No | No |
 | [Temporal](#temporal) | Yes | Yes | Partial — Named zones are supported; Local is rejected. | Partial — Limited by CatchupWindow, one minute by default. | Yes |
-| [Hatchet](#hatchet) | Yes | Yes | Partial — Requires AllowCronTZ and engine verification. | No | Yes |
 | [Restate](#restate) | Yes | Yes | Partial — Named zones are supported; Local is rejected. | Partial — Fires the pending tick once, not every missed tick. | Yes |
 
 Memory runs every entry independently in every replica and drops the running
@@ -50,7 +52,7 @@ produce duplicate delivery, so make handlers idempotent. During an autumn DST
 overlap, memory and Restate fire once and Temporal fires twice; the default
 UTC-only Hatchet path has no DST overlap.
 
-The three engine drivers share a **host** per vendor: one object that manages
+The two available engine drivers share a **host** per vendor: one object that manages
 the native worker or service endpoint and that you start and stop with the
 application.
 [Shared Worker Host](../workflows/shared-worker-host.md) explains it once, and
@@ -282,15 +284,19 @@ For every function and option, see [the `temporalschedule` API reference](https:
 
 ## Hatchet
 
+> [!NOTE]
+> Pending and unpublished: `arkoren.dev/driver/hatchet` is not available to
+> install. The following examples and operational notes are retained development
+> context, not usable setup instructions or verified public API documentation.
+> Choose memory, Temporal, or Restate above for an available driver.
+
 The Hatchet driver turns each entry into a Hatchet cron trigger and each
-deferred task into a scheduled run. Choose it when you run Hatchet and your
-entries are in UTC.
+deferred task into a scheduled run in the pending integration. These retained
+notes target UTC entries; they are not a recommendation to install it.
 
 ### Installation
 
-```sh
-go get arkoren.dev/driver/hatchet
-```
+Installation is unavailable until the Hatchet module is published.
 
 ### Connecting
 
@@ -389,7 +395,8 @@ and durable-shutdown race limits still apply to the shared host. See
 
 ### API references
 
-For every function and option, see [the `hatchetschedule` API reference](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetschedule).
+The [`hatchetschedule` API reference URL](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetschedule)
+is pending publication; it does not establish package availability.
 
 ## Restate
 

@@ -1,7 +1,7 @@
 ---
 title: Workflow Drivers
 nav: Drivers
-description: Choose between the memory, Temporal, Hatchet, and Restate workflow drivers, and install, wire, and configure each, with a local server.
+description: Choose between the memory, Temporal, and Restate workflow drivers, with pending Hatchet integration notes.
 order: 50
 ---
 
@@ -9,9 +9,9 @@ order: 50
 
 ## Introduction
 
-Memory loses runs on exit; Temporal, Hatchet, and Restate survive worker restarts.
+Memory loses runs on exit; Temporal and Restate survive worker restarts.
 Prefer your existing engine if it supports your operations: Restate lacks `Child`,
-and Hatchet lacks both `Child` and `Spawn`. Start with the [overview](overview.md)
+and the pending Hatchet integration lacks both `Child` and `Spawn`. Start with the [overview](overview.md)
 for portable definitions or [Choosing a Driver](../drivers/choosing-a-driver.md)
 for other services. Install modules from your application's directory.
 
@@ -25,6 +25,8 @@ processes.
 
 ## Compatibility matrix
 
+Hatchet is pending and unpublished, not an available driver in these matrices.
+
 Compare Arkoren's workflow operations, not each engine's full SDK. Restart
 survival requires retained engine history; it does not cover engine data loss.
 
@@ -32,7 +34,6 @@ survival requires retained engine history; it does not cover engine data loss.
 | --- | --- | --- | --- | --- | --- |
 | [Memory](#memory) | No | Yes | Yes | Yes | No |
 | [Temporal](#temporal) | Yes | Yes | Yes | Yes | Yes |
-| [Hatchet](#hatchet) | Yes | No | No | Partial — Cannot exceed TimeoutMargin. | Yes |
 | [Restate](#restate) | Yes | No | Yes | Yes | Yes |
 
 `Child` acquires cancellation ownership only when it creates the run. Joining an
@@ -51,12 +52,12 @@ runs require positive retention and the
 [operator-managed preflight-retention profile](#retaining-canceled-runs-before-execution).
 Without that profile, a canceled pre-execution invocation can disappear.
 
-Hatchet's rows describe operations exercised on the pinned v0.111.0 profile, not
-race-free or caller-bounded lifecycle behavior. A fresh full native race suite
-passed on that profile, but repeated concurrent conformance still exposes an SDK
+Hatchet is pending and unpublished, so it is excluded from the availability
+matrices. Its retained notes describe a development profile, not a published
+or independently verified driver. Reported concurrent conformance exposes an SDK
 shutdown race; startup cancellation and asynchronous SDK panics also remain
 unresolved. Keep the
-[native limits](#hatchet) when selecting and operating this driver.
+[native limits](#hatchet) as pending context, not an installation recommendation.
 
 Use the [shared client/worker observability wiring](overview.md#events-and-telemetry)
 for every driver below.
@@ -68,7 +69,6 @@ cannot be guaranteed. Legacy untraced histories retain their argument shape.
 | --- | --- | --- | --- | --- |
 | [Memory](#memory) | Yes | Yes | Yes — Copied start carrier. | Yes |
 | [Temporal](#temporal) | Yes | Yes | Yes — Input envelope. | Yes |
-| [Hatchet](#hatchet) | Yes | Yes | Yes — Wire field. | No — Unsupported child operations. |
 | [Restate](#restate) | Yes | Yes | Yes — Invocation headers, extracted in Run attempts. | Partial — Spawn only; Child is unsupported. |
 
 Examples assume the [overview's definitions](overview.md#a-first-workflow).
@@ -299,6 +299,12 @@ See [the `temporalworkflow` API reference](https://pkg.go.dev/arkoren.dev/driver
 
 ## Hatchet
 
+> [!NOTE]
+> Pending and unpublished: `arkoren.dev/driver/hatchet` is not available to
+> install. The following examples and operational notes are retained development
+> context, not usable setup instructions or verified public API documentation.
+> Choose memory, Temporal, or Restate above for an available driver.
+
 Hatchet maps workflows to durable tasks and steps to standalone tasks. Durable
 eviction needs engine v0.80.0+, but the repaired registered retry timing needs
 v0.111.0+ with an adequate native retry-delay cap. The host's older-version gate
@@ -308,9 +314,7 @@ limits still apply.
 
 ### Installation
 
-```sh
-go get arkoren.dev/driver/hatchet
-```
+Installation is unavailable until the Hatchet module is published.
 
 ### Connecting
 
@@ -538,7 +542,8 @@ Wire the runner/hooks and start/signal onboarding; `Result` returns the token.
 
 ### API references
 
-See [the `hatchetworkflow` API reference](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow).
+The [`hatchetworkflow` API reference URL](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow)
+is pending publication; it does not establish package availability.
 
 ## Restate
 

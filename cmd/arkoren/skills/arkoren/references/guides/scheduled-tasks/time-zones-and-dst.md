@@ -7,6 +7,11 @@ order: 20
 
 # Time Zones and DST
 
+> [!NOTE]
+> Hatchet references below are retained development context for a pending,
+> unpublished integration, not available driver support. See the
+> [scheduler comparison](drivers.md#compatibility-matrix) for available drivers.
+
 ## Introduction
 
 A daily digest may need to arrive at the same local time even when clocks
@@ -100,20 +105,19 @@ run every day, move it to UTC or to a time outside the transition hours.
 ## How the drivers differ
 
 The rules above are the ones the scheduler's own calendar follows, and the
-memory and Restate drivers use it, so they behave exactly as described. The
-other two engines compute their own calendars:
+memory and Restate drivers use it, so they behave exactly as described.
+Temporal computes its own calendar. The comparison lists available drivers:
 
 | Driver | Spring gap | Autumn overlap | Non-UTC entries |
 | --- | --- | --- | --- |
 | Memory | skipped | once | supported |
 | Temporal | skipped | runs twice | supported |
-| Hatchet | not applicable | not applicable | `ErrUnsupported` unless `Builder.AllowCronTZ(true)` |
 | Restate | skipped | once | supported |
 
 Temporal runs an entry inside the autumn overlap twice, once per occurrence, so
 an entry in a DST zone on Temporal must tolerate that or sit outside the
-overlap. Hatchet evaluates cron expressions in UTC. When an entry carries
-another zone, the Hatchet driver's `Run` returns `schedule.ErrUnsupported`;
+overlap. In the pending integration, Hatchet evaluates cron expressions in UTC.
+When an entry carries another zone, the Hatchet driver's `Run` returns `schedule.ErrUnsupported`;
 the `Builder.AllowCronTZ(true)` construction setting instead prefixes the expression with
 `CRON_TZ=<zone>`, which depends on how your Hatchet engine reads it, so test
 it against your engine before relying on it. See [Scheduler Drivers](drivers.md)

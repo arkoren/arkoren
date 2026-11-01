@@ -7,6 +7,11 @@ order: 10
 
 # Workflows Overview
 
+> [!NOTE]
+> Hatchet references on this page describe a pending, unpublished integration,
+> not available support. Its [retained notes](drivers.md#hatchet) are development
+> context; choose memory, Temporal, or Restate for an available driver.
+
 ## Introduction
 
 Some processes take longer than a request and must not be lost halfway. A user
@@ -19,7 +24,7 @@ you end up building a state machine in a database to survive it.
 A **workflow** is that process written as one ordinary Go function. The function
 runs **steps**, which are the parts that do real work and may fail, waits for
 **signals** from the outside, sleeps, and starts other workflows. A **driver**
-makes it durable: an engine such as Temporal, Hatchet, or Restate records each
+makes it durable: an engine such as Temporal or Restate records each
 result, so a run that is interrupted resumes where it was, and a sleep of three
 days does not hold a goroutine for three days.
 
@@ -29,7 +34,7 @@ policy. A [scheduled task](../scheduled-tasks/overview.md) starts work at a time
 A workflow connects many units of work into one run with a name, an identifier,
 a status, and a result that you can ask for. The [memory driver](drivers.md#memory)
 runs workflows inside the process for development and tests, and the
-[Temporal](drivers.md#temporal), [Hatchet](drivers.md#hatchet), and
+[Temporal](drivers.md#temporal) and
 [Restate](drivers.md#restate) drivers make them durable. Your definitions do not
 change between them, but supported operations and timing limits differ; check
 the [driver comparison](drivers.md#compatibility-matrix) before choosing an engine.

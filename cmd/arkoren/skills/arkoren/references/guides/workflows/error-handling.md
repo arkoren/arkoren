@@ -7,6 +7,11 @@ order: 20
 
 # Workflow Errors
 
+> [!NOTE]
+> Hatchet references below are retained development context for a pending,
+> unpublished integration, not available driver support. See the
+> [workflow comparison](drivers.md#compatibility-matrix) for available drivers.
+
 ## Introduction
 
 When a payment request fails, another attempt might succeed; when a card is

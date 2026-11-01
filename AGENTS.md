@@ -15,8 +15,10 @@ During the incremental import, the ignored `go.local.work` preserves the full
 local workspace. Select it per command with `GOWORK="$PWD/go.local.work"` from
 the repository root (or use its absolute path from another directory). Keep
 its checksum file ignored too; do not change global Go environment settings.
-Future core imports must require canonical foundation pseudo-versions resolved
-from the merged foundation import commit. This import creates no release tags.
+Source imports use canonical dependencies resolved from merged source and create
+no release tags. For an explicitly authorized release, follow Publishing in
+the `arkoren-codebase` skill. Source import authorization alone does not
+authorize a release.
 
 ## Find code before reading it
 
