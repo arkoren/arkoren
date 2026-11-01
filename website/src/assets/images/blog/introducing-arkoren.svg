@@ -15,7 +15,7 @@
   <path d="M48 48H1152V352H48Z" fill="none" stroke="#fff1f2" stroke-opacity=".18"/>
   <g fill="#fffbf5">
     <text x="85" y="150" font-family="Maple Mono, monospace" font-size="16" letter-spacing="3">INTRODUCING</text>
-    <text x="78" y="260" font-family="Geist, Arial, sans-serif" font-size="112" font-weight="600" letter-spacing="-6">arkoren</text>
+    <text x="78" y="260" font-family="Geist, Arial, sans-serif" font-size="112" font-weight="600" letter-spacing="-6">Arkoren</text>
   </g>
   <g transform="translate(850 101) scale(2)" fill="#fff1f2" fill-opacity=".8">
     <path d="M40 8H60L69 28H31Z"/>
