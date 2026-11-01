@@ -752,7 +752,8 @@ plan is a proposal, not release authorization.
 `Publish modules` follows successful trusted main-push CI, using the upstream
 `head_sha`. It executes reviewed main code, independently recomputes the planner
 result and requires fresh exact-SHA `CI gate` AND `website` evidence before
-publication credentials. Manual dispatch selects an exact main SHA; it is an
+publication credentials. Recovery also requires exact-green evidence for the
+current main implementation executing the older signed plan. Manual dispatch selects an exact main SHA; it is an
 emergency retry, not a routine release approval. Missing/pending evidence has a
 bounded wait; failed/cancelled evidence blocks. No upstream artifacts or caches
 are executed. The preview remains independently read-only.

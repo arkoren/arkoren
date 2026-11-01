@@ -36,8 +36,13 @@ def validate_batch(repo, state, main, allowed=None):
 
 
 def prepare(repo, sha, main, *, request=api, evidence=collect, consumer=public_verify):
-    if not ancestor(repo, git(repo, "rev-parse", "HEAD").strip(), main):
+    code_sha = git(repo, "rev-parse", "HEAD").strip()
+    if not ancestor(repo, code_sha, main):
         raise ValueError("publisher code must come from trusted main")
+    if code_sha != sha:
+        # Recovery may target an older signed batch. The current implementation
+        # executing with secrets must ALSO have its own exact-green main evidence.
+        evidence(REPO, code_sha, "main", "publisher-code")
     history = recorded(repo)
     matching = [state for state in history if state["plan"]["sha"] == sha]
     if sha != main and not matching:
@@ -78,6 +83,10 @@ def publish(repo, manifest, token, secret, *, request=api, evidence=collect,
             tags=push_tags, release=publish_releases, consumer=public_verify):
     # GH_TOKEN remains the ordinary read-only Actions token throughout this job.
     main = main_sha(request)
+    code_sha = git(repo, "rev-parse", "HEAD").strip()
+    if not ancestor(repo, code_sha, main):
+        raise ValueError("publisher code is no longer on trusted main history")
+    evidence(REPO, code_sha, "main", "publisher-code-before-write")
     for state in manifest["batches"]:
         validate_batch(repo, state, main)
         evidence(REPO, state["plan"]["sha"], "main", "publisher-before-write")

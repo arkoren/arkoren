@@ -216,6 +216,20 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(manifest["batches"], [state])
         self.release(state)
 
+    def test_old_batch_recovery_also_requires_exact_green_executing_code(self):
+        state = self.state()
+        self.push(state)
+        main = self.commit("ci: newer publisher implementation", {"scripts/publisher.py": ""})
+        observed = []
+        def evidence(repo, sha, branch, mode):
+            observed.append((sha, mode))
+            if mode == "publisher-code":
+                raise ValueError("current publisher code CI is pending")
+        with self.assertRaisesRegex(ValueError, "publisher code CI"):
+            publisher.prepare(self.repo, state["plan"]["sha"], main, request=self.github, evidence=evidence)
+        self.assertEqual(observed, [(main, "publisher-code")])
+        self.assertEqual(self.github.writes, [])
+
     def test_failed_pending_missing_evidence_stops_before_any_side_effect(self):
         state = self.state()
         for status in ("failed", "cancelled", "pending", "missing", "wrong-ref"):
