@@ -56,7 +56,9 @@ def verify_tag(repo, tag, state=None, trust=None):
                     "verify-tag", "--", tag], cwd=repo, check=True, capture_output=True)
     raw = git(repo, "cat-file", "tag", "refs/tags/" + tag)
     headers, message = raw.split("\n\n", 1)
-    unsigned = message.split(SIGNATURE, 1)[0]
+    # Notes may quote a signature delimiter. The actual signature is the last
+    # delimiter, outside the canonical single-line JSON annotation.
+    unsigned = message.rsplit(SIGNATURE, 1)[0]
     if not unsigned.startswith(MARKER):
         raise ValueError("signed tag lacks a publication plan")
     recovered = json.loads(unsigned[len(MARKER):])

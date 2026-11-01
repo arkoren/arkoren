@@ -196,6 +196,11 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "target"):
             plans.verify_tag(self.repo, name, state)
 
+    def test_notes_can_quote_ssh_signature_delimiters(self):
+        state = self.state("fix: parse -----BEGIN SSH SIGNATURE----- text")
+        self.push(state)
+        self.assertEqual(plans.recorded(self.repo), [state])
+
     def test_newer_main_stops_unsigned_batch_before_effects(self):
         state = self.state()
         main = self.commit("ci: later main", {"scripts/later.py": ""})
