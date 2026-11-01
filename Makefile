@@ -82,6 +82,7 @@ workflow-check:
 release-preview-check:
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_preview_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_evidence_test.py
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_publish_test.py
 
 # golangci-lint's configured govet is authoritative for routine checks. This
 # standalone command bypasses golangci-lint's diagnostic/exclusion/version

@@ -1,0 +1,89 @@
+name: Publish modules
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact green main SHA (or original signed-batch SHA to resume)
+        type: string
+        required: true
+      preflight-only:
+        description: Verify App scope and local-only tag signature without publishing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: module-publication
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'arkoren/arkoren' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      # Execute reviewed main code, NEVER a caller-supplied SHA, PR artifact or cache.
+      # The candidate SHA is independently checked against main ancestry and exact CI.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: false
+      - name: Install checksum-pinned planner
+        run: |
+          python3 scripts/install-git-cliff.py "$RUNNER_TEMP/cliff-bin"
+          echo "$RUNNER_TEMP/cliff-bin" >> "$GITHUB_PATH"
+      - name: Require exact green SHA, namespace policy and recomputed plans
+        id: prepare
+        run: python3 scripts/release_publish.py prepare "$RUNNER_TEMP/publication.json"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        if: steps.prepare.outputs.changed == 'true' || inputs.preflight-only == true
+        id: app
+        with:
+          client-id: Iv23liUAyM9AkNIKa7tH
+          private-key: ${{ secrets.ARKOREN_RELEASES_PRIVATE_KEY }}
+          owner: arkoren
+          repositories: arkoren
+          permission-contents: write
+      - name: Verify dedicated signer without remote writes
+        if: inputs.preflight-only == true
+        run: python3 scripts/release_publish.py preflight "$RUNNER_TEMP/publication.json"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.app.outputs.installation-id }}
+          SIGNING_KEY: ${{ secrets.ARKOREN_RELEASES_TAG_SIGNING_KEY }}
+      - name: Sign atomic immutable tag batch, verify public consumers, publish notes
+        if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
+        run: python3 scripts/release_publish.py publish "$RUNNER_TEMP/publication.json"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.app.outputs.installation-id }}
+          SIGNING_KEY: ${{ secrets.ARKOREN_RELEASES_TAG_SIGNING_KEY }}
