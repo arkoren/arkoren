@@ -677,10 +677,9 @@ Settled; reopen only with the owner.
 
 ## Publishing
 
-Consumer documentation uses canonical released-style module installation commands
-without checkout prerequisites or prerelease fences. This policy applies even
-while the release-engineering state below is unreleased; keep contributor build
-instructions separate from consumer installation.
+Consumer documentation uses canonical module installation commands for available
+modules. Mark unpublished integrations as pending; do not present their install
+commands as usable. Keep contributor build instructions separate.
 
 Keep the committed root `go.work` for shared development. Its relative `use`
 paths name only imported modules and expand as modules land. Module manifests
@@ -696,11 +695,40 @@ catch-all route) with
 `<meta name="go-import" content="arkoren.dev git https://github.com/arkoren/arkoren">`;
 Go maps `arkoren.dev/core` to the `core/` folder by path. Each module is
 tagged with its folder as prefix (`core/v1.2.0`, `driver/aws/v1.0.0`) and
-versioned independently; a contract change releases as one set, with every
-module tagged on the same merge commit. If the repository is ever split,
+versioned independently, including during 0.x development. There is no root
+module or root version tag. If the repository is ever split,
 repository names follow the first path segment (`arkoren.dev/<repo>` is
 `github.com/arkoren/<repo>`). The consumer skill tree, `website/`, and `.agents/`
 hold no Go code.
+
+Releases are manual and require explicit authorization. For the approved v0.1.0
+bootstrap, publish the six foundation modules first, then core, then the 36
+committed driver modules, then the CLI. Hatchet is unpublished and excluded.
+Complete and publicly verify each wave before adopting its versions in the next
+focused PR. Later dependency adoption is explicit, not an automatic consequence
+of publishing a dependency. A contract change coordinates affected consumers,
+but dependency-ordered waves need not share one merge commit.
+
+Before publishing each module, run scoped `GOWORK=off go mod tidy` from that
+module's directory after its dependency versions are publicly available. Review
+its go.mod and generated sums, including test dependencies and legitimate
+indirect requirements; do not force a core requirement that tidy removes.
+Foundation modules remain stdlib-only. Never tidy the whole repository or use
+workspace resolution, local replacements, or disabled verification to bypass a
+missing published dependency. Keep vendor SDK upgrades out of bootstrap PRs.
+
+Merge each focused PR only after every discovered module check, integration
+suite, tooling job, website job, and aggregate gate succeeds. Validate all checks
+again on the exact post-merge SHA before signing directory-prefixed annotated
+tags at that SHA. Never move or delete a published tag. Keep tag update/deletion
+protection non-bypassable; authorize creation narrowly, without unlocking other
+module namespaces or root tags. Verify each tag's remote target and signature,
+public module-proxy/checksum resolution, and independent `GOWORK=off` use before
+the next wave. Verify the CLI's generated core and MCP pins and generated-project
+proof before its tag. GitHub release descriptions identify v0.1.0 as pre-alpha;
+the module version remains v0.1.0, without a prerelease suffix. This manual
+bootstrap adds no release automation and does not lift the held-back full-CI or
+scheduled-audit policy for source imports.
 
 ## Make a change
 

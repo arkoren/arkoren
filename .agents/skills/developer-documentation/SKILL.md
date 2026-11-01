@@ -109,7 +109,9 @@ Read the relevant reference files directly; each contains a table of contents, e
   arkoren.dev/cmd/arkoren@latest`, or `go get -tool
   arkoren.dev/cmd/arkoren@latest`. Keep contributor checkout/build workflows
   separate. Consumer guides, README templates, and website copy use
-  these commands without local replacements or prerelease fences. Never invent
+  these commands without local replacements or prerelease fences for available
+  modules. Mark unpublished integrations as pending and omit usable installation
+  instructions for them. Never invent
   a version tag or claim that a download was verified without testing it.
 - Address the reader directly, use present-tense product behavior, and state conditions with explicit `if`/`otherwise` language.
 - Define a new term before using it as an instruction. Use its exact name consistently afterward.
