@@ -10,7 +10,7 @@
     "guides:check": "node --experimental-strip-types scripts/guides.ts --check",
     "releases:sync": "node --experimental-strip-types scripts/releases.ts",
     "releases:check": "node --experimental-strip-types scripts/releases.ts --check",
-    "test:releases": "node --experimental-strip-types --test test/releases.test.ts",
+    "test:releases": "node --experimental-strip-types --test test/releases.test.ts test/release-reader.test.ts",
     "check": "astro check",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",

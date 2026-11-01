@@ -1,0 +1,83 @@
+---
+import type { GetStaticPaths, InferGetStaticPropsType } from "astro";
+import { getCollection } from "astro:content";
+import Site from "../../layouts/Site.astro";
+import Command from "../../components/ui/Command.astro";
+import Link from "../../components/ui/Link.astro";
+import Tag from "../../components/ui/Tag.astro";
+import { releaseLinks, renderReleaseBody } from "../../lib/releases/content";
+import { releaseCommand, releaseDate } from "../../lib/releases/history";
+
+/** Publish exactly the identities validated by the offline collection loader. */
+export const getStaticPaths = (async () => {
+  const entries = await getCollection("releases");
+  return entries.map((entry) => ({ params: { release: entry.id }, props: { entry } }));
+}) satisfies GetStaticPaths;
+
+type Props = InferGetStaticPropsType<typeof getStaticPaths>;
+const { entry } = Astro.props;
+const { data } = entry;
+const links = releaseLinks(data);
+const title = `${data.module} ${data.version}`;
+const notes = renderReleaseBody(entry.body ?? "", data);
+---
+
+<Site
+  title={`${title} — Changelog — Arkoren`}
+  socialTitle={title}
+  description={`Release notes for ${title}, published ${releaseDate(data.publishedAt)}.`}
+  canonical={links.route}
+>
+  <main class="page-width pt-12 pb-18 sm:pb-24 lg:pt-18" id="top">
+    <Link href="/changelog">All releases</Link>
+    <article class="mt-8 min-w-0">
+      <header class="border-b-2 border-fg pb-8">
+        <p class="eyebrow">module release</p>
+        <h1 class="my-6 text-section font-medium wrap-anywhere">{title}</h1>
+        <div class="flex flex-wrap items-center gap-4 text-sm text-muted">
+          <time datetime={data.publishedAt}>{releaseDate(data.publishedAt)} · UTC</time>
+          {data.prerelease && <Tag>Pre-alpha · prerelease</Tag>}
+        </div>
+      </header>
+      <div class="grid items-start gap-12 pt-8 lg:grid-cols-main-aside lg:gap-18">
+        <div class="min-w-0">
+          <section aria-label="Release notes">
+            {notes === "" ? (
+              <p class="text-muted">No release notes were published for this version.</p>
+            ) : (
+              <div class="prose min-w-0" set:html={notes} />
+            )}
+          </section>
+          <section class="mt-8 border-t border-line pt-6" aria-label="Use this release">
+            <h2 class="mb-4 text-lg font-medium">Install this version</h2>
+            {data.prerelease && (
+              <p class="mb-4 text-sm leading-relaxed text-muted">
+                This is a pre-alpha prerelease. APIs may change during 0.x development.
+              </p>
+            )}
+            <Command command={releaseCommand(data)} />
+          </section>
+        </div>
+        <aside
+          class="min-w-0 border-line max-lg:border-t max-lg:pt-8"
+          aria-label="Published source"
+        >
+          <h2 class="mb-4 text-lg font-medium">Published source</h2>
+          <nav class="flex flex-col items-start gap-4" aria-label="Release source">
+            <Link href={links.github} icon="arrow-up-right">
+              GitHub release
+            </Link>
+            <Link href={links.commit} icon="arrow-up-right">
+              Source commit {data.commit.slice(0, 7)}
+            </Link>
+          </nav>
+        </aside>
+      </div>
+    </article>
+  </main>
+</Site>
+
+<script>
+  import { initCopyControls } from "../../scripts/copy";
+  initCopyControls(document);
+</script>

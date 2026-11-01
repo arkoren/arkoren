@@ -243,6 +243,8 @@ test("the sitemap contains exactly canonical content pages and no redirects or i
         file === "index.html" ||
         file === "docs.html" ||
         file === "blog.html" ||
+        file === "changelog.html" ||
+        file.startsWith("changelog/") ||
         file.startsWith("docs/") ||
         file.startsWith("blog/"),
     )

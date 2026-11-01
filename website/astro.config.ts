@@ -47,6 +47,8 @@ export default defineConfig({
           (pathname === "/" ||
             pathname === "/docs" ||
             pathname === "/blog" ||
+            pathname === "/changelog" ||
+            pathname.startsWith("/changelog/") ||
             pathname.startsWith("/docs/") ||
             pathname.startsWith("/blog/"))
         );

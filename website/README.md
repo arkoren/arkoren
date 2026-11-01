@@ -224,8 +224,14 @@ override a domain-level redirect or guarantee crawler access through a WAF.
 
 Published module history lives only in `src/content/releases/`, not in blog posts
 or the CLI's embedded guides. The `releases` content collection loads these files
-offline. The changelog reader and automated sync PRs are upcoming; this importer
-does not publish modules, tags, GitHub releases, or website deployments.
+offline. `/changelog` groups compact module entries by UTC publication date,
+newest first, with publication-time ordering and identity tie-breaks within a day.
+Each record has a permanent `/changelog/<module-directory>/<version>` page, for
+example `/changelog/driver/redis/v0.1.0`, with its complete notes, GitHub release,
+peeled source commit, and exact-version installation command. CLI pages use
+`go install`; library pages use `go get`. Modules version independently.
+Automated sync PRs are upcoming; this importer does not publish modules, tags,
+GitHub releases, or website deployments.
 
 To import confirmed GitHub publications, use Node.js 26.13+ and an authenticated
 `gh` CLI with repository read access. From `website/`, run:
@@ -264,7 +270,7 @@ This example comes from the initial Redis publication; sync obtains metadata fro
 Module names must match committed canonical `go.mod` declarations. Versions are
 normal `v0.X.Y` values without suffixes or leading zeros. Filename and metadata
 must agree; duplicate identities, extra metadata, invalid dates, and path traversal
-are rejected. Tag, GitHub URL, and future `/changelog/<module-directory>/<version>`
+are rejected. Tag, GitHub URL, and `/changelog/<module-directory>/<version>`
 URL are derived by `releaseLinks`, not stored as untrusted frontmatter.
 
 The body is the published GitHub body verbatim after replacing CRLF and bare CR
@@ -289,9 +295,16 @@ executes expressions, imports, shell text, or raw HTML. The shared
 `renderReleaseBody` helper parses Markdown and rejects raw HTML and active or
 ambiguous URL schemes rather than silently altering published text. If notes
 fail that gate, correct the GitHub body and retry. Code fences containing HTML
-remain inert code. The upcoming reader must use this helper, **not** Astro's
-trusted-author `render()` pipeline or MDX. Relative Markdown links are preserved;
-the reader must resolve them against GitHub source context, not website routes.
+remain inert code. The reader uses this helper, **not** Astro's
+trusted-author `render()` pipeline or MDX. Stored relative Markdown links stay
+unchanged; rendering resolves them from the module directory at the peeled commit
+to GitHub `blob` URLs (raw source URLs for images). Root-relative paths refer to
+the repository root. Heading fragments stay on the page with namespaced IDs;
+`#top` points to the page header. Empty, query-only, whitespace-containing, or
+repository-escaping relative URLs, encoded path separators, and missing heading
+fragments fail with an actionable error instead of
+producing broken site links. `ARKOREN_RELEASES` overrides the source directory
+for isolated test fixtures; leave it unset for production builds.
 The initial imported bodies have no relative Markdown links. Safety and importer
 fixtures run offline with `npm run test:releases`, also included in `npm test`.
 
