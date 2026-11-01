@@ -70,6 +70,7 @@ generate:
 	@cd website && npm run guides:generate
 
 workflow-check:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_notes_pr_test.py
 	bash scripts/ci-modules_test.sh
 	bash scripts/ci-gate_test.sh
 	bash scripts/audit_test.sh

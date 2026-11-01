@@ -230,8 +230,46 @@ Each record has a permanent `/changelog/<module-directory>/<version>` page, for
 example `/changelog/driver/redis/v0.1.0`, with its complete notes, GitHub release,
 peeled source commit, and exact-version installation command. CLI pages use
 `go install`; library pages use `go get`. Modules version independently.
-Automated sync PRs are upcoming; this importer does not publish modules, tags,
-GitHub releases, or website deployments.
+The **Website release notes** workflow imports published GitHub notes on release
+`published` and `edited` events, including prereleases. It opens or updates one
+human-reviewed PR from `automation/release-notes` to `main`. It does not publish
+modules, tags, GitHub releases, or deployments, and never enables auto-merge.
+Normal CI and website checks run for App-created PRs; merging follows the usual
+website deployment path.
+
+Before the first changed import, configure the existing
+[Arkoren Releases App](https://github.com/apps/arkoren-releases) (App ID `5540931`,
+installation `176874315`) for `arkoren/arkoren`. Store its **existing** private key
+securely as the repository Actions secret `ARKOREN_RELEASES_PRIVATE_KEY`, or an
+organization secret available to this repository. Do not paste the key into chat
+or commit it. The workflow requests a short-lived token for this repository only,
+with Contents and Pull requests write permissions; it does not request Issues,
+Workflows, administration or bypass permissions. No PAT or built-in write-token
+fallback is used. Missing credentials fail a changed import explicitly.
+
+To recover a missed event or retry after correcting notes or configuration, run:
+
+```sh
+gh workflow run release-notes.yml --ref main
+```
+
+An unchanged import succeeds without App authentication, commits or PRs. That
+result does **not** verify App setup. To probe authentication and repository scope
+even when nothing changed, add `-f verify-app=true` to that command. This probe
+does not manufacture a changed record or empty PR; successful authentication is
+not proof that a changed-record PR has been exercised live.
+
+The workflow checks out trusted `main`, not release-tag code. It validates every
+tracked and untracked change before obtaining write credentials. Only additions
+and modifications in `website/src/content/releases/` are allowed. GitHub signs
+App commits server-side. Branch updates are fast-forward-only: concurrent changes
+fail safely, while normal updates append a commit incorporating current `main`.
+Existing PRs must belong to the App; existing branch commits must be verified App
+commits with a release-only diff. A foreign branch or PR stops sync for manual
+recovery rather than overwriting it. Runs are serialized; an identical retry
+creates no duplicate commit or PR. If `main` advances during import, rerun from
+current `main`. API failures preserve existing history; no publication is retried
+or edited by this workflow. Review and merge note PRs manually after green checks.
 
 To import confirmed GitHub publications, use Node.js 26.13+ and an authenticated
 `gh` CLI with repository read access. From `website/`, run:
@@ -286,9 +324,9 @@ All remote records and existing managed files are validated before writing.
 API or validation failure leaves files unchanged. Writes use atomic per-file
 renames; a disk failure during writing can leave a partial batch, so review the
 diff and rerun after recovery. The importer rejects symlinks and writes only
-managed release files. Future sync automation can use the same functions and
-restrict its PR diff to `website/src/content/releases/`; preview artifacts and
-proposed versions are never publication evidence.
+managed release files. The sync workflow restricts its PR diff to
+`website/src/content/releases/`; preview artifacts and proposed versions are
+never publication evidence.
 
 Release bodies are untrusted input. Loading never compiles Markdown as MDX or
 executes expressions, imports, shell text, or raw HTML. The shared

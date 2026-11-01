@@ -1,0 +1,92 @@
+name: Website release notes
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      verify-app:
+        description: Verify App authentication even if notes are unchanged (no extra writes)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: website-release-notes
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  sync:
+    if: github.repository == 'arkoren/arkoren' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Never execute source from a released tag or target_commitish.
+      - uses: actions/checkout@v7
+        with:
+          repository: arkoren/arkoren
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: website/.node-version
+      - run: npm ci
+        working-directory: website
+      - name: Import confirmed publications with read-only credentials
+        run: npm run releases:sync
+        working-directory: website
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Bound all tracked and untracked changes before App authentication
+        id: prepare
+        run: python3 scripts/release_notes_pr.py prepare "$RUNNER_TEMP/release-notes.json"
+      - name: Inspect existing branch ownership with read-only credentials
+        if: steps.prepare.outputs.changed == 'true'
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from scripts.release_notes_pr import owned
+          owned(json.load(open(os.environ['RUNNER_TEMP'] + '/release-notes.json')))
+          PY
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Require the existing App private key
+        if: steps.prepare.outputs.changed == 'true' || inputs.verify-app == true
+        env:
+          APP_KEY: ${{ secrets.ARKOREN_RELEASES_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APP_KEY" ]; then
+            echo 'Configure ARKOREN_RELEASES_PRIVATE_KEY securely in GitHub Actions secrets for the existing Arkoren Releases App (5540931). No fallback token is used.' >&2
+            exit 1
+          fi
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        if: steps.prepare.outputs.changed == 'true' || inputs.verify-app == true
+        id: app
+        with:
+          app-id: '5540931'
+          private-key: ${{ secrets.ARKOREN_RELEASES_PRIVATE_KEY }}
+          owner: arkoren
+          repositories: arkoren
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Verify App identity and repository scope
+        if: steps.prepare.outputs.changed == 'true' || inputs.verify-app == true
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.app.outputs.installation-id }}
+        run: |
+          test "$APP_SLUG" = arkoren-releases
+          test "$INSTALLATION_ID" = 176874315
+          python3 scripts/release_notes_pr.py verify "$RUNNER_TEMP/release-notes.json"
+      - name: Upsert one signed, human-reviewed website PR
+        if: steps.prepare.outputs.changed == 'true'
+        run: python3 scripts/release_notes_pr.py publish "$RUNNER_TEMP/release-notes.json"
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
