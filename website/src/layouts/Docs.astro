@@ -4,6 +4,7 @@ import Sidebar from "../components/docs/Sidebar.astro";
 import Outline from "../components/docs/Outline.astro";
 import Breadcrumbs from "../components/docs/Breadcrumbs.astro";
 import Version from "../components/docs/Version.astro";
+import Projects from "../components/site/Projects.astro";
 import { breadcrumbData, canonicalURL, type Breadcrumb, type SocialImage } from "../lib/site/seo";
 
 /**
@@ -74,6 +75,7 @@ const rail = [
     </main>
     <aside class="stick-below-header overflow-y-auto py-8 pl-4 max-xl:hidden" data-docs-rail>
       <Version date={releaseDate} />
+      <Projects />
       <Outline headings={rail} variant="desktop" />
     </aside>
   </div>
