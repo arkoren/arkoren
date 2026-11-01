@@ -676,6 +676,79 @@ Settled; reopen only with the owner.
 
 ## Publishing
 
+### Dry-run planning
+
+`Release preview (dry run)` proposes versions and notes only. Publication remains
+manual and requires separate explicit authorization. The preview has only
+`contents: read` and `actions: read`; keep tag rules and release credentials out
+of this workflow. It consumes API metadata, not upstream artifacts or caches.
+
+Automatic previews follow successful main-push CI and check out the upstream
+`workflow_run.head_sha`, not `github.sha` or the latest main tip. Before planning,
+the evidence helper requires the latest eligible CI and Website runs and their
+`CI gate` and `website` jobs to succeed at that exact SHA. A later failed or
+pending run cannot be replaced with an earlier green run. Missing/pending runs
+have a bounded 15-minute wait; failures block immediately. Manual dispatch takes
+an explicit full SHA on the selected branch; main accepts push/manual evidence,
+other branches require successful manual CI and Website runs at that SHA. Manual
+mode is also validated-only and never authorizes publication.
+
+The planner reads canonical tracked modules from the committed tree, excluding
+ignored/untracked private modules, nested examples, worktrees and caches. It uses
+each module's own latest reachable plain directory-prefixed `v0.X.Y` tag. Tags
+must have monotonically comparable ancestry; malformed tags, v1+, multiple
+versions for one module on one commit, and conflicting histories block the plan.
+Other modules may share a tag commit. An exact escaped tag pattern selects the
+module's baseline before git-cliff constructs its commit-keyed tag map.
+
+git-cliff owns conventional-commit parsing, version increments and release notes.
+The maintained release and upstream SHA-512 checksums are pinned in
+`scripts/install-git-cliff.py`. Update the pin and fixtures together after checking
+the upstream release assets and source. Run `make release-preview-check` using
+that binary, plus `make workflow-check`, before merging planner changes.
+Use the [upstream release](https://github.com/orhun/git-cliff/releases),
+[bump policy](https://git-cliff.org/docs/configuration/bump/) and
+[GitHub workflow-run semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
+when changing tool pins or trigger/evidence handling.
+
+Changes accumulate from each module's release tag, including changes from earlier
+failed CI runs. Actual changed files determine module ownership, not commit
+scope. A multi-module commit applies its classification to every touched payload.
+Fixes propose patches; features and breaking changes propose minors under 0.x.
+Unknown/nonconventional payload commits and conventional maintenance changes
+conservatively propose patches. Reverts do not cancel earlier semantic changes:
+feature plus revert still proposes a minor. Ordinary merges add no duplicate
+entry; merge-only payload resolutions block planning and require an explicit
+non-merge change commit. Signed ordinary merges remain supported.
+
+Root website, CI and contributor instructions do not affect module versions.
+Within modules, Markdown/reStructuredText, `_test.go`, `testdata/`, `tests/`,
+`docs/`, agent/CI directories and license files are non-payload paths. Other
+files are conservatively payload. The CLI's `cmd/arkoren/skills/` tree is embedded
+runtime payload: even `docs(cli): ...` changes there propose a patch (features or
+breaking markers still take precedence). Keep other embedded runtime assets out
+of excluded documentation/test paths. Ignore-file/filter omissions block the
+plan instead of silently dropping selected commits.
+
+Missing tags never bootstrap an existing module's import history. For a genuinely
+new tracked module, a local `--initial-module DIRECTORY` explicitly requests a
+`v0.1.0` entry; its manifest must be absent from every reachable release baseline.
+Automatic and dispatched workflows intentionally offer no initial-module override:
+review that new-module policy before extending them. No eligible payload means
+no proposal. Plans do not adopt dependencies, cascade releases, query unpublished
+proxy versions, modify manifests, write changelogs/version commits, open release
+PRs, or create tags/releases. Artifacts expire after 14 days.
+
+For local inspection, run `scripts/release_preview.py` with `python3`, `--sha`
+set to the full commit ID and `--output` outside the checkout. Set `GIT_CLIFF` to
+the checksum-pinned binary. Local plans explicitly say they have no attached CI
+evidence; Actions attaches exact-SHA evidence. The JSON contains every module's
+path, baseline/current/proposed version, matching commit messages/files, notes,
+SHA and skip decision. Review the Actions summary and JSON together. A nonempty
+plan is a proposal, not release authorization.
+
+### Manual publication
+
 Consumer documentation uses canonical module installation commands for available
 modules. Mark unpublished integrations as pending; do not present their install
 commands as usable. Keep contributor build instructions separate.

@@ -41,6 +41,11 @@ jobs:
           GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: make workflow-check
+      - name: Install checksum-pinned git-cliff for planner fixtures
+        run: |
+          python3 scripts/install-git-cliff.py "$RUNNER_TEMP/cliff-bin"
+          echo "$RUNNER_TEMP/cliff-bin" >> "$GITHUB_PATH"
+      - run: make release-preview-check
 
   check:
     needs: discovery
