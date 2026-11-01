@@ -1,0 +1,40 @@
+GO ?= go
+DOCKER ?= docker
+IMAGE ?= {{.Name}}
+PORT ?= 8080
+
+.DEFAULT_GOAL := help
+.PHONY: help run build fmt fmt-check vet test test-race check docker-build docker-run
+
+help: ## Show available commands.
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+run: build ## Run the service locally.
+	./bin/server
+
+build: ## Build the service into bin/server.
+	$(GO) build -o bin/server ./cmd/server
+
+fmt: ## Format Go source files.
+	gofmt -w .
+
+fmt-check: ## Check Go formatting without modifying files.
+	@files=$$(gofmt -l .) || exit $$?; \
+	if [ -n "$$files" ]; then printf '%s\n' "$$files"; exit 1; fi
+
+vet: ## Run Go static analysis.
+	$(GO) vet ./...
+
+test: ## Run tests with Go's normal caching.
+	$(GO) test ./...
+
+test-race: ## Run race tests (requires a C compiler).
+	CGO_ENABLED=1 $(GO) test -race ./...
+
+check: fmt-check vet test ## Check formatting, static analysis, and tests.
+
+docker-build: ## Build the container image (override IMAGE).
+	$(DOCKER) build -t "$(IMAGE)" .
+
+docker-run: ## Run the existing image on loopback (override IMAGE or PORT).
+	$(DOCKER) run --rm -p "127.0.0.1:$(PORT):8080" -e HTTP_ADDR=:8080 -e APP_DEBUG=false "$(IMAGE)"

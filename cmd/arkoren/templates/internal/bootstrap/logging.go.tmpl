@@ -1,0 +1,28 @@
+package bootstrap
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/lmittmann/tint"
+	"github.com/mattn/go-isatty"
+)
+
+// Logger returns the application's log handler factory. Terminal output uses
+// Tint; redirected output uses JSON. A nonempty NO_COLOR disables ANSI colors
+// without changing the terminal format. The supplied level keeps runtime
+// log-level changes connected to either handler. Application installs this
+// factory during application construction, before composition starts.
+func Logger() func(slog.Leveler) slog.Handler {
+	return func(level slog.Leveler) slog.Handler {
+		if !isatty.IsTerminal(os.Stderr.Fd()) {
+			return slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+		}
+
+		return tint.NewTextHandler(os.Stderr, &tint.Options{
+			AddSource: true,
+			Level:     level,
+			NoColor:   os.Getenv("NO_COLOR") != "",
+		})
+	}
+}

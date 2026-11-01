@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM golang:1.27 AS build
+WORKDIR /src
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOWORK=off
+RUN --mount=type=bind,target=. \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/server
+
+FROM gcr.io/distroless/static-debian13:nonroot
+COPY --link --from=build /out/app /app
+EXPOSE 8080
+ENTRYPOINT ["/app"]

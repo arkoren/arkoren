@@ -1,0 +1,27 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+)
+
+// Application returns the settings callback used by application.New. It sets
+// the service name to {{.Name}}; change that name here if the service is renamed.
+// The callback runs during construction, before composition and startup.
+//
+// Debug is enabled only when APP_DEBUG is exactly "true". Any other value,
+// including an unset variable, disables it. The generated development .env
+// enables debug; production must set APP_DEBUG=false because the starter's
+// debug diagnostics endpoint has no authentication.
+//
+// See https://arkoren.dev/docs/guides/first-steps/configuration for construction
+// callbacks and https://arkoren.dev/docs/guides/observability/exposing-diagnostics
+// for debug diagnostics.
+func Application() application.BuilderFunc {
+	return func(app *application.Builder) {
+		app.Name("{{.Name}}")
+		app.Debug(os.Getenv("APP_DEBUG") == "true")
+		app.LogHandler(Logger())
+	}
+}

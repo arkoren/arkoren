@@ -1,0 +1,27 @@
+package bootstrap
+
+import "arkoren.dev/core/application"
+
+// Compose connects the shared router, optional diagnostics, and HTTP server.
+// The executable passes this root callback to app.Run; all selected factories
+// finish composition before any registered startup callback runs.
+//
+// Add dependencies here in the order their consumers need them. compose.Use
+// invokes a factory and returns its constructed value, not a started service.
+// Pass that value to dependent factories rather than looking it up globally.
+// compose.UseDebug skips diagnostics construction when application debug is off.
+//
+// Each factory owns cleanup for the resources it acquires. If composition fails,
+// app.Run cleans up acquired resources and returns the error to the executable;
+// startup does not begin. The application reports lifecycle failures before
+// finalizing telemetry; the executable only selects the process exit status.
+//
+// See https://arkoren.dev/docs/guides/application/composition for extending the
+// graph, and https://arkoren.dev/docs/guides/application/lifecycle-and-ownership
+// for startup ordering and resource ownership.
+func Compose(compose *application.Composer) {
+	routes := compose.Use(Router())
+
+	compose.UseDebug(MCP(routes))
+	compose.Use(Server(routes))
+}
