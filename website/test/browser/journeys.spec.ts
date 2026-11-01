@@ -1033,7 +1033,9 @@ test("blog banner colors transition with the season and respect reduced motion",
 /** Dev asset URLs differ from bundled URLs and must still resolve to inline artwork. */
 test("development blog banners remain inline and follow the seasonal toggle", async ({ page }) => {
   const previousBlog = process.env.ARKOREN_BLOG;
+  const previousRepo = process.env.ARKOREN_REPO;
   process.env.ARKOREN_BLOG = resolve(directory, "posts");
+  process.env.ARKOREN_REPO = resolve(website, "..");
   let development;
   try {
     development = await dev({
@@ -1066,6 +1068,8 @@ test("development blog banners remain inline and follow the seasonal toggle", as
     await development?.stop();
     if (previousBlog === undefined) delete process.env.ARKOREN_BLOG;
     else process.env.ARKOREN_BLOG = previousBlog;
+    if (previousRepo === undefined) delete process.env.ARKOREN_REPO;
+    else process.env.ARKOREN_REPO = previousRepo;
   }
 });
 
