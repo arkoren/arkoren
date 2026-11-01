@@ -1,0 +1,216 @@
+# {{.Name}}
+
+This starter serves an HTML welcome page and application health probes, with
+explicit startup and graceful-shutdown wiring. Follow the dependency setup
+below to run it locally.
+
+This source belongs to your application. Change it directly; no generator
+runtime, application generator state, or Arkoren configuration file is required.
+
+## Install dependencies
+
+Use Go 1.27 or newer. Scaffolding does not download dependencies.
+From this application's directory, run:
+
+```sh
+go get arkoren.dev/core arkoren.dev/driver/mcp
+go mod tidy
+make run
+```
+
+These commands download dependencies. Commit `go.mod` and `go.sum`.
+
+Open the `url` from the `http server started` log in a browser to see the welcome
+page (by default, `http://127.0.0.1:8080/`).
+Stop the service with Ctrl+C before building or running
+another copy on the same port.
+
+## Development commands
+
+The generated `Makefile` belongs to your application; edit it as your workflow
+grows. It requires Make and standard Unix tools, not the Arkoren CLI. Run `make`
+for the command list. Without Make, you can still use `go run ./cmd/server`.
+
+Use `make build` to write `bin/server`, `make fmt` to format Go source, and
+`make check` to verify formatting, run static analysis, and test without changing
+source files. `make vet` and `make test` run those checks separately.
+`make test-race` enables CGO for that command and requires a C compiler.
+Tests retain Go's normal caching. Dependency installation remains explicit;
+these targets do not run `go get` or `go mod tidy` for you.
+
+Override the Go executable with `make test GO=/path/to/go`. Formatting uses
+`gofmt` from your `PATH`.
+
+## Container image
+
+The `Dockerfile` uses BuildKit source mounts and persistent module/compiler caches,
+cross-compiles a stripped static binary, and runs it as a non-root user in a
+minimal distroless image with CA certificates and timezone data. No shell or Go
+toolchain ships in the runtime image. CGO-dependent drivers need a different
+build and runtime image.
+
+Build and run the image:
+
+```sh
+make docker-build
+make docker-run
+```
+
+Open `http://127.0.0.1:8080/` to check the welcome page. Stop the container with
+Ctrl+C; `--rm` removes it after it exits. Docker is required for these targets.
+`docker-run` uses an existing image, sets `HTTP_ADDR=:8080` inside the container,
+and disables debug diagnostics. The published host port binds only to loopback.
+Override the image with `IMAGE=my-service:dev` on both commands, or change the
+host port with `make docker-run PORT=8081`. BuildKit caches
+downloads and compiled packages across source changes. Use Docker Buildx with
+`--platform` to build for another Linux architecture. Pin base images by digest
+when you need reproducible production builds.
+
+`.gitignore` excludes local environment files, workspace settings, and build/test
+output, but keeps `.env.example` and `go.sum`. `.dockerignore` also excludes local
+environment files and Git/editor metadata from the build context; pass runtime
+configuration explicitly rather than baking secrets into the image.
+
+## HTTP and lifecycle
+
+The executable imports `godotenv/autoload`, which loads `.env` from the working
+directory during initialization. Existing environment variables take precedence;
+loading errors are ignored. The generated `.env` selects
+`HTTP_ADDR=127.0.0.1:8080` and `APP_DEBUG=true` for local development.
+`bootstrap.Server(handler)` reads `HTTP_ADDR` inside its composition callback. An empty
+address uses the server default `:8080` (all interfaces).
+
+After successful startup and runner launch, the starter logs `http server started`
+with an `address` field after `app started`. It reports the bound socket address,
+including the assigned port if `HTTP_ADDR` selects port `0`, without guessing a
+browser URL or public domain. `Server` uses `compose.MustDefer` to register the
+subscription and own its cleanup, with the log callback inline. Startup failures produce no successful
+HTTP startup log; readiness recovery does not repeat it.
+
+In debug mode, `http://127.0.0.1:8080/mcp` exposes read-only application,
+route, and telemetry diagnostics. The `http.routes` tool lists routes, handler
+names, and source paths; it does not execute HTTP routes. `MCP(routes)` returns a factory that
+constructs and mounts the endpoint. `bootstrap.Compose` selects it through
+`compose.UseDebug(MCP(routes))`. It shares the main listener and inherited middleware. No authentication
+is required: anyone who can reach that listener can read logs and telemetry
+attributes as well as route diagnostics. Keep debug
+off in production and bind development listeners to loopback.
+From this directory, run `arkoren http:routes` to inspect the running service;
+the CLI reads `ARKOREN_MCP_URL` from `.env`. If you change `HTTP_ADDR`, update
+that URL too. No token is needed; clear any inherited `ARKOREN_MCP_TOKEN`.
+Set `APP_DEBUG=false` in production to omit the MCP endpoint.
+
+To inspect local requests, send a request to `/`, then run:
+
+```sh
+arkoren app:traces
+arkoren app:logs
+arkoren app:metrics
+```
+
+Debug capture retains up to 2000 finished spans, 5000 logs, 1000 metric series
+per instrument, and 500 application event records in memory. It exports nothing
+to an external backend and loses history when the process exits. The router's
+tracing middleware adds a `traceresponse` header and ignores incoming trace
+context. With debug disabled and no configured telemetry driver, it is a no-op.
+Logs made with a request context carry that request's trace and span IDs.
+
+The CLI creates `.env` with private access: mode 0600 on POSIX, or a protected
+current-user-only DACL on Windows, before writing its contents. Keep it out of
+version control; commit `.env.example`, which has debug disabled. Neither file needs
+secrets for this starter. Generate independent keys with `arkoren key generate`
+only when your application needs encryption or signing.
+
+- `GET /` serves `app.WelcomeHandler()`, a public HTML welcome page. Replace
+  this route as your application grows; it does not expose operator information.
+- `GET /livez`, `/readyz`, and `/startupz` expose application health probes.
+- `SIGINT` and `SIGTERM` cancel the context passed to `app.Run`, which
+  owns startup and graceful shutdown.
+
+## Browser security defaults
+
+`bootstrap.Router` registers security headers, telemetry, panic recovery, and
+same-origin CSRF protection before routes, in that order. A handler panic before
+response commitment becomes a generic HTTP 500 problem without exposing the panic
+value. Recovery does not replace an already committed response, and
+`http.ErrAbortHandler` still aborts the connection. Responses prevent MIME sniffing and
+framing, limit referrer disclosure, and disable the legacy XSS auditor. The
+welcome page retains its stricter CSP. HSTS is omitted by default: enable it
+in the application or ingress once your HTTPS deployment is established.
+
+CSRF protection rejects untrusted cross-origin browser writes without requiring
+domain settings. Keep GET, HEAD, and OPTIONS free of state changes. Requests
+without Origin or Sec-Fetch-Site headers are allowed; this is not authentication.
+Configure cross-origin frontends and provider callbacks deliberately, using
+narrow route scopes rather than disabling protection globally. No extra trusted
+origins or CORS permissions are configured. These defaults do not configure
+authentication, accepted hosts, proxy trust, cookies, or rate limits, and do not
+make the unauthenticated debug endpoint safe to expose publicly.
+
+## Application execution
+
+The executable's `main.go` constructs `app` with
+`application.New(bootstrap.Application())` and service name `{{.Name}}`, then calls
+`app.Run(ctx, bootstrap.Compose)` with a signal context. `bootstrap.Compose`
+constructs dependencies before startup; `app.Run` returns composition, startup,
+serving, or shutdown errors.
+The application reports lifecycle failures before telemetry finalization; failures
+before telemetry starts or during its finalization reach stderr only. The run
+helper returns `app.Run` directly, and `main` maps failure to exit status 1;
+clean shutdown returns 0. Its deferred signal cleanup
+finishes before `main` calls `os.Exit`.
+
+To customize logging, edit `Logger()` in `internal/bootstrap/logging.go`.
+Logs go to stderr: terminals use Tint with source locations; redirected output
+uses JSON. Set a nonempty `NO_COLOR` to disable terminal colors. Both formats
+honor runtime log-level changes through `app.SetLogLevel`.
+
+Bootstrap factories capture explicit dependencies. Their callbacks construct
+resources only when composition invokes them, then return typed handles.
+
+The composition root is `internal/bootstrap`: `bootstrap.go` composes components
+before startup:
+
+```go
+routes := compose.Use(Router())
+compose.UseDebug(MCP(routes))
+compose.Use(Server(routes))
+```
+
+`Router` returns `application.Factory[*router.Router]`, so `Use` provides the
+shared router directly to the dependent factories. `MCP` returns the mounted
+`*mcpserver.Server`; `UseDebug` skips construction when debug is disabled. The
+root ignores that optional result. `Server` returns `*server.Server` and owns
+its `Cleanup`, `Startup`, and `Run` registrations and startup-log subscription.
+The root ignores its result; `Use` itself does not
+start the server. Obtaining any factory constructs nothing. `Router` gets
+probes and the welcome handler from `compose.App()`. `app.go` supplies
+`Application()`, `logging.go` supplies the `Logger()` handler factory,
+`router.go` owns routes and middleware, `server.go` owns listener policy and
+lifecycle, and `mcp.go` owns debug diagnostics. No `internal/config` package is
+generated. The starter contains no tests; add them as behavior grows.
+
+`.editorconfig` sets UTF-8, LF line endings, final newlines, tabs for Go and
+`go.mod` and Makefile recipes, and two-space indentation elsewhere. Markdown keeps trailing spaces
+for hard line breaks. Use an EditorConfig-compatible editor; `gofmt` remains
+the source of truth for Go formatting.
+{{if .AgentFiles}}
+## Agent instructions
+
+`AGENTS.md` contains editable project defaults and points to the complete Arkoren
+skill in `{{.SkillsDir}}/arkoren/`. Read its `SKILL.md` and the relevant guide/API
+page before changing Arkoren code. Agent discovery varies; configure your agent
+to read that path if it does not discover the skill automatically.
+
+Commit `AGENTS.md`, the skill directory, and its `.arkoren-skill.json` manifest.
+Skill management works offline and never rewrites `AGENTS.md`:
+
+```sh
+arkoren skills status --dir {{.SkillsDir}}
+arkoren skills update --dir {{.SkillsDir}} --dry-run
+arkoren skills update --dir {{.SkillsDir}}
+```
+
+Upgrade the CLI to get a newer bundle. Compare its API pages with the module
+versions in `go.mod` before updating; local edits block replacement.
+{{end}}

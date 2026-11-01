@@ -1,6 +1,7 @@
 go 1.27
 
 use (
+	./cmd/arkoren
 	./core
 	./driver/aes
 	./driver/argon2

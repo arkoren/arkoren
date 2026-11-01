@@ -1,0 +1,52 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/middleware/csrf"
+	"arkoren.dev/core/http/middleware/secureheaders"
+	"arkoren.dev/core/http/router"
+)
+
+// Router returns a factory for the application's shared HTTP router. Calling
+// Router only creates the callback; compose.Use invokes it to construct routes
+// and obtain health-probe handlers from the current application.
+//
+// The router serves the public welcome page at GET / and probes at /livez,
+// /readyz, and /startupz. The root route matches only /; unknown paths remain
+// not-found. The probe handlers observe the application's lifecycle and health.
+//
+// Register shared middleware before routes, then add or mount application
+// handlers here. Pass the returned router to MCP and Server so diagnostics and
+// serving use the same registrations. This factory opens no network listener.
+// Tracing uses the application's handle and ignores incoming trace context.
+// Without debug capture or a configured driver, the middleware is a no-op.
+// Security headers precede telemetry, panic recovery, and same-origin CSRF
+// protection. Recovery converts handler panics to private server errors before
+// response commitment; http.ErrAbortHandler still aborts the connection. HSTS is
+// omitted until HTTPS deployment is configured deliberately. No CORS permissions
+// or extra trusted origins are granted. Keep safe methods free of state changes;
+// configure cross-origin frontends and provider callbacks explicitly.
+//
+// See https://arkoren.dev/docs/guides/http-fundamentals/routing for routing and
+// https://arkoren.dev/docs/guides/application/health-and-readiness for probes.
+func Router() application.Factory[*router.Router] {
+	return func(compose *application.Composer) *router.Router {
+		telemetry := compose.App().Telemetry()
+		app := compose.App()
+
+		routes := router.New()
+
+		routes.Use(secureheaders.Middleware())
+		routes.Use(telemetry.Middleware())
+		routes.Use(router.Recover())
+		routes.Use(csrf.Middleware())
+
+		routes.Get(application.LivePath, app.LiveHandler(), application.LiveOperation)
+		routes.Get(application.ReadyPath, app.ReadyHandler(), application.ReadyOperation)
+		routes.Get(application.StartupPath, app.StartupHandler(), application.StartupOperation)
+
+		routes.Get("/", app.WelcomeHandler(), application.WelcomeOperation)
+
+		return routes
+	}
+}

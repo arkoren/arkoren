@@ -1,0 +1,47 @@
+package main
+
+import (
+	"context"
+	"os"
+
+	_ "github.com/joho/godotenv/autoload"
+
+	"arkoren.dev/core/application"
+
+	"{{.Module}}/internal/bootstrap"
+)
+
+// main maps run's error to process exit status after cleanup finishes.
+// os.Exit does not execute deferred functions, so signal cleanup and application
+// lifecycle work belong in run rather than in this final exit boundary.
+func main() {
+	if run() != nil {
+		os.Exit(1)
+	}
+}
+
+// run constructs the application from bootstrap.Application and runs the graph
+// declared by bootstrap.Compose. Construction applies settings without starting
+// components; app.Run owns composition, startup, supervised work, and shutdown.
+//
+// SIGINT or SIGTERM cancels the run context and requests shutdown. Registered
+// component cleanup completes before app.Run returns, and deferred signal
+// cleanup completes before main exits. Keep component cleanup in bootstrap so
+// it also runs when composition or startup fails.
+//
+// The application reports lifecycle failures before telemetry stops. Return its
+// error directly; logging after Run would miss telemetry capture and duplicate
+// the application's report. Main maps failure to exit 1 and clean shutdown to 0.
+//
+// See https://arkoren.dev/docs/guides/application/lifecycle-and-ownership.
+func run() error {
+	// The godotenv autoload import reads .env during package initialization;
+	// existing environment variables take precedence. Configuration callbacks
+	// run during construction, before any component starts.
+	app := application.New(bootstrap.Application())
+
+	ctx, stop := application.NewSignalContext(context.Background())
+	defer stop()
+
+	return app.Run(ctx, bootstrap.Compose)
+}
