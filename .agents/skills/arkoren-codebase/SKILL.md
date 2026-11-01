@@ -31,11 +31,10 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 Separate modules live only under `cmd/`, `driver/`, `ark/`, and `foundation/`,
 never below a `core/` path, so core can move its folders in a new major.
 
-During incremental imports, `scripts/imported-modules.sh` supplies the temporary
-`imports.yml` workflow with available canonical modules; zero modules is valid.
-Validate the exact committed tree, since excluded local modules can hide missing
-dependencies. Keep the required `website` job in its separate workflow. Replace
-the import workflow with full CI/audits only when the complete inventory lands.
+The permanent `ci.yml` workflow discovers the complete canonical inventory.
+Validate the exact committed tree: ignored local modules also count during local
+discovery. Keep the required `website` job in its separate workflow, without
+duplicating rendered docs in Go CI. Require both `CI gate` and `website`.
 
 `scripts/ci-modules.sh` owns the complete-source CI inventory, not a Go dependency planner. It lists
 core, the CLI and direct driver/foundation/optional ark roots;
@@ -727,8 +726,8 @@ public module-proxy/checksum resolution, and independent `GOWORK=off` use before
 the next wave. Verify the CLI's generated core and MCP pins and generated-project
 proof before its tag. GitHub release descriptions identify v0.1.0 as pre-alpha;
 the module version remains v0.1.0, without a prerelease suffix. This manual
-bootstrap adds no release automation and does not lift the held-back full-CI or
-scheduled-audit policy for source imports.
+bootstrap adds no release automation. Routine CI and scheduled/manual audits are
+independent of publication; a successful audit does not authorize new tags.
 
 ## Make a change
 

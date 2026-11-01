@@ -86,6 +86,15 @@ mkdir ark
 run_inventory
 diff -u "$scratch/expected" "$scratch/output" || fail 'empty ark changed inventory'
 
+fixture 'new canonical modules and Compose marker are included automatically'
+mkdir -p driver/new-driver foundation/new-foundation
+touch driver/new-driver/go.mod foundation/new-foundation/go.mod driver/new-driver/compose.yaml
+run_inventory
+grep -Fxq 'modules=["cmd/arkoren","core","driver/new-driver","driver/z","foundation/a","foundation/new-foundation"]' "$scratch/output" \
+  || fail 'new modules were not included'
+grep -Fxq 'integration=["driver/new-driver","driver/z"]' "$scratch/output" \
+  || fail 'new integration was not included'
+
 fixture 'optional ark and ignored nested driver'
 mkdir -p ark/b
 touch ark/b/go.mod ark/b/compose.yaml

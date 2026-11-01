@@ -71,7 +71,8 @@ generate:
 
 workflow-check:
 	bash scripts/ci-modules_test.sh
-	bash scripts/imported-modules_test.sh
+	bash scripts/ci-gate_test.sh
+	bash scripts/audit_test.sh
 	bash scripts/make_test.sh
 	actionlint .github/workflows/*.yml
 
