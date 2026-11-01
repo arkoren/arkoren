@@ -9,14 +9,19 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
+	"arkoren.dev/cmd/arkoren-ci/internal/process"
 	"arkoren.dev/cmd/arkoren-ci/internal/repository"
 )
 
 // usage describes the implemented boundary, not future release operations.
 const usage = `Usage: arkoren-ci inventory [--repo DIRECTORY] [--commit FULL_SHA]
+       arkoren-ci release plan --sha FULL_SHA --output DIRECTORY [--repo ROOT] [--evidence FILE] [--initial-module ROOT] [--historical-v1]
+       arkoren-ci release evidence --output FILE [--repo ROOT]
+       arkoren-ci release tool
 
 Development-only maintenance command. No publication operations are available.
 inventory emits one JSON document; diagnostics are JSON on stderr.
@@ -27,7 +32,9 @@ Without --commit, inventory includes ignored working-tree modules.
 
 // main maps command outcomes to process status without affecting release state.
 func main() {
-	err := run(context.Background(), os.Args[1:], os.Stdout)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := run(ctx, os.Args[1:], os.Stdout)
 
 	if err != nil {
 		data, _ := json.Marshal(map[string]string{"error": err.Error()})
@@ -43,6 +50,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		_, err := io.WriteString(stdout, usage)
 
 		return err
+	}
+	if args[0] == "release" {
+		return releaseCommand(ctx, args[1:], stdout)
 	}
 	if args[0] != "inventory" {
 		return fmt.Errorf("unknown command: %s", args[0])
@@ -65,7 +75,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("inventory accepts flags only")
 	}
 	if *root == "" {
-		data, err := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel").Output()
+		data, err := process.Run(ctx, ".", "git", "", false, "rev-parse", "--show-toplevel")
 
 		if err != nil {
 			return fmt.Errorf("resolve repository root; use --repo: %w", err)

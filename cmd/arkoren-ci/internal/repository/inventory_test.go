@@ -98,6 +98,17 @@ func TestCommittedNewPublicModuleRequiresPolicyReview(t *testing.T) {
 	}
 }
 
+func TestCommittedExecutableManifestFailsClosed(t *testing.T) {
+	root := fixture(t)
+	if err := os.Chmod(filepath.Join(root, "core/go.mod"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sha := snapshot(t, root)
+	if _, err := repository.Inspect(context.Background(), root, sha); err == nil {
+		t.Fatal("executable manifest accepted")
+	}
+}
+
 func TestUnknownCommandRequiresExplicitBoundaryReview(t *testing.T) {
 	root := fixture(t)
 	write(t, root, "cmd/unknown/go.mod", "module arkoren.dev/cmd/unknown\n")

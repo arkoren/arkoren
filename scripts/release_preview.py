@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Read a committed tree and propose independent module versions; never publish."""
-import argparse
-import html
+"""Transitional disabled-publisher dependency; use arkoren-ci for live previews."""
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
-import sys
 
 SCRIPTS = Path(__file__).resolve().parent
+# Transitional disabled-publisher dependency; the Go command owns live previews.
+TOOL = SCRIPTS.parent / "cmd/arkoren-ci/internal/release"
+CLIFF_VERSION = json.loads((TOOL / "tool.json").read_text())["git_cliff"]
 CANONICAL = re.compile(r"(?:core|cmd/arkoren|(?:driver|foundation|ark)/[a-z0-9][a-z0-9-]*)")
 VERSION = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 
@@ -44,7 +44,7 @@ def cliff(repo, *args, context=None):
     binary = os.environ.get("GIT_CLIFF", "git-cliff")
     # No remote metadata, shell preprocessors, or caller-provided cliff options.
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CLIFF_") and k not in ("GITHUB_TOKEN", "GH_TOKEN", "APP_TOKEN", "SIGNING_KEY")}
-    command = [binary, "--config", str(SCRIPTS.parent / "cliff.toml"), "--offline", "--no-exec", *args]
+    command = [binary, "--config", str(TOOL / "cliff.toml"), "--offline", "--no-exec", *args]
     result = subprocess.run(command, cwd=repo, env=env, input=context, text=True, capture_output=True)
     if result.returncode:
         raise ValueError(f"git-cliff failed: {result.stderr.strip()}")
@@ -78,8 +78,8 @@ def plan(repo, sha, initial=()):
         raise ValueError("full tag history is required; shallow repository rejected")
     if git(repo, "rev-parse", f"{sha}^{{commit}}").strip() != sha:
         raise ValueError("SHA must identify a commit")
-    if cliff(repo, "--version").strip() != "git-cliff 2.14.2":
-        raise ValueError("install pinned git-cliff 2.14.2 with scripts/install-git-cliff.py")
+    if cliff(repo, "--version").strip() != "git-cliff " + CLIFF_VERSION:
+        raise ValueError("install the pinned git-cliff from arkoren-ci release tool")
 
     # Inspect tree names/modes, not the local filesystem: ignored private modules,
     # worktrees, cache entries and untracked manifests cannot enter this inventory.
@@ -205,45 +205,8 @@ def plan(repo, sha, initial=()):
             if next_version != current:
                 entry.update(next_version=next_version, skip_reason=None, notes=cliff(repo, "--from-context", "-", "--bump", context=context))
         entries.append(entry)
-    return {"schema_version": 1, "dry_run": True, "publication_authorized": False, "sha": sha, "git_cliff": "2.14.2", "validation": "local plan only; no CI evidence attached", "modules": entries}
-
-
-def summary(result):
-    lines = ["# Release preview — DRY RUN", "", "Publication is not authorized. No tags, releases, pins or version commits are written.", "", f"Exact SHA: `{result['sha']}`", f"Validation: {result['validation']}", "", "| Module | Current | Proposed | Decision |", "| --- | --- | --- | --- |"]
-    for entry in result["modules"]:
-        lines.append(f"| {entry['module_path']} | {entry['current_version'] or 'unreleased'} | {entry['next_version'] or '—'} | {'preview only' if entry['next_version'] else entry['skip_reason']} |")
-    for entry in result["modules"]:
-        if entry["next_version"]:
-            lines.extend(["", f"### {entry['directory']}", "", "<pre>" + html.escape(entry["notes"]) + "</pre>"])
-    return "\n".join(lines) + "\n"
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sha", required=True)
-    parser.add_argument("--repo", default=".")
-    parser.add_argument("--initial-module", action="append", default=[])
-    parser.add_argument("--output", required=True, help="output directory outside the source tree")
-    parser.add_argument("--evidence", help="validated exact-SHA evidence from release_evidence.py")
-    args = parser.parse_args()
-    result = plan(args.repo, args.sha, args.initial_module)
-    if args.evidence:
-        evidence = json.loads(Path(args.evidence).read_text())
-        if evidence["sha"] != args.sha or evidence.get("validated") is not True:
-            raise ValueError("CI evidence does not validate the planned SHA")
-        result["validation"] = "CI gate and website succeeded at this exact SHA"
-        result["evidence"] = evidence
-    output = Path(args.output).resolve()
-    if output.is_relative_to(Path(args.repo).resolve()):
-        raise ValueError("write preview outputs outside the source checkout")
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "plan.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    (output / "summary.md").write_text(summary(result))
-    print(summary(result))
+    return {"schema_version": 1, "dry_run": True, "publication_authorized": False, "sha": sha, "git_cliff": CLIFF_VERSION, "validation": "local plan only; no CI evidence attached", "modules": entries}
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except (ValueError, subprocess.CalledProcessError) as error:
-        sys.exit(f"release preview blocked: {error}")
+    raise SystemExit("use arkoren-ci release plan; this module remains only for the disabled publisher")

@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""Require trusted CI and website workflow/job evidence for one exact SHA."""
-import argparse
+"""Transitional disabled-publisher evidence helpers; live previews use Go."""
 import json
-import os
-from pathlib import Path
 import re
 import subprocess
-import sys
 import time
 import urllib.parse
 
@@ -85,24 +81,5 @@ def collect(repository, sha, branch, mode):
         time.sleep(15)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", required=True)
-    args = parser.parse_args()
-    repository = os.environ["GITHUB_REPOSITORY"]
-    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-    sha, branch = select_target(os.environ["GITHUB_EVENT_NAME"], event, repository, os.environ["GITHUB_REF"], os.environ["GITHUB_SHA"])
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    if head != sha:
-        raise ValueError("checkout does not match the exact requested/upstream SHA")
-    subprocess.run(["git", "merge-base", "--is-ancestor", sha, f"refs/remotes/origin/{branch}"], check=True)
-    result = collect(repository, sha, branch, os.environ["GITHUB_EVENT_NAME"])
-    Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    print(f"Validated CI gate AND website at {sha}; DRY RUN ONLY")
-
-
 if __name__ == "__main__":
-    try:
-        main()
-    except (ValueError, subprocess.CalledProcessError) as error:
-        sys.exit(f"release preview blocked: {error}")
+    raise SystemExit("use arkoren-ci release evidence; this module remains only for the disabled publisher")
