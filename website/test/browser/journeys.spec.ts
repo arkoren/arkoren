@@ -195,6 +195,36 @@ test.afterAll(async () => {
   if (directory) rmSync(directory, { recursive: true, force: true });
 });
 
+/** Keep rotating links usable without changing the reader's focused target. */
+test("sidebar projects rotate one at a time and respect focus and reduced motion", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${origin}/docs`);
+  const carousel = page.locator("[data-projects]");
+  const slides = carousel.locator("[data-project]");
+  await expect(slides.filter({ visible: true })).toHaveCount(1);
+  await expect(slides.first()).toBeVisible();
+  await page.clock.fastForward(8000);
+  await expect(slides.last()).toBeVisible();
+  await slides.last().getByRole("link").focus();
+  await page.mouse.move(0, 0);
+  await page.clock.fastForward(16000);
+  await expect(slides.last()).toBeVisible();
+  await expect(slides.filter({ visible: true })).toHaveCount(1);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${origin}/blog/alpha`);
+  await page.clock.fastForward(16000);
+  await expect(slides.first()).toBeVisible();
+  await expect(page.locator("[data-blog-aside] [data-projects]")).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(carousel).toBeHidden();
+  await page.goto(origin);
+  await expect(carousel).toHaveCount(0);
+});
+
 /** Prevent faded syntax and fixed-theme examples from becoming unreadable. */
 test("code remains readable and scrolls within mobile columns in both OS themes", async ({
   page,

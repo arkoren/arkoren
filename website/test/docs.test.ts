@@ -70,7 +70,8 @@ test("documentation pages have one title and matching mobile and desktop content
       const html = readFileSync(page, "utf8");
       assert.equal([...html.matchAll(/<h1\b/g)].length, 1, page);
       const mobile = html.match(/<details\b[^>]*data-toc-mobile[^>]*>([\s\S]*?)<\/details>/)?.[1];
-      const rail = html.match(/<aside\b[^>]*data-docs-rail[^>]*>([\s\S]*?)<\/aside>/)?.[1];
+      /** Compare section navigation, not supplementary links elsewhere in the rail. */
+      const rail = html.match(/<nav\b[^>]*data-contents-marker[^>]*>([\s\S]*?)<\/nav>/)?.[1];
       assert.ok(mobile, page);
       assert.ok(rail, page);
       assert.deepEqual(attributes(mobile, "href"), attributes(rail, "href"), page);

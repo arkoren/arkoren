@@ -10,6 +10,7 @@ import Tag from "../../components/ui/Tag.astro";
 import Button from "../../components/ui/Button.astro";
 import BlogAuthor from "../../components/blog/Author.astro";
 import BlogMargin from "../../components/blog/Margin.astro";
+import Projects from "../../components/site/Projects.astro";
 import { blogDate, getBlogPosts, readingMinutes } from "../../lib/blog/posts";
 import { canonicalURL, type SocialImage } from "../../lib/site/seo";
 import { ARTICLE_SIZES, blogCard, cardImage, cardPath } from "../../lib/og/image";
@@ -218,6 +219,7 @@ const article = {
           class="stick-below-header -mt-8 w-rail flex-none overflow-y-auto pt-8 max-xl:hidden xl:order-2"
           data-pagefind-ignore
         >
+          <Projects />
           <Outline headings={contents} variant="desktop" />
         </aside>
         {hasReaderMargin && (
