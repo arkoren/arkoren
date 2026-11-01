@@ -56,6 +56,24 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(all(e["next_version"] is None for e in self.plan()["modules"]))
         self.assertEqual(self.plan(), self.plan())
 
+    def test_development_module_never_enters_public_plan(self):
+        import json
+        self.commit("ci: add maintenance boundary", {
+            ".github/release-modules.json": json.dumps({"schema": 1, "public": self.modules, "development": ["cmd/arkoren-ci"]}),
+            "cmd/arkoren-ci/go.mod": "module arkoren.dev/cmd/arkoren-ci\n",
+            "cmd/arkoren-ci/main.go": "package main\n",
+        })
+        result = self.plan()
+        self.assertEqual(sorted(e["directory"] for e in result["modules"]), sorted(self.modules))
+        self.assertTrue(all(e["next_version"] is None for e in result["modules"]))
+
+    def test_committed_policy_rejects_unapproved_new_public_module(self):
+        import json
+        self.commit("ci: classify modules", {".github/release-modules.json": json.dumps({"schema": 1, "public": self.modules, "development": []})})
+        self.commit("feat: unapproved namespace", {"driver/new/go.mod": "module arkoren.dev/driver/new\n"})
+        with self.assertRaisesRegex(ValueError, "policy"):
+            self.plan(initial=["driver/new"])
+
     def test_file_scope_multimodule_and_accumulated_changes(self):
         fix = self.commit("fix(api): repair", {"core/a.go": "fix", "driver/d0/a.go": "fix"})
         feat = self.commit("feat(api): add", {"core/b.go": "feat"})

@@ -6,7 +6,7 @@ scratch=$(mktemp -d "${TMPDIR:-/tmp}/arkoren-audit.XXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir -p "$scratch/bin" "$scratch/core" "$scratch/cmd/arkoren" "$scratch/driver/sample"
+mkdir -p "$scratch/bin" "$scratch/core" "$scratch/cmd/arkoren" "$scratch/cmd/arkoren-ci" "$scratch/driver/sample"
 cat > "$scratch/bin/make" <<'TOOL'
 #!/usr/bin/env bash
 printf 'make %s\n' "$*" >> "$TRACE"
@@ -24,7 +24,7 @@ printf 'go %s\n' "$*" >> "$TRACE"
 TOOL
 chmod +x "$scratch/bin/"*
 export PATH="$scratch/bin:$PATH" TRACE="$scratch/trace"
-export GITHUB_STEP_SUMMARY="$scratch/summary" MODULES='["core","driver/sample"]'
+export GITHUB_STEP_SUMMARY="$scratch/summary" MODULES='["core","cmd/arkoren-ci","driver/sample"]'
 cd "$scratch"
 bash "$script_dir/audit.sh" > "$scratch/output" 2>&1
 grep -Fq 'All vet, vulnerability, and generated-project checks passed.' "$GITHUB_STEP_SUMMARY"
@@ -40,6 +40,8 @@ done
 grep -Fxq 'scan core' "$TRACE"
 grep -Fxq 'make vet MODULE=driver/sample' "$TRACE"
 grep -Fxq 'scan sample' "$TRACE"
+grep -Fxq 'make vet MODULE=cmd/arkoren-ci' "$TRACE"
+grep -Fxq 'scan arkoren-ci' "$TRACE"
 if MODULES='[]' bash "$script_dir/audit.sh" > "$scratch/output" 2>&1; then
   printf 'Audit accepted an empty inventory\n' >&2
   exit 1

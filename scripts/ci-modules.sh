@@ -37,7 +37,7 @@ require_directory() {
 # manifests. A Compose marker must also be a real file, not a redirected path.
 validate_module() {
   local module="$1"
-  local canonical='^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$'
+  local canonical='^(core|cmd/arkoren|cmd/arkoren-ci|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$'
 
   [[ "$module" =~ $canonical ]] || fail "invalid module: $module"
   require_directory "$module"
@@ -57,6 +57,16 @@ if [[ $# -eq 1 && ( "$1" == --help || "$1" == -h ) ]]; then
 fi
 [[ $# -eq 0 ]] || fail 'unexpected arguments; use --help for usage'
 command -v jq >/dev/null 2>&1 || fail 'jq is required; install jq and run again'
+[[ -f .github/release-modules.json && ! -L .github/release-modules.json && ! -L .github ]] \
+  || fail 'expected real module policy'
+jq -e 'keys == ["development","public","schema"] and .schema == 1 and
+  (.public | type == "array" and length > 0) and
+  (.development | type == "array") and
+  all(.public[]; type == "string" and test("^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$")) and
+  all(.development[]; . == "cmd/arkoren-ci") and
+  ((.public + .development) | length == (unique | length))' \
+  .github/release-modules.json >/dev/null || fail 'invalid module policy'
+development=$(jq -r '.development[]' .github/release-modules.json)
 
 # Core must remain a single module; discovery elsewhere stops at direct children.
 require_directory cmd
@@ -67,6 +77,15 @@ nested_core=$(find core -mindepth 2 -name go.mod -print) || fail 'cannot inspect
 # Never traverse examples or skill trees.
 # Driver and foundation must be populated; ark is optional and may be empty.
 candidates=(core cmd/arkoren)
+while IFS= read -r module; do
+  [[ -z "$module" ]] || candidates+=("$module")
+done <<< "$development"
+for root in cmd/*; do
+  if [[ -d "$root" || -L "$root" ]]; then
+    [[ "$root" == cmd/arkoren || "$root" == "$development" ]] \
+      || fail "unreviewed command module: $root"
+  fi
+done
 for family in driver foundation ark; do
   if [[ "$family" == ark && ! -e ark && ! -L ark ]]; then
     continue

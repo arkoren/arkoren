@@ -17,6 +17,13 @@ enforces these conventions.
 
 ## Package organization
 
+`cmd/arkoren-ci` is an independent development-only Go 1.27 module. Keep it
+stdlib-only and independent of core, foundation, drivers and `cmd/arkoren`.
+Use standard flags and focused internal packages for implemented maintenance
+operations, not plugin registries or empty future-port packages. It is not a
+consumer command or release namespace; verify it with the shared Make checks
+and `GOWORK=off` like every other CI module.
+
 When reorganizing a package, use single-word Go filenames and pair each test
 file with its actual source: `foo.go` and `foo_test.go`. Put examples in the
 matching test file too. Split cross-cutting tests by the behavior they verify;

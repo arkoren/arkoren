@@ -19,14 +19,40 @@ const VERSION = /^v0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
 /** Read committed manifests only; ignored local modules cannot enter history. */
 export function releaseModules(repo = RELEASE_REPO): string[] {
+  const policy = z
+    .strictObject({
+      schema: z.literal(1),
+      public: z.array(z.string().regex(MODULE)).min(1),
+      development: z.array(z.literal("cmd/arkoren-ci")),
+    })
+    .refine(
+      (value) =>
+        new Set([...value.public, ...value.development]).size ===
+        value.public.length + value.development.length,
+      "duplicate module classification",
+    )
+    .parse(
+      JSON.parse(
+        execFileSync("git", ["show", "HEAD:.github/release-modules.json"], {
+          cwd: repo,
+          encoding: "utf8",
+        }),
+      ),
+    );
   const files = execFileSync("git", ["ls-tree", "-r", "--name-only", "HEAD"], {
     cwd: repo,
     encoding: "utf8",
   }).split("\n");
-  return files
+  const directories = files
     .filter((file) => file.endsWith("/go.mod") && MODULE.test(file.slice(0, -7)))
-    .map((file) => {
-      const directory = file.slice(0, -7);
+    .map((file) => file.slice(0, -7))
+    .sort();
+  if (JSON.stringify(directories) !== JSON.stringify([...policy.public].sort())) {
+    throw new Error("committed public inventory differs from module policy");
+  }
+  return directories
+    .map((directory) => {
+      const file = `${directory}/go.mod`;
       const manifest = execFileSync("git", ["show", `HEAD:${file}`], {
         cwd: repo,
         encoding: "utf8",
