@@ -733,15 +733,49 @@ func newMakeDirectory(t *testing.T) string {
 	return dir
 }
 
-// runNewMake executes generated recipes with isolated command overrides.
+// runNewMake executes generated recipes independently of the outer Make process.
+// Clear inherited flags, recursion state, injected files, and variable overrides;
+// fixture command-line overrides remain explicit in args.
 func runNewMake(t *testing.T, dir string, args ...string) ([]byte, error) {
 	t.Helper()
 
 	command := exec.CommandContext(t.Context(), "make", args...)
 	command.Dir = dir
-	command.Env = append(os.Environ(), "MAKEFLAGS=", "MFLAGS=")
+	command.Env = append(os.Environ(),
+		"MAKEFLAGS=", "MFLAGS=", "GNUMAKEFLAGS=", "MAKELEVEL=0", "MAKEFILES=", "MAKEOVERRIDES=",
+	)
 
 	return command.CombinedOutput()
+}
+
+// TestNewMakeIgnoresParentEnvironment keeps outer Make recipes from changing
+// fixture commands, output, or the Makefiles loaded by a generated project.
+func TestNewMakeIgnoresParentEnvironment(t *testing.T) {
+	dir := newMakeDirectory(t)
+	inherited := filepath.Join(t.TempDir(), "inherited.mk")
+
+	if err := os.WriteFile(inherited, []byte("$(error inherited parent Makefile)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("MAKELEVEL", "37")
+	t.Setenv("MAKEFLAGS", "n")
+	t.Setenv("MFLAGS", "-n")
+	t.Setenv("GNUMAKEFLAGS", "s")
+	t.Setenv("MAKEFILES", inherited)
+	t.Setenv("MAKEOVERRIDES", "GO=false")
+
+	output, err := runNewMake(t, dir, "-n", "run", "GO=custom-go")
+
+	if err != nil {
+		t.Fatalf("make inherited parent configuration: %v\n%s", err, output)
+	}
+
+	want := "custom-go build -o bin/server ./cmd/server\n./bin/server\n"
+
+	if string(output) != want {
+		t.Fatalf("isolated run commands = %q, want %q", output, want)
+	}
 }
 
 // TestNewMakeDefaultsToHelp ensures listing tasks does not require Go or Docker.
@@ -855,13 +889,27 @@ func TestNewMakeRunPreservesBuildFailure(t *testing.T) {
 
 	dir := newMakeDirectory(t)
 
-	output, err := runNewMake(t, dir, "run", "GO=false")
+	if err := os.Mkdir(filepath.Join(dir, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
-	if err == nil || !strings.Contains(string(output), "[build] Error") {
+	if err := os.WriteFile(filepath.Join(dir, "bin", "server"), []byte("#!/bin/sh\necho stale-server-ran\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "fail-build"), []byte("#!/bin/sh\necho build-failed >&2\nexit 23\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runNewMake(t, dir, "run", "GO=./fail-build")
+
+	exit, ok := errors.AsType[*exec.ExitError](err)
+
+	if !ok || exit.ExitCode() <= 0 || !strings.Contains(string(output), "build-failed") {
 		t.Fatalf("build failure = %v\n%s", err, output)
 	}
 
-	if strings.Contains(string(output), "./bin/server") {
+	if strings.Contains(string(output), "./bin/server") || strings.Contains(string(output), "stale-server-ran") {
 		t.Fatalf("run continued after build failure:\n%s", output)
 	}
 }
@@ -876,13 +924,15 @@ func TestNewMakeRunPreservesServerFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "bin", "server"), []byte("#!/bin/sh\nexit 7\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "bin", "server"), []byte("#!/bin/sh\necho server-failed >&2\nexit 7\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	output, err := runNewMake(t, dir, "run", "GO=true")
 
-	if err == nil || !strings.Contains(string(output), "[run] Error 7") {
+	exit, ok := errors.AsType[*exec.ExitError](err)
+
+	if !ok || exit.ExitCode() <= 0 || !strings.Contains(string(output), "server-failed") {
 		t.Fatalf("server failure = %v\n%s", err, output)
 	}
 }
