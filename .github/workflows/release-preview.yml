@@ -34,20 +34,33 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cmd/arkoren-ci/go.mod
+          cache: false
+      - name: Build Go maintenance command
+        id: maintenance
+        run: |
+          GOWORK=off go -C cmd/arkoren-ci build -o "$RUNNER_TEMP/arkoren-ci" .
+          echo "cliff=$("$RUNNER_TEMP/arkoren-ci" release tool | jq -r .git_cliff)" >> "$GITHUB_OUTPUT"
       - name: Require CI gate and Website on the exact SHA
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/release_evidence.py --output "$RUNNER_TEMP/release-evidence.json"
+        run: '"$RUNNER_TEMP/arkoren-ci" release evidence --output "$RUNNER_TEMP/release-evidence.json"'
       - name: Install checksum-pinned git-cliff
-        run: |
-          python3 scripts/install-git-cliff.py "$RUNNER_TEMP/cliff-bin"
-          echo "$RUNNER_TEMP/cliff-bin" >> "$GITHUB_PATH"
+        uses: taiki-e/install-action@8bf69897abc26b921431feaaa8ca2b47a6c30c00
+        with:
+          tool: git-cliff@${{ steps.maintenance.outputs.cliff }}
+          checksum: 'true'
+          fallback: none
       - name: Generate read-only plan
         id: plan
         env:
           PLAN_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
         run: |
-          python3 scripts/release_preview.py --sha "$PLAN_SHA" --evidence "$RUNNER_TEMP/release-evidence.json" --output "$RUNNER_TEMP/release-preview"
+          "$RUNNER_TEMP/arkoren-ci" release plan --sha "$PLAN_SHA" --evidence "$RUNNER_TEMP/release-evidence.json" --output "$RUNNER_TEMP/release-preview"
+          "$RUNNER_TEMP/arkoren-ci" release tool > "$RUNNER_TEMP/release-preview/tool.json"
+          go version -m "$RUNNER_TEMP/arkoren-ci" > "$RUNNER_TEMP/release-preview/build.txt"
           cat "$RUNNER_TEMP/release-preview/summary.md" >> "$GITHUB_STEP_SUMMARY"
           echo "sha=$PLAN_SHA" >> "$GITHUB_OUTPUT"
       - name: Upload plan and release-note preview (not a release)

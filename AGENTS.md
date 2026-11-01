@@ -93,8 +93,10 @@ release namespaces and explicit development-only roots. CI discovers all canonic
 filesystem modules, including ignored local ones (currently 45 modules and 15
 integrations); release preparation validates only the exact committed public set
 (44). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
-The Go command currently inspects inventory only. Existing Python release tools
-remain the release-operation authority until their sequential ports replace them.
+The Go command owns inventory, read-only release plans and exact-SHA evidence.
+Python helpers remain only for the disabled publisher and notes automation until
+Part 3 replaces them. Historical-v1 decoding is explicit recovery, not current
+namespace approval; signed canonical-v1 bytes must remain unchanged.
 
 `test` runs short tests with normal built-in vet defaults. `check` runs
 golangci-lint (including configured govet) and short race tests with test-time
@@ -144,10 +146,14 @@ changes must preserve its canonical paths and pass its fixtures. Compose modules
 run lint in check and full race suites in integration.
 Require both `CI gate` (all Go/tooling jobs) and the separate `website` check.
 The gate rejects failures, cancellations, missing jobs, and unexpected skips.
-The tooling job also runs `make release-preview-check` (planner, evidence and
-publisher fixtures) with checksum-pinned git-cliff; install it into an explicit temporary directory with
-`python3 scripts/install-git-cliff.py DIRECTORY` and set `GIT_CLIFF` to that binary
-for local planner fixtures. Python 3.9+ is required.
+The tooling job also runs `make maintenance-check` (Go planner/evidence and
+transitional Python publisher fixtures). The native git-cliff version is owned by
+`cmd/arkoren-ci/internal/release/tool.json`; `release tool` emits that pin as JSON.
+CI installs it with SHA-pinned install-action, checksums enabled and fallback off.
+Locally install that exact version (for example `cargo install --locked git-cliff
+--version VERSION`) and optionally set `GIT_CLIFF` to its binary. Ordinary module
+checks do not require git-cliff; `maintenance-check` explicitly runs real-tool
+fixtures and fails if it is missing or wrong. Python 3.9+ is transitional only.
 The separate Monday/Thursday 03:17 UTC audit runs all-module toolchain vet and
 govulncheck and the CLI generated-project end-to-end test.
 Manual audit dispatch checks the selected ref; scheduled audits use the default

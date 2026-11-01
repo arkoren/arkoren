@@ -51,10 +51,17 @@ jobs:
         with:
           go-version-file: core/go.mod
           cache: false
-      - name: Install checksum-pinned planner
+      - name: Read maintenance tool pin
+        id: maintenance
         run: |
-          python3 scripts/install-git-cliff.py "$RUNNER_TEMP/cliff-bin"
-          echo "$RUNNER_TEMP/cliff-bin" >> "$GITHUB_PATH"
+          GOWORK=off go -C cmd/arkoren-ci build -o "$RUNNER_TEMP/arkoren-ci" .
+          echo "cliff=$("$RUNNER_TEMP/arkoren-ci" release tool | jq -r .git_cliff)" >> "$GITHUB_OUTPUT"
+      - name: Install checksum-pinned planner
+        uses: taiki-e/install-action@8bf69897abc26b921431feaaa8ca2b47a6c30c00
+        with:
+          tool: git-cliff@${{ steps.maintenance.outputs.cliff }}
+          checksum: 'true'
+          fallback: none
       - name: Require exact green SHA, namespace policy and recomputed plans
         id: prepare
         run: python3 scripts/release_publish.py prepare "$RUNNER_TEMP/publication.json"

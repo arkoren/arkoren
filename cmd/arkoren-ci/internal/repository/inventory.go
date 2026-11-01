@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+
+	"arkoren.dev/cmd/arkoren-ci/internal/process"
 )
 
 // Module describes a validated manifest and its policy classification.
@@ -59,7 +60,7 @@ func Inspect(ctx context.Context, root, revision string) (Inventory, error) {
 		return Inventory{}, err
 	}
 	if mode, ok := source.modes[".github/release-modules.json"]; !ok || !mode.IsRegular() ||
-		source.modes[".github"] != fs.ModeDir {
+		source.modes[".github"] != fs.ModeDir || (revision != "" && mode.Perm() != 0) {
 		return Inventory{}, fmt.Errorf("expected real module policy")
 	}
 	data, err := source.read(".github/release-modules.json")
@@ -162,6 +163,9 @@ func committed(ctx context.Context, root, revision string) (view, error) {
 			return view{}, fmt.Errorf("invalid Git tree record")
 		}
 		mode := fs.FileMode(0)
+		if strings.HasPrefix(header, "100755 ") {
+			mode = 0o111
+		}
 		if !strings.HasPrefix(header, "100644 ") && !strings.HasPrefix(header, "100755 ") {
 			mode = fs.ModeSymlink
 		}
@@ -176,7 +180,7 @@ func committed(ctx context.Context, root, revision string) (view, error) {
 
 // git runs a read-only operation against an explicitly selected repository.
 func git(ctx context.Context, root string, args ...string) ([]byte, error) {
-	data, err := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...).Output()
+	data, err := process.Run(ctx, root, "git", "", false, args...)
 
 	if err != nil {
 		return nil, fmt.Errorf("read Git source: %w", err)
@@ -230,6 +234,9 @@ func (source view) inventory(ctx context.Context, policy Policy, exact bool) (In
 
 		if err != nil {
 			return Inventory{}, err
+		}
+		if exact && source.modes[directory+"/go.mod"].Perm() != 0 {
+			return Inventory{}, fmt.Errorf("invalid manifest mode: %s", directory)
 		}
 		result.Modules = append(result.Modules, module)
 		if mode, ok := source.modes[directory+"/compose.yaml"]; ok {

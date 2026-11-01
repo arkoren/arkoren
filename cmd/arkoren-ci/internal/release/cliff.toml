@@ -1,4 +1,4 @@
-# Used only by the read-only preview. No changelog or version commit is written.
+# Trusted configuration; no remote metadata or executable hooks.
 [changelog]
 header = ""
 body = """
@@ -14,7 +14,6 @@ trim = true
 conventional_commits = true
 filter_unconventional = false
 split_commits = false
-# A breaking commit outside a module must still be excluded by --skip-commit.
 protect_breaking_commits = false
 filter_commits = false
 commit_parsers = [

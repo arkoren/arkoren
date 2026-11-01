@@ -55,9 +55,11 @@ working-tree inspection, or append `--commit FULL_SHA` to validate a committed
 inventory and its same-commit policy. CI/audits currently include 45 modules and
 15 integration suites; releases include only the 44 approved public modules.
 The development command uses standard flags, JSON stdout and JSON diagnostics on
-stderr. It implements inventory only during the sequential migration. Existing
-Python planner/evidence/publisher tools remain authoritative until each port
-replaces its old implementation; add no permanent wrapper framework.
+stderr. It owns inventory, release planning and exact-SHA evidence. The disabled
+publisher and notes automation still depend on transitional Python helpers;
+Part 3 removes them. Add no permanent wrapper framework or production planner
+fallback. `release plan --historical-v1` explicitly recomputes old signed plans
+from their original tree; normal planning still requires schema-1 approval.
 
 Place new code by asking, in order:
 
@@ -717,9 +719,12 @@ Other modules may share a tag commit. An exact escaped tag pattern selects the
 module's baseline before git-cliff constructs its commit-keyed tag map.
 
 git-cliff owns conventional-commit parsing, version increments and release notes.
-The maintained release and upstream SHA-512 checksums are pinned in
-`scripts/install-git-cliff.py`. Update the pin and fixtures together after checking
-the upstream release assets and source. Run `make release-preview-check` using
+The version pin is `cmd/arkoren-ci/internal/release/tool.json`, embedded by the
+command alongside trusted cliff configuration. Workflows read `release tool`
+and install that version with SHA-pinned `taiki-e/install-action`, checksum
+verification enabled and `fallback: none`. Check the pinned action manifest and
+upstream release assets before updating it. Local installation is an explicit
+prerequisite, not a custom archive installer. Run `make maintenance-check` using
 that binary, plus `make workflow-check`, before merging planner changes.
 Use the [upstream release](https://github.com/orhun/git-cliff/releases),
 [bump policy](https://git-cliff.org/docs/configuration/bump/) and
@@ -754,9 +759,12 @@ no proposal. Plans do not adopt dependencies, cascade releases, query unpublishe
 proxy versions, modify manifests, write changelogs/version commits, open release
 PRs, or create tags/releases. Artifacts expire after 14 days.
 
-For local inspection, run `scripts/release_preview.py` with `python3`, `--sha`
-set to the full commit ID and `--output` outside the checkout. Set `GIT_CLIFF` to
-the checksum-pinned binary. Local plans explicitly say they have no attached CI
+For local inspection, build `cmd/arkoren-ci` and run `arkoren-ci release plan`
+with `--repo` selecting the checkout, `--sha` the full commit ID and `--output`
+outside the checkout. Set `GIT_CLIFF` to the pinned binary if needed.
+`release evidence --output FILE` validates GitHub trigger metadata and checkout
+before reading paginated workflow/job metadata with a read-only gh credential.
+Local plans explicitly say they have no attached CI
 evidence; Actions attaches exact-SHA evidence. The JSON contains every module's
 path, baseline/current/proposed version, matching commit messages/files, notes,
 SHA and skip decision. Review the Actions summary and JSON together. A nonempty
