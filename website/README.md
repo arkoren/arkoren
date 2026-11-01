@@ -220,6 +220,81 @@ has its canonical `Link` header and `/llms-full.txt` has `X-Robots-Tag: noindex`
 Check CDN rules for redirects and browser challenges: website code cannot
 override a domain-level redirect or guarantee crawler access through a WAF.
 
+## Release notes
+
+Published module history lives only in `src/content/releases/`, not in blog posts
+or the CLI's embedded guides. The `releases` content collection loads these files
+offline. The changelog reader and automated sync PRs are upcoming; this importer
+does not publish modules, tags, GitHub releases, or website deployments.
+
+To import confirmed GitHub publications, use Node.js 26.13+ and an authenticated
+`gh` CLI with repository read access. From `website/`, run:
+
+```sh
+npm run releases:sync
+npm run releases:check
+```
+
+Sync reads every page of GitHub releases and peels annotated tags through the
+read-only GitHub Git API to full commit SHAs. It includes prereleases (including
+plain `v0.1.0` tags marked prerelease on GitHub) and excludes drafts. Unknown
+published modules or malformed tags stop the import: reconcile the publication
+and committed module inventory before retrying. A branch-valued
+`target_commitish` is not proof of a release commit; the peeled tag is authoritative.
+A full-SHA `target_commitish` must agree with that commit.
+
+One managed ordinary Markdown file represents each module/version, for example
+`src/content/releases/driver/redis/v0.1.0.md`. Its frontmatter is JSON, a YAML
+subset, with exactly these fields:
+
+```yaml
+---
+{
+  "module": "arkoren.dev/driver/redis",
+  "version": "v0.1.0",
+  "publishedAt": "2026-11-01T14:07:41Z",
+  "commit": "56b2d33afea8ae0614e973e5efc2af2bd6eed39d",
+  "prerelease": true
+}
+---
+```
+
+This example comes from the initial Redis publication; sync obtains metadata from GitHub.
+`publishedAt` is the release's publication timestamp, not its tag or commit date.
+Module names must match committed canonical `go.mod` declarations. Versions are
+normal `v0.X.Y` values without suffixes or leading zeros. Filename and metadata
+must agree; duplicate identities, extra metadata, invalid dates, and path traversal
+are rejected. Tag, GitHub URL, and future `/changelog/<module-directory>/<version>`
+URL are derived by `releaseLinks`, not stored as untrusted frontmatter.
+
+The body is the published GitHub body verbatim after replacing CRLF and bare CR
+with LF. No trimming, final-newline insertion, Unicode normalization, link rewriting,
+or prose editing occurs. Null GitHub bodies become empty bodies. The deterministic
+frontmatter is followed by one newline after its closing fence; everything after
+that newline belongs to the body. Correct notes on GitHub, rerun sync, review
+the resulting diff, and merge through the normal website checks. An unchanged
+rerun changes no bytes; `releases:check` exits nonzero if confirmed records differ.
+Neither command deletes older files missing from an API response.
+
+All remote records and existing managed files are validated before writing.
+API or validation failure leaves files unchanged. Writes use atomic per-file
+renames; a disk failure during writing can leave a partial batch, so review the
+diff and rerun after recovery. The importer rejects symlinks and writes only
+managed release files. Future sync automation can use the same functions and
+restrict its PR diff to `website/src/content/releases/`; preview artifacts and
+proposed versions are never publication evidence.
+
+Release bodies are untrusted input. Loading never compiles Markdown as MDX or
+executes expressions, imports, shell text, or raw HTML. The shared
+`renderReleaseBody` helper parses Markdown and rejects raw HTML and active or
+ambiguous URL schemes rather than silently altering published text. If notes
+fail that gate, correct the GitHub body and retry. Code fences containing HTML
+remain inert code. The upcoming reader must use this helper, **not** Astro's
+trusted-author `render()` pipeline or MDX. Relative Markdown links are preserved;
+the reader must resolve them against GitHub source context, not website routes.
+The initial imported bodies have no relative Markdown links. Safety and importer
+fixtures run offline with `npm run test:releases`, also included in `npm test`.
+
 ## Publish a blog post
 
 Add a Markdown file to `src/content/blog/`. Its filename, without the

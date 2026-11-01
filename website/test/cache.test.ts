@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { readReleases, releaseModules } from "../src/lib/releases/content.ts";
 
 /** Renderer changes must reach unchanged Markdown even when its content cache is warm. */
 test("warm collection caches do not preserve HTML from an older Markdown renderer", () => {
@@ -32,6 +33,9 @@ test("warm collection caches do not preserve HTML from an older Markdown rendere
     mkdirSync(posts);
     symlinkSync(resolve(website, "node_modules"), resolve(root, "node_modules"), "dir");
     cpSync(resolve(website, "src/content.config.ts"), resolve(root, "src/content.config.ts"));
+    cpSync(resolve(website, "src/lib/releases"), resolve(root, "src/lib/releases"), {
+      recursive: true,
+    });
     cpSync(
       resolve(website, "src/lib/docs/references.ts"),
       resolve(root, "src/lib/docs/references.ts"),
@@ -49,9 +53,10 @@ test("warm collection caches do not preserve HTML from an older Markdown rendere
       `---
 import { getCollection, render } from "astro:content";
 const entries = (await Promise.all([getCollection("guides"), getCollection("blog")])).flat();
+const releases = await getCollection("releases");
 const rendered = await Promise.all(entries.map(async (entry) => ({entry, ...await render(entry)})));
 ---
-<html lang="en"><body>{rendered.map(({entry, Content}) => <article data-collection={entry.collection}><Content /></article>)}</body></html>
+<html lang="en"><body><output data-releases>{releases.length}</output>{rendered.map(({entry, Content}) => <article data-collection={entry.collection}><Content /></article>)}</body></html>
 `,
     );
     /** Change only the visitor implementation; serialized plugin metadata stays identical. */
@@ -78,7 +83,12 @@ export default defineConfig({
         {
           // Isolate Astro's fallback prerender staging as well as its cache.
           cwd: root,
-          env: { ...process.env, ARKOREN_REFERENCES: references, ARKOREN_BLOG: posts },
+          env: {
+            ...process.env,
+            ARKOREN_REFERENCES: references,
+            ARKOREN_BLOG: posts,
+            ARKOREN_REPO: resolve(website, ".."),
+          },
           stdio: "pipe",
           timeout: 60000,
         },
@@ -87,6 +97,12 @@ export default defineConfig({
     }
     assert.equal((build("first-render").match(/first-render/g) ?? []).length, 2);
     const updated = build("updated-render");
+    assert.match(
+      updated,
+      new RegExp(
+        `<output data-releases>${readReleases({ modules: releaseModules() }).length}</output>`,
+      ),
+    );
     assert.equal(
       (updated.match(/updated-render/g) ?? []).length,
       2,

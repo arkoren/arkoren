@@ -2,6 +2,8 @@ import { defineCollection } from "astro:content";
 import { glob } from "astro/loaders";
 import { z } from "astro/zod";
 import { REFERENCES_ROOT } from "./lib/docs/references";
+import { releaseModules, releaseSchema } from "./lib/releases/content";
+import { releasesLoader } from "./lib/releases/loader";
 
 /** Entry ids mirror the file path without `.md`, so ids map 1:1 onto routes. */
 const generateId = ({ entry }: { entry: string }) => entry.replace(/\.md$/, "");
@@ -125,4 +127,10 @@ const blog = defineCollection({
   },
 });
 
-export const collections = { guides, blog };
+/** Published module history is website-only, never a blog or embedded guide. */
+const releases = defineCollection({
+  loader: releasesLoader(),
+  schema: releaseSchema(releaseModules()),
+});
+
+export const collections = { guides, blog, releases };
