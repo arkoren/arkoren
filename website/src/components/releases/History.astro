@@ -1,0 +1,49 @@
+---
+import Icon from "../ui/Icon.astro";
+import Tag from "../ui/Tag.astro";
+import { releaseLinks, type ReleaseData } from "../../lib/releases/content";
+import { releaseHistory, releaseDate } from "../../lib/releases/history";
+
+/** Compact publication history; empty collections do not invent a release. */
+interface Props {
+  entries: { data: ReleaseData }[];
+}
+
+const history = releaseHistory(Astro.props.entries);
+---
+
+{history.length === 0 && (
+  <p class="py-12 text-muted" role="status">
+    No releases have been recorded yet.{" "}
+    <a href="https://github.com/arkoren/arkoren/releases">Check GitHub Releases</a>.
+  </p>
+)}
+{history.map(({ day, releases }) => (
+  <section class="py-8" aria-labelledby={`day-${day}`} data-release-day={day}>
+    <header class="mb-4 flex flex-wrap items-baseline justify-between gap-3">
+      <h3 id={`day-${day}`} class="text-lg font-medium">
+        <time datetime={day}>{releaseDate(day)}</time>
+      </h3>
+      <span class="font-mono text-2xs text-muted">
+        UTC · {releases.length} {releases.length === 1 ? "release" : "releases"}
+      </span>
+    </header>
+    <ul class="list-none divide-y divide-line border-y border-line">
+      {releases.map(({ data }) => (
+        <li class="py-4" data-release-entry>
+          <a
+            class="flex flex-wrap items-center justify-between gap-3 no-underline"
+            href={releaseLinks(data).route}
+          >
+            <span class="min-w-0 font-mono text-sm wrap-anywhere">{data.module}</span>
+            <span class="flex flex-wrap items-center gap-3">
+              <span class="font-mono text-sm wrap-anywhere">{data.version}</span>
+              {data.prerelease && <Tag>Pre-alpha · prerelease</Tag>}
+              <Icon name="arrow-right" />
+            </span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </section>
+))}

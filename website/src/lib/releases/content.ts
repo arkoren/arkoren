@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "astro/zod";
-import { defineMdastPlugin, markdownToHtml } from "satteri";
+import { defineHastPlugin, defineMdastPlugin, markdownToHtml } from "satteri";
 
 /** The checkout, independent of the command's working directory. */
 export const RELEASE_REPO =
@@ -68,6 +68,7 @@ export function releaseLinks(data: ReleaseData) {
     tag: id,
     github: `https://github.com/arkoren/arkoren/releases/tag/${id}`,
     route: `/changelog/${id}`,
+    commit: `https://github.com/arkoren/arkoren/commit/${data.commit}`,
   };
 }
 
@@ -106,11 +107,103 @@ function validateReleaseLink(url: string): void {
 
 /**
  * Render untrusted notes as plain Markdown, without MDX or raw HTML.
- * Relative URLs remain unchanged here; a reader must resolve them against
- * GitHub, not the website route. Importing and loading both enforce this gate.
+ * Importing and loading validate without rewriting stored notes. Readers pass
+ * source metadata to resolve relative links at the verified source commit.
  */
-export function renderReleaseBody(body: string): string {
-  return markdownToHtml(body, { mdastPlugins: [inertReleaseMarkdown] }).html;
+export function renderReleaseBody(body: string, data?: ReleaseData): string {
+  const headings = new Set<string>();
+  const fragments: string[] = [];
+  const sourceLinks = defineHastPlugin({
+    name: "release-source-links",
+    element: {
+      filter: ["a", "img", "h1", "h2", "h3", "h4", "h5", "h6", "table"],
+      visit(node, ctx) {
+        if (node.tagName === "table") {
+          ctx.wrapNode(node, {
+            type: "element",
+            tagName: "div",
+            properties: {
+              className: ["table-scroll"],
+              tabIndex: 0,
+              role: "region",
+              ariaLabel: "Scrollable table",
+            },
+            children: [],
+          });
+          return;
+        }
+        if (/^h[1-6]$/.test(node.tagName)) {
+          const base =
+            ctx
+              .textContent(node)
+              .toLowerCase()
+              .replace(/[^\p{L}\p{M}\p{N}_\- ]/gu, "")
+              .replace(/ /g, "-") || "section";
+          let slug = base;
+          let suffix = 0;
+          while (headings.has(slug)) slug = `${base}-${++suffix}`;
+          headings.add(slug);
+          ctx.setProperty(node, "id", `release-${slug}`);
+          return;
+        }
+        const property = node.tagName === "img" ? "src" : "href";
+        const url = node.properties[property];
+        if (data !== undefined && typeof url === "string") {
+          if (node.tagName === "a" && url.startsWith("#") && url !== "#top" && url !== "#") {
+            const fragment = decodeURIComponent(url.slice(1)).replace(/^user-content-/, "");
+            fragments.push(fragment);
+            ctx.setProperty(node, property, `#release-${fragment}`);
+            return;
+          }
+          const resolved = releaseSourceURL(url, data);
+          ctx.setProperty(
+            node,
+            property,
+            node.tagName === "img"
+              ? resolved.replace(
+                  "https://github.com/arkoren/arkoren/blob/",
+                  "https://raw.githubusercontent.com/arkoren/arkoren/",
+                )
+              : resolved,
+          );
+        }
+      },
+    },
+    after() {
+      for (const fragment of fragments) {
+        if (!headings.has(fragment)) {
+          throw new Error(
+            `unknown release heading fragment #${fragment}; use a matching heading or an explicit HTTPS GitHub URL`,
+          );
+        }
+      }
+    },
+  });
+  return markdownToHtml(body, {
+    features: { frontmatter: false },
+    mdastPlugins: [inertReleaseMarkdown],
+    hastPlugins: [sourceLinks],
+  }).html;
+}
+
+/** Resolve repository-relative notes from the module directory at its peeled commit. */
+function releaseSourceURL(url: string, data: ReleaseData): string {
+  validateReleaseLink(url);
+  if (url.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
+  if (url === "" || url.startsWith("?") || /[\u0000-\u0020\u007f]|%2f|%5c/i.test(url)) {
+    throw new Error("ambiguous relative release URL; use an explicit HTTPS GitHub URL");
+  }
+  const directory = data.module.slice("arkoren.dev/".length);
+  const resolved = new URL(
+    url.startsWith("/") ? `/repository${url}` : url,
+    `https://source.invalid/repository/${directory}/`,
+  );
+  if (!resolved.pathname.startsWith("/repository/")) {
+    throw new Error(
+      "relative release URL escapes the repository; use an explicit HTTPS GitHub URL",
+    );
+  }
+  return `https://github.com/arkoren/arkoren/blob/${data.commit}${resolved.pathname.slice("/repository".length)}${resolved.search}${resolved.hash}`;
 }
 
 /** Serialize JSON (a YAML subset) so remote text cannot inject frontmatter. */

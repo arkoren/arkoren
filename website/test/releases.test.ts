@@ -70,6 +70,7 @@ test("published timestamps and signed annotated tags retain their actual facts",
     tag: "core/v0.2.3",
     github: "https://github.com/arkoren/arkoren/releases/tag/core/v0.2.3",
     route: "/changelog/core/v0.2.3",
+    commit: `https://github.com/arkoren/arkoren/commit/${COMMIT}`,
   });
 });
 

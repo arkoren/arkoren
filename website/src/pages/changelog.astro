@@ -3,16 +3,12 @@ import Site from "../layouts/Site.astro";
 import Button from "../components/ui/Button.astro";
 import Icon from "../components/ui/Icon.astro";
 import Link from "../components/ui/Link.astro";
-import Tag from "../components/ui/Tag.astro";
+import History from "../components/releases/History.astro";
+import { getCollection } from "astro:content";
 
 const releasesURL = "https://github.com/arkoren/arkoren/releases";
 
-/** The placeholder ledger: a sign and two bars per row, each row shorter than the last. */
-const ledger = [
-  { sign: "+", width: "w-full" },
-  { sign: "~", width: "w-5/6" },
-  { sign: "−", width: "w-2/3" },
-];
+const entries = await getCollection("releases");
 ---
 
 <Site
@@ -42,35 +38,7 @@ const ledger = [
           </h2>
           <span class="font-mono text-2xs tracking-wide text-muted">NEWEST FIRST</span>
         </header>
-        <div class="flex gap-4 pt-12 sm:gap-6">
-          <div
-            class="relative flex w-4 flex-none justify-center pt-2 before:absolute before:top-4 before:bottom-0 before:w-px before:bg-linear-to-b before:from-line before:to-transparent sm:w-8"
-            aria-hidden="true"
-          >
-            <span class="relative size-3 rounded-full border-2 border-accent-text bg-bg ring-6 ring-accent-text/10"></span>
-          </div>
-          <div class="min-w-0 pb-12">
-            <Tag>Coming soon</Tag>
-            <h3 class="mt-6 mb-4 text-xl font-medium">A place for every release.</h3>
-            <p class="mb-6 max-w-measure leading-relaxed text-muted">
-              Release notes aren’t listed here yet. Visit GitHub Releases for published versions and
-              their notes.
-            </p>
-            <Link href={releasesURL}>Browse GitHub Releases</Link>
-            <ul
-              class="mt-12 grid list-none gap-6 rounded-sm border border-dashed border-line bg-surface p-4 sm:p-8"
-              aria-hidden="true"
-            >
-              {ledger.map((row) => (
-                <li class:list={["flex items-center gap-4", row.width]}>
-                  <span class="w-4 font-mono text-base text-accent-text">{row.sign}</span>
-                  <span class="h-1.5 flex-1 bg-line" />
-                  <span class="h-1.5 w-1/4 bg-line" />
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
+        <History entries={entries} />
         <footer class="flex flex-wrap items-baseline justify-between gap-3 border-t border-line pt-6 text-xs text-muted">
           <span>Looking for the thinking behind a change?</span>
           <Link href="/blog" icon="arrow-up-right">
@@ -88,8 +56,8 @@ const ledger = [
             One set of notes.
           </h2>
           <p class="mb-4 text-sm leading-relaxed text-muted">
-            GitHub Releases will be the home for release notes. This page is being prepared to bring
-            that history into the site.
+            Each module has its own versions and source commits. Read the published notes here, or
+            follow the original release on GitHub.
           </p>
           <Link href={releasesURL} icon="arrow-up-right">
             View on GitHub

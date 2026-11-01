@@ -108,7 +108,7 @@ export async function rootIndex(): Promise<string> {
       await guideSections(),
       API_NOTICE,
       moduleSections(),
-      `## Optional\n\n- [Bulk guides archive](${SITE}/docs/guides/llms-full.txt): offline indexing or deliberate large-context use\n- [Guides index](${SITE}/docs/guides/llms.txt)\n- [API module catalog](${SITE}/docs/api/llms.txt)`,
+      `## Optional\n\n- [Bulk guides archive](${SITE}/docs/guides/llms-full.txt): offline indexing or deliberate large-context use\n- [Guides index](${SITE}/docs/guides/llms.txt)\n- [API module catalog](${SITE}/docs/api/llms.txt)\n- [Changelog](${SITE}/changelog): published module versions and release notes`,
     ].join("\n\n") + "\n"
   );
 }

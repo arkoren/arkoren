@@ -17,6 +17,7 @@ import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { required } from "../dom.ts";
 import { checkoutModules } from "../modules.ts";
+import { serializeRelease } from "../../src/lib/releases/content.ts";
 
 /** Software WebGL keeps surface picking available on headless CI runners. */
 test.use({ launchOptions: { args: ["--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] } });
@@ -75,8 +76,31 @@ test.beforeAll(async () => {
   directory = realpathSync(mkdtempSync(resolve(temporary, "arkoren-browser-")));
   const root = resolve(directory, "site");
   const posts = resolve(directory, "posts");
+  const releases = resolve(directory, "releases");
   mkdirSync(root);
   mkdirSync(posts);
+  mkdirSync(releases);
+  for (const [module, version, publishedAt] of [
+    ["core", "v0.99.0", "2026-11-02T00:00:00Z"],
+    ["driver/redis", "v0.99.0", "2026-11-02T00:00:00Z"],
+    ["cmd/arkoren", "v0.99.0", "2026-11-01T23:59:59Z"],
+    ["foundation/collection", "v0.123456789012345678901234567890.0", "2026-11-03T00:00:00Z"],
+  ]) {
+    mkdirSync(resolve(releases, module), { recursive: true });
+    writeFileSync(
+      resolve(releases, module, `${version}.md`),
+      serializeRelease(
+        {
+          module: `arkoren.dev/${module}`,
+          version,
+          publishedAt,
+          commit: "a".repeat(40),
+          prerelease: true,
+        },
+        `## Breaking changes\n\nFixture migration instructions.\n\n[Source](README.md)\n\n[Long link](https://example.com/${"long-source-path".repeat(18)})\n\n\`\`\`text\n${"long-code-token".repeat(18)}\n\`\`\`\n\n\`<script>bad()</script>\` {notAnExpression}\n`,
+      ),
+    );
+  }
   for (const [id, title, category, date, body, draft] of [
     ["alpha", "Alpha fixture", "Examples", "2026-01-01", "fixturequartz", false],
     ["beta", "Beta fixture", "Examples", "2026-01-02", "fixturequartz", false],
@@ -114,6 +138,14 @@ test.beforeAll(async () => {
   }
   for (const entry of ["src", "public", "tsconfig.json"])
     cpSync(resolve(website, entry), resolve(root, entry), { recursive: true });
+  writeFileSync(
+    resolve(root, "src/pages/empty-history.astro"),
+    `---
+import Site from "../layouts/Site.astro";
+import History from "../components/releases/History.astro";
+---
+<Site title="Empty fixture" description="Empty release history"><main><h1>Release history</h1><History entries={[]} /></main></Site>`,
+  );
   writeFileSync(
     resolve(root, "src/assets/images/blog/browser-fixture.svg"),
     '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400"><rect width="1200" height="400" fill="orange"/></svg>',
@@ -169,6 +201,7 @@ const panels = ["Create", "Configure", "Start", "Serve", "Observe", "Drain", "St
       env: {
         ...process.env,
         ARKOREN_BLOG: posts,
+        ARKOREN_RELEASES: releases,
         ARKOREN_REFERENCES: resolve(website, "../cmd/arkoren/skills/arkoren/references"),
         ARKOREN_REPO: resolve(website, ".."),
       },
@@ -193,6 +226,84 @@ const panels = ["Create", "Configure", "Start", "Serve", "Observe", "Drain", "St
 test.afterAll(async () => {
   await server?.stop();
   if (directory) rmSync(directory, { recursive: true, force: true });
+});
+
+/** Release URLs, status, source notes and copying must work without pointer input. */
+test("release history opens complete module notes and copies an exact version by keyboard", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(`${origin}/changelog`);
+  expect(
+    await page
+      .locator("[data-release-day]")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-release-day"))),
+  ).toEqual(["2026-11-03", "2026-11-02", "2026-11-01"]);
+  const sameDay = page.locator('[data-release-day="2026-11-02"] [data-release-entry] a');
+  expect(
+    await sameDay.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href"))),
+  ).toEqual(["/changelog/core/v0.99.0", "/changelog/driver/redis/v0.99.0"]);
+  const release = page.getByRole("link", { name: /arkoren.dev\/driver\/redis/ });
+  await release.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(`${origin}/changelog/driver/redis/v0.99.0`);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "arkoren.dev/driver/redis v0.99.0",
+  );
+  await expect(page.getByText("Pre-alpha · prerelease", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Breaking changes" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Source", exact: true })).toHaveAttribute(
+    "href",
+    `https://github.com/arkoren/arkoren/blob/${"a".repeat(40)}/driver/redis/README.md`,
+  );
+  await expect(page.getByLabel("Release notes")).toContainText("<script>bad()</script>");
+  await page
+    .getByLabel("Use this release")
+    .getByRole("button", { name: "copy", exact: true })
+    .focus();
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe("go get arkoren.dev/driver/redis@v0.99.0");
+  await page.getByRole("link", { name: "All releases" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(`${origin}/changelog`);
+  await page.getByRole("link", { name: /arkoren.dev\/cmd\/arkoren/ }).click();
+  await expect(page.locator("[data-copy]")).toHaveAttribute(
+    "data-copy",
+    "go install arkoren.dev/cmd/arkoren@v0.99.0",
+  );
+  const missing = await page.goto(`${origin}/changelog/driver/redis/v0.98.0`);
+  expect(missing?.status()).toBe(404);
+  await page.goto(`${origin}/empty-history`);
+  await expect(page.getByRole("status")).toContainText("No releases");
+  await expect(page.locator("[data-release-entry]")).toHaveCount(0);
+});
+
+/** Long source identifiers and code must stay inside the reader's mobile viewport. */
+test("release readers contain long content at narrow and wide widths in both themes", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    for (const width of [320, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const path of [
+        "/changelog",
+        "/changelog/foundation/collection/v0.123456789012345678901234567890.0",
+      ]) {
+        await page.goto(`${origin}${path}`);
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        ).toBe(true);
+        await expect(
+          page.getByText("Pre-alpha · prerelease", { exact: true }).first(),
+        ).toBeVisible();
+      }
+    }
+  }
 });
 
 /** Keep rotating links usable without changing the reader's focused target. */

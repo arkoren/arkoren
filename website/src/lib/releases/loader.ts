@@ -9,7 +9,10 @@ export function releasesLoader(): Loader {
   return {
     name: "published-module-releases",
     async load({ store, parseData }) {
-      const entries = readReleases({ modules: releaseModules() });
+      const entries = readReleases({
+        root: process.env.ARKOREN_RELEASES,
+        modules: releaseModules(),
+      });
       const parsed = await Promise.all(
         entries.map(async (entry) => ({
           ...entry,
