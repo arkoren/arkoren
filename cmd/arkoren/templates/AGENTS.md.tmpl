@@ -1,0 +1,80 @@
+# {{.Name}}
+
+Go 1.27 service (`{{.Module}}`) built with Arkoren, a modular Go toolkit.
+
+## Before changing Arkoren code
+
+Read `{{.SkillsDir}}/arkoren/SKILL.md` when creating, wiring, changing, or
+reviewing Arkoren code. Follow its links to the relevant guide and API page
+before using a package; use `go doc` for full symbol documentation. Check the
+installed module's API when it differs from the bundled documentation.
+
+## Layout and composition
+
+- `cmd/server`: application construction, signals, and process exit status.
+- `internal/bootstrap`: `bootstrap.go` composes components; `app.go` supplies
+  `Application()` settings, `logging.go` supplies `Logger()`, `router.go`
+  owns routes and middleware, `server.go` owns listener policy and lifecycle,
+  and `mcp.go` owns debug diagnostics.
+- Main constructs `application.New(bootstrap.Application())`; no config package
+  is generated. Read environment settings inside construction/composition callbacks.
+- At the top of composition callbacks, bind the specific app handles you need
+  (`events`, `logger`, `telemetry`), then separate them from wiring with a blank
+  line. Keep `app` only when its own operations are needed; avoid shadowing imports.
+- `Router` mounts `app.WelcomeHandler()` at `GET /` and application probes.
+  Replace the welcome route with application behavior; operator information
+  through `InfoHandler` remains an explicit opt-in, not a public starter route.
+- `Router` registers security headers, telemetry, panic recovery, and same-origin
+  CSRF protection in that order. Recovery converts handler panics to generic
+  server errors before response commitment; `http.ErrAbortHandler` still aborts
+  the connection. Package defaults omit HSTS and reject incoming trace context;
+  the welcome handler keeps its stronger CSP. No CORS permissions or extra trusted
+  origins are granted. Keep safe methods free of state changes and configure
+  exceptional cross-origin routes narrowly. These policies are not authentication.
+- The executable uses `godotenv/autoload`; existing environment variables win
+  and loading errors are ignored.
+- `Compose` obtains the shared router with `routes := compose.Use(Router())`.
+  `Router`, `MCP`, and `Server` return typed `application.Factory[T]` callbacks.
+- `Use` returns the constructed handle before startup. `Server` registers its
+  own cleanup once; retain its result to observe `Addr` after `app.Start`.
+- Use `Defer` for infallible `func()` releases and `MustDefer` for composition
+  acquisitions returning `(func(), error)`, such as listener registrations. Both
+  use the same cleanup stack as `Cleanup`, not Go function-return timing.
+  `MustDefer` is composition-only; startup callbacks return errors and may
+  register successful releases through `Cleanup` or `Defer`.
+- Construct resources inside factory callbacks, not
+  while creating factories, so skipped features acquire nothing.
+- `Compose` selects `MCP(routes)` with `UseDebug`. That callback constructs and mounts
+  read-only application, route, and local telemetry diagnostics at `/mcp` on the
+  shared router, without auth. Capture is bounded, in memory, and exports nothing.
+  Keep debug disabled in production, bind development listeners to loopback,
+  and keep `.env` out of commits.
+- Private CLI outputs use POSIX 0600 or a protected current-user-only Windows
+  DACL at exclusive creation. Preserve that protection when adding secrets to
+  `.env` or changing local key provisioning; inherited Windows ACLs are not enough.
+- Composition uses direct constructor calls. The Arkoren application owns
+  service startup, shutdown, and failure reporting before telemetry stops.
+  Return `app.Run` directly; map its error to exit status without logging again.
+
+## Checks
+
+Install dependencies as described in README.md before running these commands:
+
+```sh
+make check
+make run
+```
+
+Use `make help` for individual checks, formatting, race tests, and container
+commands. The Makefile belongs to this application; adapt it as needed.
+Format changed Go files with `gofmt`. Add tests for changed behavior, handle
+errors, and keep lifecycle registration explicit. Supply secrets at runtime;
+keep credentials and local `.env` files out of commits.
+
+## Ownership
+
+Application files and this AGENTS.md belong to the project; edit them directly.
+Update the managed skill with `arkoren skills update --dir {{.SkillsDir}}`,
+not by editing its reference pages. Preview with `--dry-run`; preserve local
+changes before updating. Commit the skill directory and its
+`.arkoren-skill.json` manifest so the team uses the same instructions.

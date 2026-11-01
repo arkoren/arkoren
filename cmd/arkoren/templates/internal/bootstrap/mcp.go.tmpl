@@ -1,0 +1,43 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/router"
+	"arkoren.dev/driver/mcp/mcpserver"
+)
+
+// MCP returns a factory for read-only application, route, and telemetry
+// diagnostics at /mcp. Application-owned bounded capture keeps recent traces,
+// logs, and metrics in memory; nothing is exported to an external backend.
+//
+// Compose selects this factory with compose.UseDebug. Calling MCP alone has no
+// side effects; invoking its callback constructs the endpoint and mounts it on
+// the supplied router. Endpoint construction errors abort composition before
+// mounting. The returned endpoint shares the HTTP server's listener and router
+// middleware; it does not start or own a separate listener.
+//
+// This starter adds no authentication. Anyone who can reach the listener can
+// read logs and telemetry attributes. Keep APP_DEBUG=false in production and
+// bind development listeners to loopback. Add authentication and authorization
+// before exposing application operations through MCP; debug selection is not
+// access control.
+//
+// See https://arkoren.dev/docs/guides/observability/exposing-diagnostics and
+// https://arkoren.dev/docs/guides/mcp/securing-mcp.
+func MCP(routes *router.Router) application.Factory[*mcpserver.Server] {
+	return func(compose *application.Composer) *mcpserver.Server {
+		logger := compose.App().Logger()
+		telemetry := compose.App().Telemetry()
+
+		endpoint := compose.Must(mcpserver.New("{{.Name}}", "dev", func(listener *mcpserver.Builder) {
+			listener.Logger(logger)
+			listener.Telemetry(telemetry)
+			listener.Tools(compose.Must(compose.MCPTools("app"))...)
+			listener.Tools(routes.MCPTools("http")...)
+		}))
+
+		routes.Mount("/mcp", endpoint)
+
+		return endpoint
+	}
+}
