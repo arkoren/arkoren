@@ -182,4 +182,9 @@ fixture 'overlapping module classifications'
 printf '%s\n' '{"schema":1,"public":["core","cmd/arkoren"],"development":["cmd/arkoren"]}' > .github/release-modules.json
 expect_rejected 'invalid module policy'
 
+fixture 'missing reviewed public module'
+jq '.public += ["driver/missing"]' .github/release-modules.json > "$scratch/policy"
+mv "$scratch/policy" .github/release-modules.json
+expect_rejected 'expected real directory: driver/missing'
+
 printf 'CI inventory fixtures passed\n'

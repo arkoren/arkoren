@@ -112,6 +112,12 @@ for module in "${candidates[@]}"; do
     integration+=("$module")
   fi
 done
+# New canonical filesystem modules join CI automatically; reviewed public roots
+# must not silently disappear while their release namespaces remain approved.
+public=$(jq -r '.public[]' .github/release-modules.json)
+while IFS= read -r module; do
+  validate_module "$module"
+done <<< "$public"
 [[ ${#integration[@]} -gt 0 ]] || fail 'empty integration inventory'
 
 # Encode both arrays before publishing either one. jq's unique also sorts.
