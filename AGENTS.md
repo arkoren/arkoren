@@ -113,12 +113,10 @@ custom Markdown/editorial policy checks are retired; review source conventions
 and relative links explicitly. A rendered build is not proof of API correctness
 or editorial quality.
 
-During incremental source imports, `.github/workflows/imports.yml` uses
-`scripts/imported-modules.sh` to check only committed canonical modules, including
-an empty checkout inventory. Keep `ci-modules.sh` strict: it is the complete-source
-inventory. Replace the temporary import workflow with full CI/audit workflows
-only after the full inventory is published; scheduled audits remain held back.
-The separate website workflow and its required `website` job remain active.
+`.github/workflows/ci.yml` uses the strict `scripts/ci-modules.sh` inventory.
+Validate from a clean committed checkout: ignored local modules also count when
+running discovery locally. The separate website workflow owns rendered docs;
+it is not duplicated in the Go workflow.
 
 After workflow edits run `workflow-check` (discovery/Make fixtures and actionlint), the affected shared
 recipes, and inspect real GitHub CI results. There is no local workflow emulator.
@@ -127,11 +125,13 @@ three integration jobs at a time, independently), plus workflow tooling checks
 and rendered docs. `scripts/ci-modules.sh` owns the bounded inventory; module
 changes must preserve its canonical paths and pass its fixtures. Compose modules
 run lint in check and full race suites in integration.
-`CI gate` requires every routine job.
+Require both `CI gate` (all Go/tooling jobs) and the separate `website` check.
+The gate rejects failures, cancellations, missing jobs, and unexpected skips.
 The separate Monday/Thursday 03:17 UTC audit runs all-module toolchain vet and
 govulncheck and the CLI generated-project end-to-end test.
 Manual audit dispatch checks the selected ref; scheduled audits use the default
-branch. Vulnerability scans are audit-only, not a dependency-PR merge gate.
+branch. Audit summaries record the resolved SHA, tools, and all failing modules.
+Vulnerability scans are audit-only, not a dependency-PR merge gate.
 
 Answer plans, proposals, comparisons and findings in the conversation. Write
 them to a file only when requested, under `.claude/tmp/` (temporary, gitignored,

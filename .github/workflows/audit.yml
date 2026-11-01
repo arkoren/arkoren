@@ -1,0 +1,51 @@
+name: Audit
+
+on:
+  schedule:
+    - cron: '17 3 * * 1,4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOWORK: "off"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      # Default checkout preserves the selected workflow_dispatch ref.
+      - uses: actions/checkout@v7
+      - id: inventory
+        run: bash scripts/ci-modules.sh >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: |
+            core/go.mod
+            core/go.sum
+            cmd/*/go.mod
+            cmd/*/go.sum
+            driver/*/go.mod
+            driver/*/go.sum
+            foundation/*/go.mod
+            foundation/*/go.sum
+            ark/*/go.mod
+            ark/*/go.sum
+      - name: Record audited revision and tools
+        run: |
+          printf '## Audit\n\nCommit: %s\n\nRef: %s\n\n' "$(git rev-parse HEAD)" "$GITHUB_REF" >> "$GITHUB_STEP_SUMMARY"
+          go version | tee -a "$GITHUB_STEP_SUMMARY"
+          GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/govulncheck" -version | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Vet, scan, and test generated applications
+        env:
+          MODULES: ${{ steps.inventory.outputs.modules }}
+        run: bash scripts/audit.sh
