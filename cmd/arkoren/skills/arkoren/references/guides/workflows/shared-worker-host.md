@@ -1,16 +1,21 @@
 ---
 title: Shared Worker Host
-description: The host the Temporal, Hatchet, and Restate drivers share, how to build and start it, and how to run a process that only starts work.
+description: Share a host between Temporal or Restate drivers, with pending Hatchet host notes.
 order: 40
 ---
 
 # Shared Worker Host
 
+> [!NOTE]
+> Hatchet is pending and unpublished. All Hatchet examples and behavior below
+> are retained development context, not usable setup instructions or verified
+> public API documentation. Use Temporal or Restate for an available shared host.
+
 ## Introduction
 
 If one service uses an engine for both workflows and scheduled tasks, it should
 not need a separate connection and worker for each driver. A **host** manages those
-shared resources, including their ownership rules. The Temporal, Hatchet, and
+shared resources, including their ownership rules. The Temporal and
 Restate modules each provide a host that their workflow and scheduler drivers
 use together.
 
@@ -133,6 +138,9 @@ namespace override native client fields only when the host dials. `NewFrom`
 retains the caller's client configuration and ownership.
 
 ## Hatchet
+
+This host is pending and unavailable to install. The following notes preserve
+its development lifecycle and safety constraints for a future publication.
 
 The Hatchet host belongs to `arkoren.dev/driver/hatchet`, in package `hatchet`.
 It needs an API token, either with `Builder.Token` or in the `HATCHET_CLIENT_TOKEN`
@@ -300,5 +308,6 @@ setter, and NewRunner's required registry supplies both runner and driver.
 
 For every function and builder method, see the API references for the hosts' drivers:
 [`temporalworkflow`](https://pkg.go.dev/arkoren.dev/driver/temporal/temporalworkflow),
-[`hatchetworkflow`](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow), and
-[`restateworkflow`](https://pkg.go.dev/arkoren.dev/driver/restate/restateworkflow).
+[`restateworkflow`](https://pkg.go.dev/arkoren.dev/driver/restate/restateworkflow), and the pending
+[`hatchetworkflow` URL](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow)
+(unpublished, not evidence of package availability).

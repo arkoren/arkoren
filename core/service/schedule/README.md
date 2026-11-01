@@ -1,5 +1,10 @@
 # Schedule
 
+> [!NOTE]
+> Hatchet references below describe a pending, unpublished integration, not
+> available support. See the [scheduler comparison](../../../cmd/arkoren/skills/arkoren/references/guides/scheduled-tasks/drivers.md#compatibility-matrix)
+> for available drivers.
+
 `arkoren.dev/core/service/schedule` runs functions on a calendar and defers one-off typed
 tasks. The scheduler owns what runs; a driver owns when it runs and how
 processes coordinate.

@@ -7,6 +7,11 @@ order: 30
 
 # Scheduled Task Errors
 
+> [!NOTE]
+> Hatchet references below are retained development context for a pending,
+> unpublished integration, not available driver support. See the
+> [scheduler comparison](drivers.md#compatibility-matrix) for available drivers.
+
 ## Introduction
 
 Scheduled work runs without anyone watching, so what it does when it fails is

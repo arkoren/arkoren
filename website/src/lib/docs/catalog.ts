@@ -72,13 +72,13 @@ export const contracts: readonly Contract[] = [
     name: "workflow",
     guide: "workflows/overview",
     body: "Durable, typed workflows with steps, signals, timers, and child runs.",
-    drivers: ["memory", "temporal", "hatchet", "restate"],
+    drivers: ["memory", "temporal", "restate"],
   },
   {
     name: "schedule",
     guide: "scheduled-tasks/overview",
     body: "Run functions on a calendar and defer typed one-off tasks. Durable drivers fire once across replicas.",
-    drivers: ["memory", "temporal", "hatchet", "restate"],
+    drivers: ["memory", "temporal", "restate"],
   },
   {
     name: "secret",

@@ -346,16 +346,16 @@ opaque to inference.
 - [Scheduled Tasks Overview](references/guides/scheduled-tasks/overview.md): Define named calendar entries and typed one-off tasks, run them with a scheduler, control overlapping runs, and test with memory.
 - [Time Zones and DST](references/guides/scheduled-tasks/time-zones-and-dst.md): Choose the time zone of a schedule, what happens to a wall-clock time skipped or repeated when clocks change, and which drivers differ.
 - [Scheduled Task Errors](references/guides/scheduled-tasks/error-handling.md): What happens when an entry or task fails, panics, times out, or chooses not to run, how failures are reported, and what drivers do next.
-- [Scheduler Drivers](references/guides/scheduled-tasks/drivers.md): Choose between the memory, Temporal, Hatchet, and Restate scheduler drivers, and install, wire, and configure each, with a local server.
+- [Scheduler Drivers](references/guides/scheduled-tasks/drivers.md): Choose between the memory, Temporal, and Restate scheduler drivers, with pending Hatchet integration notes.
 
 #### Workflows
 
 - [Workflows Overview](references/guides/workflows/overview.md): Define workflows from steps, signals, sleeps, and child workflows, register them with a driver, start and signal runs, and know the rules.
 - [Workflow Errors](references/guides/workflows/error-handling.md): How steps retry and when to stop, which errors end a run, how panics and timeouts surface, and why messages must not hold secrets.
 - [Testing Workflows](references/guides/workflows/testing.md): Test code that starts workflows with a fake driver, and workflow logic on the memory driver with instant time.
-- [Shared Worker Host](references/guides/workflows/shared-worker-host.md): The host the Temporal, Hatchet, and Restate drivers share, how to build and start it, and how to run a process that only starts work.
-- [Recovering Hatchet Runs](references/guides/workflows/hatchet-recovery.md): Preserve execution identity, signal history, and safe upgrade ordering when recovering or replacing Hatchet workers.
-- [Workflow Drivers](references/guides/workflows/drivers.md): Choose between the memory, Temporal, Hatchet, and Restate workflow drivers, and install, wire, and configure each, with a local server.
+- [Shared Worker Host](references/guides/workflows/shared-worker-host.md): Share a host between Temporal or Restate drivers, with pending Hatchet host notes.
+- [Recovering Hatchet Runs](references/guides/workflows/hatchet-recovery.md): Pending, unpublished Hatchet integration notes on execution identity, signal history, and safe worker replacement.
+- [Workflow Drivers](references/guides/workflows/drivers.md): Choose between the memory, Temporal, and Restate workflow drivers, with pending Hatchet integration notes.
 
 #### Language Models
 

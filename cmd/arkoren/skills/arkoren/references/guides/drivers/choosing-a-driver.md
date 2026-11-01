@@ -29,6 +29,11 @@ linked driver guide before relying on one.
 
 ## Drivers by service
 
+Hatchet is pending and unpublished, not an installable driver. Its
+[workflow notes](../workflows/drivers.md#hatchet) and
+[scheduler notes](../scheduled-tasks/drivers.md#hatchet) remain as development
+context; the catalog below lists available choices.
+
 | Service | Driver | Pick when | Guide |
 | --- | --- | --- | --- |
 | Cache | Memory | Development and tests; a single process. | [Docs](../cache/drivers.md#memory) |
@@ -70,11 +75,9 @@ linked driver guide before relying on one.
 | | Mollie | Automatic one-off hosted card payments and explicit partial refunds. | [Docs](../payments/drivers.md#mollie) |
 | Scheduled tasks | Memory | Development and tests; a single process. | [Docs](../scheduled-tasks/drivers.md#memory) |
 | | Temporal | Tasks that run once across replicas, and durable one-off runs. | [Docs](../scheduled-tasks/drivers.md#temporal) |
-| | Hatchet | Hatchet crons (in UTC) and durable one-off runs. | [Docs](../scheduled-tasks/drivers.md#hatchet) |
 | | Restate | Durable schedules with at-least-once execution. | [Docs](../scheduled-tasks/drivers.md#restate) |
 | Workflows | Memory | Development and tests; a single process. | [Docs](../workflows/drivers.md#memory) |
 | | Temporal | Temporal workflows and activities, with signals and timers. | [Docs](../workflows/drivers.md#temporal) |
-| | Hatchet | Hatchet durable tasks, signals, and timers; no child workflows. | [Docs](../workflows/drivers.md#hatchet) |
 | | Restate | Restate workflow services, with signals and timers. | [Docs](../workflows/drivers.md#restate) |
 | Secrets | Memory | Development and tests. | [Docs](../secrets/drivers.md#memory) |
 | | Vault | HashiCorp Vault (KV version 2). | [Docs](../secrets/drivers.md#hashicorp-vault) |

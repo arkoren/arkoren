@@ -1,10 +1,16 @@
 ---
 title: Recovering Hatchet Runs
-description: Preserve execution identity, signal history, and safe upgrade ordering when recovering or replacing Hatchet workers.
+description: Pending, unpublished Hatchet integration notes on execution identity, signal history, and safe worker replacement.
 order: 45
 ---
 
 # Recovering Hatchet Runs
+
+> [!NOTE]
+> Hatchet is pending and unpublished. This page preserves development recovery
+> and safety context; it does not describe an installable Arkoren module or
+> independently verified public behavior. See the available
+> [workflow drivers](drivers.md#compatibility-matrix) for new applications.
 
 ## Introduction
 
@@ -140,5 +146,5 @@ Keep namespace and prefix stable for the lifetime of runs you need to access.
 After replacement, verify expected status and results by the same logical tuple,
 and test queued signals, replay after eviction, and retention boundaries against
 your engine. [Memory tests](testing.md) cannot establish engine replay or
-retention behavior. For driver APIs selected by your application, see
-[the `hatchetworkflow` API reference](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow).
+retention behavior. The [`hatchetworkflow` API reference URL](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow)
+is pending publication; it does not establish package availability.

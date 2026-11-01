@@ -7,6 +7,11 @@ order: 30
 
 # Testing Workflows
 
+> [!NOTE]
+> Hatchet references below are retained development context for a pending,
+> unpublished integration, not available driver support. See the
+> [workflow comparison](drivers.md#compatibility-matrix) for available drivers.
+
 ## Introduction
 
 Test the handoff separately from the work. A signup handler needs to start the

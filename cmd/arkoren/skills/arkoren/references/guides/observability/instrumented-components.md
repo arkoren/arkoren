@@ -6,6 +6,11 @@ order: 20
 
 # Instrumented Components
 
+> [!NOTE]
+> Hatchet instrumentation references below are retained development context for
+> a pending, unpublished integration, not available support. See the
+> [workflow comparison](../workflows/drivers.md#compatibility-matrix) for available drivers.
+
 ## Introduction
 
 You do not write spans for the parts of your application that Arkoren already
