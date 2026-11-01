@@ -14,7 +14,7 @@
   <rect width="1200" height="630" fill="url(#grid)"/>
   <text class="mono" x="90" y="94" font-size="30" font-weight="700" letter-spacing="1" fill="#fffbf5">A MODULAR GO TOOLKIT</text>
   <image href="../logo/logo-rose-on-white.svg" x="90" y="163" width="172" height="172"/>
-  <text class="sans" x="302" y="334" font-size="240" font-weight="600" letter-spacing="-14" fill="#fffbf5">arkoren</text>
+  <text class="sans" x="302" y="334" font-size="240" font-weight="600" letter-spacing="-14" fill="#fffbf5">Arkoren</text>
   <g class="sans" font-size="46" letter-spacing="-.9" fill="#fffbf5">
     <text x="90" y="427">Less framework.</text>
     <text x="90" y="485" fill-opacity=".75">More Go.</text>
