@@ -232,12 +232,15 @@ peeled source commit, and exact-version installation command. CLI pages use
 `go install`; library pages use `go get`. Modules version independently.
 The **Website release notes** workflow imports published GitHub notes on release
 `published` and `edited` events, including prereleases. It opens or updates one
-human-reviewed PR from `automation/release-notes` to `main`. It does not publish
-modules, tags, GitHub releases, or deployments, and never enables auto-merge.
-Normal CI and website checks run for App-created PRs; merging follows the usual
-website deployment path.
+App-owned PR from `automation/release-notes` to `main` and requests GitHub native
+auto-merge with a merge commit, preserving the signed App commits. GitHub waits
+for the required `CI gate` and `website` checks on an up-to-date branch; pending,
+failed or cancelled checks block merging. No human review, App self-approval or
+main bypass is used. The workflow does not publish modules, tags, GitHub releases
+or deployments; merging follows the usual website deployment path.
 
-Before the first changed import, configure the existing
+The repository enables auto-merge and merge commits without weakening main's
+required checks. The existing credential setup uses the
 [Arkoren Releases App](https://github.com/apps/arkoren-releases) (App ID `5540931`,
 installation `176874315`) for `arkoren/arkoren`. Store its **existing** private key
 securely as the repository Actions secret `ARKOREN_RELEASES_PRIVATE_KEY`, or an
@@ -269,7 +272,12 @@ commits with a release-only diff. A foreign branch or PR stops sync for manual
 recovery rather than overwriting it. Runs are serialized; an identical retry
 creates no duplicate commit or PR. If `main` advances during import, rerun from
 current `main`. API failures preserve existing history; no publication is retried
-or edited by this workflow. Review and merge note PRs manually after green checks.
+or edited by this workflow. Before requesting auto-merge, sync reinspects the
+PR's App author, repository, base, branch, verified commits and release-only diff,
+and supplies the inspected head SHA to GitHub's mutation. An already enabled
+merge-commit request is left intact. API or permission failures stop sync with
+recovery guidance, never fall back to direct merging; rerun the workflow after
+correcting the cause.
 
 To import confirmed GitHub publications, use Node.js 26.13+ and an authenticated
 `gh` CLI with repository read access. From `website/`, run:

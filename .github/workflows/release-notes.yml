@@ -85,7 +85,7 @@ jobs:
           test "$APP_SLUG" = arkoren-releases
           test "$INSTALLATION_ID" = 176874315
           python3 scripts/release_notes_pr.py verify "$RUNNER_TEMP/release-notes.json"
-      - name: Upsert one signed, human-reviewed website PR
+      - name: Upsert one signed website PR with green-only native auto-merge
         if: steps.prepare.outputs.changed == 'true'
         run: python3 scripts/release_notes_pr.py publish "$RUNNER_TEMP/release-notes.json"
         env:

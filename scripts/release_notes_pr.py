@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a bounded import, then upsert a human-reviewed website PR as the App."""
+"""Prepare a bounded import, then upsert a green-only auto-merge PR as the App."""
 
 import argparse
 import base64
@@ -83,6 +83,8 @@ def owned(state, request=api):
         raise RuntimeError("multiple release-note PRs require manual recovery")
     for pull in pulls:
         if (pull["user"]["login"] != BOT or pull["base"]["ref"] != "main"
+                or pull["base"]["repo"]["full_name"] != REPO
+                or pull["head"]["ref"] != BRANCH
                 or pull["head"]["repo"]["full_name"] != REPO):
             raise RuntimeError("foreign PR occupies the automation branch")
     refs = request(f"{API}/git/matching-refs/heads/{BRANCH}")
@@ -126,6 +128,34 @@ def verify(request=api):
         raise RuntimeError("App token must be scoped only to arkoren/arkoren")
 
 
+def auto_merge(state, pull, expected_head, request=api):
+    """Reinspect ownership, then let GitHub enforce all main requirements."""
+    tip, current = owned(state, request)
+    if (current is None or current["number"] != pull["number"]
+            or current["node_id"] != pull["node_id"] or tip["sha"] != expected_head):
+        raise RuntimeError("PR or branch changed before auto-merge; rerun sync")
+    enabled = current.get("auto_merge")
+    if enabled:
+        if enabled["merge_method"] != "merge":
+            raise RuntimeError("existing auto-merge must preserve signed commits with merge method")
+        return
+    repository = request(API)
+    if not repository.get("allow_auto_merge") or not repository.get("allow_merge_commit"):
+        raise RuntimeError("enable repository auto-merge and merge commits; do not relax main requirements")
+    try:
+        result = request("graphql", {
+            "query": "mutation($input: EnablePullRequestAutoMergeInput!) { "
+                     "enablePullRequestAutoMerge(input: $input) { pullRequest { id } } }",
+            "variables": {"input": {"pullRequestId": current["node_id"],
+                                    "expectedHeadOid": expected_head, "mergeMethod": "MERGE"}},
+        }, "POST")
+        if result.get("errors") or result["data"]["enablePullRequestAutoMerge"]["pullRequest"]["id"] != current["node_id"]:
+            raise RuntimeError("auto-merge not confirmed")
+    except (RuntimeError, KeyError, TypeError) as error:
+        raise RuntimeError("auto-merge request failed; check App Contents/Pull requests write access, "
+                           "repository auto-merge and current PR head; rerun sync without bypassing checks") from error
+
+
 def publish(state, request=api):
     """Create signed API commits and advance only the dedicated branch, never tags."""
     for record in state["records"]:
@@ -149,6 +179,7 @@ def publish(state, request=api):
                   "content": base64.b64decode(record["content"], validate=True).decode()}
                  for record in state["records"]],
     }, "POST")
+    expected_head = tip["sha"] if tip is not None else None
     if tip is None or tip["commit"]["tree"]["sha"] != tree["sha"]:
         parents = [state["base"]] if tip is None else list(dict.fromkeys([tip["sha"], state["base"]]))
         commit = request(f"{API}/git/commits", {
@@ -157,6 +188,7 @@ def publish(state, request=api):
         }, "POST")
         if not commit["verification"]["verified"]:
             raise RuntimeError("GitHub did not sign the App commit; branch was not changed")
+        expected_head = commit["sha"]
         if tip is None:
             request(f"{API}/git/refs", {"ref": f"refs/heads/{BRANCH}", "sha": commit["sha"]}, "POST")
         else:
@@ -167,14 +199,17 @@ def publish(state, request=api):
     )
     body = ("Sync confirmed published GitHub notes into the website collection.\n\n" + links
             + "\n\nOnly release records change. This job publishes no modules, tags or releases. "
-              "Review the notes and normal CI checks, then merge manually. No auto-merge is enabled.")
+              "GitHub native auto-merge uses a merge commit after required CI gate and website checks "
+              "pass on an up-to-date branch. Failed, pending or cancelled checks block merging. "
+              "No self-approval or main bypass is used.")
     payload = {"title": "Sync published module release notes", "body": body}
     if pull is None:
         payload.update({"head": BRANCH, "base": "main", "maintainer_can_modify": False})
         pull = request(f"{API}/pulls", payload, "POST")
     else:
         pull = request(f"{API}/pulls/{pull['number']}", payload, "PATCH")
-    return f"Human review required: {pull['html_url']}"
+    auto_merge(state, pull, expected_head, request)
+    return f"GitHub green-only auto-merge requested: {pull['html_url']}"
 
 
 def main():

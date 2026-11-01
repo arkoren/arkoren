@@ -27,10 +27,22 @@ class GitHub:
         self.comparison = {"total_commits": 0, "commits": [], "files": []}
         self.is_signed = True
         self.has_race = False
+        self.repository = {"allow_auto_merge": True, "allow_merge_commit": True}
+        self.graphql_error = None
+        self.required_check_status = "pending"
+        self.merged = False
 
     def request(self, endpoint, payload=None, method="GET"):
         if method != "GET":
             self.writes.append((endpoint, copy.deepcopy(payload), method))
+        if endpoint == SYNC.API:
+            return self.repository
+        if endpoint == "graphql":
+            if self.graphql_error:
+                return {"errors": [{"message": self.graphql_error}]}
+            self.pull["auto_merge"] = {"merge_method": "merge"}
+            self.merged = self.required_check_status == "success"
+            return {"data": {"enablePullRequestAutoMerge": {"pullRequest": {"id": self.pull["node_id"]}}}}
         if endpoint == "installation/repositories?per_page=100":
             return {"total_count": 1, "repositories": [{"full_name": SYNC.REPO}]}
         if "/pulls?" in endpoint:
@@ -54,9 +66,11 @@ class GitHub:
                         "commit": {"verification": {"verified": True}, "tree": {"sha": "desired-tree"}}}
             return {}
         if "/pulls" in endpoint:
-            self.pull = {"number": 7, "html_url": "https://github.com/arkoren/arkoren/pull/7",
-                         "user": {"login": SYNC.BOT}, "base": {"ref": "main"},
-                         "head": {"sha": "new-sha", "repo": {"full_name": SYNC.REPO}}}
+            if self.pull is None:
+                self.pull = {"number": 7, "node_id": "PR_fixture", "auto_merge": None,
+                             "html_url": "https://github.com/arkoren/arkoren/pull/7",
+                             "user": {"login": SYNC.BOT}, "base": {"ref": "main", "repo": {"full_name": SYNC.REPO}},
+                             "head": {"sha": "new-sha", "ref": SYNC.BRANCH, "repo": {"full_name": SYNC.REPO}}}
             return self.pull
         raise AssertionError(endpoint)
 
@@ -72,12 +86,17 @@ class ReleaseNotesPRTest(unittest.TestCase):
         self.state["records"] = []
         self.assertIn("No changes", SYNC.publish(self.state, lambda *args: self.fail("unexpected API")))
 
-    def test_new_publication_creates_signed_commit_and_one_review_pr(self):
-        self.assertIn("Human review", SYNC.publish(self.state, self.github.request))
-        self.assertEqual([item[0].split("/")[-1] for item in self.github.writes], ["trees", "commits", "refs", "pulls"])
+    def test_new_publication_creates_signed_commit_and_native_auto_merge_pr(self):
+        self.assertIn("auto-merge requested", SYNC.publish(self.state, self.github.request))
+        self.assertEqual([item[0].split("/")[-1] for item in self.github.writes], ["trees", "commits", "refs", "pulls", "graphql"])
         self.assertEqual(self.github.writes[1][1]["parents"], ["main-sha"])
         self.assertEqual(self.github.writes[0][1]["tree"][0]["content"], "notes\n")
-        self.assertFalse(self.github.writes[-1][1]["maintainer_can_modify"])
+        self.assertFalse(self.github.writes[-2][1]["maintainer_can_modify"])
+        mutation = self.github.writes[-1][1]
+        self.assertIn("enablePullRequestAutoMerge(input: $input)", mutation["query"])
+        self.assertEqual(mutation["variables"]["input"], {
+            "pullRequestId": "PR_fixture", "expectedHeadOid": "new-sha", "mergeMethod": "MERGE",
+        })
 
     def test_identical_retry_updates_pr_without_another_commit(self):
         SYNC.publish(self.state, self.github.request)
@@ -139,7 +158,7 @@ class ReleaseNotesPRTest(unittest.TestCase):
         self.github.pull = None
         self.github.writes.clear()
         SYNC.publish(self.state, self.github.request)
-        self.assertEqual([item[0].split("/")[-1] for item in self.github.writes], ["trees", "pulls"])
+        self.assertEqual([item[0].split("/")[-1] for item in self.github.writes], ["trees", "pulls", "graphql"])
 
     def test_unsigned_api_commit_never_advances_branch(self):
         self.github.is_signed = False
@@ -231,6 +250,87 @@ class ReleaseNotesPRTest(unittest.TestCase):
     def test_app_token_cannot_cover_other_repositories(self):
         with self.assertRaisesRegex(RuntimeError, "scoped only"):
             SYNC.verify(lambda endpoint: {"total_count": 2, "repositories": []})
+
+    def test_existing_pr_without_auto_merge_recovers(self):
+        SYNC.publish(self.state, self.github.request)
+        self.github.pull["auto_merge"] = None
+        self.github.writes.clear()
+        SYNC.publish(self.state, self.github.request)
+        self.assertEqual([item[0].split("/")[-1] for item in self.github.writes], ["trees", "7", "graphql"])
+
+    def test_wrong_base_or_branch_fails_before_auto_merge(self):
+        SYNC.publish(self.state, self.github.request)
+        for field, value in (("base", "other"), ("head", "other")):
+            with self.subTest(field=field):
+                previous = self.github.pull[field]["ref"]
+                self.github.pull[field]["ref"] = value
+                self.github.writes.clear()
+                with self.assertRaisesRegex(RuntimeError, "foreign PR"):
+                    SYNC.publish(self.state, self.github.request)
+                self.assertEqual(self.github.writes, [])
+                self.github.pull[field]["ref"] = previous
+
+    def test_repository_must_allow_auto_merge_and_merge_commits(self):
+        for setting in ("allow_auto_merge", "allow_merge_commit"):
+            with self.subTest(setting=setting):
+                self.github = GitHub()
+                self.github.repository[setting] = False
+                with self.assertRaisesRegex(RuntimeError, "enable repository auto-merge"):
+                    SYNC.publish(self.state, self.github.request)
+                self.assertFalse(any(item[0] == "graphql" for item in self.github.writes))
+
+    def test_graphql_permission_error_is_actionable_without_direct_merge(self):
+        self.github.graphql_error = "Resource not accessible by integration"
+        with self.assertRaisesRegex(RuntimeError, "App Contents/Pull requests write access"):
+            SYNC.publish(self.state, self.github.request)
+        self.assertEqual(self.github.writes[-1][0], "graphql")
+        self.assertIsNone(self.github.pull["auto_merge"])
+
+    def test_head_moves_after_creation_before_auto_merge(self):
+        def request(endpoint, payload=None, method="GET"):
+            result = self.github.request(endpoint, payload, method)
+            if endpoint.endswith("/pulls") and method == "POST":
+                self.github.tip["sha"] = "concurrent-sha"
+                self.github.pull["head"]["sha"] = "concurrent-sha"
+            return result
+        with self.assertRaisesRegex(RuntimeError, "changed before auto-merge"):
+            SYNC.publish(self.state, request)
+        self.assertFalse(any(item[0] == "graphql" for item in self.github.writes))
+
+    def test_required_check_states_are_left_to_github_without_direct_merge(self):
+        for status in ("pending", "failure", "cancelled", "success"):
+            with self.subTest(status=status):
+                self.github = GitHub()
+                # GitHub owns check evaluation, including stale-head and missing checks.
+                # The transport rejects every unrecognized call, including direct merge/review APIs.
+                self.github.required_check_status = status
+                SYNC.publish(self.state, self.github.request)
+                self.assertEqual(self.github.writes[-1][1]["variables"]["input"]["mergeMethod"], "MERGE")
+                self.assertEqual(self.github.merged, status == "success")
+
+    def test_reinspection_rejects_foreign_author_or_diff_before_enabling(self):
+        for intrusion in ("author", "diff"):
+            with self.subTest(intrusion=intrusion):
+                self.github = GitHub()
+                def request(endpoint, payload=None, method="GET"):
+                    result = self.github.request(endpoint, payload, method)
+                    if endpoint.endswith("/pulls") and method == "POST":
+                        if intrusion == "author":
+                            self.github.pull["user"]["login"] = "human"
+                        else:
+                            self.github.comparison["files"] = [{"filename": "core/go.mod", "status": "modified"}]
+                    return result
+                with self.assertRaises(RuntimeError):
+                    SYNC.publish(self.state, request)
+                self.assertFalse(any(item[0] == "graphql" for item in self.github.writes))
+
+    def test_existing_squash_request_is_not_accepted(self):
+        SYNC.publish(self.state, self.github.request)
+        self.github.pull["auto_merge"]["merge_method"] = "squash"
+        self.github.writes.clear()
+        with self.assertRaisesRegex(RuntimeError, "preserve signed commits"):
+            SYNC.publish(self.state, self.github.request)
+        self.assertFalse(any(item[0] == "graphql" for item in self.github.writes))
 
 
 if __name__ == "__main__":
