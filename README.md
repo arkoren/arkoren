@@ -2,127 +2,125 @@
 
 ![Introducing Arkoren: wordmark and stepped A logo on a rose grid.](website/src/assets/images/blog/introducing-arkoren.svg)
 
-A modular Go toolkit for the work that keeps coming back: handling requests,
-validating input, querying databases, running background jobs, and understanding
-what happened along the way.
+A modular Go toolkit for HTTP services, data access, background work, and
+integrations. Use one package in an existing application or compose a service
+from the pieces you need.
 
-[Documentation](cmd/arkoren/skills/arkoren/references/guides/about/introduction.md) ·
-[Quickstart](cmd/arkoren/skills/arkoren/references/guides/first-steps/quickstart.md) ·
+Arkoren is a toolkit, not a framework: standard Go types, stdlib-first design,
+and explicit composition around `net/http`, `context.Context`, and `log/slog`.
+No dependency injection container, automatic discovery, or required lifecycle.
+Core has no third-party dependencies; vendor drivers are independent Go modules.
+
+[Documentation](https://arkoren.dev/docs/guides/about/introduction) ·
+[Quickstart](https://arkoren.dev/docs/guides/first-steps/quickstart) ·
+[API reference](https://pkg.go.dev/arkoren.dev/core) ·
 [Introducing Arkoren](website/src/content/blog/introducing-arkoren.mdx)
 
-## A toolkit, not a framework
+## Services, with your choice of backend
 
-Use one package in an existing application or combine them to build a service.
-Arkoren builds on `net/http`, `log/slog`, and `context.Context`. You construct
-objects and connect them explicitly—no dependency injection container, automatic
-discovery, or required application lifecycle.
+Keep application code against shared service contracts and choose the backend
+at construction time. The tables below list shipped implementations, not a
+promise of identical provider capabilities. Each service links to its detailed
+compatibility matrix; [choosing a driver](cmd/arkoren/skills/arkoren/references/guides/drivers/choosing-a-driver.md)
+explains persistence, sharing across replicas, and operational trade-offs.
 
-## The pieces you need
+### Data and application state
 
-- **HTTP:** routing, error-returning handlers, request and response helpers,
-  authentication, sessions, and middleware.
-- **Data:** parameterized SQL and schema builders, database access, pagination,
-  validation, and standard Problem Details error responses.
-- **Services:** cache, queues, mail, push notifications, storage, payments and provider-managed
-  subscriptions, workflows, scheduling, feature flags, search, and language models.
-- **MCP:** typed application tools, explicitly served through an optional
-  [MCP protocol adapter](cmd/arkoren/skills/arkoren/references/guides/mcp/tools.md).
-- **Operations:** optional startup and shutdown coordination, health checks,
-  traces, metrics, and local diagnostic MCP tools.
+| Service | Use it for | Local development | Backend drivers |
+| --- | --- | --- | --- |
+| [Cache](cmd/arkoren/skills/arkoren/references/guides/cache/drivers.md) | Typed values, expiry, counters, and locks | Memory | Redis |
+| [Database](cmd/arkoren/skills/arkoren/references/guides/database/drivers.md) | SQL queries, transactions, and migrations | SQLite, including in-memory databases | PostgreSQL, MySQL / MariaDB, SQLite |
+| [File storage](cmd/arkoren/skills/arkoren/references/guides/file-storage/drivers.md) | Read, write, and serve objects | Memory, filesystem | Filesystem, Amazon S3 and compatible stores |
+| [Search](cmd/arkoren/skills/arkoren/references/guides/search/drivers.md) | Typed indexes, text queries, filters, and sorting | Memory | PostgreSQL, Meilisearch, OpenSearch |
+| [Feature flags](cmd/arkoren/skills/arkoren/references/guides/feature-flags/drivers.md) | Typed flags and subject targeting | Memory | OpenFeature providers, LaunchDarkly |
+| [Secrets](cmd/arkoren/skills/arkoren/references/guides/secrets/drivers.md) | Named secrets and versioned reads | Memory | HashiCorp Vault KV v2, AWS Secrets Manager, Google Secret Manager, Azure Key Vault |
 
-The core has no third-party dependencies. Foundation libraries for collections,
-SQL queries, cryptographic keys, TLS certificates, validation, and Problem Details also work independently of Arkoren
-and use only the standard library.
+### Messaging and background work
 
-[Application keys](cmd/arkoren/skills/arkoren/references/guides/keys/overview.md) use
-validated immutable shared keys, ECDSA P-256 signing identities, and X25519
-exchange identities. Provision them offline with `arkoren key generate` and load the same
-material at startup; the CLI never overwrites an established key.
+| Service | Use it for | Local development | Backend drivers |
+| --- | --- | --- | --- |
+| [Queues](cmd/arkoren/skills/arkoren/references/guides/queues/drivers.md) | Dispatch jobs and control retries | Memory | RabbitMQ, NATS JetStream, Amazon SQS, Cloudflare Queues |
+| [Broadcasting](cmd/arkoren/skills/arkoren/references/guides/broadcasting/drivers.md) | Publish and subscribe across processes | Memory | Redis, NATS, RabbitMQ, MQTT (experimental), Amazon SNS / SQS |
+| [Scheduled tasks](cmd/arkoren/skills/arkoren/references/guides/scheduled-tasks/drivers.md) | Recurring tasks and deferred runs | Memory | Temporal, Restate |
+| [Workflows](cmd/arkoren/skills/arkoren/references/guides/workflows/drivers.md) | Coordinate steps, signals, and timers | Memory | Temporal, Restate |
 
-[TLS certificates](cmd/arkoren/skills/arkoren/references/guides/http-networking/certificates.md)
-support local CA provisioning, existing client and server identities, and native
-Go TLS configuration. The offline
-[certificate commands](cmd/arkoren/skills/arkoren/references/guides/cli/certificates.md)
-create files without overwriting them; system root trust changes require a
-separate, explicit command.
+### Customer communication and payments
 
-## Choose your infrastructure
+| Service | Use it for | Local development | Provider drivers |
+| --- | --- | --- | --- |
+| [Mail](cmd/arkoren/skills/arkoren/references/guides/mail/drivers.md) | Send messages and attachments | Log output, test fake | SMTP, Resend, Mailgun, Postmark, Amazon SES |
+| [Push notifications](cmd/arkoren/skills/arkoren/references/guides/push/drivers.md) | Submit encrypted browser notifications | Test fake | Web Push; application-owned subscriptions and service workers |
+| [Payments](cmd/arkoren/skills/arkoren/references/guides/payments/drivers.md) | Checkout, refunds, and provider-managed subscriptions where supported | Memory simulation, test fake | Stripe, PayPal, Mollie |
 
-Write against shared service interfaces, then choose a driver for Redis,
-PostgreSQL, S3, RabbitMQ, or another supported backend. Drivers live in separate
-Go modules, so you add only the integrations you need. Native clients remain
-accessible when you need vendor-specific features.
+### Security, AI, and observability
 
-[Push notifications](cmd/arkoren/skills/arkoren/references/guides/push/overview.md) start with
-standard Web Push for supported browsers, including Home Screen web apps on
-iOS and iPadOS. Your application owns subscriptions and notification display;
-the driver handles encrypted submission without automatic retries.
+| Service | Use it for | Local / test option | Driver choices |
+| --- | --- | --- | --- |
+| [Encryption](cmd/arkoren/skills/arkoren/references/guides/encryption/drivers.md) | Authenticated encryption | Same local algorithms | AES-GCM, ChaCha20-Poly1305 |
+| [Password hashing](cmd/arkoren/skills/arkoren/references/guides/hashing/drivers.md) | Hash, verify, and detect rehash needs | Same local algorithms | Argon2id, bcrypt |
+| [Language models](cmd/arkoren/skills/arkoren/references/guides/llm/drivers.md) | Generation, streaming, tools, and embeddings | Test fake; compatible local servers | OpenAI, OpenAI-compatible APIs (capabilities vary) |
+| [Telemetry](cmd/arkoren/skills/arkoren/references/guides/observability/telemetry-drivers.md) | Traces, metrics, and logs | Memory, test fake | OpenTelemetry / OTLP, Prometheus (metrics) |
 
-[Payments](cmd/arkoren/skills/arkoren/references/guides/payments/drivers.md) include hosted
-checkout through Stripe, PayPal, and Mollie. For native apps, the
-[mobile payments guide](cmd/arkoren/skills/arkoren/references/guides/payments/mobile-payments.md)
-shows shared payment preparation for Stripe cards and eligible wallets or
-PayPal SDK orders, with provider-required completion and server-side outcome
-verification.
+Memory drivers keep state in one process and lose it on restart; they do not
+coordinate replicas. Test fakes record or simulate calls without contacting a
+provider. Every service contract ships a conformance suite in its
+`<service>test` package; see [testing](cmd/arkoren/skills/arkoren/references/guides/testing/overview.md).
 
-Vendor modules also provide HTTP adapters, including
-[CAPTCHA verification](cmd/arkoren/skills/arkoren/references/guides/abuse-prevention/captcha.md)
-for Cloudflare Turnstile and Google reCAPTCHA. These keep provider-specific
-tokens and risk policies explicit rather than impose a shared service contract.
-[Webhook adapters](cmd/arkoren/skills/arkoren/references/guides/http-capabilities/webhooks.md#provider-adapters)
-receive notifications from Stripe, PayPal, Resend, Mailgun, Postmark, and OpenAI;
-your application chooses handlers and acceptance policy.
+## More than service drivers
 
-Many services include in-memory drivers for local development and tests. Every
-contract has a conformance test suite to check that its drivers behave consistently.
+HTTP capabilities and protocol adapters compose alongside those services;
+they are not interchangeable backend drivers.
+
+| Capability | What's included |
+| --- | --- |
+| [HTTP](cmd/arkoren/skills/arkoren/references/guides/http-fundamentals/routing.md) | Routing, error-returning handlers, request / response helpers, and middleware on `net/http` |
+| [Authentication](cmd/arkoren/skills/arkoren/references/guides/authentication/oauth.md) | OAuth 2 / OpenID Connect login and bearer tokens |
+| [Sessions](cmd/arkoren/skills/arkoren/references/guides/http-capabilities/sessions.md) | Session state backed by your chosen cache; no separate session driver |
+| [Events](cmd/arkoren/skills/arkoren/references/guides/events/overview.md) | In-process application events; separate from cross-process broadcasting |
+| [Secure links](cmd/arkoren/skills/arkoren/references/guides/http-capabilities/secure-links.md) | Signed links, with storage only when single-use enforcement needs it |
+| [CAPTCHA](cmd/arkoren/skills/arkoren/references/guides/abuse-prevention/captcha.md) | Cloudflare Turnstile and Google reCAPTCHA; application-owned acceptance policy |
+| [Webhooks](cmd/arkoren/skills/arkoren/references/guides/http-capabilities/webhooks.md#provider-adapters) | Receivers for Stripe, PayPal, Resend, Mailgun, Postmark, and OpenAI; explicitly registered handlers |
+| [MCP](cmd/arkoren/skills/arkoren/references/guides/mcp/tools.md) | Typed application tools, served through the optional official-SDK protocol adapter |
+| [Application lifecycle](cmd/arkoren/skills/arkoren/references/guides/application/lifecycle-and-ownership.md) | Optional startup, supervised work, and cleanup coordination |
+| [Foundation libraries](https://arkoren.dev/docs/api) | Independent, stdlib-only modules for collections, SQL queries, validation, Problem Details, cryptographic keys, and TLS certificates |
+
+[Application keys](cmd/arkoren/skills/arkoren/references/guides/keys/overview.md)
+and [TLS certificates](cmd/arkoren/skills/arkoren/references/guides/http-networking/certificates.md)
+support offline provisioning. Existing key and certificate files are not
+overwritten; changing system root trust is a separate, explicit action.
 
 ## Get started
 
-Arkoren requires **Go 1.27 or later**. Follow the
-[installation guide](cmd/arkoren/skills/arkoren/references/guides/first-steps/installation.md)
-to install the modules you need, then the
-[quickstart](cmd/arkoren/skills/arkoren/references/guides/first-steps/quickstart.md) to build
-your first HTTP service.
-
-Focused documentation snippets show the success path and keep error results
-visible. In application code, check those errors before using the results.
-
-Working with a coding agent? Install the documentation skill:
+Requires **Go 1.27 or later**. Add core to your existing Go module:
 
 ```sh
-go install arkoren.dev/cmd/arkoren@latest
-arkoren skills install
+go get arkoren.dev/core
 ```
 
-Run the second command from your project root after adding Go's binary directory
-to `PATH`. It installs the CLI's bundled documentation in `.agents/skills/arkoren/`
-without contacting a server. The [agent guide](cmd/arkoren/skills/arkoren/references/guides/agent-skills/working-with-agents.md)
-covers discovery, version selection, safe updates, and installation with
-`gh skill` or `npx skills` without the Arkoren CLI. The website and skill share
-the same guides. API declarations are published on pkg.go.dev.
+Add only the drivers you use—for example, `go get arkoren.dev/driver/redis`.
+The [installation guide](cmd/arkoren/skills/arkoren/references/guides/first-steps/installation.md)
+covers module choices; the [quickstart](cmd/arkoren/skills/arkoren/references/guides/first-steps/quickstart.md)
+builds a first HTTP service. Native clients remain accessible for vendor-specific
+features. Documentation snippets keep error results visible; application code
+must check them before using the results.
+
+Working with a coding agent? The [agent guide](cmd/arkoren/skills/arkoren/references/guides/agent-skills/working-with-agents.md)
+explains how to install the bundled documentation skill. The website and skill
+share the same authored guides; API declarations live on pkg.go.dev.
 
 ## Contribute
 
-Run `make` for the shared local and CI commands. For example, `make test
-MODULE=core PKG=./http/...` runs cached short tests; `make check MODULE=core`
-runs lint and cached short race tests. Go commands run with `GOWORK=off` so
-each module verifies its own requirements. Race targets enable CGO only for
-their test command and require a C compiler.
+Run `make` for the available commands. From a checkout:
 
-Use `make integration MODULE=driver/redis` for service-backed tests. It waits
-for healthy Compose services and removes its unique test project's containers
-and volumes on exit. An explicit `COMPOSE_PROJECT_NAME` is honored and that
-project must be disposable. Manual `services`/`cleanup` commands instead share
-the named `arkoren-manual-driver-redis` project by default. Fixed test ports
-must still be free. Integrations use `-count=1`; ordinary module tests retain
-caching. After guide edits, run `make generate` and `make docs` (install website
-dependencies and Playwright Chromium first). Workflow edits also require
-`make workflow-check`; execution of GitHub workflows is verified in CI, not
-through a local workflow emulator.
+```sh
+make test MODULE=core PKG=./http/...
+make check MODULE=core
+```
 
-The website build checks guide-index freshness without writing and validates
-guide metadata. Module conventions and offline source links are reviewed rather
-than checked by a repository-wide Go policy suite.
+Shared Go recipes use `GOWORK=off` to check each module independently. Race tests
+require a C compiler. After guide edits, run `make generate` and `make docs`;
+see the [website contributor guide](website/README.md) for Node dependencies
+and browser setup.
 
 ## License
 
