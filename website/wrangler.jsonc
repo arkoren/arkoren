@@ -3,9 +3,6 @@
   // Must match the Worker name in the Cloudflare dashboard.
   "name": "arkoren",
   "compatibility_date": "2026-10-31",
-  // Enable branch previews; assets and compatibility settings stay at the
-  // top level because this static site needs no preview-specific bindings.
-  "previews": {},
   // Static files only: without a Worker script, requests are free and not
   // counted against the Workers daily request limit.
   "assets": {

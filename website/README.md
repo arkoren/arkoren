@@ -171,11 +171,28 @@ Worker name in `wrangler.jsonc` identical to the name in the Cloudflare dashboar
 
 Workers Builds deploys from GitHub with these settings: root directory `website`,
 build command `npm run build`, deploy command `npx wrangler deploy`, and
-production branch `main`. Builds on other branches create previews, not
-production deployments. Deployments never create Git tags or releases. The
-build uses the Wrangler version pinned in `package.json`. To check the
-configuration without uploading anything, build the site and run
+production branch `main`. In **Settings > Builds > Previews Base**, turn off
+**Builds for Preview branches** to avoid PR preview deployments and their
+Cloudflare bot comments. Production deployments continue to serve `https://arkoren.dev`.
+Deployments never create Git tags or releases. The build uses the Wrangler
+version pinned in `package.json`. To check the configuration without uploading
+anything, build the site and run
 `npx wrangler deploy --dry-run`.
+
+In **Settings > Builds > Production > Build watch paths**, set include paths to
+`website/*`, `cmd/arkoren/skills/arkoren/*`, `*.go`, and `*go.mod`.
+Set exclude paths to `*_test.go`. Cloudflare's
+[build watch paths](https://developers.cloudflare.com/workers/ci-cd/builds/build-watch-paths/)
+match repository-relative paths, not paths relative to the `website` build
+directory. Its prefix and suffix wildcards also match nested paths, so
+`website/*` includes descendants and `*.go` includes Go files across modules.
+Exclusions take precedence. The Go inputs are needed because the
+site discovers module declarations, package paths, and package comments for its
+API catalog and vanity-import pages. Contributor-only skills and unrelated files
+do not trigger a deployment. Cloudflare bypasses watch paths for empty pushes
+or pushes with at least 3,000 changed files or 20 commits.
+The required GitHub `website` check runs independently on every PR; it does not
+deploy the site or post preview comments.
 
 The build reads the Node version from `website/.node-version`. A `NODE_VERSION`
 build variable set in the Cloudflare dashboard overrides that file; if you set
