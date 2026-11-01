@@ -24,9 +24,6 @@ concurrency:
   group: module-publication
   cancel-in-progress: false
 
-env:
-  PYTHONDONTWRITEBYTECODE: '1'
-
 jobs:
   publish:
     if: >-
@@ -64,33 +61,62 @@ jobs:
           fallback: none
       - name: Require exact green SHA, namespace policy and recomputed plans
         id: prepare
-        run: python3 scripts/release_publish.py prepare "$RUNNER_TEMP/publication.json"
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish prepare --output "$RUNNER_TEMP/publication.json"'
         env:
           GH_TOKEN: ${{ github.token }}
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         if: steps.prepare.outputs.changed == 'true' || inputs.preflight-only == true
-        id: app
+        id: tag-app
         with:
           client-id: Iv23liUAyM9AkNIKa7tH
           private-key: ${{ secrets.ARKOREN_RELEASES_PRIVATE_KEY }}
           owner: arkoren
           repositories: arkoren
           permission-contents: write
+          # Revoke immediately after the short tag phase, not after public builds.
+          skip-token-revoke: true
       - name: Verify dedicated signer without remote writes
         if: inputs.preflight-only == true
-        run: python3 scripts/release_publish.py preflight "$RUNNER_TEMP/publication.json"
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish preflight --manifest "$RUNNER_TEMP/publication.json"'
         env:
           GH_TOKEN: ${{ github.token }}
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-          APP_SLUG: ${{ steps.app.outputs.app-slug }}
-          INSTALLATION_ID: ${{ steps.app.outputs.installation-id }}
+          APP_TOKEN: ${{ steps.tag-app.outputs.token }}
+          APP_SLUG: ${{ steps.tag-app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.tag-app.outputs.installation-id }}
           SIGNING_KEY: ${{ secrets.ARKOREN_RELEASES_TAG_SIGNING_KEY }}
-      - name: Sign atomic immutable tag batch, verify public consumers, publish notes
+      - name: Sign atomic immutable tag batches and reconcile remote objects
         if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
-        run: python3 scripts/release_publish.py publish "$RUNNER_TEMP/publication.json"
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish tags --manifest "$RUNNER_TEMP/publication.json"'
         env:
           GH_TOKEN: ${{ github.token }}
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-          APP_SLUG: ${{ steps.app.outputs.app-slug }}
-          INSTALLATION_ID: ${{ steps.app.outputs.installation-id }}
+          APP_TOKEN: ${{ steps.tag-app.outputs.token }}
+          APP_SLUG: ${{ steps.tag-app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.tag-app.outputs.installation-id }}
           SIGNING_KEY: ${{ secrets.ARKOREN_RELEASES_TAG_SIGNING_KEY }}
+      - name: Revoke tag-phase token before any public Go build
+        if: always() && steps.tag-app.outputs.token != ''
+        run: gh api --method DELETE installation/token
+        env:
+          GH_TOKEN: ${{ steps.tag-app.outputs.token }}
+      - name: Verify exact public proxy, checksums, module builds and CLI install
+        if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish verify --manifest "$RUNNER_TEMP/publication.json" --output "$RUNNER_TEMP/public-verification.json"'
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
+        id: release-app
+        with:
+          client-id: Iv23liUAyM9AkNIKa7tH
+          private-key: ${{ secrets.ARKOREN_RELEASES_PRIVATE_KEY }}
+          owner: arkoren
+          repositories: arkoren
+          permission-contents: write
+      - name: Revalidate signed batches and publish idempotent App prereleases
+        if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish releases --manifest "$RUNNER_TEMP/publication.json" --verification "$RUNNER_TEMP/public-verification.json"'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.release-app.outputs.token }}
+          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.release-app.outputs.installation-id }}

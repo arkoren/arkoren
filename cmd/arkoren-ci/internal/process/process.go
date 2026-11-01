@@ -34,9 +34,16 @@ func Environment(readToken bool) []string {
 func Run(ctx context.Context, root, binary, input string, readToken bool, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+
+	return Execute(ctx, root, Environment(readToken), binary, input, args...)
+}
+
+// Execute runs a credential-scoped operation with caller-owned cancellation.
+// Diagnostics never contain arguments, environment values or child output.
+func Execute(ctx context.Context, root string, env []string, binary, input string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Dir = root
-	command.Env = Environment(readToken)
+	command.Env = env
 	command.Stdin = strings.NewReader(input)
 	data, err := command.Output()
 

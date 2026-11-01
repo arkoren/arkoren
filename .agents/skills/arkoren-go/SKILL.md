@@ -25,13 +25,17 @@ consumer command or release namespace; verify it with the shared Make checks
 and `GOWORK=off` like every other CI module.
 
 Maintenance subprocesses use explicit working directories, bounded contexts and
-the narrow environment in `internal/process`. Only metadata-reading gh receives
-the read token; Git and git-cliff receive no release credentials or ambient Git
-overrides. Candidate trees supply data, not executable configuration. Keep native
+the narrow environment in `internal/process`. Metadata-reading gh receives only
+the read token. App gh writes and atomic Git pushes receive an explicit scoped
+token; only signing Git/SSH processes receive the temporary dedicated key path.
+Public Go builds and git-cliff receive no credentials or ambient Git overrides.
+Candidate trees supply data, not executable configuration. Keep native
 cliff configuration and its single version pin embedded in the trusted command.
 Ordinary module tests stay tool-independent; `make maintenance-check` explicitly
-enables real Git/git-cliff fixtures and retains transitional publisher fixtures
-until the publisher port removes their Python dependencies.
+enables real Git/git-cliff/SSH fixtures. Preserve canonical-v1 signature bytes and
+the full original plan during recovery. Keep administrative policy mutations out
+of ordinary publication. Use native gh for auto-merge and prerelease creation;
+leave release Markdown parsing to the existing website TypeScript implementation.
 
 When reorganizing a package, use single-word Go filenames and pair each test
 file with its actual source: `foo.go` and `foo_test.go`. Put examples in the

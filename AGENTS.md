@@ -21,12 +21,12 @@ no release tags. For an explicitly authorized release, follow Publishing in
 the `arkoren-codebase` skill. Source import authorization alone does not
 authorize a release.
 
-`.github/workflows/release-preview.yml` remains read-only. During the maintenance
-tool migration, `release-publish.yml` stays disabled and the global version-tag
-creation lock stays active without bypass. Final activation requires separate
-authorization after migration parity. Follow Publishing in `arkoren-codebase`
-for provenance, namespace policy and same-SHA recovery; preserve signed v1 batch
-bytes. Publication never adopts dependency pins.
+`.github/workflows/release-preview.yml` remains read-only. The separately
+authorized publisher uses reviewed main code, exact-green evidence and signed
+immutable batches. Follow Publishing in `arkoren-codebase` for provenance,
+namespace policy, phased App credentials and same-SHA recovery. Preserve signed
+v1 batch bytes. Publication never adopts dependency pins. Administrative policy
+activation is separate from the publisher and requires explicit authorization.
 
 ## Find code before reading it
 
@@ -93,10 +93,11 @@ release namespaces and explicit development-only roots. CI discovers all canonic
 filesystem modules, including ignored local ones (currently 45 modules and 15
 integrations); release preparation validates only the exact committed public set
 (44). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
-The Go command owns inventory, read-only release plans and exact-SHA evidence.
-Python helpers remain only for the disabled publisher and notes automation until
-Part 3 replaces them. Historical-v1 decoding is explicit recovery, not current
-namespace approval; signed canonical-v1 bytes must remain unchanged.
+The Go command owns inventory, release plans, exact-SHA evidence, publication,
+notes-PR ownership and administrative policy checks. Native gh owns auto-merge
+and prerelease creation; website TypeScript owns Markdown import/validation.
+Historical-v1 decoding is explicit recovery, not current namespace approval;
+signed canonical-v1 bytes must remain unchanged.
 
 `test` runs short tests with normal built-in vet defaults. `check` runs
 golangci-lint (including configured govet) and short race tests with test-time
@@ -146,14 +147,14 @@ changes must preserve its canonical paths and pass its fixtures. Compose modules
 run lint in check and full race suites in integration.
 Require both `CI gate` (all Go/tooling jobs) and the separate `website` check.
 The gate rejects failures, cancellations, missing jobs, and unexpected skips.
-The tooling job also runs `make maintenance-check` (Go planner/evidence and
-transitional Python publisher fixtures). The native git-cliff version is owned by
+The tooling job also runs `make maintenance-check` (real Git/cliff/SSH and
+GitHub boundary fixtures). The native git-cliff version is owned by
 `cmd/arkoren-ci/internal/release/tool.json`; `release tool` emits that pin as JSON.
 CI installs it with SHA-pinned install-action, checksums enabled and fallback off.
 Locally install that exact version (for example `cargo install --locked git-cliff
 --version VERSION`) and optionally set `GIT_CLIFF` to its binary. Ordinary module
 checks do not require git-cliff; `maintenance-check` explicitly runs real-tool
-fixtures and fails if it is missing or wrong. Python 3.9+ is transitional only.
+fixtures and fails if it is missing or wrong. No Python runtime is required.
 The separate Monday/Thursday 03:17 UTC audit runs all-module toolchain vet and
 govulncheck and the CLI generated-project end-to-end test.
 Manual audit dispatch checks the selected ref; scheduled audits use the default

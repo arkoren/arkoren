@@ -30,7 +30,7 @@ func (values *repeated) Set(value string) error {
 	return nil
 }
 
-// releaseCommand composes the implemented read-only operations and flags.
+// releaseCommand composes operation groups and the read-only planner flags.
 func releaseCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		_, err := io.WriteString(stdout, usage)
@@ -45,6 +45,9 @@ func releaseCommand(ctx context.Context, args []string, stdout io.Writer) error 
 		}
 
 		return emit(stdout, result)
+	}
+	if args[0] == "notes" || args[0] == "publish" || args[0] == "policy" {
+		return automationCommand(ctx, args, stdout)
 	}
 	if args[0] != "plan" && args[0] != "evidence" {
 		return fmt.Errorf("unknown release command")
