@@ -3,7 +3,7 @@ module arkoren.dev/driver/aws
 go 1.27
 
 require (
-	arkoren.dev/core v0.0.0-20261031153809-a3f0efb45148
+	arkoren.dev/core v0.1.0
 	github.com/aws/aws-sdk-go-v2 v1.47.5
 	github.com/aws/aws-sdk-go-v2/config v1.33.12
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.12
@@ -16,9 +16,9 @@ require (
 )
 
 require (
-	arkoren.dev/foundation/collection v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/problem v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/validate v0.0.0-20261031152036-de86541f7d6d // indirect
+	arkoren.dev/foundation/collection v0.1.0 // indirect
+	arkoren.dev/foundation/problem v0.1.0 // indirect
+	arkoren.dev/foundation/validate v0.1.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.25 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.5 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.8 // indirect

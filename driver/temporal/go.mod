@@ -3,7 +3,7 @@ module arkoren.dev/driver/temporal
 go 1.27
 
 require (
-	arkoren.dev/core v0.0.0-20261031153809-a3f0efb45148
+	arkoren.dev/core v0.1.0
 	github.com/stretchr/testify v1.12.1
 	go.temporal.io/api v1.64.0
 	go.temporal.io/sdk v1.50.0
@@ -12,9 +12,9 @@ require (
 )
 
 require (
-	arkoren.dev/foundation/collection v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/problem v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/validate v0.0.0-20261031152036-de86541f7d6d // indirect
+	arkoren.dev/foundation/collection v0.1.0 // indirect
+	arkoren.dev/foundation/problem v0.1.0 // indirect
+	arkoren.dev/foundation/validate v0.1.0 // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/mock v1.6.0 // indirect
