@@ -3,16 +3,16 @@ module arkoren.dev/driver/launchdarkly
 go 1.27
 
 require (
-	arkoren.dev/core v0.0.0-20261031153809-a3f0efb45148
+	arkoren.dev/core v0.1.0
 	github.com/launchdarkly/go-sdk-common/v3 v3.6.0
 	github.com/launchdarkly/go-server-sdk-evaluation/v3 v3.2.0
 	github.com/launchdarkly/go-server-sdk/v7 v7.21.2
 )
 
 require (
-	arkoren.dev/foundation/collection v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/problem v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/validate v0.0.0-20261031152036-de86541f7d6d // indirect
+	arkoren.dev/foundation/collection v0.1.0 // indirect
+	arkoren.dev/foundation/problem v0.1.0 // indirect
+	arkoren.dev/foundation/validate v0.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79 // indirect
 	github.com/josharian/intern v1.0.0 // indirect

@@ -3,8 +3,8 @@ module arkoren.dev/driver/otel
 go 1.27
 
 require (
-	arkoren.dev/core v0.0.0-20261031153809-a3f0efb45148
-	arkoren.dev/foundation/collection v0.0.0-20261031152036-de86541f7d6d
+	arkoren.dev/core v0.1.0
+	arkoren.dev/foundation/collection v0.1.0
 	go.opentelemetry.io/contrib/instrumentation/runtime v0.72.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.23.0
@@ -22,8 +22,8 @@ require (
 )
 
 require (
-	arkoren.dev/foundation/problem v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/validate v0.0.0-20261031152036-de86541f7d6d // indirect
+	arkoren.dev/foundation/problem v0.1.0 // indirect
+	arkoren.dev/foundation/validate v0.1.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect

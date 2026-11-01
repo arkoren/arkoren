@@ -3,16 +3,16 @@ module arkoren.dev/driver/azure
 go 1.27
 
 require (
-	arkoren.dev/core v0.0.0-20261031153809-a3f0efb45148
+	arkoren.dev/core v0.1.0
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets v1.5.1
 )
 
 require (
-	arkoren.dev/foundation/collection v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/problem v0.0.0-20261031152036-de86541f7d6d // indirect
-	arkoren.dev/foundation/validate v0.0.0-20261031152036-de86541f7d6d // indirect
+	arkoren.dev/foundation/collection v0.1.0 // indirect
+	arkoren.dev/foundation/problem v0.1.0 // indirect
+	arkoren.dev/foundation/validate v0.1.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/internal v1.2.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.10.1 // indirect
