@@ -18,9 +18,6 @@ concurrency:
   group: website-release-notes
   cancel-in-progress: false
 
-env:
-  PYTHONDONTWRITEBYTECODE: '1'
-
 jobs:
   sync:
     if: github.repository == 'arkoren/arkoren' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
@@ -36,6 +33,12 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: website/.node-version
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cmd/arkoren-ci/go.mod
+          cache: false
+      - name: Build reviewed maintenance command
+        run: GOWORK=off go -C cmd/arkoren-ci build -o "$RUNNER_TEMP/arkoren-ci" .
       - run: npm ci
         working-directory: website
       - name: Import confirmed publications with read-only credentials
@@ -45,15 +48,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - name: Bound all tracked and untracked changes before App authentication
         id: prepare
-        run: python3 scripts/release_notes_pr.py prepare "$RUNNER_TEMP/release-notes.json"
+        run: '"$RUNNER_TEMP/arkoren-ci" release notes prepare --output "$RUNNER_TEMP/release-notes.json"'
       - name: Inspect existing branch ownership with read-only credentials
         if: steps.prepare.outputs.changed == 'true'
-        run: |
-          python3 - <<'PY'
-          import json, os
-          from scripts.release_notes_pr import owned
-          owned(json.load(open(os.environ['RUNNER_TEMP'] + '/release-notes.json')))
-          PY
+        run: '"$RUNNER_TEMP/arkoren-ci" release notes inspect --manifest "$RUNNER_TEMP/release-notes.json"'
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Require the existing App private key
@@ -84,9 +82,11 @@ jobs:
         run: |
           test "$APP_SLUG" = arkoren-releases
           test "$INSTALLATION_ID" = 176874315
-          python3 scripts/release_notes_pr.py verify "$RUNNER_TEMP/release-notes.json"
+          "$RUNNER_TEMP/arkoren-ci" release notes verify
       - name: Upsert one signed website PR with green-only native auto-merge
         if: steps.prepare.outputs.changed == 'true'
-        run: python3 scripts/release_notes_pr.py publish "$RUNNER_TEMP/release-notes.json"
+        run: '"$RUNNER_TEMP/arkoren-ci" release notes publish --manifest "$RUNNER_TEMP/release-notes.json"'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.app.outputs.installation-id }}

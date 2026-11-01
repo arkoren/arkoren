@@ -50,9 +50,9 @@ func TestInvalidInventoryEmitsNoPartialJSON(t *testing.T) {
 	}
 }
 
-func TestPublicationCommandUnavailable(t *testing.T) {
+func TestPublicationRequiresExplicitScopedPhase(t *testing.T) {
 	output := &bytes.Buffer{}
-	if err := run(context.Background(), []string{"publish"}, output); err == nil {
-		t.Fatal("publisher unexpectedly available")
+	if err := run(context.Background(), []string{"release", "publish"}, output); err == nil {
+		t.Fatal("publisher accepted an implicit write phase")
 	}
 }

@@ -55,9 +55,10 @@ working-tree inspection, or append `--commit FULL_SHA` to validate a committed
 inventory and its same-commit policy. CI/audits currently include 45 modules and
 15 integration suites; releases include only the 44 approved public modules.
 The development command uses standard flags, JSON stdout and JSON diagnostics on
-stderr. It owns inventory, release planning and exact-SHA evidence. The disabled
-publisher and notes automation still depend on transitional Python helpers;
-Part 3 removes them. Add no permanent wrapper framework or production planner
+stderr. Its focused internal packages own inventory, release planning, exact-SHA
+evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
+auto-merge and prerelease creation. TypeScript remains the only release Markdown
+importer/parser. Add no permanent wrapper framework or production planner
 fallback. `release plan --historical-v1` explicitly recomputes old signed plans
 from their original tree; normal planning still requires schema-1 approval.
 
@@ -772,12 +773,10 @@ plan is a proposal, not release authorization.
 
 ### Unattended publication
 
-Migration pause: the publisher workflow is disabled manually. Ruleset `26273278`
-currently locks creation as well as update/deletion/non-fast-forward globally,
-without bypass. The two creation-only App rulesets remain behind that lock.
-Keep these controls unchanged until separately authorized final activation after
-the remaining Go ports pass parity checks. The behavior below describes the
-publisher implementation, not an instruction to activate it during migration.
+If the publisher is administratively paused, retain global creation protection
+without bypass until the reviewed implementation and merged-main checks pass.
+Restoration requires explicit authorization and readback of the existing exact
+App-only creation policy. A code merge alone does not authorize policy changes.
 
 `Publish modules` follows successful trusted main-push CI, using the upstream
 `head_sha`. It executes reviewed main code, independently recomputes the planner
@@ -829,6 +828,16 @@ write tokens would suppress that downstream automation. The App has no
 administration permission or main bypass. It creates no release PR, manifest pin,
 version constant, changelog commit, binary asset or aggregate project release.
 
+The Go command exposes explicit `release publish prepare|preflight|tags|verify|releases`
+phases. The workflow mints a tag-write token only after preparation, revokes it
+immediately after the short tag phase, then runs public verification without App
+credentials. Only after successful public builds does the official App-token
+action mint a fresh release-write token. A local same-job verification receipt
+binds the full manifest and executing code SHA; release creation revalidates it,
+source plans, exact-green evidence and remote signed objects. Receipts are not
+upstream artifacts or independent authorization. Token expiry during public
+builds cannot invalidate the later release-write credential.
+
 The publisher pushes all batch tags atomically, without a force option. A lost
 response is reconciled against exact remote tag objects and verified annotations.
 Conflicts stop; existing tags are never moved or deleted. After refs exist,
@@ -847,10 +856,13 @@ deletion and non-fast-forward). Two creation-only rulesets split its former
 creation lock: one locks global version namespaces except the reviewed canonical
 module `/v0.*` selectors; the other covers only those selectors and permits
 Integration App `5540931` alone. Root, unknown, Hatchet and v1+ creation remains
-locked. Main ruleset `26273253` is unchanged. `scripts/release_tag_rules.py check`
-audits these selectors with existing administrative read access; its one-time
-`activate --output NEW_SNAPSHOT_DIRECTORY` installs both locks before removing
-only the original creation rule, restoring that rule on uncertain activation.
+locked. Main ruleset `26273253` is unchanged. `arkoren-ci release policy check`
+audits these selectors with existing administrative read access; add `--locked`
+when global creation is temporarily locked. The separately authorized
+`release policy activate --output NEW_SNAPSHOT_DIRECTORY` requires both existing
+creation-only rulesets to match exactly before removing only the original
+creation rule. It records before/after snapshots, requires exact-green main
+evidence and restores the global creation lock on uncertain activation.
 The publisher never invokes administrative policy changes.
 
 For emergency recovery, dispatch `release-publish.yml` on main with `sha` set to

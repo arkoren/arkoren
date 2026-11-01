@@ -132,6 +132,13 @@ require a C compiler. After guide edits, run `make generate` and `make docs`;
 see the [website contributor guide](website/README.md) for Node dependencies
 and browser setup.
 
+Repository automation lives in the stdlib-only development command
+`cmd/arkoren-ci`, not the consumer CLI. Run `make maintenance-check` with the
+pinned git-cliff installed to exercise real Git/SSH publication and recovery
+fixtures. `release notes` manages the signed notes PR; `release publish` separates
+tag writes, credential-free public builds and fresh-token prerelease writes.
+Neither website nor maintenance-only changes propose module versions.
+
 ## License
 
 [MIT](LICENSE).
