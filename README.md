@@ -1,6 +1,6 @@
-# Arkoren
-
 ![Introducing Arkoren: wordmark and stepped A logo on a rose grid.](website/src/assets/images/blog/introducing-arkoren.svg)
+
+# arkoren
 
 A modular Go toolkit for HTTP services, data access, background work, and
 integrations. Use one package in an existing application or compose a service
@@ -24,42 +24,52 @@ promise of identical provider capabilities. Each service links to its detailed
 compatibility matrix; [choosing a driver](cmd/arkoren/skills/arkoren/references/guides/drivers/choosing-a-driver.md)
 explains persistence, sharing across replicas, and operational trade-offs.
 
-### Data and application state
+### Data
 
 | Service | Use it for | Local development | Backend drivers |
 | --- | --- | --- | --- |
 | [Cache](cmd/arkoren/skills/arkoren/references/guides/cache/drivers.md) | Typed values, expiry, counters, and locks | Memory | Redis |
 | [Database](cmd/arkoren/skills/arkoren/references/guides/database/drivers.md) | SQL queries, transactions, and migrations | SQLite, including in-memory databases | PostgreSQL, MySQL / MariaDB, SQLite |
-| [File storage](cmd/arkoren/skills/arkoren/references/guides/file-storage/drivers.md) | Read, write, and serve objects | Memory, filesystem | Filesystem, Amazon S3 and compatible stores |
+| [Storage](cmd/arkoren/skills/arkoren/references/guides/file-storage/drivers.md) | Read, write, and serve objects | Memory, filesystem | Filesystem, Amazon S3 and compatible stores |
 | [Search](cmd/arkoren/skills/arkoren/references/guides/search/drivers.md) | Typed indexes, text queries, filters, and sorting | Memory | PostgreSQL, Meilisearch, OpenSearch |
-| [Feature flags](cmd/arkoren/skills/arkoren/references/guides/feature-flags/drivers.md) | Typed flags and subject targeting | Memory | OpenFeature providers, LaunchDarkly |
-| [Secrets](cmd/arkoren/skills/arkoren/references/guides/secrets/drivers.md) | Named secrets and versioned reads | Memory | HashiCorp Vault KV v2, AWS Secrets Manager, Google Secret Manager, Azure Key Vault |
 
-### Messaging and background work
+### Application
+
+| Service | Use it for | Local development | Backend drivers |
+| --- | --- | --- | --- |
+| [Broadcasting](cmd/arkoren/skills/arkoren/references/guides/broadcasting/drivers.md) | Publish and subscribe across processes | Memory | Redis, NATS, RabbitMQ, MQTT (experimental), Amazon SNS / SQS |
+| [Mail](cmd/arkoren/skills/arkoren/references/guides/mail/drivers.md) | Send messages and attachments | Log output, test fake | SMTP, Resend, Mailgun, Postmark, Amazon SES |
+| [Push](cmd/arkoren/skills/arkoren/references/guides/push/drivers.md) | Submit encrypted browser notifications | Test fake | Web Push; application-owned subscriptions and service workers |
+| [Payments](cmd/arkoren/skills/arkoren/references/guides/payments/drivers.md) | Checkout, refunds, and provider-managed subscriptions where supported | Memory simulation, test fake | Stripe, PayPal, Mollie |
+| [Feature Flags](cmd/arkoren/skills/arkoren/references/guides/feature-flags/drivers.md) | Typed flags and subject targeting | Memory | OpenFeature providers, LaunchDarkly |
+
+### Background
 
 | Service | Use it for | Local development | Backend drivers |
 | --- | --- | --- | --- |
 | [Queues](cmd/arkoren/skills/arkoren/references/guides/queues/drivers.md) | Dispatch jobs and control retries | Memory | RabbitMQ, NATS JetStream, Amazon SQS, Cloudflare Queues |
-| [Broadcasting](cmd/arkoren/skills/arkoren/references/guides/broadcasting/drivers.md) | Publish and subscribe across processes | Memory | Redis, NATS, RabbitMQ, MQTT (experimental), Amazon SNS / SQS |
-| [Scheduled tasks](cmd/arkoren/skills/arkoren/references/guides/scheduled-tasks/drivers.md) | Recurring tasks and deferred runs | Memory | Temporal, Restate |
+| [Scheduling](cmd/arkoren/skills/arkoren/references/guides/scheduled-tasks/drivers.md) | Recurring tasks and deferred runs | Memory | Temporal, Restate |
 | [Workflows](cmd/arkoren/skills/arkoren/references/guides/workflows/drivers.md) | Coordinate steps, signals, and timers | Memory | Temporal, Restate |
 
-### Customer communication and payments
-
-| Service | Use it for | Local development | Provider drivers |
-| --- | --- | --- | --- |
-| [Mail](cmd/arkoren/skills/arkoren/references/guides/mail/drivers.md) | Send messages and attachments | Log output, test fake | SMTP, Resend, Mailgun, Postmark, Amazon SES |
-| [Push notifications](cmd/arkoren/skills/arkoren/references/guides/push/drivers.md) | Submit encrypted browser notifications | Test fake | Web Push; application-owned subscriptions and service workers |
-| [Payments](cmd/arkoren/skills/arkoren/references/guides/payments/drivers.md) | Checkout, refunds, and provider-managed subscriptions where supported | Memory simulation, test fake | Stripe, PayPal, Mollie |
-
-### Security, AI, and observability
+### Security
 
 | Service | Use it for | Local / test option | Driver choices |
 | --- | --- | --- | --- |
 | [Encryption](cmd/arkoren/skills/arkoren/references/guides/encryption/drivers.md) | Authenticated encryption | Same local algorithms | AES-GCM, ChaCha20-Poly1305 |
-| [Password hashing](cmd/arkoren/skills/arkoren/references/guides/hashing/drivers.md) | Hash, verify, and detect rehash needs | Same local algorithms | Argon2id, bcrypt |
-| [Language models](cmd/arkoren/skills/arkoren/references/guides/llm/drivers.md) | Generation, streaming, tools, and embeddings | Test fake; compatible local servers | OpenAI, OpenAI-compatible APIs (capabilities vary) |
-| [Telemetry](cmd/arkoren/skills/arkoren/references/guides/observability/telemetry-drivers.md) | Traces, metrics, and logs | Memory, test fake | OpenTelemetry / OTLP, Prometheus (metrics) |
+| [Hashing](cmd/arkoren/skills/arkoren/references/guides/hashing/drivers.md) | Hash, verify, and detect rehash needs | Same local algorithms | Argon2id, bcrypt |
+| [Secrets](cmd/arkoren/skills/arkoren/references/guides/secrets/drivers.md) | Named secrets and versioned reads | Memory | HashiCorp Vault KV v2, AWS Secrets Manager, Google Secret Manager, Azure Key Vault |
+
+### AI
+
+| Service | Use it for | Local / test option | Driver choices |
+| --- | --- | --- | --- |
+| [Language Models](cmd/arkoren/skills/arkoren/references/guides/llm/drivers.md) | Generation, streaming, tools, and embeddings | Test fake; compatible local servers | OpenAI, OpenAI-compatible APIs (capabilities vary) |
+
+### Operations
+
+| Service | Use it for | Local / test option | Driver choices |
+| --- | --- | --- | --- |
+| [Observability](cmd/arkoren/skills/arkoren/references/guides/observability/telemetry-drivers.md) | Traces, metrics, and logs | Memory, test fake | OpenTelemetry / OTLP, Prometheus (metrics) |
 
 Memory drivers keep state in one process and lose it on restart; they do not
 coordinate replicas. Test fakes record or simulate calls without contacting a
