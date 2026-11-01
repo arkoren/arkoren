@@ -43,7 +43,7 @@ def payload(path, module):
 def cliff(repo, *args, context=None):
     binary = os.environ.get("GIT_CLIFF", "git-cliff")
     # No remote metadata, shell preprocessors, or caller-provided cliff options.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CLIFF_") and k not in ("GITHUB_TOKEN", "GH_TOKEN")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CLIFF_") and k not in ("GITHUB_TOKEN", "GH_TOKEN", "APP_TOKEN", "SIGNING_KEY")}
     command = [binary, "--config", str(SCRIPTS.parent / "cliff.toml"), "--offline", "--no-exec", *args]
     result = subprocess.run(command, cwd=repo, env=env, input=context, text=True, capture_output=True)
     if result.returncode:

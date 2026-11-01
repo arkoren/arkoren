@@ -63,17 +63,9 @@ def api_pages(path, key):
     return [item for page in pages for item in page[key]]
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", required=True)
-    args = parser.parse_args()
-    repository = os.environ["GITHUB_REPOSITORY"]
-    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-    sha, branch = select_target(os.environ["GITHUB_EVENT_NAME"], event, repository, os.environ["GITHUB_REF"], os.environ["GITHUB_SHA"])
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    if head != sha:
-        raise ValueError("checkout does not match the exact requested/upstream SHA")
-    subprocess.run(["git", "merge-base", "--is-ancestor", sha, f"refs/remotes/origin/{branch}"], check=True)
+def collect(repository, sha, branch, mode):
+    """Read fresh exact-SHA evidence; callers establish checkout and ancestry."""
+    full_sha(sha)
     deadline = time.monotonic() + 900
     while True:
         evidence = {}
@@ -86,14 +78,27 @@ def main():
                 required = job_evidence(jobs, job, sha)
                 evidence[workflow] = {"run_id": run["id"], "run_attempt": run["run_attempt"], "url": run["html_url"], "job": required["name"], "job_url": required["html_url"]}
         if len(evidence) == 2:
-            result = {"validated": True, "sha": sha, "branch": branch, "repository": repository, "mode": os.environ["GITHUB_EVENT_NAME"], "workflows": evidence}
-            Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-            print(f"Validated CI gate AND website at {sha}; DRY RUN ONLY")
-            return
+            return {"validated": True, "sha": sha, "branch": branch, "repository": repository, "mode": mode, "workflows": evidence}
         if time.monotonic() >= deadline:
             raise ValueError(f"timed out waiting for exact-SHA CI gate AND website: {sha}")
         print(f"Waiting for CI gate AND website at {sha}", flush=True)
         time.sleep(15)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
+    repository = os.environ["GITHUB_REPOSITORY"]
+    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+    sha, branch = select_target(os.environ["GITHUB_EVENT_NAME"], event, repository, os.environ["GITHUB_REF"], os.environ["GITHUB_SHA"])
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if head != sha:
+        raise ValueError("checkout does not match the exact requested/upstream SHA")
+    subprocess.run(["git", "merge-base", "--is-ancestor", sha, f"refs/remotes/origin/{branch}"], check=True)
+    result = collect(repository, sha, branch, os.environ["GITHUB_EVENT_NAME"])
+    Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    print(f"Validated CI gate AND website at {sha}; DRY RUN ONLY")
 
 
 if __name__ == "__main__":

@@ -20,10 +20,12 @@ no release tags. For an explicitly authorized release, follow Publishing in
 the `arkoren-codebase` skill. Source import authorization alone does not
 authorize a release.
 
-Release planning is dry-run only. `.github/workflows/release-preview.yml` requires
-successful `CI gate` and `website` jobs at the exact planned SHA. It writes only
-an Actions summary and a temporary plan artifact. Follow the preview policy in
-Publishing in `arkoren-codebase`; a plan does not authorize publication or pins.
+`.github/workflows/release-preview.yml` remains read-only. The separately
+authorized `release-publish.yml` automatically publishes genuine module changes
+from exact-green main: dedicated signed annotated tags, immutable v0 versions,
+GitHub prereleases and public Go verification. Zero proposals need no publication
+credentials. Follow Publishing in `arkoren-codebase` for provenance, namespace
+policy and same-SHA recovery. Publication never adopts dependency pins.
 
 ## Find code before reading it
 
@@ -132,8 +134,8 @@ changes must preserve its canonical paths and pass its fixtures. Compose modules
 run lint in check and full race suites in integration.
 Require both `CI gate` (all Go/tooling jobs) and the separate `website` check.
 The gate rejects failures, cancellations, missing jobs, and unexpected skips.
-The tooling job also runs `make release-preview-check` with checksum-pinned
-git-cliff; install it into an explicit temporary directory with
+The tooling job also runs `make release-preview-check` (planner, evidence and
+publisher fixtures) with checksum-pinned git-cliff; install it into an explicit temporary directory with
 `python3 scripts/install-git-cliff.py DIRECTORY` and set `GIT_CLIFF` to that binary
 for local planner fixtures. Python 3.9+ is required.
 The separate Monday/Thursday 03:17 UTC audit runs all-module toolchain vet and
