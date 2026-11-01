@@ -6,8 +6,9 @@ and no root module. `core/` is `arkoren.dev/core`: application lifecycle,
 `<contract>test` conformance suites. `driver/<vendor>` holds one module per
 vendor; `ark/<name>` holds opt-in domain features (none yet);
 `foundation/<name>` holds stdlib-only libraries. `cmd/arkoren` is the consumer
-CLI; `scripts/` holds workflow fixtures. The committed `go.work` joins only
-imported modules for shared development. Module
+CLI; `cmd/arkoren-ci` is a separate stdlib-only development command, never a
+release or consumer dependency. `scripts/` holds workflow fixtures. The committed
+`go.work` joins imported and explicit development modules. Module
 manifests declare real dependency versions, with no local `replace` directives;
 `GOWORK=off` checks remain the independent-module authority.
 
@@ -20,12 +21,12 @@ no release tags. For an explicitly authorized release, follow Publishing in
 the `arkoren-codebase` skill. Source import authorization alone does not
 authorize a release.
 
-`.github/workflows/release-preview.yml` remains read-only. The separately
-authorized `release-publish.yml` automatically publishes genuine module changes
-from exact-green main: dedicated signed annotated tags, immutable v0 versions,
-GitHub prereleases and public Go verification. Zero proposals need no publication
-credentials. Follow Publishing in `arkoren-codebase` for provenance, namespace
-policy and same-SHA recovery. Publication never adopts dependency pins.
+`.github/workflows/release-preview.yml` remains read-only. During the maintenance
+tool migration, `release-publish.yml` stays disabled and the global version-tag
+creation lock stays active without bypass. Final activation requires separate
+authorization after migration parity. Follow Publishing in `arkoren-codebase`
+for provenance, namespace policy and same-SHA recovery; preserve signed v1 batch
+bytes. Publication never adopts dependency pins.
 
 ## Find code before reading it
 
@@ -84,7 +85,16 @@ make integration MODULE=driver/redis
 make generate
 make docs
 make workflow-check
+GOWORK=off go -C cmd/arkoren-ci run . inventory
 ```
+
+`.github/release-modules.json` is the versioned classification authority: public
+release namespaces and explicit development-only roots. CI discovers all canonical
+filesystem modules, including ignored local ones (currently 45 modules and 15
+integrations); release preparation validates only the exact committed public set
+(44). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
+The Go command currently inspects inventory only. Existing Python release tools
+remain the release-operation authority until their sequential ports replace them.
 
 `test` runs short tests with normal built-in vet defaults. `check` runs
 golangci-lint (including configured govet) and short race tests with test-time

@@ -51,6 +51,25 @@ def cliff(repo, *args, context=None):
     return result.stdout
 
 
+def module_policy(data, legacy=False):
+    """Read classification policy without changing signed planner record bytes."""
+    value = json.loads(data)
+    if legacy and isinstance(value, list):
+        value = {"schema": 1, "public": value, "development": []}
+    if not isinstance(value, dict) or set(value) != {"schema", "public", "development"} or value["schema"] != 1:
+        raise ValueError("invalid module policy schema")
+    public, development = value["public"], value["development"]
+    if not isinstance(public, list) or not public or not isinstance(development, list):
+        raise ValueError("invalid module policy lists")
+    if any(not isinstance(m, str) or not CANONICAL.fullmatch(m) for m in public):
+        raise ValueError("invalid public module policy")
+    if any(m != "cmd/arkoren-ci" for m in development) or len(set(public + development)) != len(public + development):
+        raise ValueError("invalid development module policy")
+    if not {"core", "cmd/arkoren"} <= set(public):
+        raise ValueError("module policy requires core and consumer CLI")
+    return public, development
+
+
 def plan(repo, sha, initial=()):
     repo = Path(repo).resolve()
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
@@ -70,6 +89,21 @@ def plan(repo, sha, initial=()):
             metadata, path = record.split("\t", 1)
             tree[path] = metadata.split()[0]
     modules = sorted(path[:-7] for path in tree if path.endswith("/go.mod") and CANONICAL.fullmatch(path[:-7]))
+    # Historical signed plans predate classification policy. Recompute their
+    # original public inventory; never inject current policy into old records.
+    development = []
+    if ".github/release-modules.json" in tree:
+        if tree[".github/release-modules.json"] != "100644":
+            raise ValueError("invalid module policy mode")
+        public, development = module_policy(git(repo, "show", f"{sha}:.github/release-modules.json"), legacy=True)
+        if sorted(public) != modules:
+            raise ValueError("committed public inventory differs from module policy")
+    for module in development:
+        if tree.get(module + "/go.mod") != "100644" or re.findall(r"(?m)^module\s+(\S+)\s*$", git(repo, "show", f"{sha}:{module}/go.mod")) != ["arkoren.dev/" + module]:
+            raise ValueError("invalid development module manifest")
+    commands = {"/".join(path.split("/")[:2]) for path in tree if path.startswith("cmd/") and len(path.split("/")) > 2}
+    if commands - {"cmd/arkoren", *development}:
+        raise ValueError("unreviewed command module")
     if "core" not in modules or "cmd/arkoren" not in modules:
         raise ValueError("missing canonical core or CLI manifest")
     family_roots = {"/".join(path.split("/")[:2]) for path in tree if path.split("/")[0] in ("driver", "foundation", "ark") and len(path.split("/")) > 2}

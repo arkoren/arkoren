@@ -63,7 +63,7 @@ class PublisherTests(unittest.TestCase):
         public = subprocess.check_output(["ssh-keygen", "-y", "-f", str(key)], text=True).strip()
         self.trust.write_text(plans.PRINCIPAL + " " + public + "\n")
         self.policy = self.root / "policy.json"
-        self.policy.write_text(json.dumps(self.modules))
+        self.policy.write_text(json.dumps({"schema": 1, "public": self.modules, "development": []}))
         for target, name, value in ((plans, "TRUST", self.trust), (io, "TRUST", self.trust), (plans, "POLICY", self.policy)):
             manager = patch.object(target, name, value)
             manager.start()
@@ -91,6 +91,22 @@ class PublisherTests(unittest.TestCase):
 
     def release(self, state):
         io.publish_releases(state, "fixture-app-token", self.github)
+
+    def test_policy_classification_preserves_historical_signed_batch(self):
+        self.commit("ci: original public allowlist", {".github/release-modules.json": json.dumps(self.modules)})
+        state = self.state()
+        self.push(state)
+        before = plans.annotation(state)
+        policy = {"schema": 1, "public": self.modules, "development": ["cmd/arkoren-ci"]}
+        self.policy.write_text(json.dumps(policy))
+        self.commit("ci: classify development module", {
+            ".github/release-modules.json": json.dumps(policy),
+            "cmd/arkoren-ci/go.mod": "module arkoren.dev/cmd/arkoren-ci\n",
+        })
+        recovered = plans.recorded(self.repo)[0]
+        self.assertEqual(plans.recompute(self.repo, recovered), state)
+        self.assertEqual(plans.annotation(recovered), before)
+        self.assertEqual(plans.canonical({"z": "é", "a": "\n"}), '{"a":"\\n","z":"\\u00e9"}')
 
     def test_no_payload_no_signer_or_writes(self):
         state = self.state("ci: publisher only", {"scripts/a.py": "# no payload"})
@@ -436,7 +452,7 @@ class RulesTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         tracked = subprocess.check_output(["git", "ls-files", "*/go.mod"], cwd=root, text=True).splitlines()
         expected = sorted(path[:-7] for path in tracked if plans.re.fullmatch(r"(?:core|cmd/arkoren|(?:driver|foundation|ark)/[a-z0-9][a-z0-9-]*)/go.mod", path))
-        self.assertEqual(sorted(json.loads((root / ".github/release-modules.json").read_text())), expected)
+        self.assertEqual(sorted(json.loads((root / ".github/release-modules.json").read_text())["public"]), expected)
 
 
 if __name__ == "__main__":

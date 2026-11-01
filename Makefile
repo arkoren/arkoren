@@ -19,7 +19,7 @@ help:
 # without loading Go packages. Cleanup uses it even if the toolchain is broken.
 # Example: make module-root MODULE=driver/redis
 module-root:
-	@printf '%s\n' '$(MODULE)' | grep -Eq '^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$$' || { echo 'MODULE must name a canonical checkout-relative module root' >&2; exit 2; }
+	@printf '%s\n' '$(MODULE)' | grep -Eq '^(core|cmd/arkoren|cmd/arkoren-ci|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$$' || { echo 'MODULE must name a canonical checkout-relative module root' >&2; exit 2; }
 	@test -f '$(MODULE)/go.mod' || { echo 'MODULE has no go.mod' >&2; exit 2; }
 
 # Package validation needs Go; teardown deliberately uses only module-root.

@@ -27,6 +27,7 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 | Arks | `ark/<name>/` | one per ark, opt in with `go get` | Domain features with their own tables, routes, or flows. None yet. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
+| Development | `cmd/arkoren-ci/` | `arkoren.dev/cmd/arkoren-ci` | Repository maintenance only; standard library only, with no dependency on toolkit or consumer CLI modules. Public source and vanity resolution do not imply a supported release/install namespace. Excluded from releases and the library API catalog. |
 
 Separate modules live only under `cmd/`, `driver/`, `ark/`, and `foundation/`,
 never below a `core/` path, so core can move its folders in a new major.
@@ -36,13 +37,27 @@ Validate the exact committed tree: ignored local modules also count during local
 discovery. Keep the required `website` job in its separate workflow, without
 duplicating rendered docs in Go CI. Require both `CI gate` and `website`.
 
+`.github/release-modules.json` schema 1 classifies `public` release roots and
+explicit `development` roots. It is the sole reviewed namespace list, not a copy
+of signed publication records. New public modules require reviewed policy and
+baseline decisions; unknown command roots require a boundary review.
+
 `scripts/ci-modules.sh` owns the complete-source CI inventory, not a Go dependency planner. It lists
-core, the CLI and direct driver/foundation/optional ark roots;
+core, the CLI, explicit development commands and direct driver/foundation/optional ark roots;
 Compose markers select integration suites. Routine CI checks all modules,
 workflow tooling and rendered docs. The separate scheduled/manual audit owns
 toolchain vet, vulnerability scans and generator end-to-end
 coverage. Keep module paths aligned with Make and run `make workflow-check`
 after inventory or workflow changes.
+
+Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
+working-tree inspection, or append `--commit FULL_SHA` to validate a committed
+inventory and its same-commit policy. CI/audits currently include 45 modules and
+15 integration suites; releases include only the 44 approved public modules.
+The development command uses standard flags, JSON stdout and JSON diagnostics on
+stderr. It implements inventory only during the sequential migration. Existing
+Python planner/evidence/publisher tools remain authoritative until each port
+replaces its old implementation; add no permanent wrapper framework.
 
 Place new code by asking, in order:
 
@@ -749,6 +764,13 @@ plan is a proposal, not release authorization.
 
 ### Unattended publication
 
+Migration pause: the publisher workflow is disabled manually. Ruleset `26273278`
+currently locks creation as well as update/deletion/non-fast-forward globally,
+without bypass. The two creation-only App rulesets remain behind that lock.
+Keep these controls unchanged until separately authorized final activation after
+the remaining Go ports pass parity checks. The behavior below describes the
+publisher implementation, not an instruction to activate it during migration.
+
 `Publish modules` follows successful trusted main-push CI, using the upstream
 `head_sha`. It executes reviewed main code, independently recomputes the planner
 result and requires fresh exact-SHA `CI gate` AND `website` evidence before
@@ -758,7 +780,8 @@ emergency retry, not a routine release approval. Missing/pending evidence has a
 bounded wait; failed/cancelled evidence blocks. No upstream artifacts or caches
 are executed. The preview remains independently read-only.
 
-The module inventory must match `.github/release-modules.json`. New modules need
+The public module inventory must match `.github/release-modules.json`'s `public`
+array; `development` modules never enter plans or namespaces. New modules need
 a reviewed allowlist, baseline policy and administrative creation-ruleset update;
 the publisher cannot grant itself namespaces. Only plain directory-prefixed
 `v0.X.Y` versions are allowed. With neither a new proposal nor an incomplete batch,
@@ -774,6 +797,11 @@ annotation stores the complete original planner result, exact notes, expected
 module set, SHA and SHA-256 plan digest. Recovery verifies the signature and
 recomputes the original result in a disposable clone with only that batch's tags
 removed. Keep planner/tool changes compatible with recorded-batch recovery.
+Canonical v1 JSON retains Python `ensure_ascii=True`, sorted keys and compact
+comma/colon separators. Policy schema versions do not change signed batch schema
+or the original module records. Historical commits without classification policy
+or with the original array allowlist retain their original committed-public
+inventory during recomputation.
 
 Tags are SSH-signed annotated objects using the dedicated automation principal
 `arkoren-releases@arkoren.dev`, not an App authentication key or human key.

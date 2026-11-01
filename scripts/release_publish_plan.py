@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 
-from release_preview import ancestor, git, plan
+from release_preview import ancestor, git, module_policy, plan
 
 ROOT = Path(__file__).resolve().parent.parent
 TRUST = ROOT / ".github/release-signing.allowed-signers"
@@ -41,7 +41,7 @@ def annotation(state):
 
 def policy(result, allowed=None):
     """New modules need a reviewed allowlist AND creation-ruleset update."""
-    allowed = json.loads(POLICY.read_text()) if allowed is None else allowed
+    allowed = module_policy(POLICY.read_text())[0] if allowed is None else allowed
     if sorted(allowed) != sorted(entry["directory"] for entry in result["modules"]):
         raise ValueError("module inventory differs from release allowlist; review namespace policy and creation rulesets")
     for entry in result["modules"]:
@@ -78,7 +78,7 @@ def recorded(repo, trust=None):
     """Legacy v0.1.0 baselines are retained; all subsequent tags need provenance."""
     batches = {}
     members = {}
-    allowed = json.loads(POLICY.read_text())
+    allowed = module_policy(POLICY.read_text())[0]
     for tag in git(repo, "tag", "--list").splitlines():
         if not any(re.fullmatch(re.escape(module) + r"/v0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag) for module in allowed):
             raise ValueError("tag outside approved canonical v0 namespaces")

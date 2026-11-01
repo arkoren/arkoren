@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { z } from "astro/zod";
 
 /**
  * Vanity import paths: every `arkoren.dev/...` path resolves to one repository.
@@ -103,8 +104,18 @@ let cache: ImportPath[] | undefined;
 export function importPaths(): ImportPath[] {
   if (cache) return cache;
   const found = new Map<string, ImportPath>();
+  /** Local import discovery follows the same development boundary as CI policy. */
+  const policyPath = join(REPO_ROOT, ".github/release-modules.json");
+  const development = new Set(
+    existsSync(policyPath)
+      ? z
+          .object({ schema: z.literal(1), development: z.array(z.string()) })
+          .parse(JSON.parse(readFileSync(policyPath, "utf8"))).development
+      : [],
+  );
 
   const walk = (dir: string, module: { path: string; dir: string } | undefined) => {
+    if (development.has(relative(REPO_ROOT, dir).split("\\").join("/"))) return;
     const entries = readdirSync(dir, { withFileTypes: true });
     const gomod = join(dir, "go.mod");
     if (existsSync(gomod)) {

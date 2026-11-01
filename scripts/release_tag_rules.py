@@ -7,6 +7,7 @@ from pathlib import Path
 from release_evidence import collect
 from release_publish_io import API, api, command
 from release_publish_plan import POLICY
+from release_preview import module_policy
 
 IMMUTABLE = 26273278
 MAIN = 26273253
@@ -116,7 +117,7 @@ def main():
     parser.add_argument("mode", choices=("check", "activate"))
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    modules = json.loads(POLICY.read_text())
+    modules = module_policy(POLICY.read_text())[0]
     if args.mode == "activate":
         if args.output is None:
             raise ValueError("activation requires a new private snapshot directory")
