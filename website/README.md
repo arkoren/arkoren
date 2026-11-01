@@ -258,7 +258,8 @@ gh workflow run release-notes.yml --ref main
 
 An unchanged import succeeds without App authentication, commits or PRs. That
 result does **not** verify App setup. To probe authentication and repository scope
-even when nothing changed, add `-f verify-app=true` to that command. This probe
+even when nothing changed, add `-f verify-app=true` to that command. It also checks
+that the App can read the enabled auto-merge and merge-commit settings. This probe
 does not manufacture a changed record or empty PR; successful authentication is
 not proof that a changed-record PR has been exercised live.
 

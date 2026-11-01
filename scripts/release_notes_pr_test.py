@@ -277,7 +277,15 @@ class ReleaseNotesPRTest(unittest.TestCase):
                 self.github.repository[setting] = False
                 with self.assertRaisesRegex(RuntimeError, "enable repository auto-merge"):
                     SYNC.publish(self.state, self.github.request)
-                self.assertFalse(any(item[0] == "graphql" for item in self.github.writes))
+                self.assertEqual(self.github.writes, [])
+
+    def test_authentication_probe_checks_merge_settings_without_writes(self):
+        SYNC.verify(self.github.request)
+        self.assertEqual(self.github.writes, [])
+        self.github.repository["allow_auto_merge"] = False
+        with self.assertRaisesRegex(RuntimeError, "enable repository auto-merge"):
+            SYNC.verify(self.github.request)
+        self.assertEqual(self.github.writes, [])
 
     def test_graphql_permission_error_is_actionable_without_direct_merge(self):
         self.github.graphql_error = "Resource not accessible by integration"

@@ -121,11 +121,14 @@ def verified_bot(commit):
 
 
 def verify(request=api):
-    """Confirm the installation token is restricted to this repository."""
+    """Confirm repository-only access and required native merge settings, without writes."""
     repositories = request("installation/repositories?per_page=100")
     if (repositories["total_count"] != 1
             or [repo["full_name"] for repo in repositories["repositories"]] != [REPO]):
         raise RuntimeError("App token must be scoped only to arkoren/arkoren")
+    repository = request(API)
+    if not repository.get("allow_auto_merge") or not repository.get("allow_merge_commit"):
+        raise RuntimeError("enable repository auto-merge and merge commits; do not relax main requirements")
 
 
 def auto_merge(state, pull, expected_head, request=api):
@@ -139,9 +142,6 @@ def auto_merge(state, pull, expected_head, request=api):
         if enabled["merge_method"] != "merge":
             raise RuntimeError("existing auto-merge must preserve signed commits with merge method")
         return
-    repository = request(API)
-    if not repository.get("allow_auto_merge") or not repository.get("allow_merge_commit"):
-        raise RuntimeError("enable repository auto-merge and merge commits; do not relax main requirements")
     try:
         result = request("graphql", {
             "query": "mutation($input: EnablePullRequestAutoMergeInput!) { "
@@ -228,7 +228,7 @@ def main():
             message += " No-op: no App authentication, commit or PR attempted."
     elif args.mode == "verify":
         verify()
-        message = "App installation token verified for arkoren/arkoren only; no writes attempted."
+        message = "App installation token verified for arkoren/arkoren only; native auto-merge and merge commits enabled; no writes attempted."
     else:
         message = publish(json.loads(args.manifest.read_text()))
     print(message)
