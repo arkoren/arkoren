@@ -69,7 +69,7 @@ jobs:
         if: steps.prepare.outputs.changed == 'true' || inputs.verify-app == true
         id: app
         with:
-          app-id: '5540931'
+          client-id: Iv23liUAyM9AkNIKa7tH
           private-key: ${{ secrets.ARKOREN_RELEASES_PRIVATE_KEY }}
           owner: arkoren
           repositories: arkoren
