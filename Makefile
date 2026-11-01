@@ -11,7 +11,7 @@ RUN ?=
 shellquote = '$(subst ','"'"',$(1))'
 run_flags = $(if $(value RUN),-run $(call shellquote,$(value RUN)))
 
-.PHONY: help module-root module compiler test lint check race integration services cleanup docs generate workflow-check vet
+.PHONY: help module-root module compiler test lint check race integration services cleanup docs generate workflow-check release-preview-check vet
 help:
 	@printf '%s\n' 'make test MODULE=core [PKG=./...] [RUN=regexp]  cached short tests with default vet' 'make check MODULE=core                       lint and cached short race tests' 'make integration MODULE=driver/redis          unique project, fresh race tests, cleanup' 'make services MODULE=driver/redis             start arkoren-manual-driver-redis' 'make cleanup MODULE=driver/redis              remove manual project and volumes' 'make docs                                     Astro check, build, and website tests' 'make generate                                 update guide index (website Node dependencies required)' 'make workflow-check                           shell fixtures and actionlint' 'make vet MODULE=core                          standalone toolchain vet backstop' 'Integrations use -count=1; ordinary module tests retain caching.' 'COMPOSE_PROJECT_NAME overrides integration and manual project defaults.'
 
@@ -75,6 +75,12 @@ workflow-check:
 	bash scripts/audit_test.sh
 	bash scripts/make_test.sh
 	actionlint .github/workflows/*.yml
+
+# Requires checksum-pinned git-cliff on PATH (or an explicit GIT_CLIFF path).
+# Kept separate so ordinary workflow fixtures do not download Rust tooling.
+release-preview-check:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_preview_test.py
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_evidence_test.py
 
 # golangci-lint's configured govet is authoritative for routine checks. This
 # standalone command bypasses golangci-lint's diagnostic/exclusion/version

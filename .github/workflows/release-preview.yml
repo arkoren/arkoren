@@ -1,0 +1,59 @@
+name: Release preview (dry run)
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact full SHA on the selected branch (successful CI and Website required)
+        required: true
+        type: string
+
+# Metadata reads and plan uploads only. No publication credential or write scope.
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  preview:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # workflow_run's default github.sha is NOT the upstream tested SHA.
+          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require CI gate and Website on the exact SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_evidence.py --output "$RUNNER_TEMP/release-evidence.json"
+      - name: Install checksum-pinned git-cliff
+        run: |
+          python3 scripts/install-git-cliff.py "$RUNNER_TEMP/cliff-bin"
+          echo "$RUNNER_TEMP/cliff-bin" >> "$GITHUB_PATH"
+      - name: Generate read-only plan
+        id: plan
+        env:
+          PLAN_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+        run: |
+          python3 scripts/release_preview.py --sha "$PLAN_SHA" --evidence "$RUNNER_TEMP/release-evidence.json" --output "$RUNNER_TEMP/release-preview"
+          cat "$RUNNER_TEMP/release-preview/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "sha=$PLAN_SHA" >> "$GITHUB_OUTPUT"
+      - name: Upload plan and release-note preview (not a release)
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-preview-${{ steps.plan.outputs.sha }}
+          path: ${{ runner.temp }}/release-preview/
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,30 @@
+# Used only by the read-only preview. No changelog or version commit is written.
+[changelog]
+header = ""
+body = """
+## {{ version }} (DRY RUN)
+{% for commit in commits %}
+- {% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message }} ({{ commit.id }})
+{% if commit.breaking_description %}  {{ commit.breaking_description }}{% endif %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+# A breaking commit outside a module must still be excluded by --skip-commit.
+protect_breaking_commits = false
+filter_commits = false
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Fixes" },
+  { message = ".*", group = "Other changes (conservative patch)" },
+]
+sort_commits = "oldest"
+
+[bump]
+initial_tag = "v0.1.0"
+features_always_bump_minor = true
+breaking_always_bump_major = false
