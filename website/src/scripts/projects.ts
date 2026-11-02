@@ -22,8 +22,8 @@ function initProjects(carousel: HTMLElement) {
   ]);
   const motion = matchMedia("(prefers-reduced-motion: reduce)");
   const style = getComputedStyle(carousel);
-  const duration = parseFloat(style.getPropertyValue("--duration-decode"));
-  const hold = parseFloat(style.getPropertyValue("--duration-project-hold"));
+  const duration = milliseconds(style.getPropertyValue("--duration-decode"));
+  const hold = milliseconds(style.getPropertyValue("--duration-project-hold"));
   let active = 0;
   let frame = 0;
 
@@ -95,6 +95,12 @@ function initProjects(carousel: HTMLElement) {
   motion.addEventListener("change", settle);
   document.addEventListener("visibilitychange", settle);
   window.setInterval(rotate, hold);
+}
+
+/** CSS optimizers may serialize the same duration in seconds or milliseconds. */
+function milliseconds(value: string): number {
+  const time = value.trim();
+  return parseFloat(time) * (time.endsWith("ms") ? 1 : 1000);
 }
 
 /** Decode each line at the same pace, retaining shared letters and whitespace. */
