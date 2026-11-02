@@ -281,6 +281,61 @@ test("release history opens complete module notes and copies an exact version by
   await expect(page.locator("[data-release-entry]")).toHaveCount(0);
 });
 
+/** Combined filters must survive reloads and history without leaving empty date groups. */
+test("release search combines module and version filters with reloadable URLs", async ({
+  page,
+}) => {
+  await page.goto(`${origin}/changelog`);
+  const search = page.getByRole("searchbox", { name: "Search releases" });
+  const module = page.getByRole("combobox", { name: "Module", exact: true });
+  const entries = page.locator("[data-release-entry]").filter({ visible: true });
+  const days = page.locator("[data-release-day]").filter({ visible: true });
+  await search.fill("V0.99.0");
+  await expect(entries).toHaveCount(3);
+  await expect(days).toHaveCount(2);
+  await module.selectOption("arkoren.dev/driver/redis");
+  await expect(entries).toHaveCount(1);
+  await expect(entries).toContainText("arkoren.dev/driver/redis");
+  await expect(days).toHaveCount(1);
+  await expect(days.locator("[data-release-day-count]")).toHaveText("UTC · 1 release");
+  await expect(page.getByRole("status")).toHaveText("1 of 4 releases");
+  await page.reload();
+  await expect(search).toHaveValue("V0.99.0");
+  await expect(module).toHaveValue("arkoren.dev/driver/redis");
+  await expect(entries).toHaveCount(1);
+  await page.goBack();
+  await expect(module).toHaveValue("");
+  await expect(entries).toHaveCount(3);
+  await search.fill("core v0.99.0");
+  await expect(entries).toHaveCount(1);
+  await search.fill("no-such-release");
+  await expect(entries).toHaveCount(0);
+  await expect(days).toHaveCount(0);
+  await expect(page.locator("[data-release-empty]")).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(search).toBeFocused();
+  await expect(entries).toHaveCount(4);
+  await expect(days).toHaveCount(3);
+  await expect(page).toHaveURL(`${origin}/changelog`);
+  await expect(page.locator("[data-release-empty]")).toBeHidden();
+});
+
+/** Progressive enhancement must not make release links depend on JavaScript. */
+test("release history remains navigable without JavaScript", async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  try {
+    const page = await context.newPage();
+    await page.goto(`${origin}/changelog?q=missing&module=unknown`);
+    await expect(page.getByRole("searchbox")).toBeHidden();
+    await expect(page.locator("[data-release-entry]").filter({ visible: true })).toHaveCount(4);
+    await page.getByRole("link", { name: /arkoren.dev\/driver\/redis/ }).click();
+    await expect(page).toHaveURL(`${origin}/changelog/driver/redis/v0.99.0`);
+  } finally {
+    await context.close();
+  }
+});
+
 /** Long source identifiers and code must stay inside the reader's mobile viewport. */
 test("release readers contain long content at narrow and wide widths in both themes", async ({
   page,

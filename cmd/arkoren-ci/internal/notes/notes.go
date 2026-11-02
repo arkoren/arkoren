@@ -19,8 +19,11 @@ import (
 // Branch is the only writable automation branch.
 const Branch = "automation/release-notes"
 
-// bot is the expected signed commit author and committer.
+// bot is the expected signed commit author and App identity.
 const bot = "arkoren-releases[bot]"
+
+// signer is GitHub's committer identity for API-created signed App commits.
+const signer = "web-flow"
 
 // recordPath accepts only the importer's canonical public Markdown paths.
 var recordPath = regexp.MustCompile(`^website/src/content/releases/(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9-]+)/v0\.[0-9]+\.[0-9]+\.md$`)
@@ -96,10 +99,11 @@ func Prepare(ctx context.Context, root string) (State, error) {
 type Commit struct {
 	// SHA identifies the exact inspected head.
 	SHA string `json:"sha"`
-	// Author and Committer must both identify the release App.
+	// Author must identify the release App.
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
+	// Committer identifies the release App or GitHub's signing service.
 	Committer struct {
 		Login string `json:"login"`
 	} `json:"committer"`
@@ -153,9 +157,13 @@ type comparison struct {
 	} `json:"files"`
 }
 
-// verifiedBot rejects unsigned or foreign commits, including abandoned branches.
+// verifiedBot requires a verified App-authored commit, including abandoned
+// branches. GitHub's signing service may commit on the App's behalf.
 func verifiedBot(commit Commit) error {
-	if commit.SHA == "" || commit.Author.Login != bot || commit.Committer.Login != bot || !commit.Commit.Verification.Verified {
+	if commit.SHA == "" || commit.Author.Login != bot || !commit.Commit.Verification.Verified {
+		return fmt.Errorf("foreign or unsigned commit occupies automation branch")
+	}
+	if commit.Committer.Login != bot && commit.Committer.Login != signer {
 		return fmt.Errorf("foreign or unsigned commit occupies automation branch")
 	}
 

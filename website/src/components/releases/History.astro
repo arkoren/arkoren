@@ -24,13 +24,13 @@ const history = releaseHistory(Astro.props.entries);
       <h3 id={`day-${day}`} class="text-lg font-medium">
         <time datetime={day}>{releaseDate(day)}</time>
       </h3>
-      <span class="font-mono text-2xs text-muted">
+      <span class="font-mono text-2xs text-muted" data-release-day-count>
         UTC · {releases.length} {releases.length === 1 ? "release" : "releases"}
       </span>
     </header>
     <ul class="list-none divide-y divide-line border-y border-line">
       {releases.map(({ data }) => (
-        <li class="py-4" data-release-entry>
+        <li class="py-4" data-release-entry data-module={data.module} data-version={data.version}>
           <a
             class="flex flex-wrap items-center justify-between gap-3 no-underline"
             href={releaseLinks(data).route}
