@@ -24,6 +24,8 @@ test.use({ launchOptions: { args: ["--enable-unsafe-swiftshader", "--ignore-gpu-
 
 declare global {
   interface Window {
+    /** Frame-by-frame geometry catches transient announcement reflow. */
+    projectHeights: number[];
     /**
      * Recorded navigation snapshots belong to the browser fixture only. Each
      * promise resolves after its controlled frame sampling completes.
@@ -361,26 +363,83 @@ test("release readers contain long content at narrow and wide widths in both the
   }
 });
 
+/** Wide scramble glyphs must not cause transient vertical overflow or reflow. */
+test("scrambled announcements never resize the reading rail", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.addInitScript(() => {
+    Math.random = () => 22.5 / 42;
+  });
+  await page.goto(`${origin}/docs`);
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const card = document.querySelector<HTMLElement>("[data-projects]");
+    if (card === null) throw new Error("missing project announcement");
+    window.projectHeights = [card.getBoundingClientRect().height];
+    const observer = new MutationObserver(() => {
+      window.projectHeights.push(card.getBoundingClientRect().height);
+    });
+    observer.observe(card, { subtree: true, childList: true });
+  });
+  await page.clock.runFor(17000);
+  const heights = await page.evaluate(() => window.projectHeights);
+  expect(heights.length).toBeGreaterThan(2);
+  expect([...new Set(heights)]).toEqual([heights[0]]);
+});
+
 /** Keep rotating links usable without changing the reader's focused target. */
 test("sidebar projects rotate one at a time and respect focus and reduced motion", async ({
   page,
 }) => {
-  await page.clock.install();
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${origin}/docs`);
   const carousel = page.locator("[data-projects]");
   const slides = carousel.locator("[data-project]");
+  const firstTitle = await slides.first().locator("[data-project-name]").textContent();
+  const lastTitle = await slides.last().locator("[data-project-name]").textContent();
+  const firstSubtitle = await slides
+    .first()
+    .locator("[data-project-description]")
+    .getAttribute("data-project-description");
+  const lastSubtitle = await slides
+    .last()
+    .locator("[data-project-description]")
+    .getAttribute("data-project-description");
+  const lastLabel = await slides
+    .last()
+    .getByRole("link", { includeHidden: true })
+    .getAttribute("aria-label");
+  const initialHeight = (await carousel.boundingBox())?.height;
   await expect(slides.filter({ visible: true })).toHaveCount(1);
   await expect(slides.first()).toBeVisible();
   await page.clock.fastForward(8000);
   await expect(slides.last()).toBeVisible();
+  await expect(slides.last().getByRole("link")).toHaveAccessibleName(lastLabel ?? "");
+  expect((await carousel.boundingBox())?.height).toBe(initialHeight);
   await slides.last().getByRole("link").focus();
+  await expect(slides.last().locator("[data-project-name]")).toHaveText(lastTitle ?? "");
+  await expect(slides.last().locator("[data-project-word]")).toHaveText(
+    (lastSubtitle ?? "").split(" "),
+  );
   await page.mouse.move(0, 0);
   await page.clock.fastForward(16000);
   await expect(slides.last()).toBeVisible();
   await expect(slides.filter({ visible: true })).toHaveCount(1);
 
+  await slides.last().getByRole("link").blur();
+  await page.clock.fastForward(8000);
+  await expect(slides.first()).toBeVisible();
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.clock.runFor(16);
+  await expect(slides.first().locator("[data-project-name]")).toHaveText(firstTitle ?? "");
+  await expect(slides.first().locator("[data-project-word]")).toHaveText(
+    (firstSubtitle ?? "").split(" "),
+  );
+  await page.clock.fastForward(16000);
+  await expect(slides.first()).toBeVisible();
   await page.goto(`${origin}/blog/alpha`);
   await page.clock.fastForward(16000);
   await expect(slides.first()).toBeVisible();
@@ -484,8 +543,9 @@ test("status matrices fit desktop columns and explain icons on hover, focus, and
       .poll(() => yes.evaluate((element) => getComputedStyle(element).color))
       .not.toBe(plainColor);
   }
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  /** Pause ahead of the installed clock; wall-clock time can already be behind it. */
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
   await yes.hover();
   const tooltip = page.getByRole("tooltip");
   await expect(tooltip).toBeHidden();

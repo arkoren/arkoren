@@ -113,10 +113,12 @@
   --rail-width-wide: 240px;
   --header-height: 72px;
 
-  /* Motion: 33 transition declarations -> 2 durations and 2 easings. Fast is for interaction,
-     slow is for theme and season color fades. */
+  /* Motion: fast is for interaction, slow for theme and season color fades.
+     Project announcements hold between brief title-decode transitions. */
   --duration-fast: 200ms;
   --duration-slow: 500ms;
+  --duration-decode: 800ms;
+  --duration-project-hold: 8000ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in: cubic-bezier(0.64, 0, 0.78, 0);
   --default-transition-duration: var(--duration-fast);
