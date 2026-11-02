@@ -162,7 +162,7 @@ func boundary(t *testing.T, handler http.HandlerFunc) github.Client {
 
 func botCommit(sha string) Commit {
 	commit := Commit{SHA: sha}
-	commit.Author.Login, commit.Committer.Login = bot, bot
+	commit.Author.Login, commit.Committer.Login = bot, "web-flow"
 	commit.Commit.Verification.Verified = true
 	commit.Commit.Tree.SHA = "tree"
 	return commit
@@ -214,6 +214,49 @@ func TestInspectRejectsForeignHistoricalCommit(t *testing.T) {
 	})
 	if _, _, err := Inspect(context.Background(), client, State{Base: "base"}); err == nil {
 		t.Fatal("foreign historical commit accepted")
+	}
+}
+
+func TestVerifiedBotAcceptsGitHubSignedAppCommit(t *testing.T) {
+	var commit Commit
+	// Match the REST commit response that previously blocked PR #42.
+	if err := json.Unmarshal([]byte(`{
+		"sha":"b0c5755c156788b6eb0dbd0cdb0a13278d2d3518",
+		"author":{"login":"arkoren-releases[bot]"},
+		"committer":{"login":"web-flow"},
+		"commit":{"verification":{"verified":true,"reason":"valid"}}
+	}`), &commit); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifiedBot(commit); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifiedBotAcceptsSignedAppCommitter(t *testing.T) {
+	commit := botCommit("head")
+	commit.Committer.Login = bot
+	if err := verifiedBot(commit); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifiedBotRejectsForeignCommitter(t *testing.T) {
+	commit := botCommit("head")
+	commit.Committer.Login = "human"
+	if err := verifiedBot(commit); err == nil {
+		t.Fatal("foreign committer accepted")
+	}
+}
+
+func TestInspectRejectsUnsignedHistoricalCommit(t *testing.T) {
+	unsigned := botCommit("old")
+	unsigned.Commit.Verification.Verified = false
+	client := boundary(t, func(writer http.ResponseWriter, request *http.Request) {
+		ownershipResponse(t, writer, request, botPull(), []Commit{unsigned, botCommit("head")}, 2, []any{})
+	})
+	if _, _, err := Inspect(context.Background(), client, State{Base: "base"}); err == nil {
+		t.Fatal("unsigned historical commit accepted")
 	}
 }
 
