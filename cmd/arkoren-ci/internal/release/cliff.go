@@ -23,6 +23,11 @@ var tool []byte
 //go:embed cliff.toml
 var configuration []byte
 
+// historicalConfiguration preserves schema-1 note rendering exactly.
+//
+//go:embed historical.toml
+var historicalConfiguration []byte
+
 // Tool returns the pinned native tool specification for workflow installation.
 func Tool() (map[string]string, error) {
 	result := map[string]string{}
@@ -42,7 +47,7 @@ type cliff struct {
 }
 
 // newCliff materializes trusted configuration and verifies the exact version.
-func newCliff(ctx context.Context, root string) (cliff, func(), error) {
+func newCliff(ctx context.Context, root string, schema int) (cliff, func(), error) {
 	directory, err := os.MkdirTemp("", "arkoren-cliff-")
 
 	if err != nil {
@@ -53,7 +58,11 @@ func newCliff(ctx context.Context, root string) (cliff, func(), error) {
 		_ = os.RemoveAll(directory)
 	}
 	config := filepath.Join(directory, "cliff.toml")
-	if err := os.WriteFile(config, configuration, 0o600); err != nil {
+	data := configuration
+	if schema == 1 {
+		data = historicalConfiguration
+	}
+	if err := os.WriteFile(config, data, 0o600); err != nil {
 		cleanup()
 
 		return cliff{}, nil, err
