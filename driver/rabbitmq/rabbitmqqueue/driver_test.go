@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -229,6 +230,51 @@ func TestPublishingCreatesPersistentInitialAttempt(t *testing.T) {
 	assertPersistentAMQPPublishing(t, published)
 }
 
+// TestPublishingPreservesLargeStringAttempt verifies that a valid parsed
+// attempt count survives the AMQP header without narrowing to int32.
+func TestPublishingPreservesLargeStringAttempt(t *testing.T) {
+	t.Parallel()
+
+	if strconv.IntSize < 64 {
+		t.Skip("attempt exceeds a 32-bit int")
+	}
+
+	attempt := stringAttempt("2147483648")
+	published := publishing("message-1", []byte("body"), attempt)
+
+	if published.Headers[attemptHeader] != int64(2147483648) {
+		t.Fatalf("attempt header = %v, want 2147483648", published.Headers[attemptHeader])
+	}
+
+	if got := headerAttempt(published.Headers); got != attempt {
+		t.Fatalf("round-trip attempt = %d, want %d", got, attempt)
+	}
+}
+
+// TestAttemptsSaturatesQuorumRedelivery prevents a large broker count from
+// wrapping the attempt count and resetting the consumer's retry budget.
+func TestAttemptsSaturatesQuorumRedelivery(t *testing.T) {
+	t.Parallel()
+
+	headers := amqp091.Table{attemptHeader: int64(math.MaxInt), "x-delivery-count": int64(1)}
+
+	if got := attempts(headers, true); got != math.MaxInt {
+		t.Fatalf("attempts = %d, want %d", got, math.MaxInt)
+	}
+}
+
+// TestAttemptsSaturatesClassicRedelivery prevents the redelivery flag from
+// wrapping the largest representable attempt count.
+func TestAttemptsSaturatesClassicRedelivery(t *testing.T) {
+	t.Parallel()
+
+	headers := amqp091.Table{attemptHeader: int64(math.MaxInt)}
+
+	if got := attempts(headers, true); got != math.MaxInt {
+		t.Fatalf("attempts = %d, want %d", got, math.MaxInt)
+	}
+}
+
 // TestRetryQueueNameUsesRoundedMilliseconds verifies AMQP TTL rounding in queue
 // names.
 func TestRetryQueueNameUsesRoundedMilliseconds(t *testing.T) {
@@ -252,7 +298,7 @@ func TestDelayedPublishingIncrementsAttemptAndSetsTTL(t *testing.T) {
 		t.Fatalf("expiration = %q, want 1501", published.Expiration)
 	}
 
-	if published.Headers[attemptHeader] != int32(2) {
+	if published.Headers[attemptHeader] != int64(2) {
 		t.Fatalf("attempt header = %v, want 2", published.Headers[attemptHeader])
 	}
 
@@ -940,7 +986,7 @@ func assertInitialAMQPMessageProperties(t *testing.T, published amqp091.Publishi
 		t.Fatalf("message ID = %q, want message-1", published.MessageId)
 	}
 
-	if published.Headers[attemptHeader] != int32(1) {
+	if published.Headers[attemptHeader] != int64(1) {
 		t.Fatalf("attempt header = %v, want 1", published.Headers[attemptHeader])
 	}
 }
