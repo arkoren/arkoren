@@ -24,7 +24,7 @@ Uppercase operands below are values you supply, not literal words.
 | --- | --- |
 | `arkoren`, `arkoren -h`, `arkoren --help` | Offline root help as text; no endpoint configuration is read. |
 | `arkoren --version` | Installed CLI version as JSON, offline. |
-| `arkoren new DIR [flags]` | Create a starter project offline, without downloads or overwrites. |
+| `arkoren new DIR [flags]` | Create a starter and resolve Go dependencies; `--skip-tidy` creates files offline. Existing files are never overwritten. |
 | `arkoren skills install\|update\|status [flags]` | Manage the CLI's bundled documentation offline. |
 | `arkoren key generate TYPE --out FILE` | Generate `shared`, `signing`, or `exchange` private material. |
 | `arkoren key check TYPE FILE` | Validate stored key material without exporting it. |

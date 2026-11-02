@@ -10,22 +10,24 @@ import (
 	"arkoren.dev/cmd/arkoren/internal/skill"
 )
 
-// newCLICommand declares the offline scaffold grammar. Each invocation builds
+// newCLICommand declares the scaffold grammar. Each invocation builds
 // fresh flag state and reads only the injected environment when its action runs.
 // Generated help comes from this same grammar before business validation.
 func newCLICommand(env console.Environment) *cli.Command {
 	return &cli.Command{
 		Name:      "new",
-		Usage:     "Create an application you own without downloads or overwrites",
+		Usage:     "Create an application and resolve its Go dependencies",
 		ArgsUsage: "DIR",
-		Description: "No downloads or Git initialization. Existing generated files are never overwritten. " +
+		Description: "Runs go mod tidy in the new project unless --skip-tidy is set. No Git initialization. " +
+			"Existing generated files are never overwritten. " +
 			"A nonempty destination requires default-no confirmation or --yes; collisions always fail. " +
-			"Includes bundled skills and AGENTS.md unless disabled. Read the generated README for dependency setup.",
+			"Includes bundled skills and AGENTS.md unless disabled. Help and dry-run never download dependencies.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "module", Usage: "Go module path (default: destination basename)"},
 			&cli.StringFlag{Name: "skills-dir", Value: skill.DefaultSkillsDir, Usage: "Project-relative skills parent"},
 			&cli.BoolFlag{Name: "no-agent-files", Usage: "Omit skills and AGENTS.md"},
 			&cli.BoolFlag{Name: "dry-run", Usage: "Show the plan without writing"},
+			&cli.BoolFlag{Name: "skip-tidy", Usage: "Create files offline without resolving Go dependencies"},
 			&cli.BoolFlag{Name: "yes", Usage: "Approve a nonempty destination, never overwrites"},
 		},
 		Action: func(ctx context.Context, command *cli.Command) error {
@@ -39,6 +41,7 @@ func newCLICommand(env console.Environment) *cli.Command {
 				SkillsDir:    command.String("skills-dir"),
 				NoAgentFiles: command.Bool("no-agent-files"),
 				DryRun:       command.Bool("dry-run"),
+				SkipTidy:     command.Bool("skip-tidy"),
 				Yes:          command.Bool("yes"),
 			}, env, newTemplates, skillSource)
 		},

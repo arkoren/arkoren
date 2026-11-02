@@ -1,24 +1,23 @@
 # {{.Name}}
 
 This starter serves an HTML welcome page and application health probes, with
-explicit startup and graceful-shutdown wiring. Follow the dependency setup
-below to run it locally.
+explicit startup and graceful-shutdown wiring. Run it locally with `make run`.
 
 This source belongs to your application. Change it directly; no generator
 runtime, application generator state, or Arkoren configuration file is required.
 
-## Install dependencies
+## Run locally
 
-Use Go 1.27 or newer. Scaffolding does not download dependencies.
-From this application's directory, run:
+Use Go 1.27 or newer. `arkoren new` runs `go mod tidy` in this directory
+to resolve the declared dependencies. Start the service:
 
 ```sh
-go get arkoren.dev/core arkoren.dev/driver/mcp
-go mod tidy
 make run
 ```
 
-These commands download dependencies. Commit `go.mod` and `go.sum`.
+If you created the project with `--skip-tidy`, or dependency setup failed,
+run `go mod tidy` here before `make run`. This can download modules.
+Commit `go.mod` and `go.sum`.
 
 Open the `url` from the `http server started` log in a browser to see the welcome
 page (by default, `http://127.0.0.1:8080/`).
@@ -35,7 +34,7 @@ Use `make build` to write `bin/server`, `make fmt` to format Go source, and
 `make check` to verify formatting, run static analysis, and test without changing
 source files. `make vet` and `make test` run those checks separately.
 `make test-race` enables CGO for that command and requires a C compiler.
-Tests retain Go's normal caching. Dependency installation remains explicit;
+Tests retain Go's normal caching. After project creation,
 these targets do not run `go get` or `go mod tidy` for you.
 
 Override the Go executable with `make test GO=/path/to/go`. Formatting uses

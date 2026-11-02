@@ -505,11 +505,11 @@ Remote names are exact MCP names or metadata-derived `group:operation` names,
 without built-in diagnostic command aliases. Roles still drive diagnostic
 semantics, not command-name shortcuts.
 
-`new` and `new --help` run offline before MCP endpoint settings. Creation requires exactly one
+`new` and `new --help` bypass MCP endpoint settings; help is offline. Creation requires exactly one
 positional destination (`arkoren new billing` or `arkoren new .`), with optional flags before or after it: module
 (absolute destination basename by default, invalid names fail without normalization),
 skills-dir (project-relative, default `.agents/skills`), no-agent-files,
-dry-run, and yes flags. Bare `new` reports usage with exit 2 without writing; `--folder` is
+dry-run, skip-tidy, and yes flags. Bare `new` reports usage with exit 2 without writing; `--folder` is
 removed. Help needs no destination. It writes application files: a cmd executable
 (main.go for infallible application.New construction/identity, signals, logging, and exit status),
 internal/bootstrap (bootstrap.go for composition/lifecycle, app.go for application
@@ -575,10 +575,14 @@ SIGINT/SIGTERM registration through os/signal.NotifyContext; terminal echo is
 unchanged and generated code owns no signal worker.
 The generated app owns the lifecycle. Missing/empty destinations proceed;
 nonempty destinations including `.git` require default-no confirmation or explicit `--yes` noninteractively.
-Generated-path collisions always fail. Dry-run lists choices, files, and conflicts without prompting, writing,
-or network access. Generated application files and AGENTS.md are user-owned: no application generator state, driver/feature generation,
-regeneration, dependency downloads, or Git initialization. The generated README installs dependencies
-with `go get arkoren.dev/core arkoren.dev/driver/mcp`, then runs `go mod tidy`.
+Generated-path collisions always fail, including an existing go.sum when tidy is enabled.
+Dry-run lists choices, files, and conflicts without prompting, writing, or network access.
+After writing, creation runs `go mod tidy` in the generated directory with
+`GOWORK=off`; `--skip-tidy` leaves dependency setup to the caller for offline creation.
+Dependency failures preserve the generated files, return failure without a success
+report, and direct the caller to retry `go mod tidy` in that directory.
+Generated application files and AGENTS.md are user-owned: no application generator
+state, driver/feature generation, regeneration, or Git initialization.
 See `cmd/arkoren/skills/arkoren/references/guides/first-steps/creating-a-project.md` for the user workflow.
 
 `skills install|update|status` and `skills --help` also bypass
