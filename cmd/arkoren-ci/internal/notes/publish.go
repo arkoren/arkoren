@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"arkoren.dev/cmd/arkoren-ci/internal/github"
+	"arkoren.dev/cmd/arkoren-ci/internal/process"
 )
 
 // Publish creates signed API commits and advances only the owned branch by FF.
@@ -20,9 +21,6 @@ func Publish(ctx context.Context, client github.Client, state State) (string, er
 	}
 	if !reflect.DeepEqual(current, state) {
 		return "", fmt.Errorf("import changed after preparation; rerun from main")
-	}
-	if len(state.Records) == 0 {
-		return "No changes; no App authentication, commit or PR needed.", nil
 	}
 	if err := Verify(ctx, client); err != nil {
 		return "", err
@@ -38,20 +36,31 @@ func Publish(ctx context.Context, client github.Client, state State) (string, er
 	if main.SHA != state.Base || main.Commit.Tree.SHA == "" {
 		return "", fmt.Errorf("main advanced after import; rerun sync")
 	}
+	behind := false
 	if tip != nil {
 		pending, err := compare(ctx, client, state.Base, tip.SHA)
 		if err != nil {
 			return "", err
 		}
+		behind = *pending.Behind > 0
 		imported := map[string]bool{}
 		for _, record := range state.Records {
 			imported[record.Path] = true
 		}
 		for _, file := range pending.Files {
 			if file.Status == "added" && !imported[file.Name] {
-				return "", fmt.Errorf("pending publication absent from fresh import; preserve branch and retry")
+				tracked, err := process.Run(ctx, client.Root, "git", "", false, "ls-tree", state.Base, "--", file.Name)
+				if err != nil {
+					return "", err
+				}
+				if !strings.HasPrefix(string(tracked), "100644 blob ") {
+					return "", fmt.Errorf("pending publication absent from fresh import and main; preserve branch and retry")
+				}
 			}
 		}
+	}
+	if len(state.Records) == 0 {
+		return finish(ctx, client, state, pull, tip)
 	}
 	tree, err := createTree(ctx, client, state, main.Commit.Tree.SHA)
 	if err != nil {
@@ -61,7 +70,7 @@ func Publish(ctx context.Context, client github.Client, state State) (string, er
 	if tip != nil {
 		expected = tip.SHA
 	}
-	if tip == nil || tip.Commit.Tree.SHA != tree {
+	if tip == nil || tip.Commit.Tree.SHA != tree || behind {
 		expected, err = advance(ctx, client, state.Base, tree, tip)
 		if err != nil {
 			return "", err
@@ -93,6 +102,35 @@ func Publish(ctx context.Context, client github.Client, state State) (string, er
 	}
 
 	return "GitHub green-only auto-merge requested: " + updated.URL, nil
+}
+
+// finish closes only an unchanged owned PR whose authoritative import is empty.
+// Main already contains the desired records; the automation branch is retained.
+func finish(ctx context.Context, client github.Client, state State, pull *Pull, tip *Commit) (string, error) {
+	if pull == nil {
+		return "No pending release-note PR or imported changes.", nil
+	}
+	currentTip, current, err := Inspect(ctx, client, state)
+	if err != nil {
+		return "", err
+	}
+	if tip == nil || currentTip == nil || current == nil || current.Number != pull.Number ||
+		current.NodeID != pull.NodeID || currentTip.SHA != tip.SHA {
+		return "", fmt.Errorf("PR or branch changed before closing; rerun sync")
+	}
+	main := Commit{}
+	if err := client.Call(ctx, "GET", github.API+"/commits/main", nil, &main); err != nil {
+		return "", err
+	}
+	if main.SHA != state.Base {
+		return "", fmt.Errorf("main advanced before closing; rerun sync")
+	}
+	if err := client.Call(ctx, "PATCH", github.API+"/pulls/"+strconv.Itoa(current.Number),
+		map[string]string{"state": "closed"}, nil); err != nil {
+		return "", err
+	}
+
+	return "Closed superseded release-note PR; current main already matches confirmed publications: " + current.URL, nil
 }
 
 // createTree reconstructs current main plus only the validated imported records.

@@ -912,6 +912,15 @@ conflicts through a reviewed fix. An empty-plan preflight does not prove a live
 tag push, release event or website-note PR: the first genuine payload exercises
 those operations. Website-note PRs use their own green-only native auto-merge;
 their merge triggers the normal Cloudflare website deployment, not module pins.
+The notes reconciler owns branch freshness after main pushes and release events;
+its schedule recovers missed events. Preserve signed, fast-forward-only history
+and compare ancestry as well as trees. Inspect existing PRs even for empty imports:
+close a superseded owned PR only after confirming no pending additions disappear.
+Retry with fresh isolated checkouts and imports, never stale prepared bytes. Keep
+the App token out of Git, npm and read-only inspection; only verified publication
+receives it. A successful sync requests auto-merge, not proof of an actual merge.
+Persistent failures remain blocked and visible; no bypass or merge-queue policy
+activation belongs to this reconciler.
 
 ### Module and dependency boundaries
 
