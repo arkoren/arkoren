@@ -171,16 +171,17 @@ func notesCommand(ctx context.Context, client github.Client, mode, manifest, out
 			return err
 		}
 		if mode == "inspect" {
-			_, _, err := notes.Inspect(ctx, client, state)
+			needed, err := notes.Needed(ctx, client, state)
 			if err != nil {
 				return err
 			}
-			return emit(stdout, map[string]bool{"owned": true, "writes": false})
-		}
-		if len(state.Records) > 0 {
-			if err := client.VerifyApp(ctx, os.Getenv("APP_SLUG"), os.Getenv("INSTALLATION_ID")); err != nil {
+			if err := changed(needed); err != nil {
 				return err
 			}
+			return emit(stdout, map[string]bool{"owned": true, "writes": false, "needed": needed})
+		}
+		if err := client.VerifyApp(ctx, os.Getenv("APP_SLUG"), os.Getenv("INSTALLATION_ID")); err != nil {
+			return err
 		}
 		message, err := notes.Publish(ctx, client, state)
 		if err != nil {
