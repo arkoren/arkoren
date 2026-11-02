@@ -17,15 +17,42 @@ const projects = [
 ---
 
 <div class="mb-6 border-b border-line pb-4" data-projects data-pagefind-ignore>
-  <div aria-roledescription="carousel" aria-label="Frontend libraries">
+  <div class="grid" role="group" aria-roledescription="carousel" aria-label="Frontend libraries">
     {projects.map((project, index) => (
-      <div data-project hidden={index !== 0}>
-        <a class="group block rounded-sm p-2 no-underline hover:bg-raised" href={project.href}>
+      <div
+        class:list={["col-start-1 row-start-1", { invisible: index !== 0 }]}
+        data-project
+        inert={index !== 0}
+        aria-hidden={index !== 0 ? "true" : undefined}
+      >
+        <a
+          class="group block rounded-sm p-2 no-underline hover:bg-raised"
+          href={project.href}
+          aria-label={`${project.name}. ${project.description}`}
+        >
           <span class="flex items-center justify-between gap-2 text-sm font-medium">
-            <span class="fade group-hover:text-accent-text">{project.name}</span>
+            <span class="fade group-hover:text-accent-text" data-project-name aria-hidden="true">
+              {project.name}
+            </span>
             <Icon name="arrow-up-right" size={14} class="shrink-0 text-muted" />
           </span>
-          <span class="mt-1 block text-xs leading-relaxed text-muted">{project.description}</span>
+          <span
+            class="mt-1 block text-xs leading-relaxed text-muted"
+            data-project-description={project.description}
+            aria-hidden="true"
+          >
+            {project.description.split(" ").map((word, index) => (
+              <Fragment>
+                {index > 0 && " "}
+                <span class="relative inline-block">
+                  <span class="invisible">{word}</span>
+                  <span class="absolute inset-0 overflow-clip whitespace-nowrap" data-project-word>
+                    {word}
+                  </span>
+                </span>
+              </Fragment>
+            ))}
+          </span>
         </a>
       </div>
     ))}
@@ -33,21 +60,5 @@ const projects = [
 </div>
 
 <script>
-  /** Rotation stops while reading or using a card, and respects reduced motion. */
-  for (const carousel of document.querySelectorAll<HTMLElement>("[data-projects]")) {
-    const slides = [...carousel.querySelectorAll<HTMLElement>("[data-project]")];
-    const motion = matchMedia("(prefers-reduced-motion: reduce)");
-    let active = 0;
-    window.setInterval(() => {
-      if (
-        motion.matches ||
-        document.hidden ||
-        !carousel.getClientRects().length ||
-        carousel.matches(":hover, :focus-within")
-      )
-        return;
-      active = (active + 1) % slides.length;
-      slides.forEach((slide, position) => (slide.hidden = position !== active));
-    }, 8000);
-  }
+  import "../../scripts/projects";
 </script>
