@@ -1,30 +1,32 @@
 ---
 title: Request Logging
-description: Log every failed request with its method, path, status, and error, correlated with traces, using any slog logger.
-order: 25
+description: Record failed requests with the observed response status and optional trace correlation.
+order: 40
+summary:
+  - Log returned handler errors and observed 5xx responses without logging every request.
+  - Place tracing, request logging, and recovery so failures retain trace correlation.
+  - Interpret observed statuses, raw error exposure, and connection-hijack limits.
 ---
 
 # Request Logging
 
-## Introduction
+When a request fails, `requestlog` records its method, concrete path, observed
+status, and returned error. It is failure logging, not an access log: a handler
+error produces a record at any status, and an observed 5xx produces a record
+even without a returned error. Other successful responses and directly written
+4xx responses produce none.
 
-When a request fails, you want a log record that says which request it was and
-why. The `requestlog` middleware writes one record for every request that
-returns an error or has an observed `5xx` status. Successful requests are not
-logged, because metrics and traces describe them better and at a fraction of
-the volume.
+## Failure Records
 
-## Usage
+The path and raw error can contain personal identifiers, secrets, or native
+diagnostics. Choose log access, retention, and any application-owned redaction
+before enabling this middleware. If your telemetry driver exports logs, those
+same fields can leave the process; span field exclusions do not protect them.
+See [Logs](telemetry-privacy.md#logs).
 
-The record includes the concrete request path and raw error, which can contain
-identifiers or sensitive values. Use a log destination, access policy, and
-retention period appropriate for that data. If your telemetry driver exports
-logs, these records can also leave the process; see
-[Telemetry Privacy](telemetry-privacy.md#logs).
-
-Import `arkoren.dev/core/http/middleware/requestlog`. With your existing
-[application](../application/overview.md) `app` and router
-`r`, register middleware before routes using the application's logger:
+With an existing application `app` and router `r`, import `requestlog` from
+`arkoren.dev/core/http/middleware/requestlog` and select the application's logger
+before registering routes:
 
 ```go
 r.Use(requestlog.Middleware(func(log *requestlog.Builder) {
@@ -32,62 +34,68 @@ r.Use(requestlog.Middleware(func(log *requestlog.Builder) {
 }))
 ```
 
-A failed request produces a record like this:
+If a report handler returns an error rendered as HTTP 503, its record contains
+these fields (timestamps and other logger attributes are omitted):
 
 ```json
 {
   "level": "ERROR",
   "msg": "request failed",
   "method": "POST",
-  "path": "/invoices",
-  "status": 422,
-  "error": "422 Validation failed"
+  "path": "/reports",
+  "status": 503,
+  "error": "503 Service Unavailable"
 }
 ```
 
-Without `Builder.Logger`, it uses `slog.Default()`. Any `*slog.Logger` works,
-including zap and zerolog through their slog handlers.
+The actual error string depends on the returned error. Any `*slog.Logger`
+works. If `Logger` is nil or omitted, the middleware resolves `slog.Default()`
+per request, so a later default change takes effect. Selecting a logger does
+not itself enable telemetry or provide trace correlation.
 
-## What is logged
+## Middleware Order
 
-The record is written when the router finishes response handling. Its `status`
-is the final HTTP status observed through the response writer, including errors
-rendered by the router; it does not confirm that the client received the response.
-A request is logged when its handler returned an error, whatever the status, or
-when the observed status is `5xx`. A `4xx` response written directly, without
-returning an error, is not logged.
-
-A successful connection hijack is not reported as a failure merely because its
-handshake bypassed the HTTP writer. If the handler returns an error after
-hijacking, that error is still logged. Status `0` means no final HTTP status was
-observed; it is not an inferred 500 or an HTTP status sent to the client. Bytes
-written directly to the caller-owned connection are outside the response hooks.
-
-This differs from [request tracing](request-tracing.md#spans), which marks only
-`5xx` responses as failed server spans. A returned validation error can therefore
-produce an error log while its `4xx` span status stays unset.
-
-## Placement
-
-Two neighbors matter. Put the telemetry middleware before request logging, so
-each record carries the `trace_id` and `span_id` of the request and you can
-jump from a log line to its trace. Put `router.Recover` after it, so a
-recovered panic reaches the logger as an error:
-
-In this alternative setup, `tel` is your started `*telemetry.Telemetry` from
-`arkoren.dev/core/service/telemetry`, and `logger` is the application's
-telemetry-wrapped logger. A plain unrelated `slog` handler does not add trace
-IDs merely because telemetry middleware ran. Import `arkoren.dev/core/http/router`
-for recovery:
+For trace IDs and recovered panics, use this alternative registration with the
+application's [configured telemetry](telemetry.md#shared-handle). Import
+`router` from `arkoren.dev/core/http/router`:
 
 ```go
 r.Use(
-	tel.Middleware(),
+	app.Telemetry().Middleware(),
 	requestlog.Middleware(func(log *requestlog.Builder) {
-		log.Logger(logger)
+		log.Logger(app.Logger())
 	}),
 	router.Recover(),
 )
 ```
 
-For every option, see the [`requestlog` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/requestlog).
+Telemetry runs first so logging receives the request's span context. The
+application logger's telemetry wrapper adds `trace_id` and `span_id` when that
+identity is valid. An unrelated plain slog handler does not acquire correlation
+just because tracing middleware ran.
+
+Recovery runs inside logging so recovered panics become returned errors the
+logger can observe. Do not register both setup variants on the same route
+stack: choose one, or you can produce duplicate failure records.
+
+## Response Boundaries
+
+Logging runs after the router completes response handling, including rendering
+returned errors. The observed status is what passed through the response writer,
+not evidence the client received those bytes. The middleware relies on Arkoren
+router response hooks; exercise it through the router rather than invoking an
+isolated wrapped handler.
+
+A returned validation error rendered as 422 produces an error log, while its
+[server span](request-tracing.md#recorded-fields) is not marked failed: HTTP
+server spans classify 5xx responses as errors. These are intentionally different
+signals, not contradictory outcomes.
+
+A successful connection hijack is not a failure. If the handler returns an
+error after taking ownership of the connection, it is still logged. Status
+`0` means no final HTTP status passed through the writer; it is neither an
+inferred 500 nor a status sent to the client. Direct connection writes are
+outside the HTTP response hooks.
+
+For configuration declarations, see the
+[`requestlog` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/requestlog).

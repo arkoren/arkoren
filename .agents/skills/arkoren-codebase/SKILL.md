@@ -14,6 +14,10 @@ then read their source/tests or use `go doc` for a public contract. `AGENTS.md`
 defines shared verification commands; no generated package or contract map is
 maintained.
 
+Before resuming unpublished Hatchet work, read the archived
+[development and recovery notes](references/hatchet-recovery.md). They are
+unverified contributor context, not consumer setup or a released API contract.
+
 ## Modules and boundaries
 
 The repository has no root module; `arkoren.dev` is only a namespace. Every

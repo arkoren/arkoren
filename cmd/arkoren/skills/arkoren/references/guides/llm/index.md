@@ -1,6 +1,6 @@
 ---
 title: Language Models
-description: Generate text, call tools, return structured output, stream replies, and embed text with large language models.
+description: Generate replies, own conversation history, run guarded tools, and validate or stream model output.
 order: 165
 section: AI
 ---

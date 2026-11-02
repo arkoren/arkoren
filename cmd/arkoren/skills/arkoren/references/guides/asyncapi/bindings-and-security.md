@@ -1,48 +1,61 @@
 ---
 title: Bindings and Security
-description: Describe broker endpoints, protocol-specific metadata, and authentication requirements without configuring runtime security.
+description: Describe broker endpoints, authentication requirements, and protocol bindings without changing runtime infrastructure.
 order: 40
+summary:
+  - Add credential-free broker endpoints and explicitly select servers for each channel.
+  - Describe authentication alternatives without confusing metadata with authorization enforcement.
+  - Attach protocol bindings while keeping provisioning and delivery guarantees outside the document.
 ---
 
 # Bindings and Security
 
-## Introduction
+Payload schemas do not tell an integrator where to connect or which credentials
+the broker requires. Add **servers** for broker endpoints, **security schemes**
+for authentication methods, and **bindings** for protocol-specific details.
+These declarations describe your deployment; they do not configure drivers,
+provision resources, or enforce access.
 
-A message schema does not tell another service which broker endpoint to use or
-how clients authenticate. Add server metadata, protocol bindings, and security
-requirements to describe those integration details. These declarations document
-the connection contract; they do not change your driver's configuration.
+The snippets use `arkoren.dev/core/asyncapi` inside the construction callbacks
+introduced in [Queues and Operations](queues-and-operations.md). Keep credentials,
+private keys, tokens, and sensitive example values out of every declaration:
+the resulting metadata is included in the exported document.
 
-This page extends the channel and operation declarations from the
-[AsyncAPI overview](overview.md). All snippets belong inside construction
-callbacks and use the `arkoren.dev/core/asyncapi` import.
+## Broker Endpoints
 
-## Describing a broker endpoint
-
-Keep the server's local ID separate from its host. Replace an existing server
-declaration with a configured one rather than declaring its ID twice:
+To document the reporting worker's AMQP broker, add a server in the document
+callback. Its local ID is separate from the host and protocol:
 
 ```go
 definition.Server("primary", "broker.example:5672", "amqp", func(listener *asyncapi.ServerBuilder) {
-	listener.Description("Primary billing broker")
+	listener.Description("Reporting broker")
 	listener.ProtocolVersion("0.9.1")
-	listener.Pathname("/billing")
+	listener.Pathname("/reports")
 })
 ```
 
-The host accepts a host and optional port, including bracketed IPv6, not a URL.
-Hosts reject schemes, credentials, paths, queries, and fragments. Use `Pathname`
-separately if the endpoint needs a path. `ProtocolVersion` is documentation, not
-protocol negotiation. If any servers are declared, each channel must explicitly
-select its servers with `channel.Servers("primary")`.
+The host accepts a host with an optional port, including bracketed IPv6, not a
+URL. Schemes, credentials, paths, queries, and fragments are rejected. Use
+`Pathname` for the endpoint path. `ProtocolVersion` describes the protocol; it
+does not negotiate one.
 
-Never put credentials in a host, example, or binding. These values become part
-of the exported document and may be distributed beyond your service.
+Once a document declares any servers, every channel must explicitly select at
+least one. In the existing `work` channel callback, add:
 
-## Documenting broker authentication
+```go
+channel.Servers("primary")
+```
 
-To describe a broker that requires a username and password, register a security
-scheme and select it on the relevant server. In a document callback:
+If you also declare the completion channel, add its server selection too. With
+no declared servers, channels can omit this setting for a portable document.
+Server IDs may be declared later, but unresolved or duplicate selections fail
+export. Defining a server does not connect to it or inspect its configuration.
+
+## Broker Authentication
+
+To describe username/password authentication, register a scheme in the document
+callback and select it on the server. Replace the earlier `primary` declaration
+with this one, retaining its optional endpoint metadata if needed:
 
 ```go
 definition.SecurityScheme("login", asyncapi.RawObject(`{"type":"userPassword"}`))
@@ -51,21 +64,22 @@ definition.Server("primary", "broker.example:5672", "amqp", func(listener *async
 })
 ```
 
-Use this instead of the earlier `primary` declaration, or add `Security` to
-that existing server callback. The scheme contains the authentication method,
-not real credentials. These declarations neither authenticate clients nor
-enforce authorization. Configure those controls on the actual broker and driver.
+The scheme describes a method, not a username or password. Configure actual
+authentication and authorization on your broker and driver separately. The
+exporter checks supported scheme type names, required fields for common scheme
+families, and local references. It does not fully validate protocol rules or
+OAuth flow semantics.
 
-Security schemes receive limited structural checks: supported type names,
-required fields for common scheme families, and local scheme aliases. They are
-not fully validated against protocol or OAuth flow semantics. External scheme
-references remain opaque and are never fetched.
+You can declare schemes after their selections. Duplicate scheme IDs and
+unresolved local references fail export. Raw scheme aliases to local schemes
+are checked within the security-scheme collection; external references remain
+opaque and are never fetched.
 
-## Combining security requirements
+## Requirement Alternatives
 
-A server or operation can name alternative security schemes. For a broker
-accepting either username/password or client certificates, register both schemes
-and select them in one server callback:
+If a broker accepts either username/password or a client certificate, register
+both schemes and select both on the server. This is an alternative to the
+previous authentication declaration:
 
 ```go
 definition.SecurityScheme("login", asyncapi.RawObject(`{"type":"userPassword"}`))
@@ -75,51 +89,51 @@ definition.Server("primary", "broker.example:5671", "amqps", func(listener *asyn
 })
 ```
 
-The server's array means `login` **OR** `certificate`, not both. An operation's
-security array also means alternatives within that level. If both the server
-and operation declare requirements, both levels apply (**AND**): the operation's
-alternatives do not replace the server's requirements.
+The server's security array means `login` **OR** `certificate`, not both.
+`OperationBuilder.Security` likewise lists alternatives within an operation.
+Server and operation requirements apply together (**AND** across the levels);
+an operation's selection does not replace server authentication.
 
-For example, after registering an additional scheme named `publisher`, add
-`action.Security("publisher")` to the sending operation callback. This documents
-an additional operation requirement, not an authorization check. Scheme IDs may
-be declared later, but duplicates and unresolved local references are export
-errors.
+For example, after declaring a separate scheme named `publisher`, adding
+`action.Security("publisher")` inside a sending operation documents an additional
+requirement. It does not authorize that operation or define broker permissions.
+Duplicate selections are errors, including across repeated `Security` calls.
 
-Broker security declarations do not protect an HTTP documentation route.
-[Serving AsyncAPI Documentation](serving.md#serving-a-protected-document)
-shows where to apply your existing HTTP middleware.
+Broker security metadata does not protect the HTTP endpoint that serves this
+document. Apply separate [document access controls](serving.md#protected-access)
+before exposing that endpoint.
 
-## Adding protocol bindings
+## Protocol Bindings
 
-A **binding** is protocol-specific metadata attached to a server, channel,
-operation, or message. Use the level that the protocol's binding specification
-defines. For example, within an existing channel callback, declare the AMQP
-queue metadata for the billing channel:
+A binding is a raw protocol-specific object attached to a server, channel,
+operation, or message. Choose the level defined by that protocol's binding
+specification. To describe the reporting work destination as an AMQP queue,
+add this inside its channel callback:
 
 ```go
 channel.Binding("amqp", asyncapi.RawObject(`{
   "is": "queue",
   "queue": {
-    "name": "production.billing",
+    "name": "production.report-work",
     "durable": true
   },
   "bindingVersion": "0.3.0"
 }`))
 ```
 
-`Binding` also exists on the server, operation, and message builders. Each call
-captures a caller-supplied `RawObject` at that level. It does not create the
-queue, make it durable, use a broker SDK, or change the transport.
+This exports the supplied queue metadata. It does not create the queue, make it
+durable, or guarantee durable delivery. Configure and verify the deployed broker
+independently; a successful export cannot establish that these details match it.
+Server, operation, and message builders also expose `Binding` for their levels.
 
-Bindings are opaque: only JSON object syntax, the protocol key's ID syntax, and
-duplicate protocol keys at that level are checked. Nested references are not
-resolved or validated. Actual document graph edges and local security-scheme
-aliases are checked separately. You remain responsible for protocol-specific
-binding semantics and for matching the deployed infrastructure.
+Bindings receive only JSON-object syntax checks, protocol-key ID checks, and
+duplicate-key checks at their own level. Nested references and protocol-specific
+semantics are opaque. Document graph references and local security aliases are
+checked separately; they do not turn binding contents into resolved references.
 
-The exporter supplies no broker inventory, producer discovery, traffic sampling,
-or runtime parameter expansion. Exporting valid JSON is not proof that a binding
-matches a broker's configuration.
+No broker inventory, producer discovery, traffic sampling, or runtime address
+parameter expansion occurs during export. Keep these declarations aligned with
+your application's actual transport and infrastructure configuration.
 
-For every server, binding, and security option, see the [`asyncapi` API reference](https://pkg.go.dev/arkoren.dev/core/asyncapi).
+For endpoint, binding, and security options, see the
+[`asyncapi` API reference](https://pkg.go.dev/arkoren.dev/core/asyncapi).

@@ -1,72 +1,81 @@
 ---
 title: CSRF Protection
-description: Stop other sites from making requests as your signed-in users with header-based checks that need no tokens, and allow trusted origins.
+description: Reject forged cookie-backed browser actions with request-header checks and narrowly scoped cross-origin exceptions.
 order: 40
+summary:
+  - Protect cookie-backed actions with browser-header checks and understand which requests still pass.
+  - Trust exact browser origins or isolate independently verified callbacks without granting resource access.
+  - Combine request-origin checks with media-type checks and keep token-only boundaries distinct.
+  - Observe blocked requests safely and test that rejection stops application work.
 ---
 
 # CSRF Protection
 
-## Introduction
+A hostile page can submit a request to your application without knowing the
+visitor's session cookie. If cookie scope and `SameSite` rules allow it, the
+browser attaches that cookie automatically. Accepting the request solely because
+it has a valid session can let the hostile page change the visitor's settings.
+This is **cross-site request forgery** (CSRF).
 
-Browsers attach cookies automatically when the cookie's scope and `SameSite`
-rules allow it; the page sending the request need not know their values.
-If a person signed in to your service visits a
-malicious page, that page can submit a hidden form to your service, and the
-browser attaches the session cookie. Your service sees a valid session and
-transfers the money, changes the email address, or deletes the account. This
-attack is called **cross-site request forgery** (CSRF).
+Arkoren's `csrf` middleware uses Go's `http.CrossOriginProtection` to check
+browser-supplied headers before application work. It needs no form tokens and
+stores nothing in the session. It does not replace authentication or the
+resource authorization inside your handlers.
 
-Arkoren's `csrf` middleware checks browser headers to reject unsafe cross-origin
-requests. It uses headers that browsers add on their own and that pages cannot
-fake: `Sec-Fetch-Site` describes the request's relationship to the destination,
-and `Origin` names the origin that made it. Go's `http.CrossOriginProtection`
-performs the checks; the middleware adds an Arkoren error response and events.
-Unlike token-based CSRF protection, this approach needs no tokens in forms or
-JavaScript and stores nothing in the session.
+## Protect Cookie Actions
 
-## Enabling protection
-
-Register the middleware before anything that acts on the user, and in
-particular before [authentication](../authentication/overview.md). Import
-`arkoren.dev/core/http/middleware/csrf`, `arkoren.dev/core/http/session`, and
-`arkoren.dev/core/http/auth`. Here `r` is your existing router, `store` is your
-configured `*cache.Cache`, and `users.Load` is your application's typed session
-user loader from the [session login guide](../authentication/session-login.md):
+Put cookie-authorized actions behind the middleware, before authentication and
+handlers. With a fresh router `routes`, import `arkoren.dev/core/http/router`
+and `arkoren.dev/core/http/middleware/csrf`. Here `requireAccount` is your
+authentication middleware and `savePreferences` is your existing authorized
+handler:
 
 ```go
-identity := auth.NewSessionIdentity(users.Load)
-r.Use(session.Middleware(store))
-r.Use(csrf.Middleware())
-r.Use(auth.Middleware(identity.Authenticator()))
+routes.Group("/account", func(account *router.Router) {
+	account.Use(csrf.Middleware(), requireAccount)
+	account.Patch("/preferences", savePreferences)
+})
 ```
 
-That is all a typical service needs. Every request that uses a session cookie
-must pass through it, so you should register it whenever you sign people in
-with sessions.
+Later group policy examples replace this `Use` call; configure the chosen
+policy before registering the group's routes.
 
-## How requests are checked
+The policy rejects unsafe cross-origin browser requests before either inner
+layer runs. Protect login and other cookie-backed actions too, not only routes
+that already require a signed-in user. If authentication uses sessions, install
+[session middleware](../http-capabilities/sessions.md#enable-sessions) before
+it; the CSRF checker itself does not need a session. Session changes still follow
+the normal [save behavior](../http-capabilities/sessions.md#save-changes).
 
-The middleware treats `GET`, `HEAD`, and `OPTIONS` as safe methods and always
-lets them pass. Browsers let any page trigger requests such as an image `GET`,
-so your handlers for these methods must not change state. A logout or a delete
-behind a `GET` route is unprotected.
+## Understand Checks
 
-For every other method, the middleware looks at the headers in this order:
+`GET`, `HEAD`, and `OPTIONS` always pass. Never use these methods for logout,
+deletion, or other state changes: those actions would bypass this protection.
+For other methods, the checker uses this order:
 
-1. If `Sec-Fetch-Site` is present, the request passes when it is `same-origin`,
-   meaning it came from your own pages, or `none`, meaning the person typed the
-   address or used a bookmark. Any other value means the request came from
-   another origin, even a subdomain of your own site, and it is blocked unless
-   that origin is [trusted](#trusting-other-origins).
-2. Otherwise, if `Origin` is present, the request passes when its host matches
-   the request's `Host` header.
-3. When both headers are missing, the checker assumes a same-origin or
-   non-browser request and lets it pass. Programs such as `curl` and other
-   servers commonly send requests without these headers; their absence is not
-   proof of the caller's identity or permission.
+1. If `Sec-Fetch-Site` is nonempty, `same-origin` and `none` pass. Other values,
+   including `same-site`, fail unless an explicit exception applies. Sharing a
+   parent domain is not enough to trust another origin.
+2. Otherwise, a nonempty `Origin` passes if its parsed host, including any port,
+   equals the request's `Host`. This fallback does not compare schemes; HTTPS and
+   a deliberate [HSTS policy](secure-headers.md#enable-hsts) help address the
+   older-browser boundary.
+3. If both headers are missing or empty, the request passes as a possible
+   same-origin or non-browser request.
 
-A blocked request receives a `403` Problem Details response, and your handler
-never runs:
+Browser pages cannot freely set these headers, but server clients can supply or
+omit them. Passing the checker is never proof of client identity. Modern
+browsers provide the fetch-context header; do not assume old clients implement
+it or enforce the session cookie's default `SameSite=Lax` behavior.
+
+The Host fallback uses the request as it reaches the application, not
+`X-Forwarded-Host`. Configure reverse proxies to preserve the intended public
+host and browser security headers rather than replacing them with internal or
+client-selected values.
+
+A blocked request returns `csrf.ErrBlocked` without calling the next layer.
+With the default router renderer and an acceptable JSON representation, the
+client receives a `403` problem with this identity:
 
 ```json
 {
@@ -77,108 +86,148 @@ never runs:
 }
 ```
 
-> [!NOTE]
-> Clients that send neither header pass this check. Browsers that honor the
-> session cookie's `SameSite=Lax` setting, the
-> [default](../http-capabilities/sessions.md#the-session-cookie), also withhold it on cross-site
-> form posts. Do not assume that old browsers implement either protection.
+The router's [error negotiation](../http-fundamentals/error-handling.md#negotiate-error-output)
+still applies, including `406` if the client excludes every supported format.
 
-## Trusting other origins
+## Trust Browser Origins
 
-Sometimes a request from another origin is legitimate: your marketing site at
-`www.example.com` posts a sign-up form to `app.example.com`, or a partner's
-dashboard calls your API from the browser. List these origins as trusted:
+If your portal intentionally sends account changes to a separate API origin,
+trust its exact browser origin rather than every subdomain. Replace the default
+CSRF registration in the account group with:
 
 ```go
-r.Use(csrf.Middleware(func(protection *csrf.Builder) {
-	protection.TrustedOrigins("https://www.example.com")
-}))
+account.Use(csrf.Middleware(func(protection *csrf.Builder) {
+	protection.TrustedOrigins("https://portal.example.com")
+}), requireAccount)
 ```
 
-Requests whose `Origin` matches a trusted origin pass. An origin is a scheme, a
-host, and an optional port, with no path, and a malformed one makes the
-middleware panic when it is created, so mistakes show up at startup.
+An exact matching `Origin` passes the CSRF check even for cross-site fetch
+context. Use `scheme://host[:port]` without a path; malformed origins panic
+during middleware construction. This is permission to pass this checker, not
+permission to change an account. The authenticated visitor still needs resource
+authorization, and the portal needs a separate [CORS policy](cors.md#send-credentials)
+to read credentialed API responses. Cookies must also permit the request.
 
-Trusting an origin only lets its requests through the CSRF check. For a browser
-to let pages on that origin read your responses, you also need
-[CORS](cors.md). The two are independent: CORS controls who
-can read responses, and CSRF protection controls who can trigger actions. CORS
-alone does not stop CSRF, because a forged form post does not need to read the
-response to do damage.
+## Isolate Exceptions
 
-## Routes that must accept cross-site requests
-
-A few routes receive cross-site requests on purpose. A payment provider posts
-webhooks to your service, and Apple's sign-in sends people back with a
-cross-site `POST`. Exempt such routes only when they verify requests another
-way, such as a webhook signature or the login flow's own cookie and callback
-checks. The exemption itself provides no verification.
-
-The simplest approach is to register them outside the protected group. With
-`arkoren.dev/core/http/router` imported, `stripeWebhook` is your configured
-signature-verifying webhook handler and `saveSettings` is your application handler:
+Some routes intentionally accept cross-site posts. Keep a signature-verifying
+webhook receiver outside the protected browser group rather than weakening the
+group. On a fresh router without global CSRF middleware, `receivePayment` is
+your configured, signature-verifying handler:
 
 ```go
-r.Post("/webhooks/stripe", stripeWebhook) // verified by its signature
-
-r.Grouped(func(web *router.Router) {
-	web.Use(csrf.Middleware())
-	web.Post("/settings", saveSettings)
+routes.Post("/callbacks/payment", receivePayment)
+routes.Group("/account", func(account *router.Router) {
+	account.Use(csrf.Middleware(), requireAccount)
+	account.Patch("/preferences", savePreferences)
 })
 ```
 
-When that is not practical, build Go's checker yourself, add bypass patterns
-for those routes, and pass it to the middleware. Import `net/http`:
+The callback must perform its own [webhook verification](../webhooks/receiving-webhooks.md).
+A browser login callback accepting cross-site `POST` likewise needs its login
+flow's callback checks. Being outside the group provides no verification.
+
+If scoping cannot isolate a verified callback, supply a native checker with one
+narrow bypass. Import `net/http` and use this alternative global policy:
 
 ```go
 engine := http.NewCrossOriginProtection()
-engine.AddInsecureBypassPattern("POST /webhooks/stripe")
+engine.AddInsecureBypassPattern("POST /callbacks/payment")
 
-r.Use(csrf.Middleware(func(protection *csrf.Builder) {
+routes.Use(csrf.Middleware(func(protection *csrf.Builder) {
 	protection.Protection(engine)
 }))
 ```
 
-Patterns use the same syntax as `http.ServeMux`. As the name of the method
-says, a bypassed route has no CSRF protection, so keep the patterns narrow and
-make sure each route verifies its requests another way.
+The bypass disables CSRF checks for matching requests; it does not verify them.
+Patterns follow `http.ServeMux` syntax and precedence, and malformed or
+conflicting patterns panic. Broad path patterns can silently expose unrelated
+actions, so keep the method and callback path explicit.
 
-## APIs and tokens
+The provided checker remains shared. Configuring `TrustedOrigins` adds origins
+to that same instance; later native changes affect future requests. Do not
+treat it as an isolated copy or modify it casually after publication.
 
-Requests authenticated exclusively with an [API token](../authentication/api-tokens.md)
-in the `Authorization` header do not have the automatic-cookie CSRF risk: the
-browser does not attach that header on its own, so a malicious page without
-the token cannot authenticate a request. An API used only
-with tokens does not need CSRF protection. When an API accepts both session
-cookies and tokens, keep the middleware: it lets token requests from programs
-through, since they carry neither browser header.
+## Check JSON Inputs
 
-If you leave out CSRF protection for JSON endpoints, still register the
-[content type middleware](../http-fundamentals/content-type.md). A cross-site
-form can only send form encodings and `text/plain`, never JSON, so rejecting
-other content types closes the most common forgery route.
-
-## Logging blocked requests
-
-With `csrf.Builder.Events`, every blocked request publishes an
-[event](../events/overview.md) with the method, the path, and the `Origin`
-header. A steady trickle usually means a misconfigured trusted origin, and a
-burst on one route may be an attack worth investigating.
-
-## Testing
-
-A request built with `httptest.NewRequest` carries neither browser header, so
-it passes the check like any program would. To test that a route is
-protected, send it as a browser would from another site. This test fragment uses
-`net/http`, `net/http/httptest`, and `t *testing.T` against the configured router:
+JSON syntax alone is not a browser boundary: a hostile page can send JSON-looking
+bytes labeled `text/plain` without a CORS preflight. If your account group accepts
+only JSON, add `arkoren.dev/core/http/middleware/contenttype` and use this policy
+before body decoding:
 
 ```go
-req := httptest.NewRequest(http.MethodPost, "/settings", nil)
-req.Header.Set("Sec-Fetch-Site", "cross-site")
+account.Use(csrf.Middleware(), contenttype.Middleware(), requireAccount)
+```
 
-if res := r.Record(req); res.StatusCode != http.StatusForbidden {
-	t.Fatalf("status = %d, want 403", res.StatusCode)
+The default media-type policy accepts `application/json` and `+json` types,
+rejecting disallowed form and plain-text declarations. Missing headers on empty
+requests can pass; see [empty-request checks](../http-fundamentals/content-type.md#check-empty-requests).
+The media-type check neither validates the JSON contents nor replaces CSRF or
+resource authorization. Keep CSRF protection when allowing browser form formats.
+
+An API authenticated exclusively by an explicit bearer token in `Authorization`
+does not have the automatic-cookie credential risk: browsers do not attach that
+header on their own. You can omit CSRF middleware for that token-only boundary.
+If the same API also accepts session cookies, retain it. Non-browser token clients
+without browser headers pass; browser token clients are still subject to the
+header checks and any configured trusted origins.
+
+## Observe Rejections
+
+To receive rejection notifications, pass your existing `*event.Bus` named `bus`
+in a construction callback, keeping authentication after the checker:
+
+```go
+account.Use(csrf.Middleware(func(protection *csrf.Builder) {
+	protection.Events(bus)
+}), requireAccount)
+```
+
+Each blocked request emits `csrf.Blocked` with its method, path, `Origin`, and
+native error. With no bus, nothing is published. Listeners run synchronously and
+cannot change the rejection. Paths can contain personal identifiers, and origin
+and error values are diagnostic, potentially untrusted data; review them before
+logging or exporting them. A rejection can indicate either an attack or a
+misconfigured browser policy, not proof of either.
+
+If clients need different failure wording, `Builder.ErrorResponse` accepts a
+`problem.Details` value. Derive from `csrf.ErrBlocked` to preserve the `403` status
+and stable problem identity, and keep internal causes out of client-facing text.
+
+## Test Rejection
+
+An ordinary `httptest.NewRequest` lacks browser headers and passes the checker.
+Test a cross-site write explicitly and make any downstream execution fail the
+test. With `net/http`, `net/http/httptest`, and `t *testing.T`:
+
+```go
+handler := csrf.Middleware()(func(http.ResponseWriter, *http.Request) error {
+	t.Fatal("rejected request reached application work")
+
+	return nil
+})
+
+incoming := httptest.NewRequest(http.MethodPatch, "/account/preferences", nil)
+incoming.Header.Set("Sec-Fetch-Site", "cross-site")
+incoming.Header.Set("Origin", "https://untrusted.example")
+response := handler.Record(incoming)
+```
+
+Register cleanup for the recorded response body and assert the rejection:
+
+```go
+t.Cleanup(func() {
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+})
+if response.StatusCode != http.StatusForbidden {
+	t.Fatalf("status = %d, want 403", response.StatusCode)
 }
 ```
 
-For every option, see the [`csrf` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/csrf).
+For your configured routes, also test that blocked requests leave stored data
+unchanged, trusted origins can reach the intended policy layers, and authentication
+and authorization still reject visitors without permission.
+
+For configuration and events, see the [`csrf` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/csrf).

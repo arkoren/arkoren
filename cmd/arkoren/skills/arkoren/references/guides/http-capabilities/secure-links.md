@@ -1,251 +1,250 @@
 ---
-title: Secure Links
-nav: Signed Links
-description: Create links that cannot be forged and can expire, be used once, or be revoked, for email verification, password reset, and downloads.
+title: Signed Links
+description: Issue expiring application URLs and enforce verification, single use, and state bindings without confusing signatures with authorization.
 order: 30
+summary:
+  - Issue expiring signed URLs and separate tamper resistance from resource authorization.
+  - Enforce single use through cache-backed consumption and invalidate links with stable server-side bindings.
+  - Inspect and rotate links while preserving backend, clock, recovery, and privacy boundaries.
 ---
 
-# Secure Links
+# Signed Links
 
-## Introduction
+A password-reset email needs a link that works without a login but rejects an
+altered account ID. A **signed link** authenticates its path and query using a
+secret key. An expiry limits how long the link is accepted; a cache can record
+single use, and a server-side binding can invalidate links when account state
+changes.
 
-Some links must work without a login but must not be forgeable: the
-verification link in a welcome email, a download link for a private file, an
-unsubscribe link. A **secure link** solves this. It is an ordinary URL with a
-signature added as a query parameter, computed from the rest of the URL and a
-secret only your service knows. If anyone changes a signed part of the URL,
-the signature no longer matches and the link is rejected.
+A valid signature proves that the URL matches what a key holder signed. It does
+not identify the person opening it or independently authorize access to the
+named resource. Decide what possession of the link permits, authorize issuance,
+and recheck application constraints at the action boundary. Anyone who obtains
+the URL can present it: keep signed queries out of logs, analytics, and referrers,
+and deliver links over HTTPS.
 
-The `link` package creates secure links and controls how long they stay valid:
-forever, until an expiry, until first use, or until the state they were issued
-for changes. Its middleware verifies them, so the handler behind a protected
-route only runs for authentic links.
+## Create Signers
 
-Treat signed URLs as bearer credentials: anyone who obtains one can use it.
-Keep query strings out of logs and avoid exposing links through referrers.
-
-Focused construction and signing snippets keep error results visible and assume
-success. Handle those errors in your application; verification and consumption
-checks remain explicit before protected actions.
-
-## Creating a signer
-
-A **signer** holds signing keys and settings. Create one at startup with a
-cryptographically random secret of exactly 32 bytes, read from your configuration. Import
-`arkoren.dev/core/http/link` and `arkoren.dev/foundation/key`. Provision a separate
-secret with `arkoren key generate shared --out link-key.key`, then load it as a
-`key.Shared`. Handle loading and construction errors
-before issuing links or installing middleware:
+Provision a separate random 32-byte shared key using
+[application key tooling](../keys/overview.md). For example, generate the
+application file `link-key.key` with `arkoren key generate shared --out
+link-key.key`; keep it outside source control and restrict access. Import
+`arkoren.dev/foundation/key` and `arkoren.dev/core/http/link`, then load the key
+at startup:
 
 ```go
 secret, err := key.LoadShared("link-key.key")
-signer, err := link.New(secret, func(signer *link.Builder) {
-	signer.Origin("https://app.example.com")
+```
+
+Handle loading failure before constructing the signer. For email links, give it
+your configured public origin rather than deriving that origin from an untrusted
+request host:
+
+```go
+signer, err := link.New(secret, func(links *link.Builder) {
+	links.Origin("https://app.example.com")
 })
 ```
 
-With an origin, the signer produces absolute URLs that you can put in emails.
-Without one, it signs relative paths only, which is enough for links used
-inside your own pages. Construction detaches owned key material and query-name
-containers, so retaining a builder does not let you change a published signer.
-Supplied cache and event services remain shared, not cloned or lifecycle-managed
-by the signer. Middleware binding functions and their captures are shared too;
-use dependencies that are safe for concurrent requests.
+Handle construction errors before issuing links or installing middleware. A zero
+key returns `ErrInvalidSecret`. Origins must be HTTP(S) scheme/host origins,
+without credentials, query, fragment, or an application path; invalid values
+return `ErrInvalidOrigin`. Use HTTPS in production.
 
-> [!WARNING]
-> The secret is what makes links unforgeable. Keep it out of your source code
-> and rotate it if it leaks, as described [below](#rotating-the-secret).
+Without `Origin`, a signer accepts root-relative paths and returns relative URLs.
+With an origin, it completes root-relative targets and accepts absolute URLs only
+for that origin. Fragments, credentials, opaque URLs, and unsuitable targets
+return `ErrInvalidURL`. A configured origin scopes link reconstruction; it is
+not a substitute for your server's host-routing policy.
 
-When logging configuration, `link.Config` is a diagnostic record, not an input
-to `link.New`. Its `fmt` and `slog` views replace previous keys with a redaction
-marker and omit cache/event service pointers. They still display `Origin` and
-ignored query names; keep credentials out of those values. This is not a
-general-purpose sanitizer for signers, URLs, or returned errors.
+Construct once and share the signer. It detaches owned key material and
+query-name containers, so retained drafts cannot reconfigure it. Cache/event
+services remain shared and application-owned; the signer does not start or stop
+them. Request-binding functions and captures must be safe for concurrent use.
 
-## Signing a link
+## Issue Links
 
-A verification email needs a link that works when the recipient opens it, but
-not one that stays valid forever. With `time` imported, use `Temporary` to give
-that link an expiry:
+After the application authorizes a reset request, build the target from a typed
+account reference. With `net/url` imported, avoid concatenating raw query input:
 
 ```go
-url, err := signer.Temporary("/verify?user=42", 24*time.Hour)
+type ResetTarget struct {
+	UserID string
+}
+
+target := ResetTarget{UserID: "user-42"}
+query := url.Values{}
+query.Set("user", target.UserID)
+path := "/reset?" + query.Encode()
 ```
 
-The result is the URL with two query parameters added: `expires`, the
-expiry time, and `signature`. The signature authenticates the expiry, path,
-and other query parameters; the `signature` field itself is excluded from the
-signed text. Altering either field invalidates the link. This includes `user=42`, so
-a recipient cannot change the link to verify another user.
-
-For a link that should never expire, use `Sign` instead.
-
-## Protecting a route
-
-Wrap the routes that accept secure links with `link.Middleware`. It verifies
-the signature and the expiry before your handler runs. Here `r` is your existing
-router, `request` is `arkoren.dev/core/http/request`, and `verifyEmail` is your
-application's verification function. Use `net/http` for the handler types:
+The target identifies the account selected by your application, not arbitrary
+request fields that the signing service trusts automatically. Use `Temporary`
+with `time` imported to issue a short-lived link:
 
 ```go
-r.With(link.Middleware(signer)).Get("/verify", func(w http.ResponseWriter, r *http.Request) error {
-	id := request.QueryOr(r, "user", "") // trusted: it was part of the signature
-	return verifyEmail(r.Context(), id)
+signed, err := signer.Temporary(path, 15*time.Minute)
+```
+
+The result is an absolute URL under `https://app.example.com` with `expires` and
+`signature` query parameters. The signature covers the path, ordinary query
+values including `user`, and expiry; changing protected values invalidates it.
+Signing replaces pre-existing reserved parameters. It does not encrypt query
+values, so never put passwords or other secrets in them.
+
+Temporary lifetimes must be positive; zero/negative returns `ErrInvalidExpiry`,
+not a default. Expiry uses Unix-second precision and the verifier's local clock;
+equality counts as expired. Synchronize verifier clocks rather than treating the
+TTL as a cross-server timing guarantee. `Sign` creates permanent links, which
+cannot be consumed and have no automatic expiry.
+
+If an email system appends tracking parameters, an alternative signer can exclude
+specific names:
+
+```go
+signer, err := link.New(secret, func(links *link.Builder) {
+	links.Origin("https://app.example.com")
+	links.IgnoreQuery("utm_source", "utm_medium")
 })
 ```
 
-An expired link is rejected with `403 Link Expired`, and any other invalid
-link with `403 Invalid Link`. The messages are deliberately generic, so they
-reveal nothing about why verification failed.
-With a configured cache, an already-consumed link gets `403 Link Already Used`.
-If the cache check fails, middleware returns the cache error for application
-error handling rather than classifying the link as forged.
+Anyone can add, change, or remove ignored values without invalidating the link.
+Never derive account selection, redirect destinations, authorization, or bindings
+from them. Empty names and reserved `signature`/`expires` names return
+`ErrInvalidIgnoreQuery`. Signing an arbitrary redirect destination does not make
+that destination safe; validate allowed destinations before issuance and use.
 
-> [!NOTE]
-> The signature covers the URL, not the HTTP method. Register protected routes for
-> a single method with `Get` or `Post`, never with `Any`, so a link sent for a
-> `GET` cannot be replayed as a `POST` unless you also register that method. If
-> GET and POST intentionally share a signed path, GET must only display the form;
-> POST must verify and consume the link before changing state.
+## Protect Routes
 
-## Verifying in code
-
-To verify a link outside a route, for example in a background job, call
-`Verify`. It returns an error that tells an expired link apart from an invalid
-one. Import `errors` for classification:
+Use `link.Middleware` on a display-only GET. With an existing router `routes`
+and your application-owned `showResetForm` handler:
 
 ```go
-err := signer.Verify(url)
-switch {
-case errors.Is(err, link.ErrInvalidURL):
-	// the URL cannot be parsed or does not fit this signer's mode
-case errors.Is(err, link.ErrExpired):
-	// authentic, but too old
-case err != nil:
-	// authentication or binding failed
+routes.With(link.Middleware(signer)).Get("/reset", showResetForm)
+```
+
+The handler runs only after signature and expiry checks. Middleware returns
+`403 Invalid Link` for invalid authentication and `403 Link Expired` for
+authentic expired links. With a configured cache, it also returns
+`403 Link Already Used` for a consumed temporary link. Cache-read failures pass
+to application error handling; they are not proof that the link was forged.
+
+The signature covers the URL, not the HTTP method. Register explicit methods,
+not `Any`. If GET and POST intentionally share a path, GET must only display the
+form; POST must independently verify and consume before changing state. This
+also keeps email scanners and link previews from spending a reset link.
+
+Verification uses the path as the router sees it; stripping a prefix can break
+the signed path. Request verification reconstructs absolute links using the
+configured origin, not forwarded host headers. Preserve the signed path and
+query through proxy routing and form submission.
+
+Outside middleware, `signer.Verify(signed)` checks authenticity and expiry only.
+Use `errors.Is` to classify `ErrInvalidURL`, `ErrInvalidSignature`, or
+`ErrExpired`. Expiry is reported only after authentication. `Verify` neither
+checks consumption nor reserves a use, even when a cache is configured.
+
+## Consume Links
+
+Single use requires a cache shared by every server accepting the same links.
+Choose [cache storage](../cache/drivers.md) that retains markers for their entire
+lifetime; early eviction, data loss, or an in-memory restart lets spent links
+work again. Construct this alternative signer with the existing `*cache.Cache`
+named `store`:
+
+```go
+signer, err := link.New(secret, func(links *link.Builder) {
+	links.Origin("https://app.example.com")
+	links.Cache(store)
+})
+```
+
+Middleware only observes consumption. Spend the link in the POST handler after
+decoding and validating the proposed password and applying your application's
+reset policy, but before committing the password change. Register that
+application-owned handler for POST explicitly:
+
+```go
+routes.Post("/reset", resetPassword)
+```
+
+Inside `resetPassword`, with incoming request `r`, keep all consumption failures
+off the action path:
+
+```go
+err := signer.ConsumeRequest(r)
+if errors.Is(err, link.ErrConsumed) {
+	return link.ErrLinkUsed
+}
+if err != nil {
+	return err
 }
 ```
 
-Parsing and signer-mode failures return `ErrInvalidURL`. Malformed signature
-data, tampering, and missing or wrong bindings return `ErrInvalidSignature`.
-Expiry is reported only after authentication succeeds. `Verify` does not check
-whether a link has already been consumed; use `Consume` before a one-time action.
+Import `errors` for classification. Only after this succeeds may your
+application-owned password update run. The form must post to the URL carrying
+the original signed query; `ConsumeRequest` reconstructs it without manual URL
+assembly. Use `Consume(ctx, signed)` outside HTTP, or `ConsumeURL` with a parsed
+URL.
 
-## Single-use links
-
-A password reset link should work once. Give the signer a cache, then spend
-the link in the handler that applies the change, not in the one that shows
-the form. Use your existing shared `*cache.Cache` named `store` from the
-[cache guide](../cache/overview.md), plus `arkoren.dev/foundation/problem` for
-the failure callbacks. `showResetForm` and `resetPassword` are application-owned
-handlers; neither is supplied by `link`:
+Consumption verifies the signature, binding, and expiry, then atomically adds a
+cache marker. Confirmed concurrent calls sharing that backend have one winner;
+the others return `ErrConsumed`. A marker lives until signed expiry plus one
+minute for clock differences. That margin retains markers longer; it does not
+extend the link's validity or guarantee arbitrary clock-skew tolerance.
 
 > [!WARNING]
-> Do not apply the action after any consumption error. A cache error can occur
-> after the consumption marker was committed but its confirmation was lost. The
-> link may already be spent; do not assume an automatic retry can succeed.
-> Confirm application state or issue a new link through your recovery flow.
+> A cache error can occur after a marker was committed but its confirmation was
+> lost. Do not perform the action after any consumption error, and do not assume
+> a retry can succeed. Confirm application state through your recovery flow or
+> issue a new link.
+
+Consumption is not a transaction with the password update. If the update fails
+after successful consumption, the link stays spent. If you need an atomic
+consume-and-update guarantee, enforce that boundary in application-owned durable
+storage; the cache marker does not provide it.
+
+Only temporary links can be spent; authenticated permanent links return
+`ErrNotTemporary`. Missing cache configuration returns `ErrNoCache` before
+verification of a parsed target. `Consume` first parses its raw URL, so an
+unparsable value returns `ErrInvalidURL` even without a cache; `ConsumeURL` and
+`ConsumeRequest` check cache configuration before validating their target.
+
+## Bind State
+
+A still-unexpired link might need to stop working after a password change.
+**Binding** adds current server-side bytes to the authenticated input without
+putting them in the URL. Load the account identified by `target.UserID` as `user`;
+its `PasswordHash` is a persisted `[]byte`. Issue a bound variant:
 
 ```go
-signer, err := link.New(secret, func(signer *link.Builder) {
-	signer.Cache(store)
-})
-
-r.With(link.Middleware(signer)).Get("/reset", showResetForm)
-r.Post("/reset", func(w http.ResponseWriter, r *http.Request) error {
-	err := signer.ConsumeRequest(r)
-	if errors.Is(err, link.ErrConsumed) {
-		return link.ErrLinkUsed.Derive(func(details *problem.Builder) {
-			details.Error(err)
-		})
-	}
-	if err != nil {
-		return link.ErrLinkRejected.Derive(func(details *problem.Builder) {
-			details.Error(err)
-		})
-	}
-	return resetPassword(r)
-})
+signed, err := signer.Temporary(path, 15*time.Minute, link.Bind(user.PasswordHash))
 ```
 
-The form posts back to a URL that carries the same signed query, so
-`ConsumeRequest` needs no URL rebuilding. The example keeps every failure off
-the action path and attaches its cause to the application-selected response.
-Consumption verifies the link as `Verify` does, then records it with an atomic
-cache add. If concurrent calls are confirmed by the cache, one succeeds and the
-others get `ErrConsumed`. With a cache on the signer,
-`Middleware` also answers `403 Link Already Used` for a spent link, so the
-form page does not render for a dead link.
-
-Only temporary links can be spent. After authentication, `ErrNotTemporary`
-rejects permanent links, whose markers would have to be kept forever. The record
-stays until the link would have expired, plus one minute for clock differences
-between servers.
-
-Error precedence differs by input form: `Consume(ctx, rawURL)` parses the URL
-first, so an unparsable value returns `ErrInvalidURL` even without a cache.
-For a parsed value, missing cache configuration returns `ErrNoCache` before
-verification. `ConsumeURL` and `ConsumeRequest` check cache configuration before
-validating the target. Cache failures preserve their wrapped causes, but do not
-prove that no marker was written.
-
-Spend the link before you change anything. If `resetPassword` fails after
-`ConsumeRequest` succeeded, the link stays spent and the user must request a
-new one. Consumption is not a transaction with the password change: it prevents
-another consumption of an otherwise valid link only while the cache retains
-the record.
-
-> [!WARNING]
-> The cache decides how reliable single use is. If it evicts or loses entries
-> early, for example an in-memory cache after a restart, a spent link works
-> again. Use a cache driver that keeps entries for their full lifetime, shared
-> by every server.
-
-With `Events(app.Events())` in the signer's construction callback, every successful
-`Consume`, `ConsumeURL`, or `ConsumeRequest` publishes `link.consumed` with the
-request `Method` after the use is confirmed. `Method` is empty for `Consume` and
-`ConsumeURL`, which have no request. Failed calls, including uncertain cache
-writes and `ErrConsumed`, publish nothing; neither do `Verify` and `Inspect`.
-The same option makes middleware publish `link.rejected` for invalid links;
-authentic expired or already-consumed links publish no rejection event.
-
-Both payloads omit paths, queries, and bindings. `link.RejectedEvent.Path`,
-`link.RejectedEvent.Err`, and `link.ConsumedEvent.Path` have been removed. Remove
-those field reads from existing listeners; do not replace them with unfiltered
-request URLs or causes. An event counts an observed outcome, not which account
-or reset link was involved. See [signed-link events](../events/http-events.md#signed-links).
-
-These limits apply to payload fields, not every value available to a listener.
-Event contexts retain caller values, and custom HTTP methods are client-controlled.
-Select safe attributes explicitly. HTTP problems can still include a request
-path in `instance`; event privacy does not redact that member.
-
-## Revoking links when state changes
-
-A link stays valid until it expires, even if the account changed after you
-sent it. To end a link early without keeping a list of revoked links, **bind**
-it to server-side state. The signature then also covers that value, and the
-link stops verifying as soon as the value changes:
+Use the same binding policy for every verification, consumption, and inspection.
+Read the current persisted bytes each time, not a stale issuance snapshot:
 
 ```go
-signed, err := signer.Temporary("/reset?user=42", time.Hour, link.Bind(user.PasswordHash))
-err = signer.Verify(signed, link.Bind(user.PasswordHash)) // nil
-// After the password changes, the same call returns link.ErrInvalidSignature.
+err := signer.Verify(signed, link.Bind(user.PasswordHash))
 ```
 
-Pass the same `Bind` to every call for that link: `Verify`, `Consume`, and
-`Inspect`. A wrong value, no value, or a value on a link that was signed
-without one all return `ErrInvalidSignature`, so the error does not reveal
-which part failed. The value itself never appears in the link. Links signed
-without `Bind` keep verifying as before.
+This succeeds while the stored bytes match; after they change, it returns
+`ErrInvalidSignature`. A wrong, missing, or unexpected binding has the same
+error. An empty binding is distinct from no binding. `Bind` copies its input;
+only a digest participates in the signature.
 
-For a protected route, derive the value from the request. Here `users.Find` is
-your application's lookup and `PasswordHash` is the current `[]byte` hash.
-The query is still untrusted during the lookup: perform no state change before
-verification succeeds:
+Choose stable bytes: a stored hash or a dedicated reset-version value, not a
+freshly salted recomputation or an inconsistently formatted timestamp. Every
+verifier must read the current state from an appropriate consistency boundary.
+Replica lag or cached old values can delay rejection; reverting to old bytes
+can make old links verify again. Binding is not an atomic lock against a state
+change that races with the subsequent action.
+
+For bound GET verification, configure a lookup. Here `users.Find(ctx, id)` is
+your application-owned loader returning that account and an error:
 
 ```go
-bind := func(policy *link.MiddlewareBuilder) {
+binding := func(policy *link.MiddlewareBuilder) {
 	policy.BindRequest(func(r *http.Request) ([]byte, error) {
 		user, err := users.Find(r.Context(), r.URL.Query().Get("user"))
 		if err != nil {
@@ -254,90 +253,92 @@ bind := func(policy *link.MiddlewareBuilder) {
 		return user.PasswordHash, nil
 	})
 }
-r.With(link.Middleware(signer, bind)).Get("/reset", showResetForm)
 ```
 
-> [!WARNING]
-> The function runs before the signature is checked, so the request is still
-> untrusted. Use `user` only to find the record, and do not act on it. If the
-> function returns an error, for example because the user does not exist, the
-> link is rejected with `403 Invalid Link`.
+Import `net/http` for the callback. It runs **before** authentication: use the
+query only for a bounded lookup, never as proof of permission, and perform no
+state change there. Lookup errors reject with `403 Invalid Link`. The returned
+problem retains the cause for application error handling; response detail and
+rejection events do not expose it. Redact causes before diagnostic logging.
 
-The returned rejection problem retains the binding failure for `errors.Is` and
-`errors.As`; the `Rejected` payload and HTTP error detail do not contain it.
-Inspect the returned chain in application error handling, not through the removed
-event `Err` field. Redact before logging: a lookup error can contain credentials
-or a full URL. The HTTP problem's normal `instance` member may still contain the
-request path.
-
-This GET-only variant does not change the earlier POST handler automatically.
-For a bound reset flow, load the current hash in the POST handler, fail closed
-if the lookup fails, and pass `link.Bind(user.PasswordHash)` to `ConsumeRequest`
-there too. Preserve the signed query when submitting the form.
-
-## Inspecting a link
-
-`Inspect` tells you about a link without acting on it. It checks the
-signature (and binding) like `Verify`, but an expired link is not an error:
+Install the bound display route instead of the earlier unbound one:
 
 ```go
-details, err := signer.Inspect(ctx, url)
-switch {
-case errors.Is(err, link.ErrInvalidURL):
-	// the URL cannot be parsed or does not fit this signer's mode
-case errors.Is(err, link.ErrInvalidSignature):
-	// unauthenticated: no link details are returned
-case err != nil:
-	// a cache observation failed: no details, not proof of forgery
-case details.Expired:
-	// offer to send a new link for details.URL
-case details.Previous:
-	// signed with a previous secret: re-issue before you drop it
-}
+routes.With(link.Middleware(signer, binding)).Get("/reset", showResetForm)
 ```
 
-`details.URL` is the link without its `signature` and `expires` parameters, so
-you can pass it to `Temporary` to issue a new one. It still contains application
-paths and query values, including ignored parameters; it is not a generally
-sanitized URL. Do not log the whole inspection as safe diagnostics.
-
-Every inspection error returns zero details. `details.Consumed` is true for a
-known spent link and is always false without a cache or for permanent links.
-False does not guarantee usability. Another request can consume the link after
-inspection; call `Consume` at the action boundary rather than treating this
-observation as a reservation.
-
-## Ignoring tracking parameters
-
-Email tools often append parameters such as `utm_source` to links, which would
-break the signature. List them with `link.Builder.IgnoreQuery` so they are left out of
-the signature:
+This does not configure POST automatically. In the POST handler, load the current
+account from the signed query, fail closed on lookup errors, and replace the
+earlier unbound consumption call with:
 
 ```go
-signer, err := link.New(secret, func(signer *link.Builder) {
-	signer.IgnoreQuery("utm_source", "utm_medium")
+err := signer.ConsumeRequest(r, link.Bind(user.PasswordHash))
+```
+
+Keep the same explicit error checks before the password update. Enforce any
+required state-version condition in the application's update as well; neither
+binding nor single-use markers authorize a different resource or transaction.
+
+## Inspect Links
+
+For a recovery page, inspect an authentic link without spending it. With a
+context `ctx` and current bound account:
+
+```go
+details, err := signer.Inspect(ctx, signed, link.Bind(user.PasswordHash))
+```
+
+On success, `details.Expired` can be true: expiry is descriptive, not an
+inspection error. `Previous` identifies a previous signing key; `Consumed`
+reports a known cache marker. False does not guarantee usability: it is always
+false without a cache or for permanent links, and another request can consume
+immediately after inspection. All inspection errors return zero details,
+including authentication failures and cache observation errors.
+
+`details.URL` removes `signature` and `expires` but retains application paths,
+query values, and ignored tracking values. It is not safe diagnostic text. If
+your recovery policy permits reissuance, pass it to `Temporary` with the current
+binding; inspection alone is not permission to extend a reset indefinitely.
+
+## Rotate Keys
+
+To accept existing links during rotation, load `current` and `previous` as
+separate `key.Shared` values, then use an alternative construction:
+
+```go
+signer, err := link.New(current, func(links *link.Builder) {
+	links.Origin("https://app.example.com")
+	links.Previous(previous)
 })
 ```
 
-Ignored parameters are not protected: anyone can add or change them. Never read
-anything security-relevant from them.
+Retain any required cache, binding, or ignored-query policy in the replacement
+configuration. New links use the current key; old keys verify only. Coordinate
+all issuers/verifiers before removing a previous key. Removing it invalidates
+its remaining links, including permanent links, which never expire naturally.
+If a key leaks, continuing to accept it also accepts forged links made with it;
+choose invalidation over a graceful overlap when that risk requires it.
 
-## Rotating the secret
+## Observe Outcomes
 
-To change the secret without breaking links that are already in people's
-inboxes, load `current` and `previous` as separate `key.Shared` values with
-`key.LoadShared` or `key.ParseShared`. Keep the old value for verification only:
+Configure `Events(events)` on the signer with your application's event bus if
+you need outcome counts. Confirmed consumption publishes `link.consumed`;
+failures, including uncertain writes and repeat use, publish nothing. Middleware
+publishes `link.rejected` for invalid authentication, not authentic expiry or
+already-used outcomes. `Verify` and `Inspect` publish neither event.
 
-```go
-signer, err := link.New(current, func(signer *link.Builder) {
-	signer.Previous(previous)
-})
-```
+Payloads omit paths, queries, bindings, and diagnostic errors. They carry
+`Method`, which is empty for non-request consumption. Do not replace removed
+`Path`/`Err` field reads with full request URLs or causes. Context values remain
+available and custom HTTP methods are client-controlled, so select safe
+attributes explicitly. HTTP problem `instance` can still contain a request
+path; event privacy does not scrub it. See
+[signed-link events](../events/http-events.md#signed-links).
 
-New links are signed with the new secret, and links signed with either secret
-are accepted. Once every link signed with the old secret has expired, remove
-it.
+`link.Config` is a printable diagnostic record, not an input to `New`. Its
+formatting redacts previous keys and omits service pointers, but displays origin
+and ignored query names. Keep credentials out of those settings; this does not
+sanitize arbitrary signers, URLs, returned errors, or inspection results.
 
-Permanent links never expire; removing their signing secret invalidates them.
-
-For every option and error, see the [`link` API reference](https://pkg.go.dev/arkoren.dev/core/http/link).
+For URL variants, inspection fields, and error contracts, see the
+[`link` API reference](https://pkg.go.dev/arkoren.dev/core/http/link).

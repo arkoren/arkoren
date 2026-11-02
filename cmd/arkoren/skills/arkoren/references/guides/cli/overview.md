@@ -1,67 +1,82 @@
 ---
-title: Arkoren CLI Overview
-nav: Overview
-description: Install the Arkoren CLI to call MCP tools or provision projects, keys, certificates, and bundled agent skills offline.
+title: Overview
+description: Choose remote MCP inspection or local provisioning and install the Arkoren CLI.
 order: 10
+summary:
+  - Distinguish remote tool discovery and execution from local provisioning.
+  - Install the CLI and verify its version and help without a running endpoint.
+  - Choose connection setup or application capture setup as your next task.
 ---
 
-# Arkoren CLI Overview
+# Overview
 
-## Introduction
+Use `arkoren` when you need to inspect an application from your terminal or
+prepare local files before deployment. Remote inspection calls the application's
+MCP endpoint; project, key, certificate, and bundled-skill commands do not need a
+running application.
 
-Use `arkoren` to discover and call a running application's MCP tools from your
-terminal or scripts. For example, you can inspect routes, find a failed trace,
-or wait for readiness when the endpoint publishes those diagnostics.
-The CLI also [creates starter projects](../first-steps/creating-a-project.md)
-offline, [generates and validates keys](keys.md), and
-[manages its bundled agent skill](../agent-skills/working-with-agents.md).
-For local HTTPS, [certificate commands](certificates.md) generate and check TLS
-files offline; installing or removing system root trust is a separate,
-explicitly confirmed operation.
+## Remote Tools
 
-Remote commands initialize MCP and discover tools through `tools/list`. Tool
-schemas supply flags and help; optional CLI metadata supplies `group:operation`
-names. `tools` and remote help stop at discovery: neither invokes any tool.
-Calling a tool sends `tools/call` for the selected operation.
+A remote command comes from the endpoint's current tool catalog. Each invocation
+negotiates MCP and reads `tools/list`; there is no saved catalog or separate
+inspection protocol or Arkoren core-version handshake. The advertised schema
+supplies input flags and help.
+Optional CLI metadata supplies names such as `public:routes`; exact MCP names
+remain callable without that metadata.
 
-The `status` command explicitly invokes uniquely advertised identity and health
-roles for its report. These roles describe a result's meaning, not a read-only
-guarantee; review the endpoint's tool contracts before requesting status. There
-is no separate inspection protocol, manifest endpoint, or client-side
-authorization system.
+Discovery and execution are separate. `arkoren tools` lists available tools, and
+remote `--help` describes them without invoking a handler. Calling a discovered
+command sends `tools/call`. The server authenticates the caller and authorizes
+the operation; a catalog entry is not permission to execute it.
 
-## Installing the CLI
+`arkoren status` goes beyond discovery: it invokes uniquely advertised identity
+and health roles. Those roles do not guarantee read-only handlers, and the report
+is not a readiness gate. Review an endpoint's contracts before calling its tools.
 
-You need Go 1.27 or later. Install the executable:
+## Local Tasks
+
+Use [project creation](../first-steps/creating-a-project.md) to prepare a starter
+application, or [install the bundled skill](../agent-skills/working-with-agents.md)
+for an agent working in an existing project. These commands use local assets,
+not MCP discovery.
+
+[Key Commands](keys.md) provision application keys without printing private
+material unless you explicitly request an export. [Certificate Commands](certificates.md)
+generate local TLS identities without installing trust. Root trust installation
+and removal are separate, explicitly approved operations that change a system
+store; they are not part of ordinary file generation.
+
+## Installing Arkoren
+
+With Go 1.27 or later, install the executable:
 
 ```sh
 go install arkoren.dev/cmd/arkoren@latest
 ```
 
-Go writes `arkoren` to `GOBIN`, or its default binary directory. Add that
-directory to `PATH`, then verify the executable without endpoint configuration:
+Go places `arkoren` in `GOBIN`, or its default binary directory. Add that
+directory to `PATH`. Check which CLI is installed without reading endpoint
+configuration or connecting to a server:
 
 ```sh
 arkoren --version
+```
+
+The result is JSON containing `version`. To read the local command help, run:
+
+```sh
 arkoren --help
 ```
 
-These commands print the installed CLI version as JSON and generated root help
-as text. Neither reads env files or connects to a server. Use `arkoren new --help`
-for the project-creation options.
+Help is text. Bare `arkoren` prints the same offline root help. To track the CLI
+as a module tool instead of installing it on `PATH`, run
+`go get -tool arkoren.dev/cmd/arkoren@latest` in your application module and invoke
+it as `go tool arkoren`.
 
-To record it as a module tool instead, use
-`go get -tool arkoren.dev/cmd/arkoren@latest` and invoke `go tool arkoren`.
+## Connecting Next
 
-## Connecting next
-
-With an existing endpoint and accepted credential, follow
-[Connecting the CLI](connecting.md), then [Calling Tools](calling-tools.md).
-To publish diagnostics in your application first, follow
-[Exposing Diagnostics](../observability/exposing-diagnostics.md).
-
-MCP protocol negotiation uses the official SDK. There is no Arkoren core-version
-handshake or saved catalog: discovery runs on every remote invocation. Tools
-without Arkoren CLI metadata remain callable by their exact advertised names.
-
-For tool declarations and metadata, see the [MCP API reference](https://pkg.go.dev/arkoren.dev/core/mcp).
+If you already have a trusted endpoint and an accepted credential, continue with
+[Connecting](connecting.md), then [Calling Tools](calling-tools.md). If your
+application does not expose diagnostics yet, start with
+[Capture Setup](../diagnostics/capture-setup.md). The
+[CLI Reference](reference.md) owns command and flag lookup.

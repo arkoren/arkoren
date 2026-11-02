@@ -1,272 +1,223 @@
 ---
-title: Deploying to Production
-nav: Deploying
-description: Build a service into a small binary or container, configure it through the environment, and wire its probes and shutdown to your platform.
-order: 50
+title: Deployment
+description: Build and run a service with explicit production settings, health probes, bounded shutdown, and application-owned credentials.
+order: 60
+summary:
+  - Build a binary or use the starter's non-root container image.
+  - Disable development diagnostics and supply runtime configuration outside the image.
+  - Connect startup, liveness, and readiness probes to the correct platform decisions.
+  - Budget HTTP draining, resource cleanup, and telemetry finalization before rollout.
 ---
 
-# Deploying to Production
+# Deployment
 
-## Introduction
+Deploy the application you have already tested, not a different production
+bootstrap. The [generated service](creating-a-project.md) connects server startup,
+serving, cleanup, and signal handling; your platform supplies runtime settings,
+credentials, traffic routing, and a termination grace period.
 
-To deploy an Arkoren service, build its binary, supply configuration, and connect
-its health probes and shutdown behavior to your platform. The lifecycle wiring
-binds the server's port before the application reports readiness and drains
-traffic when the application stops.
+This page assumes that starter or equivalent `application.Application` wiring.
+Keep driver-specific setup in its owning guide and decide
+[migration rollout](../migrations/deployment.md) before deploying schema changes.
 
-The same approach applies to Kubernetes, a container platform, or a virtual
-machine running systemd. An Arkoren service can compile to a single static
-binary; the build, logging, and migration guidance below does not assume a
-particular host.
+## Binary Builds
 
-Start with the [generated service](creating-a-project.md) or equivalent wiring:
-an `application.Application`, an HTTP router, and a server whose lifecycle hooks are
-registered on that application. Code fragments use `app` for the
-application, `r` for the router, and `driver` for a backend that exposes `Ping`.
-Import `arkoren.dev/core/application`, `arkoren.dev/core/http/router`, and
-`arkoren.dev/core/http/server` where used.
-
-## Building the binary
-
-From your project root, build the generated `cmd/server` executable with the
-standard Go toolchain. Adjust the path if you use a different executable.
-Disabling cgo produces a
-static binary with no dependency on the system's C library, which lets it run
-in the smallest container images:
+From your application's module root, build the server executable:
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -o bin/server ./cmd/server
 ```
 
-As the application owner, build with a supported, patched Go toolchain and keep
-your application's dependencies patched. Updating the host, its Go installation,
-or the runtime container image alone does not patch the Go runtime,
-standard library, or dependencies already compiled into the executable; rebuild
-and redeploy the application to apply those fixes.
+This targets the build machine's OS and architecture. Select `GOOS` and `GOARCH`
+for a different target, or use the container build below. Core does not require
+cgo, but confirm that every dependency you select supports this build mode.
+CGO-dependent libraries need a suitable builder and runtime image instead.
 
-Core needs no cgo, and the SQLite driver uses a pure Go implementation of
-SQLite. Build your application with the drivers and other dependencies you
-actually use to confirm that they support `CGO_ENABLED=0`.
+Commit `go.mod` and `go.sum`, use a supported patched Go toolchain, and rebuild
+when the Go runtime, standard library, or compiled dependencies need security
+updates. Patching the host or replacing a runtime image does not patch code
+already inside the binary. Test the resulting artifact on the target platform.
 
-The Go toolchain records the module version and the version control revision
-in the binary. Arkoren reads them back: unless you set `application.Builder.Version`, the
-application uses a known module version as the `version` attribute on log
-records and in telemetry. Local builds commonly have the version `(devel)`,
-which Arkoren omits. Set an explicit build version when your deployment process
-needs an identifier that the toolchain does not provide.
+## Production Settings
 
-## Building a container image
+Before starting the process, supply required application settings through your
+platform's environment or your own validated settings loader. Core does not
+automatically read environment variables. The starter explicitly reads
+`HTTP_ADDR` and `APP_DEBUG`; vendor SDK credential chains can have additional
+documented sources.
 
-A two-stage build compiles the service in a Go image and copies only the
-binary into a minimal runtime image:
+> [!WARNING]
+> The starter's debug `/mcp` endpoint has no authentication and can reveal logs
+> and telemetry attributes. Set `APP_DEBUG=false` explicitly in production.
+> Selecting the production environment alone does not disable debug.
 
-```dockerfile
-FROM golang:1.27 AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/server ./cmd/server
+For a local check of the built binary, bind to loopback and disable debug:
 
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/server /server
-EXPOSE 8080
-ENTRYPOINT ["/server"]
+```sh
+APP_DEBUG=false HTTP_ADDR=127.0.0.1:8080 ./bin/server
 ```
 
-The runtime image contains no shell and runs as a non-root user. If your
-service makes outgoing TLS connections, the `static` distroless image already
-includes CA certificates.
+The executable still autoloads `.env` from its working directory, without
+overriding existing environment values. Do not depend on a development file for
+production configuration. Explicit process values above override that file.
+The platform must select an appropriate listener address: a container usually
+needs `:8080` inside its network namespace, while a host-local reverse proxy can
+use loopback. Empty `HTTP_ADDR` selects `:8080` on all interfaces.
 
-Commit `go.mod` and `go.sum` so the build resolves the same dependency versions.
-The build stage needs network access to download modules unless you vendor them
-and include `vendor/` in the build context.
-
-## Configuring the service
-
-Pass application configuration through the environment. Core packages do not
-load it for you; your `main` function reads it (usually
-through a small `config` package, as shown in
-[Project Layout](project-layout.md)) and passes the values to each
-constructor as required arguments or builder callbacks. This keeps every setting visible in code and makes the
-environment the only thing that differs between staging and production.
-Vendor drivers may also use their SDK's default credential and endpoint
-sources, as described in their driver guides.
-
-Set the application's environment explicitly in production, because it
-changes how the service logs:
+Set the application environment in code if you want production metadata. In
+`cmd/server/main.go`'s existing `run` helper, replace its construction statement
+with the following, preserving signal setup and the call to `app.Run`:
 
 ```go
-app := application.New(func(app *application.Builder) {
+app := application.New(bootstrap.Application(), func(app *application.Builder) {
 	app.Environment(application.Production)
 })
 ```
 
-In the `Development` environment, the application writes human-readable text
-logs with source locations. In `Staging` and `Production`, it writes one JSON
-object per line to standard error, which log collectors can parse without
-configuration. Every record carries `env`, and `service` and `version` when
-they are known.
+The later callback overrides environment while retaining the starter's name and
+logger policy. `APP_ENV` is not a built-in loader. The starter's custom logger
+uses JSON when stderr is not a terminal and Tint otherwise; changing environment
+does not replace that policy. Without a custom log handler, the application's
+default selects source-enabled text for development and JSON otherwise.
 
-> [!WARNING]
-> Keep secrets such as database passwords and API keys out of the image and
-> out of your source. Inject them through the environment, or read them at
-> startup from a secret store with the [Secrets](../secrets/overview.md)
-> service.
+Inject passwords, API tokens, and keys outside the image and source tree. The
+application owner provisions them and grants the process least-privilege access,
+whether through environment values, mounted files, SDK workload identity, or a
+[secret store](../secrets/overview.md). Validate required values before serving,
+never log them, and do not generate a replacement key to repair a missing startup
+secret. Rotation can require coordinated rollout or fallback keys; follow the
+feature's credential rules.
 
-## Health probes
+## Container Builds
 
-Register the application's three probe handlers on the router. Their paths
-follow the Kubernetes naming convention, and the constants keep your routes and
-your platform configuration in step:
+The generated Dockerfile already builds a stripped, cgo-disabled Linux binary
+using BuildKit source mounts and module/compiler caches. Its runtime is
+`gcr.io/distroless/static-debian13:nonroot`, with CA certificates and timezone
+data, but no shell or Go toolchain. The generated `.dockerignore` excludes local
+environment files from the build context.
 
-```go
-r.Get(application.LivePath, app.LiveHandler())       // /livez
-r.Get(application.ReadyPath, app.ReadyHandler())     // /readyz
-r.Get(application.StartupPath, app.StartupHandler()) // /startupz
+With Docker available, build the image from the project root:
+
+```sh
+docker build -t hello:dev .
 ```
 
-Each probe answers `200 OK` with the body `ok`, or `503 Service Unavailable`
-with the body `unavailable`. They mean different things, and platforms use
-them differently:
+The build needs access to resolve modules unless its caches already contain them.
+For a different Linux architecture, use Docker Buildx with the target `--platform`;
+the generated build uses its target OS and architecture arguments. Pin base
+images by digest when your release process requires reproducible image inputs.
 
-- **Liveness** (`/livez`) answers `200` while the application is running and
-  none of its runners has failed. A platform restarts the process when this
-  probe fails. It never depends on a database or another service, so a slow
-  dependency cannot cause a restart loop.
-- **Readiness** (`/readyz`) answers `200` while the application is live and
-  its latest health checks passed. A load balancer stops sending traffic while
-  this probe fails, without restarting anything.
-- **Startup** (`/startupz`) answers `200` once startup has finished. Use it on
-  platforms that support a separate startup probe, so a slow start is not
-  mistaken for a dead process.
+Run a disposable local container, publishing only on host loopback:
 
-The checks behind readiness are the ones you register with
-`composer.Check` during composition, typically one per driver:
-
-```go
-compose := func(composer *application.Composer) {
-	composer.Check("database", driver.Ping)
-}
+```sh
+docker run --rm --name hello-demo -p 127.0.0.1:8080:8080 \
+  -e HTTP_ADDR=:8080 -e APP_DEBUG=false hello:dev
 ```
 
-The readiness handler never runs these checks when a request arrives. The
-application runs every check in the background, every five seconds by default,
-and the handler answers from the latest result. A burst of probe requests
-therefore never reaches your database, and a result that is too old counts as
-not ready. [Health and readiness](../application/health-and-readiness.md) describes the
-checks, the intervals, and the detailed JSON report in full.
+Check `http://127.0.0.1:8080/readyz` from another terminal. Stop the test container
+with `docker stop hello-demo`; `--rm` removes it after exit. These commands
+create no database volume. The equivalent starter shortcuts are
+`make docker-build IMAGE=hello:dev` and `make docker-run IMAGE=hello:dev`.
+Runtime credentials belong in the platform's secret mechanism, not Docker build
+arguments, copied `.env` files, or committed image layers.
 
-## Graceful shutdown
+Configure HTTPS at your ingress or explicitly on the [HTTP server](../http-networking/server.md).
+The starter does not enable HSTS before you establish that HTTPS policy. It
+also does not establish authentication, trusted proxy headers, host validation,
+or cross-origin permissions merely by running in a container.
 
-When a platform stops a service, it sends `SIGTERM`, waits for a grace period,
-and then kills the process. Arkoren handles the signal through the context
-you pass to `app.Run`. Import `context` and `arkoren.dev/core/application`.
-In a function returning `error`, create the context and pass it to the
-application. The generated executable does this in its run helper
-and translates the returned error into a process exit status:
+## Health Probes
 
-```go
-ctx, stop := application.NewSignalContext(context.Background())
-defer stop()
-return app.Run(ctx, bootstrap.Compose)
-```
+The starter already mounts the application's three probe handlers. Configure
+your platform to use their paths rather than adding duplicate registrations:
 
-Always call `stop`, including on startup failure or parent cancellation, to
-release the process signal registration. The helper does not change terminal
-settings or erase the terminal's echoed `^C`.
+| Path | Meaning | Platform Decision |
+| --- | --- | --- |
+| `/startupz` | Startup has completed successfully. | Allow the startup phase to finish before applying ordinary health thresholds. |
+| `/livez` | The application is running and no supervised runner has failed. | Restart an unhealthy process. |
+| `/readyz` | The application is live and its latest background health pass is acceptable. | Send or withhold traffic without restarting the process. |
 
-When the signal arrives, the application stops: liveness and readiness start
-answering `503`, signaling the load balancer to stop sending traffic; the server stops
-accepting connections and waits for the requests in flight; and then the stop
-hooks run in reverse registration order, closing the server, the database
-pools, and the other drivers.
+Plain probes return `200` with `ok` or `503` with `unavailable`. Startup stays
+successful after completed startup, including while stopping; it is not a traffic
+readiness signal. Liveness and readiness become unavailable during shutdown,
+although an HTTP response is possible only while the listener can still serve it.
 
-The server waits up to 15 seconds for in-flight requests by default.
-`app.Run` supplies a 30-second context for runner waiting and stop
-hooks. Both settings can be changed during construction; import `time`:
+Only readiness depends on registered dependency checks. Inside an existing
+composition callback, a driver with `Ping(context.Context) error` can supply one:
 
 ```go
-app := application.New(func(app *application.Builder) {
-	app.ShutdownTimeout(45 * time.Second)
-})
-srv := server.New(r, func(listener *server.Builder) {
-	listener.ShutdownTimeout(20 * time.Second)
-})
+compose.Check("catalog", driver.Ping)
 ```
 
-Choose them so that the server's drain fits inside the application's shutdown
-budget. Stop hooks must honor their context. If waiting for runners exhausts
-the application budget, the application still invokes stop hooks with a fresh
-ten-second cleanup context. Telemetry cleanup runs last with at least ten
-seconds, even when the preceding budget has expired. Your platform's grace
-period must allow for both cleanup phases and scheduling overhead, not merely
-equal the application timeout. On Kubernetes, set
-`terminationGracePeriodSeconds` accordingly; its default 30 seconds can cut off
-cleanup with the application's default budget.
+The application runs checks in the background, every five seconds by default;
+probe requests read the latest result instead of calling the backend. With checks
+registered, readiness waits for the first successful pass and rejects results
+older than three intervals. Without checks, readiness equals liveness. Callbacks
+must honor their context deadline; a timeout cannot forcibly interrupt them.
+See [Health and Readiness](../application/health-and-readiness.md) for tuning.
 
-> [!NOTE]
-> Shutdown does not cancel the contexts of requests that are still running.
-> Long-lived handlers such as server-sent event streams should watch
-> `server.ShuttingDown(ctx)` and return on their own, or they are cut off when
-> the drain timeout expires.
+Keep operator endpoints off public routes unless you add access control.
+`InfoHandler`, verbose readiness (`?verbose`), and diagnostics can reveal internal
+metadata. A second port or loopback bind is not authentication; enforce the
+actual network and authorization boundary appropriate to your platform.
 
-## Operator endpoints
+## Shutdown Budgets
 
-The application can describe itself through two endpoints that are useful when
-you debug a deployment: `app.InfoHandler()`, which reports the service
-name, version, environment, state, and build details, and the readiness probe
-with `?verbose`, which returns a JSON report of every check. Both reveal
-internal details and are not protected.
+Ensure the platform sends `SIGTERM` to the executable rather than only to a shell
+wrapper. The starter calls `application.NewSignalContext`, defers its stop
+function, and passes the context to `app.Run`. Keep that signal cleanup even
+when startup fails. Lifecycle errors are reported before telemetry finalization;
+the executable uses the returned error for status 1 rather than logging it again.
 
-To expose them only to operators, serve them on a second server that listens on
-an internal port, and register its hooks on the same application:
+On cancellation, the server runner stops accepting connections and drains
+in-flight requests. After runners return, cleanup runs in reverse registration
+order. Register backend cleanup before listener cleanup so the backend remains
+available while requests finish.
+
+The HTTP drain defaults to 15 seconds. To change it, add a setting inside the
+existing constructor callback in `internal/bootstrap/server.go`, with `time`
+imported:
 
 ```go
-ops := router.New()
-ops.Get(application.InfoPath, app.InfoHandler())
-ops.Get(application.ReadyPath, app.ReadyHandler())
-
-listener := server.New(ops, func(listener *server.Builder) {
-	listener.Addr("127.0.0.1:9090")
-})
-composeOps := func(composer *application.Composer) {
-	composer.Cleanup(listener.Stop)
-	composer.Startup(listener.Start)
-	composer.Run(listener.Serve)
-}
+listener.ShutdownTimeout(20 * time.Second)
 ```
 
-## Running migrations
+The application's runner-wait and shutdown budget defaults to 30 seconds. Change
+it in the callback returned by `Application()` in `internal/bootstrap/app.go`:
 
-Decide where schema migrations run before your first deployment. There are two
-common choices:
+```go
+app.ShutdownTimeout(45 * time.Second)
+```
 
-- **At startup**, as a start hook that runs before the server starts. A
-  migration failure then prevents the new instance from serving. The
-  migrator takes a lock, so several replicas starting at once do not apply the
-  same migration twice.
-- **As a separate step**, with a second executable such as
-  `cmd/migrate` that runs before the new version is rolled out. This keeps
-  startup fast and lets you review the migration's effect separately.
+These lines edit existing construction callbacks; they are not runtime setters.
+The HTTP drain must fit within the application budget. Cleanup receives at least
+a fresh ten-second context when the preceding budget is exhausted. Configured
+telemetry finalization runs last with at least another ten seconds. Allow room
+for these phases and platform scheduling overhead, not just the application
+timeout, when setting Kubernetes `terminationGracePeriodSeconds` or an equivalent
+platform grace period. Cleanup callbacks must cooperate with their deadlines.
 
-[Migrations](../database/migrations.md) shows both setups.
+Long-lived handlers should observe `server.ShuttingDown(r.Context())` and return
+when draining begins. Drain timeout closes tracked HTTP connections; it does not
+join hijacked connections or forcibly stop arbitrary handler goroutines. Their
+owners must coordinate completion before dependencies are released. See
+[Lifecycle and Ownership](../application/lifecycle-and-ownership.md).
 
-## A deployment checklist
+## Rollout Checks
 
-Before you deploy a service for the first time, check that:
+Before directing production traffic to a release:
 
-- the binary builds with `CGO_ENABLED=0` and runs in your target image;
-- the environment is set to `Production`, and logs arrive as JSON;
-- each driver's lifecycle hooks and health check are registered when that
-  driver provides them; stateless drivers need no hooks;
-- the liveness, readiness, and startup probes are configured on the platform
-  with the paths above;
-- the platform's grace period is longer than the application's shutdown
-  timeout, with additional time for telemetry cleanup;
-- operator endpoints are only reachable from inside your network;
-- secrets come from the environment or a secret store, not from the image.
+- Verify the built artifact, environment, debug setting, and log format on the
+  target platform rather than relying only on a successful local build.
+- Apply schema changes using the reviewed [migration deployment](../migrations/deployment.md)
+  process; driver installation and startup do not create tables automatically.
+- Confirm startup and readiness succeed, and that a dependency failure removes
+  readiness without turning the dependency into a liveness restart condition.
+- Send the platform's termination signal under representative load and verify
+  requests drain, drivers stop, and the process exits within the allotted grace.
+- Check that secrets are absent from artifacts and logs, and that diagnostics
+  and operator details are inaccessible to unauthorized clients.
 
-For lifecycle options and probe handlers, see the
-[`application` API reference](https://pkg.go.dev/arkoren.dev/core/application). For listener and drain settings,
-see the [`server` API reference](https://pkg.go.dev/arkoren.dev/core/http/server).
+For the lifecycle and listener contracts behind these checks, see the
+[`application` API reference](https://pkg.go.dev/arkoren.dev/core/application)
+and the [`server` API reference](https://pkg.go.dev/arkoren.dev/core/http/server).

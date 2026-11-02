@@ -1,112 +1,115 @@
 ---
 title: Row-Level Access
 nav: Row Access
-description: Keep which records a user may see in query scopes applied by the store, answer 404 for rows outside them, and make writes atomic.
+description: Enforce record visibility in store queries and preserve authorization boundaries during concurrent writes.
+summary:
+  - Keep reads, pagination totals, and writes within the authenticated actor's query scope.
+  - Return private absence without confusing database failures with missing records.
+  - Constrain writable fields and coordinate cross-record permissions and invariants under a shared lock protocol.
 order: 30
 ---
 
 # Row-Level Access
 
-## Introduction
+An invoice-list permission does not tell you which invoices a caller may read.
+Put that record boundary in the SQL query, rather than loading all invoices and
+discarding forbidden ones afterward. The database then filters the rows before
+pagination, counting, or returning private data to the application.
 
-Rules answer "may this user do this?". They are the wrong tool for "which
-records may this user see?". Loading every invoice and checking each one in a
-rule is slow, pagination breaks because pages come back with holes, and a
-handler that forgets the check leaks data. Visibility belongs in the query
-instead, so the database returns only rows the user may see. A route-level gate
-check can decide whether the user may perform an action, but it does not filter
-the rows that action may reach. Apply the visibility scope in the store as well.
+A **scope** is a reusable query predicate. This is application-side SQL
+filtering, not a database server's row-level security configuration. Keep scopes
+inside your store methods so callers cannot accidentally omit them.
 
-This page shows how to express visibility as query scopes, where to apply them
-so no handler can forget them, and how to keep a check and the write that
-depends on it from being split by a concurrent request.
+## Ownership Scopes
 
-## Scopes for visibility
-
-Examples import `query` from `arkoren.dev/foundation/query`, `database` from
-`arkoren.dev/core/service/database`, `pagination` from
-`arkoren.dev/core/pagination`, and `problem` from `arkoren.dev/foundation/problem`.
-`context` and `errors` are standard-library packages. `db` is your configured
-database facade; `User`, `Invoice`, `Member`, and `Team` are your application types.
-
-A **scope** is a function that adds conditions to a query. A scope for
-visibility takes the user and matches only their rows:
+Assume your authenticator supplies `User` from trusted account data, and the
+`invoices` table has `id`, `customer_id`, and `reference` columns. These are
+application-owned types; database tags name SQL columns, not JSON input fields:
 
 ```go
-func visibleTo(u User) query.Scope {
-	return func(predicate *query.PredicateBuilder) {
-		predicate.Where("customer_id", u.CustomerID)
-	}
+type User struct {
+	ID         int
+	CustomerID int
 }
 
-invoice, err := db.Find[Invoice](ctx, query.Table("invoices", func(statement *query.Builder) {
-	statement.Where("id", id)
-	statement.Scope(visibleTo(user))
-}))
+type Invoice struct {
+	ID         int    `db:"id"`
+	CustomerID int    `db:"customer_id"`
+	Reference  string `db:"reference"`
+}
 ```
 
-A scope is added as its own group of conditions, ANDed after the entire
-nonempty user condition chain in parentheses. Neither a later `OrWhere` nor
-an OR in `WhereRaw` can widen it, and it applies to updates and deletes too.
-Keep raw SQL text trusted and constant and bind variable values separately;
-grouping does not validate arbitrary SQL. The same scope serves a
-single row, a list, and a [paginated](../database/pagination.md) list, which
-therefore never has holes.
-
-When visibility comes from membership rather than ownership, as with projects
-that belong to a team, match rows through the membership table. Build a
-subquery with the `query` package:
+Import `query` from `arkoren.dev/foundation/query`. The customer's identity,
+not a customer ID submitted in the request, determines the invoice boundary:
 
 ```go
-func visibleTo(u User) query.Scope {
+func visibleInvoices(user User) query.Scope {
 	return func(predicate *query.PredicateBuilder) {
-		predicate.WhereExists(query.Table("members", func(statement *query.Builder) {
-			statement.WhereColumn("members.team_id", "projects.team_id")
-			statement.Where("members.user_id", u.ID)
-		}))
+		predicate.Where("customer_id", user.CustomerID)
 	}
 }
 ```
 
-The subquery is part of the same SQL statement, not a separate query from Go
-for each row. Give the membership table an index on `(user_id, team_id)` so it stays
-fast as teams grow.
+`Builder.Scope` ANDs each scope with the complete ordinary condition chain,
+grouping both so a later `OrWhere` or an OR in `WhereRaw` cannot bypass it.
+Scopes also apply to updates, deletes, and derived counts. An empty scope adds
+no restriction, so every authorization scope must actually express its boundary.
+Raw SQL still needs trusted SQL text and separately bound values; grouping does
+not make arbitrary input safe SQL.
 
-## Applying scopes in the store
+## Scoped Stores
 
-A scope that each handler must remember is a scope that one handler will
-forget. Give each store method the user, and apply the scope inside the store,
-so the only way to read invoices is through a method that filters them:
+Make the actor an explicit store argument. With standard-library `context` and
+`database` from `arkoren.dev/core/service/database`, the single-invoice lookup
+owns both its requested ID and its customer restriction:
 
 ```go
-type Invoices struct{ db *database.Database }
+type Invoices struct {
+	db *database.Database
+}
 
-func (invoices *Invoices) Find(ctx context.Context, u User, id int) (Invoice, error) {
+func (invoices *Invoices) Find(ctx context.Context, user User, id int) (Invoice, error) {
 	return invoices.db.Find[Invoice](ctx, query.Table("invoices", func(statement *query.Builder) {
 		statement.Where("id", id)
-		statement.Scope(visibleTo(u))
+		statement.Scope(visibleInvoices(user))
 	}))
-}
-
-func (invoices *Invoices) List(ctx context.Context, u User, page pagination.PageParams) (pagination.Page[Invoice], error) {
-	return invoices.db.Paginate[Invoice](ctx, query.Table("invoices", func(statement *query.Builder) {
-		statement.Scope(visibleTo(u))
-		statement.OrderBy("id")
-	}), page)
 }
 ```
 
-Code that genuinely needs every row, such as a billing job or an admin report,
-gets a separately named method, so reading without the scope is a deliberate,
-visible choice in review rather than a missing line.
-
-## Answering with 404
-
-When the scoped query finds nothing, the handler returns `404 Not Found`, the
-same as for a record that does not exist:
+Apply the same scope in list methods. For an existing `db`, authenticated
+`user`, and `page` of type `pagination.PageParams` from
+`arkoren.dev/core/pagination`, the page and its total both use scoped rows:
 
 ```go
-invoice, err := h.invoices.Find(r.Context(), user, id)
+invoices := query.Table("invoices", func(statement *query.Builder) {
+	statement.Scope(visibleInvoices(user))
+	statement.OrderBy("id")
+})
+result, err := db.Paginate[Invoice](ctx, invoices, page)
+```
+
+The unique `id` provides a stable order. Filtering after fetching would leave
+gaps and could expose unscoped totals; [pagination](../queries/pagination.md)
+belongs after the authorization predicate. Give genuinely unrestricted billing
+jobs a separately named store operation with its own admission boundary, rather
+than making a missing scope the way to request all records.
+
+For membership-based visibility, use a correlated `WhereExists` subquery that
+matches both the record's team and the authenticated user's ID. That checks
+membership within SQL rather than running a separate rule for each returned
+row. [Query Builder](../queries/query-builder.md) explains subqueries; indexes
+and uniqueness constraints should match the membership keys you query.
+
+## Private Absence
+
+A requested invoice outside the caller's scope and a nonexistent invoice both
+produce `database.ErrNoRows`. In the handler, translate that absence to `404`;
+do not turn other database failures into missing records. Here `store` is your
+`Invoices` store, `id` is the parsed request ID, `errors` is standard-library,
+and `problem` is `arkoren.dev/foundation/problem`:
+
+```go
+invoice, err := store.Find(r.Context(), user, id)
 if errors.Is(err, database.ErrNoRows) {
 	return problem.NotFound()
 }
@@ -115,103 +118,155 @@ if err != nil {
 }
 ```
 
-A user therefore cannot even learn that someone else's invoice `42` exists, or
-count how many invoices other customers have by trying ids in turn.
-[Handling Denials](denials.md#choosing-the-status-code) explains when a `403`
-is the better answer.
+The request ID selects a candidate; it is not evidence of ownership. This
+response does not disclose whether an out-of-scope invoice exists. It does not
+promise identical timing or hide information exposed by other endpoints. If the
+caller may know the resource exists but lacks an action permission, use a
+[forbidden response](denials.md#response-statuses) instead.
 
-## Checks and concurrent requests
+## Conditional Writes
 
-A check followed by a write leaves a gap: between the two, another request can
-change what the check relied on. Close the gap by making the write itself
-conditional, so the database checks and writes in one step:
+Reading an authorized invoice and later updating it by ID alone leaves a gap:
+the data used to authorize it might change between statements. Repeat the
+boundary in the write so the database evaluates the predicate as part of the
+mutation.
+
+For a reference change, assume decoding and validation already produced this
+input. Do not accept customer ownership fields in the writable shape:
 
 ```go
-n, err := db.Exec(ctx, query.Table("posts", func(statement *query.Builder) {
+type ChangeReference struct {
+	Reference string `json:"reference" db:"reference"`
+}
+```
+
+Inside the scoped store operation, with `input` of that type and the requested
+`id`, convert the allowlisted struct with `query.Values`:
+
+```go
+change := query.Table("invoices", func(statement *query.Builder) {
 	statement.Where("id", id)
-	statement.Scope(editableBy(user))
-	statement.Update(map[string]any{"title": title})
-}))
+	statement.Scope(visibleInvoices(user))
+	statement.Update(query.Values(input))
+})
+```
+
+Execute the conditional write and distinguish an execution error from a
+zero-row result:
+
+```go
+affected, err := db.Exec(ctx, change)
 if err != nil {
 	return err
 }
-if n == 0 {
+if affected == 0 {
 	return problem.NotFound()
 }
 ```
 
-Here `editableBy` is a scope, like `visibleTo` above, that matches the posts
-the user may edit. If no row matches, either the post does not exist or the
-user may not edit it, and nothing was written.
+No invoice outside the scope is changed. Affected-row reporting depends on the
+driver: a no-op update can also report zero. Returning the same `404` preserves
+the privacy boundary but does not prove why no change was reported. If your API
+must distinguish a visible no-op from absence, perform the scoped lookup and
+update under an appropriate transaction/lock protocol instead.
 
-### Invariants across rows
+Apply the boundary to deletes too. Scopes do not apply to inserts: assign new
+rows' customer/team ownership from authorized application values, and validate
+every referenced record against that same boundary. A source invoice check
+does not authorize attaching it to an arbitrary destination account.
 
-Some rules span several rows. A team must keep at least one owner, so two
-owners who remove each other at the same moment can each pass the "not the
-last owner" check, and leave the team with none. A conditional write on one
-row cannot see the others. Lock the parent row inside a transaction before
-checking, so concurrent requests for the same team run one after another:
+## Shared Invariants
 
-Authorize the actor before entering this operation. Preserving one owner does
-not itself grant permission to remove members.
+Removing a team member has two separate requirements: the actor must be allowed
+to remove that member, and the team must retain at least one owner. A transaction
+alone does not stop two owners from concurrently passing the last-owner check
+and removing each other.
+
+Serialize these operations by locking the parent team row before checking
+current membership. Assume `Team` maps the team's stored ID, `teamID` is the
+requested candidate, and `targetUserID` identifies the member to remove—not the
+authenticated actor. Your application policy `members.CanRemove(team)` checks
+the actor's current owner membership for this exact team, using this same `db`.
+
+Import `gate` from `arkoren.dev/core/http/auth/gate`. In the shared application
+operation, the transaction first locks the team, then checks the actor:
 
 ```go
 err := db.WithTransaction(ctx, func(ctx context.Context) error {
-	if _, err := db.Find[Team](ctx, query.Table("teams", func(statement *query.Builder) {
+	team, err := db.Find[Team](ctx, query.Table("teams", func(statement *query.Builder) {
+		statement.Select("id")
 		statement.Where("id", teamID)
 		statement.ForUpdate()
-	})); err != nil {
-		return err
-	}
-
-	owners, err := db.Select[Member](ctx, query.Table("members", func(statement *query.Builder) {
-		statement.Where("team_id", teamID)
-		statement.Where("role", "owner")
 	}))
 	if err != nil {
 		return err
 	}
-	if len(owners) == 1 && owners[0].UserID == userID {
-		return problem.Conflict().Derive(func(details *problem.Builder) {
-			details.Detail("A team needs at least one owner.")
-		})
+	if err := gate.Authorize(ctx, members.CanRemove(team)); err != nil {
+		return err
 	}
 
-	_, err = db.Exec(ctx, query.Table("members", func(statement *query.Builder) {
-		statement.Where("team_id", teamID)
-		statement.Where("user_id", userID)
-		statement.Delete()
-	}))
-
-	return err
+	return removeLockedMember(ctx, team, targetUserID)
 })
 ```
 
-The second request waits at `ForUpdate` until the first commits, then sees
-only one owner left and fails with `409 Conflict`. Row locks need PostgreSQL or
-MySQL; [Transactions](../database/transactions.md#locking-rows) explains them
-and their limits.
+`removeLockedMember` is your application helper, not an Arkoren function. It
+must look up the target membership by both `team.ID` and `targetUserID`, count
+owners in that same team, and reject removing the last owner with
+`problem.Conflict()` (`409`). Otherwise, it deletes using both keys. The count,
+target lookup, and delete all use the callback's `ctx` and the same database so
+they join its transaction. Keeping one owner is not a substitute for the actor
+check shown above.
 
-Every operation that can change this invariant must take the same parent-row
-lock, including owner removal, demotion, and membership changes. A transaction
-alone does not serialize competing checks.
-Put this protocol in the shared store or application operation, so a tool or
-background job cannot bypass it by calling a different transport.
-
-## Testing
-
-Test a store's visibility with two users and rows for each: every method must
-return the first user's rows to the first user and nothing to the second.
+After those checks, the helper's deletion keeps the target inside the locked
+team. Do not delete by `targetUserID` alone, since that could remove the same
+user's memberships in other teams:
 
 ```go
-_, err := invoices.Find(t.Context(), bob, aliceInvoice.ID)
-if !errors.Is(err, database.ErrNoRows) {
-	t.Fatalf("bob read alice's invoice: %v", err)
-}
+remove := query.Table("memberships", func(statement *query.Builder) {
+	statement.Where("team_id", team.ID)
+	statement.Where("user_id", targetUserID)
+	statement.Delete()
+})
+affected, err := db.Exec(ctx, remove)
 ```
 
-Write this test for every store method, including updates and deletes. A
-method added later without the scope then fails it.
+Handle execution failure and a missing target before reporting success. This
+fragment runs inside `removeLockedMember` with the transaction context, not
+after `WithTransaction` has returned.
 
-For the query builder, see [Query Builder](../database/query-builder.md); for
-the gate, see the [`gate` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth/gate).
+This example assumes the caller may know the team exists. For private teams,
+use a scoped lookup before exposing any team-specific response and map
+out-of-scope absence to `404`; recheck current action permission under the lock.
+Do not translate an arbitrary infrastructure error to `404` or `403`.
+
+Every operation that can alter this invariant or its permission basis must
+follow the same parent-lock protocol, including owner demotion and removal of
+the actor's membership. Use an isolation level whose reads observe the preceding
+lock holder's committed changes; verify that behavior for your database.
+Keep the protocol in the shared operation, not only an HTTP handler, so tools
+and jobs cannot bypass it. Row locks require supported database behavior;
+[Locking](../database/locking.md#row-locks) covers PostgreSQL/MySQL support and
+the alternatives for SQLite.
+
+Return an error from the transaction callback to roll back. Never replace its
+context with the outer context, use it concurrently, or retain it after the
+callback returns. [Transactions](../database/transactions.md) explains that
+lifetime and commit-failure handling.
+
+## Boundary Tests
+
+Seed two customers and exercise every read, count, update, and delete using the
+other customer's record ID. Assert no private rows are returned or changed,
+including when ordinary predicates contain OR conditions. Test lists' totals
+as well as their items.
+
+For membership changes, test an unauthorized actor, a target in another team,
+last-owner rejection, and concurrent owner removals using your real database
+driver. Query-generation tests alone cannot prove the database's lock and
+isolation behavior. Also verify that every route and tool reaches the shared
+store operation rather than an unscoped alternative.
+
+For all query operations, see the
+[`query` API reference](https://pkg.go.dev/arkoren.dev/foundation/query); for
+execution, see the
+[`database` API reference](https://pkg.go.dev/arkoren.dev/core/service/database).

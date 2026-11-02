@@ -1,200 +1,116 @@
 ---
 title: HTTP Tests
-description: Test routes, handlers, and middleware by sending requests through the router without a server, and check statuses, headers, and JSON.
+description: Exercise route matching, middleware, and response contracts with in-process HTTP requests.
 order: 20
+summary:
+  - Send requests through the router and assert decoded responses without opening a port.
+  - Check input failures and middleware behavior while owning every response body.
+  - Carry cookies between requests and choose networked tests for transport behavior.
 ---
 
 # HTTP Tests
 
-## Introduction
+Send an HTTP request through your application's router to test routing, middleware, and handler behavior together. `Record` runs the full router pipeline using an in-memory response recorder: it does not bind a port or make a network call. Your handler still receives a genuine `*http.Request`.
 
-Most HTTP tests do not need a running server. An Arkoren router can handle a
-request directly and return the response, with every middleware applied, in
-the same process without binding a port. This makes it practical to test each
-route, including its error cases, as an ordinary unit test.
+## Record Requests
 
-The fragments run inside your own `func Test...(t *testing.T)` functions.
-Import `net/http`, `net/http/httptest`, and `arkoren.dev/core/http/router` for
-request recording. Later examples add `strings`, `encoding/json/v2`,
-`arkoren.dev/foundation/problem`, and
-`arkoren.dev/core/http/middleware/secureheaders` where used. The post examples
-assume your router has `POST /posts`, returns the created post as JSON, and
-validates a required `title` field.
+Reuse your application's [route registration](../http-fundamentals/routing.md#register-handlers) when testing a feature. Inject test dependencies before registering its handlers; otherwise a test can accidentally retain a production backend.
 
-## Sending a request
-
-Build the router the same way your service does, and seed an invoice with ID 1.
-With that router named `r`, call `Record` with a request created by
-`httptest.NewRequest`:
+To illustrate the boundary, this small route returns the report ID selected by routing. Import `net/http`, `arkoren.dev/core/http/response`, and `arkoren.dev/core/http/router`:
 
 ```go
-res := r.Record(httptest.NewRequest(http.MethodGet, "/invoices/1", nil))
-if res.StatusCode != http.StatusOK {
-	t.Fatalf("status = %d, want 200", res.StatusCode)
+type reportView struct {
+	ID string `json:"id"`
+}
+
+func reportRoutes() *router.Router {
+	routes := router.New()
+	routes.Get("/reports/{id}", func(w http.ResponseWriter, r *http.Request) error {
+		return response.JSON(w, http.StatusOK, reportView{ID: r.PathValue("id")})
+	})
+	return routes
 }
 ```
 
-`Record` returns an `*http.Response`, so you check it with the same fields as a
-response from a real server: `StatusCode`, `Header`, and `Body`.
-Close the returned body when you finish reading it, including responses from
-`Record`. A test cleanup callback can close it after your assertions.
+The route intentionally has no persistence or authorization behavior. In an application test, replace `reportRoutes()` with your production route factory and its test dependencies.
 
-Building routes through your feature's route-registration function, as described in
-[Project Layout](../first-steps/project-layout.md), pays off here:
-the test mounts exactly the feature it tests.
-
-## Sending a JSON body
-
-Pass the body as a reader and set the content type, as a client would:
+Add `testing`, `net/http/httptest`, and `encoding/json/v2` for the test. Check the HTTP status before interpreting the body, and register body cleanup before assertions can stop the test:
 
 ```go
-body := strings.NewReader(`{"title": "First post"}`)
-req := httptest.NewRequest(http.MethodPost, "/posts", body)
-req.Header.Set("Content-Type", "application/json")
+func TestReportRoute(t *testing.T) {
+	routes := reportRoutes()
+	res := routes.Record(httptest.NewRequest(http.MethodGet, "/reports/monthly", nil))
+	t.Cleanup(func() {
+		if err := res.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
 
-res := r.Record(req)
-if res.StatusCode != http.StatusCreated {
-	t.Fatalf("status = %d, want 201", res.StatusCode)
+	var report reportView
+	if err := json.UnmarshalRead(res.Body, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ID != "monthly" {
+		t.Fatalf("report ID = %q, want monthly", report.ID)
+	}
 }
 ```
 
-This assumes your create handler returns HTTP 201. `Record` does not choose
-that status for you; use the status your endpoint promises.
+This checks that the path pattern selected the ID and the response encoded it. `Record` returns an `*http.Response`; you own its body even though no socket was opened. Apply the same cleanup to every recorded response below.
 
-## Reading a JSON response
+## Submit JSON
 
-Decode the body into your application's response type, `Post` below, which has
-a string field named `Title`. Use
-`encoding/json/v2`, as Arkoren does:
+When testing a create endpoint, send the content type and body a client would send. With `strings` imported and your configured router named `routes`, create a request inside your test:
 
 ```go
-var post Post
-if err := json.UnmarshalRead(res.Body, &post); err != nil {
+incoming := httptest.NewRequest(http.MethodPost, "/reports", strings.NewReader(`{"name":"Monthly"}`))
+incoming.Header.Set("Content-Type", "application/json")
+res := routes.Record(incoming)
+```
+
+Assert the endpoint's promised status, response headers, and decoded fields, not merely that it did not panic. The router does not choose a successful creation status for you; your handler must return it. Keep [input validation](../http-fundamentals/requests.md#validate-input) in the production request path so malformed and rejected input exercise the same behavior as real clients.
+
+## Assert Errors
+
+For an endpoint that returns Problem Details, check both the HTTP status and the document. After recording a rejected request and registering body cleanup, import `arkoren.dev/foundation/problem` and decode:
+
+```go
+var details problem.Details
+if err := json.UnmarshalRead(res.Body, &details); err != nil {
 	t.Fatal(err)
 }
-if post.Title != "First post" {
-	t.Fatalf("title = %q, want First post", post.Title)
+if res.StatusCode != http.StatusUnprocessableEntity || details.Status() != res.StatusCode {
+	t.Fatalf("HTTP status = %d, problem status = %d; want 422", res.StatusCode, details.Status())
 }
 ```
 
-## Testing errors
+This fragment assumes your endpoint promises HTTP 422 for that input. For validation problems, inspect `details.Extension("errors")` and assert the particular field path that should fail. Do not accept any non-200 response as proof that validation worked: an unrelated internal error could satisfy that assertion. [Error Handling](../http-fundamentals/error-handling.md) explains which failures the router renders and which your application must map.
 
-Error responses are Problem Details documents, so a test can decode them into
-`problem.Details` and check the fields that matter, such as the status and, for
-validation errors, which fields failed:
+## Cover Middleware
+
+Keep middleware in the router used by a route test. Assert its visible result, such as a required response header, rejected origin, or denied anonymous request. Registering a trivial handler is useful for testing one middleware in isolation; it does not prove that middleware is installed on the production route.
+
+To test a handler without route matching, use `router.Handler(handler).Record(incoming)`. Returned errors still go through the handler lifecycle. Path values are supplied by route matching, so prefer the router when the handler reads them. [Authentication Tests](auth-tests.md) distinguishes handler identity fixtures from access-enforcement tests.
+
+## Continue Flows
+
+For a cookie-based flow, keep the response cookies and attach them to the next request. With a successful login response named `login`, and after registering cleanup for its body:
 
 ```go
-req := httptest.NewRequest(http.MethodPost, "/posts", strings.NewReader(`{"title": ""}`))
-req.Header.Set("Content-Type", "application/json")
-res := r.Record(req)
-
-var got problem.Details
-if err := json.UnmarshalRead(res.Body, &got); err != nil {
-	t.Fatal(err)
+incoming := httptest.NewRequest(http.MethodGet, "https://app.example/me", nil)
+for _, cookie := range login.Cookies() {
+	incoming.AddCookie(cookie)
 }
-
-if got.Status() != http.StatusUnprocessableEntity {
-	t.Fatalf("status = %d, want 422", got.Status())
-}
-fields, found := got.Extension("errors")
-if !found {
-	t.Fatal("missing validation errors extension")
-}
-violations, ok := fields.(map[string]any)
-if !ok {
-	t.Fatalf("errors has type %T, want an object", fields)
-}
-if _, ok := violations["/title"]; !ok {
-	t.Fatalf("no error for /title: %v", fields)
-}
+res := routes.Record(incoming)
 ```
 
-Extension members, such as the `errors` of a validation problem, are in the
-`Extension(name)` lookup; `Extensions()` returns an independent outer map.
+This explicitly carries cookies but does not emulate a browser's cookie policy. Test login, protected access, logout, and subsequent rejection with the real [session middleware](../http-capabilities/sessions.md#enable-sessions). Check session mutation errors and [save failures](../http-capabilities/sessions.md#save-changes); a successful handler alone does not establish session persistence.
 
-## Testing middleware
+If the test needs automatic cookie scope, redirects, or a real HTTP transport, use `httptest.NewServer` with an `http.Client` and cookie jar instead. Prefer `httptest.NewTLSServer` when retaining secure-cookie defaults. Plain HTTP requires test-only `session.Builder.AllowInsecure(true)` configuration; never carry that setting into production. Register server cleanup and close every client response body.
 
-Because `Record` runs the whole router, middleware is tested the same way:
-register it, add a trivial route, and check its effect on the response:
+An in-memory recorder collects output rather than observing its arrival over time. Use a networked test for transport cancellation or incremental delivery, following [Streaming Responses](../http-fundamentals/streaming-responses.md).
 
-```go
-r := router.New()
-r.Use(secureheaders.Middleware())
-r.Get("/", func(w http.ResponseWriter, r *http.Request) error {
-	return nil
-})
-
-res := r.Record(httptest.NewRequest(http.MethodGet, "/", nil))
-if got := res.Header.Get("X-Frame-Options"); got != "DENY" {
-	t.Fatalf("X-Frame-Options = %q", got)
-}
-```
-
-## Testing a single handler
-
-A handler is a function, so it can also be tested on its own, without a router.
-Wrap it in `router.Handler` so returned errors are rendered as in production:
-
-```go
-res := router.Handler(h.show).Record(httptest.NewRequest(http.MethodGet, "/", nil))
-```
-
-Path parameters are only set by the router's patterns, so testing through the
-router is simpler for handlers that read them.
-
-## Requests across several calls
-
-Some flows span requests, such as logging in and then visiting a page, where
-the second request needs the session cookie from the first. For these, start
-a real test server and use a client with a cookie jar. Use a router `r` with
-your real login and `/me` routes and their middleware. Here `credentials` is
-your form data (`url.Values`) with a valid login. Import `net/http/cookiejar`
-for the client. This example assumes login ends in HTTP 200, including after
-any redirect that the client follows.
-
-`httptest.NewServer` serves plain HTTP. Before building `r`, configure its
-session middleware with a callback that calls `cookies.AllowInsecure(true)`,
-where `cookies` is a `*session.Builder`. Enable this only in the test setup.
-
-Submit the login, then use the same client for the protected request. The jar
-keeps the session cookie from the login response:
-
-```go
-srv := httptest.NewServer(r)
-t.Cleanup(srv.Close)
-
-jar, err := cookiejar.New(nil)
-if err != nil {
-	t.Fatal(err)
-}
-client := &http.Client{Jar: jar}
-
-login, err := client.PostForm(srv.URL+"/login", credentials)
-if err != nil {
-	t.Fatal(err)
-}
-login.Body.Close()
-if login.StatusCode != http.StatusOK {
-	t.Fatalf("login status = %d, want 200", login.StatusCode)
-}
-res, err := client.Get(srv.URL + "/me")
-if err != nil {
-	t.Fatal(err)
-}
-t.Cleanup(func() {
-	res.Body.Close()
-})
-if res.StatusCode != http.StatusOK {
-	t.Fatalf("status = %d, want 200", res.StatusCode)
-}
-```
-
-[Auth tests](auth-tests.md) shows simpler ways to test routes that need a user.
-
-If your own login flow requires an earlier request to establish state, make that
-request with the same client first. This example checks session continuity, not
-browser-origin enforcement; test [CSRF protection](../browser-security/csrf-protection.md)
-with the relevant browser headers separately.
-
-For more on the testing helpers, see the
-[testing API reference](overview.md).
+For recording and handler behavior, see the [`router` API reference](https://pkg.go.dev/arkoren.dev/core/http/router).

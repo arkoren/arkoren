@@ -1,144 +1,73 @@
 ---
-title: Testing Overview
-nav: Overview
-description: How Arkoren services are tested with the standard testing package, real facades on in-memory drivers, and no mocking framework.
+title: Overview
+description: Choose test boundaries for application code, HTTP routes, and external services using Go's standard testing package.
 order: 10
+summary:
+  - Choose in-process drivers, recording fakes, or real backends according to the behavior under test.
+  - Test typed state through a real facade and run tests with Go's standard runner.
+  - Keep database-engine semantics separate from portable application behavior.
 ---
 
-# Testing Overview
+# Overview
 
-## Introduction
+Keep the application code you want to verify real, and replace only the dependencies outside the test's scope. Arkoren facades accept drivers directly, so your tests can use an in-process backend or a recording fake without changing the code that calls the facade. Go's standard `testing` package is the test runner; no mocking framework is required.
 
-Test application behavior without starting its production infrastructure: keep
-the real facades and choose memory drivers, recording fakes, or SQLite for their
-backends. Use Go's standard `testing` package; Arkoren needs no special runner.
+## Choose Boundaries
 
-Choose the replacement for the question the test asks. A memory cache lets you
-check stored values and expiry. A mail fake lets you check that your code
-requested a message without sending one. SQLite executes database queries in
-the test process, while production-specific SQL still needs the production
-engine.
+A test's assertions determine which dependencies it needs:
 
-Dependencies arrive as plain arguments: a store receives its database facade,
-a handler receives its store, and a router is a value. Build the piece under
-test with those chosen dependencies, then assert its observable result.
+| Question | Test boundary |
+| --- | --- |
+| Does application code store and retrieve the right value? | Real facade with an in-process driver. |
+| Does an endpoint return the promised status, headers, and body? | Requests through the router, as shown in [HTTP Tests](http-tests.md). |
+| Does an operation request the right external effect? | Real facade with a [recording or scripted fake](fakes.md). |
+| Does production-specific SQL, expiry, or broker behavior work? | [Integration tests](integration-tests.md) against that backend. |
+| Does a custom driver satisfy the tested public contract? | The service's [conformance suite](conformance-suites.md). |
 
-## Running tests
+A memory driver stores and processes data in your test process. A recording fake captures requests instead of performing the external effect; a scripted fake also supplies chosen replies or failures. Neither proves that a production vendor delivers messages, persists data across crashes, or behaves identically under network failures.
 
-Run the tests of a module the usual way:
+## Test Facades
+
+For cached application state, construct the real cache facade over `memorycache`. This complete test uses `testing`, `arkoren.dev/core/service/cache`, and `arkoren.dev/core/service/cache/memorycache` in a `_test.go` file:
+
+```go
+func TestCachedLanguage(t *testing.T) {
+	store := cache.New(memorycache.New())
+	key := cache.NewKey[string]("preferences:language")
+	if err := store.Put(t.Context(), key, "en"); err != nil {
+		t.Fatal(err)
+	}
+
+	language, err := store.Get(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if language != "en" {
+		t.Fatalf("language = %q, want en", language)
+	}
+}
+```
+
+This establishes the fixture and checks typed retrieval. To test your own operation, pass this `store` into that operation, then assert the state it should leave behind. Give each independent test its own driver so previous tests cannot supply missing setup.
+
+The memory cache checks expiry on access without starting background cleanup. Other drivers have their own lifecycle requirements; follow their setup instructions rather than assuming construction starts them. [Cache Drivers](../cache/drivers.md) owns cache setup, and [Cache Keys](../cache/keys.md) explains typed key definitions.
+
+## Run Tests
+
+From your application's module directory, run:
 
 ```sh
 go test -short -race ./...
 ```
 
-`-race` enables Go's race detector, which catches unsynchronized access that
-ordinary tests miss; services handle requests concurrently, so it is worth
-keeping on. `-short` skips infrastructure tests only when those tests check
-`testing.Short()`, as
-described in [Integration tests](integration-tests.md).
+`-race` checks executed code for data races and requires a supported race-detector toolchain and C compiler. `-short` is a flag your tests inspect, not an automatic infrastructure filter: tests skip only if they call `testing.Short()` and act on it. [Integration Tests](integration-tests.md#select-infrastructure) shows that guard and the separate backend run.
 
-## Testing with in-memory drivers
+For expiry and timers, use [Controlling Time](time.md) instead of adding real delays to otherwise in-process tests.
 
-To test code that uses a service, build the facade with its memory driver.
-For example, seed a cache entry and check the typed result. Pass this same
-`store` to your application code when testing how it uses cached values.
-In your `_test.go` file, import `arkoren.dev/core/service/cache` and
-`arkoren.dev/core/service/cache/memorycache`. The fragment runs inside a test
-whose `*testing.T` is named `t`:
+## Test SQL
 
-```go
-store := cache.New(memorycache.New())
-key := cache.NewKey[float64]("rates.v1.EUR")
-if err := store.Put(t.Context(), key, 1.08); err != nil {
-	t.Fatal(err)
-}
-rate, err := store.Get(t.Context(), key)
-if err != nil || rate != 1.08 {
-	t.Fatalf("rate = %v, err = %v; want 1.08 and nil", rate, err)
-}
-```
+Use a real SQL engine for queries and result mapping. An in-process SQLite database can serve tests whose SQL and schema support SQLite; follow [SQLite setup](../database/drivers.md#sqlite), start the driver, register cleanup, and apply the schema your operation needs before calling it.
 
-The memory drivers implement the same contracts as the vendor drivers and pass
-the same [conformance suites](conformance-suites.md), so a test that passes on
-them exercises the portable contract. It does not verify network behavior,
-durability, backend configuration, or provider-specific features.
+SQLite is not a substitute for PostgreSQL or MySQL semantics. Test engine-specific types, locking, isolation, and SQL against the production engine. Keep schema changes application-owned, following [Migrations](../migrations/overview.md), rather than expecting driver startup to create tables.
 
-For services whose effects leave the process, such as mail and queues, a
-**fake** records what your code asked for and lets you assert on it. See
-[Fakes](fakes.md).
-
-## Testing with a database
-
-Database code is best tested against a real SQL engine. SQLite runs inside
-the test process and needs no server. A small helper
-gives each test a fresh, empty database. First install the SQLite driver from
-your application's module root:
-
-```sh
-go get arkoren.dev/driver/sqlite
-```
-
-In a `_test.go` file, import `context`, `testing`,
-`arkoren.dev/core/service/database`, and
-`arkoren.dev/driver/sqlite/sqlitedatabase`, then add this helper:
-
-```go
-func newTestDB(t *testing.T) *database.Database {
-	t.Helper()
-
-	driver, err := sqlitedatabase.New(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := driver.Stop(context.Background()); err != nil {
-			t.Error(err)
-		}
-	})
-	if err := driver.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	return database.New(driver)
-}
-```
-
-Run your migrations on it, or create the tables the test needs, and test your
-store as usual. Because the store depends on the database facade, the same
-store code runs on PostgreSQL in production.
-
-> [!NOTE]
-> SQLite and PostgreSQL differ in places, such as some data types and locking.
-> Keep a few [integration tests](integration-tests.md) against your production
-> database for the queries that depend on its features.
-
-## Testing handlers
-
-A router can serve a request without a server. `Record` sends a request
-through the router and all its middleware and returns the response. With your
-application's router named `r`, import `net/http` and `net/http/httptest`.
-This assertion assumes invoice 7 is absent and the handler maps that condition
-to HTTP 404:
-
-```go
-res := r.Record(httptest.NewRequest(http.MethodGet, "/invoices/7", nil))
-if res.StatusCode != http.StatusNotFound {
-	t.Fatalf("status = %d, want 404", res.StatusCode)
-}
-```
-
-[HTTP tests](http-tests.md) covers requests with bodies, headers, cookies, and
-authenticated users.
-
-## Where to go next
-
-- [HTTP tests](http-tests.md) and [Auth tests](auth-tests.md) test the HTTP
-  layer.
-- [Fakes](fakes.md) test code that sends mail, dispatches jobs, starts
-  workflows, or calls a language model.
-- [Controlling time](time.md) tests expiry, timeouts, and schedules without
-  waiting.
-- [Integration tests](integration-tests.md) run against real infrastructure.
-
-For the available fakes and suites, see the
-[testing API reference](overview.md).
+For your next application test, start with [HTTP Tests](http-tests.md) for a route or [Fakes](fakes.md) for an operation that requests an external effect.

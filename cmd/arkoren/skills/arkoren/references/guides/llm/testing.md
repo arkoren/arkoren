@@ -1,101 +1,124 @@
 ---
-title: Testing Language Models
+title: Testing Models
 nav: Testing
-description: Test code that calls a model with a scripted llmtest.Fake, assert on requests, inject failures, and run the conformance suite.
-order: 60
+description: Script model turns, inspect requests, and test application outcomes without provider calls.
+order: 100
+summary:
+  - Script replies and tool requests through the real facade without model I/O.
+  - Assert on requests, terminal failures, streams, and deterministic embedding vectors.
+  - Keep live-provider conformance separate from repeatable application tests.
 ---
 
-# Testing Language Models
+# Testing Models
 
-## Introduction
+Routine application tests should not depend on a billable, nondeterministic
+model. `llmtest.Fake` implements `llm.Driver` with scripted replies, so your
+tests can exercise the real facade, agent loop, and validation without provider
+I/O. There is no memory driver for this contract; use the fake for this task.
 
-A real model can be slow, nondeterministic, or billable, so routine application
-tests should not call one. The `llmtest` package provides a
-`Fake`, a scripted `llm.Driver`. You queue the replies the model should give,
-pass the fake to the real `llm.New`, and exercise the facade's agent loop, tools,
-and validation without provider I/O. The fake scripts responses and synthesizes
-stream events; it does not reproduce a provider's timing, model quality, or wire
-protocol. There is no memory driver for this contract; the fake takes its place.
+Import `llm` from `arkoren.dev/core/service/llm` and `llmtest` from
+`arkoren.dev/core/service/llm/llmtest`. These fragments run inside a test with
+`t *testing.T`, `ctx := t.Context()`, and standard `errors` where shown.
 
-Here `history` is the `[]llm.Message` your application sends.
-Import `llm` from `arkoren.dev/core/service/llm`, `llmtest` from
-`arkoren.dev/core/service/llm/llmtest`, and the standard packages `errors` and
-`testing`. The driver-author example also imports the standard `os` package and
-`openaillm` from `arkoren.dev/driver/openai/openaillm`.
+## Scripting Replies
 
-## Scripting replies
-
-Queue one reply per model turn, in order. These fragments run inside your test
-with `t *testing.T` and `ctx := t.Context()`. The `support` agent is the one
-defined in [Agents and Tools](agents-and-tools.md):
+Queue the answer before calling your model. With the text `assistant` from
+[Running Agents](running-agents.md#defining-agents):
 
 ```go
 fake := llmtest.New()
-fake.Reply("Your order shipped yesterday.")
-
+fake.Reply("Search maintenance lasts fifteen minutes.")
 model := llm.New(fake, "test-model")
-result, err := model.Run(ctx, support, []llm.Message{llm.UserText("Where is order 4012?")})
+```
+
+Run the real facade and assert the exact accepted output:
+
+```go
+result, err := model.Run(ctx, assistant, []llm.Message{
+	llm.UserText("How long does search maintenance last?"),
+})
 if err != nil {
 	t.Fatal(err)
 }
-if result.Text != "Your order shipped yesterday." {
-	t.Fatalf("text = %q", result.Text)
+if result.Output != "Search maintenance lasts fifteen minutes." {
+	t.Fatalf("output = %q", result.Output)
 }
 ```
 
-To test an agent that uses tools, script the tool call first and the answer
-after it. `ReplyToolCall` takes the tool name and its JSON arguments, and the
-agent runs your real tool function in between. Supply that tool with a test
-repository too; faking the model does not fake the tool's external effects:
+Each `Generate` or `Stream` call consumes one reply. Exhausting the script
+returns `llmtest.ErrNoReply`, exposing an unexpected turn. For a structured-output
+agent, script JSON text and let the real output schema decode and validate it.
+`ReplyParts` scripts multiple parts; `ReplyResponse` sets explicit stop reasons
+and usage; `ReplyWith` computes a response or error from the request.
+
+## Testing Tools
+
+For a separate tool-dispatch test, create a fresh fake and model as above, then
+script a request followed by the final answer:
 
 ```go
-fake := llmtest.New()
-fake.ReplyToolCall("lookup-order", `{"number": 4012}`)
-fake.Reply("It shipped yesterday.")
+fake.ReplyToolCall("lookup-window", `{"service_id":"search"}`)
+fake.Reply("Search maintenance starts at 02:00 UTC.")
 ```
 
-`ReplyParts` scripts a reply of several parts, `ReplyResponse` a full
-`llm.Response` with a stop reason and usage, and `ReplyWith` computes the reply
-from the request, or returns an error:
+Run an agent containing the `lookupWindow` from [Defining Tools](defining-tools.md).
+The script consumes two model turns with your real handler between them.
+Supply that handler with a test service: faking the model does not fake tool
+effects, resource authorization, or network dependencies.
 
-```go
-fake.ReplyWith(func(request llm.Request) (llm.Response, error) {
-	return llm.Response{}, llm.ErrRateLimited
-})
-```
+Test denial with a caller context your policy rejects, and assert that the
+protected handler was not invoked. Test the application's resource check
+directly too; hiding a capability is not proof of row-level access control.
 
-Each `Generate` or `Stream` call consumes one reply. When the script runs out,
-the call fails with `llmtest.ErrNoReply`, so a test notices a model call it did
-not expect. A structured-output agent is scripted the same way: reply with the
-JSON text, and the agent decodes and validates it.
+## Inspecting Requests
 
-## Asserting on requests
-
-The fake records every request it receives. Assert on what your code sent, with
-predicates that receive the `llm.Request`:
+After executing the tool scenario with a fresh fake, assert on the advertised
+capability rather than only the final text:
 
 ```go
 fake.AssertGenerated(t, func(request llm.Request) bool {
-	return len(request.Tools) == 1 && request.Tools[0].Name == "lookup-order"
+	return len(request.Tools) == 1 && request.Tools[0].Name == "lookup-window"
 })
 fake.AssertNotGenerated(t, func(request llm.Request) bool {
-	return request.Model == "expensive-model"
+	return request.Model != "test-model"
 })
 ```
 
-All predicates of one assertion must match the same request. `Generated()`
-returns the recorded requests for anything more detailed, such as checking that
-a user's name reached the instructions. `Embedded()` does the same for embedding
-requests.
+All predicates passed to one assertion must match the same request.
+`Generated()` returns recorded generation/stream requests for detailed checks;
+`Embedded()` returns embedding requests. The fake proves what your code sent,
+not provider wire compatibility or model quality.
 
-## Streaming and embeddings
+## Testing Failures
 
-`Stream` splits a scripted text reply into word-sized `TextDelta` events and
-ends with `Done`, so streaming code is tested with the same script. Here
-`request` is the `llm.Request` your application sends:
+Inject an outage and check the portable error your application handles:
 
 ```go
-fake.Reply("one two three")
+fake.FailNext(llm.ErrUnavailable)
+_, err := model.Run(ctx, assistant, []llm.Message{llm.UserText("Show the schedule.")})
+if !errors.Is(err, llm.ErrUnavailable) {
+	t.Fatalf("err = %v", err)
+}
+```
+
+An injected failure is not recorded and consumes no scripted reply.
+`FailWith(err)` keeps failing calls until cleared with nil; `Reset()` clears
+scripts, records, and injected failures. Use `ReplyWith` when you need a
+recorded scripted turn to fail instead.
+
+To verify truncation handling, script a response with
+`StopReason: llm.StopMaxTokens`: `Generate` returns it as data, whereas `Run`
+returns `llm.ErrTruncated`. A refusal or content-filter stop similarly becomes
+`llm.ErrRefused` in an agent run. Do not assert success only because partial
+text exists.
+
+## Streaming Events
+
+The fake synthesizes word-sized text deltas and ends with `Done`. With a fresh
+fake/model and a user-message `request` of type `llm.Request`:
+
+```go
+fake.Reply("Maintenance is complete.")
 var text string
 for event, err := range model.Stream(ctx, request) {
 	if err != nil {
@@ -105,64 +128,53 @@ for event, err := range model.Stream(ctx, request) {
 		text += delta.Text
 	}
 }
-if text != "one two three" {
+if text != "Maintenance is complete." {
 	t.Fatalf("text = %q", text)
 }
 ```
 
-`Embed` needs no script. It returns deterministic hash-based unit vectors, so
-repeating a text repeats its vector. These vectors let you test embedding calls,
-storage, and retrieval wiring, but they do not represent meaning and cannot
-verify search relevance. The vectors have the dimensions you request, or 8 by
-default. `EmbedWith(fn)` replaces them with your own, for example when a test
-needs a known similarity ranking.
+This checks consumption and assembly, not provider timing or HTTP framing.
+Consume through natural completion when testing an outcome; breaking at `Done`
+has different [observation semantics](streaming.md#stopping-streams).
 
-## Testing failures
+## Testing Vectors
 
-Your code should handle a rate limit or an outage. `FailNext(err)` fails the
-next call only, `FailWith(err)` fails every call until you call it with `nil`,
-and `Reset` clears the script, the records, and the failures:
+Embeddings need no script. The fake returns hash-based unit vectors with the
+requested dimensions, or 8 by default:
 
 ```go
-fake.FailNext(llm.ErrUnavailable)
-
-_, err := model.Run(ctx, support, history)
-if !errors.Is(err, llm.ErrUnavailable) {
-	t.Fatalf("err = %v", err)
+embedder := llm.NewEmbedder(fake, "test-embedding")
+vectors, err := embedder.Embed(ctx, "Search maintenance", "Search maintenance")
+if err != nil {
+	t.Fatal(err)
+}
+if !slices.Equal(vectors[0], vectors[1]) {
+	t.Fatal("identical texts produced different test vectors")
 }
 ```
 
-A call that fails this way is not recorded and uses no scripted reply.
+This fragment also imports standard `slices`. Determinism tests storage and
+retrieval wiring, not semantic relevance. Use `EmbedWith` to supply known
+vectors when testing your own ranking logic.
 
-## Testing a driver
+## Driver Conformance
 
-Driver authors check the contract with `llmtest.Run`, which exercises the driver
-returned by the factory. With a vendor driver, this makes real provider requests;
-the suite does not skip itself under `testing.Short()`. Keep live checks opt-in
-and add the short-mode guard in your test. For hosted OpenAI, configure
-`OPENAI_API_KEY` and access to both selected models before setting
-`LLM_LIVE_TEST=1`; those calls can incur provider charges:
+Driver authors can call `llmtest.Run` with a factory returning their driver.
+The suite exercises the actual driver, not a fake transport. With a hosted
+driver it makes real, potentially billable requests and does not automatically
+skip under `testing.Short()`.
 
-```go
-func TestDriver(t *testing.T) {
-	if testing.Short() || os.Getenv("LLM_LIVE_TEST") != "1" {
-		t.Skip("set LLM_LIVE_TEST=1 outside short mode to call a real provider")
-	}
-	llmtest.Run(t, func(t *testing.T) llm.Driver {
-		driver, err := openaillm.New()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return driver
-	}, llmtest.WithModel("gpt-5.2"), llmtest.WithEmbeddingModel("text-embedding-3-small"))
-}
-```
+Keep that test opt-in: check both short mode and an explicit environment flag
+before constructing a live driver. Configure credentials and model IDs your
+account can access; pass them with `llmtest.WithModel(modelID)` and
+`llmtest.WithEmbeddingModel(embeddingModelID)`. Do not run it as an ordinary
+unit test or treat nondeterministic model output as a deterministic fixture.
 
-Options such as `WithoutEmbeddings`, `WithoutImages`, `WithoutDocuments`,
-`WithoutReasoning`, and `WithoutStructuredOutput` skip checks for what a vendor
-cannot do. A real model can occasionally fail a check, so rerun before blaming
-the driver. [Writing a Driver](../drivers/writing-a-driver.md) explains the
-process.
+Use `WithoutEmbeddings`, `WithoutImages`, `WithoutDocuments`,
+`WithoutReasoning`, or `WithoutStructuredOutput` only for capabilities the
+selected driver/server cannot provide. For OpenAI Chat Completions, documents
+and reasoning are unsupported. [Writing a Driver](../drivers/writing-a-driver.md)
+explains the broader contract checks. A failing live-model assertion can be
+nondeterministic; investigate before assigning the cause to the driver.
 
-For every fake method and option, see [the `llmtest` API
-reference](https://pkg.go.dev/arkoren.dev/core/service/llm/llmtest).
+For fake methods and conformance options, see the [llmtest API reference](https://pkg.go.dev/arkoren.dev/core/service/llm/llmtest).

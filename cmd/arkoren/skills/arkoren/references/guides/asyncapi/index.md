@@ -1,6 +1,6 @@
 ---
 title: AsyncAPI
-description: Describe messaging contracts, model wire payloads and queue operations, and export or serve AsyncAPI documents.
+description: Describe typed messaging contracts, wire schemas, and broker requirements, then export or serve AsyncAPI JSON.
 order: 200
 section: Documentation
 ---

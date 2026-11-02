@@ -37,12 +37,15 @@ export default defineConfig({
           !/\.(?:md|txt|xml)$/.test(pathname) &&
           !pathname.startsWith("/docs/guides/http/") &&
           !pathname.startsWith("/docs/api/") &&
-          !pathname.startsWith("/docs/guides/webhooks/") &&
           ![
             "/docs/api/core/app",
             "/docs/guides",
             "/docs/guides/events/asyncapi",
             "/docs/guides/payments/webhooks",
+            "/docs/guides/webhooks/receiving",
+            "/docs/guides/webhooks/providers",
+            "/docs/guides/http-capabilities/webhooks",
+            "/docs/guides/http-capabilities/provider-webhooks",
           ].includes(pathname) &&
           (pathname === "/" ||
             pathname === "/docs" ||
@@ -79,14 +82,17 @@ export default defineConfig({
     "/docs/guides/http/localization.md": "/docs/guides/http-capabilities/localization.md",
     "/docs/guides/http/secure-links": "/docs/guides/http-capabilities/secure-links",
     "/docs/guides/http/secure-links.md": "/docs/guides/http-capabilities/secure-links.md",
-    "/docs/guides/http/webhooks": "/docs/guides/http-capabilities/webhooks",
-    "/docs/guides/http/webhooks.md": "/docs/guides/http-capabilities/webhooks.md",
-    "/docs/guides/webhooks/receiving": "/docs/guides/http-capabilities/webhooks",
-    "/docs/guides/webhooks/receiving.md": "/docs/guides/http-capabilities/webhooks.md",
-    "/docs/guides/webhooks/providers": "/docs/guides/http-capabilities/webhooks#provider-adapters",
-    "/docs/guides/webhooks/providers.md":
-      "/docs/guides/http-capabilities/webhooks.md#provider-adapters",
-    "/docs/guides/webhooks/llms.txt": "/docs/guides/llms.txt",
+    "/docs/guides/http/webhooks": "/docs/guides/webhooks/receiving-webhooks",
+    "/docs/guides/http/webhooks.md": "/docs/guides/webhooks/receiving-webhooks.md",
+    "/docs/guides/webhooks/receiving": "/docs/guides/webhooks/receiving-webhooks",
+    "/docs/guides/webhooks/receiving.md": "/docs/guides/webhooks/receiving-webhooks.md",
+    "/docs/guides/webhooks/providers": "/docs/guides/webhooks/provider-adapters",
+    "/docs/guides/webhooks/providers.md": "/docs/guides/webhooks/provider-adapters.md",
+    "/docs/guides/http-capabilities/webhooks": "/docs/guides/webhooks/receiving-webhooks",
+    "/docs/guides/http-capabilities/webhooks.md": "/docs/guides/webhooks/receiving-webhooks.md",
+    "/docs/guides/http-capabilities/provider-webhooks": "/docs/guides/webhooks/provider-adapters",
+    "/docs/guides/http-capabilities/provider-webhooks.md":
+      "/docs/guides/webhooks/provider-adapters.md",
     "/docs/guides/payments/webhooks": "/docs/guides/payments/drivers",
     "/docs/guides/payments/webhooks.md": "/docs/guides/payments/drivers.md",
     "/docs/guides/http/server": "/docs/guides/http-networking/server",

@@ -1,31 +1,32 @@
 ---
-title: Testing Push
-nav: Testing
-description: Assert submitted messages with pushtest.Fake and verify browser display separately from provider acceptance.
-order: 40
+title: Testing
+description: Assert application submissions with the push fake and verify browser delivery through separate acceptance checkpoints.
+order: 50
+summary:
+  - Assert recipient, message content, and resolved retention without external requests.
+  - Inject uncertain acceptance and preserve cancellation causes without treating failures as delivery evidence.
+  - Verify browser registration, display, clicks, and revocation through separate manual checkpoints.
 ---
-# Testing Push
+# Testing
 
-## Introduction
+Test notification submission without asking for browser permission or contacting
+a provider. `pushtest.Fake` records accepted messages and resolved retention so
+you can inspect the application's intent. It does not prove encryption,
+provider acceptance, delivery, or service-worker display; those need a separate
+browser check.
 
-An application test should prove that an order update submits the right
-notification without contacting a push service. `pushtest.Fake` records accepted
-messages and their resolved TTL. A separate browser check verifies permissions,
-encryption interoperability, service-worker display, and click behavior; a fake
-cannot establish those outcomes.
+## Asserting Submissions
 
-## Asserting a submission
-
-The fake is included in `arkoren.dev/core`; no vendor credentials or network
-access are required. Add the following complete test as `push_test.go` in your
-application. Replace the direct `Send` with your order service's call when
-testing its integration:
+The fake is included in `arkoren.dev/core` and requires no credentials or network
+access. In your application's `push_test.go`, import these packages and define
+the small input used by the test:
 
 ```go
 package notification_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -33,88 +34,130 @@ import (
 	"arkoren.dev/core/service/push/pushtest"
 )
 
-// TestOrderNotification checks content and resolved retention, not delivery.
-// A token is convenient synthetic test data; Web Push itself requires a browser subscription.
-func TestOrderNotification(t *testing.T) {
+type OrderNotice struct {
+	OrderID string
+	Path    string
+}
+```
+
+Construct a fresh fake per test and inject its sender into your application.
+This complete test demonstrates the submission boundary directly; replace its
+`Send` call and message construction with your order service invocation when
+testing that service's behavior:
+
+```go
+func TestOrderNotice(t *testing.T) {
 	t.Parallel()
 	fake := pushtest.New()
 	sender := push.New(fake)
-	message := push.NewMessage(push.Token("test-device"), "Order shipped", func(notification *push.MessageBuilder) {
+	recipient := push.Token("test-device")
+	notice := OrderNotice{OrderID: "123", Path: "/orders/123"}
+	message := push.NewMessage(recipient, "Order shipped", func(notification *push.MessageBuilder) {
 		notification.Body("Your order is on its way.")
-		notification.Data(map[string]string{"order_id": "123", "url": "/orders/123"})
+		notification.Data(map[string]string{"order_id": notice.OrderID, "url": notice.Path})
 	})
-	if _, err := sender.Send(context.Background(), message, push.TTL(5*time.Minute)); err != nil {
+	if _, err := sender.Send(t.Context(), message, push.TTL(5*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	fake.AssertSentCount(t, 1)
 	fake.AssertSent(t, func(submission pushtest.Submission) bool {
-		return submission.Message.Title() == "Order shipped" &&
-			submission.Message.Data()["order_id"] == "123" &&
+		return submission.Message.To() == recipient &&
+			submission.Message.Title() == "Order shipped" &&
+			submission.Message.Body() == "Your order is on its way." &&
+			submission.Message.Data()["order_id"] == notice.OrderID &&
+			submission.Message.Data()["url"] == notice.Path &&
 			submission.Config.TTL == 5*time.Minute
 	})
 }
 ```
 
-Run `go test ./...` in your application module. The test passes only if one
-submission has the expected title, order identifier, and retention. Inspect
-`submission.Message.To()` and `Body()` in additional predicates when recipient
-selection and display text are part of your application's contract. Assertions
-do not print message contents or subscription secrets on failure.
+The count excludes unexpected additional submissions; the predicate checks the
+recipient, content, and raw retention received by the driver. No start, stop, or
+cleanup hook is needed. Synthetic `push.Token` input is convenient here but does
+not imply that Web Push supports native tokens.
 
-## Exercising failure policy
+`AssertSent` requires one recorded submission to match every supplied predicate.
+`AssertNotSent` fails if any submission matches them all; with no predicates it
+requires no recordings. `AssertNothingSent` checks the same empty state.
+`Sent()` returns an independent slice in acceptance order, and message metadata
+accessors return copies. Assertion failures do not print sensitive content.
 
-With the `fake` and `sender` from the preceding test, import `errors` and inject
-an ambiguous outcome before the next valid send:
+## Testing Uncertainty
+
+Your application must not mistake cancellation for proof of non-acceptance. Add
+this second complete test to the same file to preserve both causes and verify
+that failure returns no receipt or accepted recording:
 
 ```go
-fake.Reset()
-fake.FailNext(push.ErrOutcomeUnknown)
-_, err := sender.Send(context.Background(), message)
-if !errors.Is(err, push.ErrOutcomeUnknown) {
-	t.Fatal("expected unknown acceptance")
+func TestUnknownAcceptance(t *testing.T) {
+	t.Parallel()
+	fake := pushtest.New()
+	fake.FailNext(errors.Join(context.Canceled, push.ErrOutcomeUnknown))
+	sender := push.New(fake)
+	message := push.NewMessage(push.Token("test-device"), "Order shipped")
+	receipt, err := sender.Send(t.Context(), message)
+	if !errors.Is(err, push.ErrOutcomeUnknown) || !errors.Is(err, context.Canceled) {
+		t.Fatal("expected uncertain acceptance with preserved cancellation")
+	}
+	if receipt != (push.Receipt{}) {
+		t.Fatal("failed submission returned a receipt")
+	}
+	fake.AssertNothingSent(t)
 }
-fake.AssertNothingSent(t)
 ```
 
-`FailNext` affects one valid send. Invalid input does not consume it. `FailWith`
-sets a persistent failure until cleared with nil; `Reset` clears both failure
-settings and recordings. Failed sends are not recorded as accepted submissions.
-These controls let you test that your application does not automatically replay
-an ambiguous send or delete a refreshed registration after an older send fails.
+The fake does not claim that an unknown submission failed to reach a real
+provider; it records only accepted test submissions. Adapt this injection to
+your application's policy test and assert that it does not blindly replay an
+uncertain notification or remove a refreshed registration.
 
-The fake accepts both canonical recipient value types so application tests can
-use synthetic `push.Token` values. That does not imply that the Web Push driver
-supports tokens or that a native mobile push driver is installed.
+`FailNext` replaces the next valid send's failure and takes precedence over
+`FailWith`, which persists until cleared. Invalid input does not consume the
+one-shot failure. To exercise persistent throttling with an existing `fake`:
 
-## Verifying a browser
+```go
+fake.FailWith(push.ErrRateLimited)
+```
 
-Use the [browser integration](browser-integration.md) with an HTTPS deployment
-and a protected test account. Do not paste real subscription endpoints into issue
-reports or application logs. Test Chrome, Firefox, and Safari independently;
-on iOS and iPadOS, launch the installed Home Screen web app on version 16.4 or
-later rather than an ordinary browser tab.
+Subsequent valid sends return that failure until `fake.FailWith(nil)` clears it.
+`FailNext(nil)` clears only the one-shot failure. `Reset()` clears both failure
+settings and recordings, and acceptance IDs restart at `fake-1`; it does not
+simulate device state or delivery.
 
-1. Click the enable button. Confirm that permission is granted and the application
-   stores one registration for the current account, with a VAPID key identifier
-   and version. A failed registration response must not produce an “enabled” UI.
-2. Send a small notification using that stored subscription and matching VAPID
-   private key. Confirm nil error separately from the visible notification.
-3. Click the notification. Confirm that it opens your origin and that the order
-   page checks authorization. Test a cross-origin `data.url`; it must fall back
-   to your home page rather than navigate there.
-4. Restart the server with the same persisted key. Confirm that the existing
-   subscription still accepts sends. Test offline expiry and zero TTL without
-   assuming that accepted notifications must appear later.
-5. Revoke permission or unsubscribe, then test your registration cleanup flow.
-   Confirm that a definitive 404/410 invalidates only the version used for that
-   send, and an authentication error does not delete the subscription.
-6. Sign out on a shared device. Confirm that the application applies its chosen
-   registration ownership policy rather than sending one account's notifications
-   to another account using the same browser.
+Run `go test ./...` from your application module. These tests make no external
+requests. If you implement a custom driver, the
+[conformance suite](../testing/conformance-suites.md) and `pushtest.Run` check
+portable validation, ownership, raw TTL, context errors, and concurrency—not
+provider wire compatibility or actual device delivery.
+
+## Verifying Browsers
+
+Use the [browser walkthrough](browser-integration.md) on an HTTPS deployment with
+a protected test account. Do not paste real endpoints or subscription keys into
+logs or issue reports. Test supported browsers independently; on iOS and iPadOS
+use the installed Home Screen app in the supported version context.
+
+1. Click the enable button. Confirm permission and one stored registration owned
+   by the signed-in account, with the correct VAPID identity and a version. A
+   failed upload must not show the enabled status.
+2. Submit a small notification using that registration and its matching signer.
+   Check nil error separately from a visible notification; operating-system
+   settings can suppress display after acceptance.
+3. Click the notification. Confirm same-origin navigation and authorization on
+   the order page. Send a cross-origin `data.url` and confirm fallback to the
+   home page, not navigation to the other origin.
+4. Restart the server with the same persisted signing key. Check that the existing
+   registration still accepts sends. Exercise offline expiry and no-store without
+   assuming that accepted notifications must eventually appear.
+5. Revoke permission or unsubscribe and exercise application cleanup. Confirm
+   that a definitive not-found response invalidates only the submitted version,
+   and authentication errors do not delete live registrations.
+6. Sign out and switch accounts on the same browser. Confirm the chosen ownership
+   policy prevents implicit transfer or disclosure of the first account's updates.
 
 This is a manual acceptance checklist, not a report of executed browser tests.
-Operating-system notification settings can suppress display even after provider
-acceptance. Diagnose each checkpoint rather than treating a receipt as display
-confirmation.
+Neither passing fake assertions nor seeing one notification establishes
+exactly-once delivery, an inbox, or guaranteed future display.
 
-For fake operations, see the [push API reference](testing.md).
+For recording, injection, and assertion operations, see the
+[pushtest API reference](https://pkg.go.dev/arkoren.dev/core/service/push/pushtest).

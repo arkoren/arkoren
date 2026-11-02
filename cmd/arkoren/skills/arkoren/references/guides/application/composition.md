@@ -1,66 +1,103 @@
 ---
 title: Application Composition
 nav: Composition
-description: Share typed dependencies, give their construction one owner, and select optional features before startup.
-order: 30
+description: Construct typed dependencies once, keep ownership explicit, and select optional features before startup.
+order: 20
+summary:
+  - Share concrete typed dependencies while keeping construction and cleanup under one owner.
+  - Extract factories and actions without introducing a registry or automatic lifecycle adoption.
+  - Abort failed construction and own subscriptions before later setup can fail.
+  - Skip optional acquisition and routes using explicit feature, debug, or environment decisions.
 ---
 
 # Application Composition
 
-## Introduction
+When catalog and stock handlers use the same database, construct one facade and
+pass it to both. Composition is the synchronous code that connects these typed
+values and registers their lifecycle; it is not a container that resolves
+dependencies later. This page assumes an [application coordinator](overview.md)
+and an existing router. Startup execution and resource release belong to
+[Lifecycle and Ownership](lifecycle-and-ownership.md).
 
-Your HTTP handlers can share one PostgreSQL pool without looking it up in a
-container or context. Construct the dependency once, register its lifecycle with
-one owner, and pass its typed value to each consumer. This builds on
-[lifecycle and ownership](lifecycle-and-ownership.md): composition connects
-objects before startup makes them usable.
+## Share Typed Dependencies
 
-At the top of a composition function or factory callback, bind the application
-handles it uses to locals such as `events`, `logger`, and `telemetry`. Follow
-that group with a blank line before construction and wiring. Keep an `app` local
-only when you also need application-owned operations such as probe handlers;
-pass the specific handles to dependencies rather than the whole application.
-
-## Produce one value and share it
-
-Inside your existing composition function, assume `dsn` is your PostgreSQL
-connection string and `routes` is your `*router.Router`. Your application-owned
-`mountCatalog` and `mountOrders` functions both have the signature
-`func(*router.Router, *database.Database)`: they register handlers that borrow
-the database facade for request-time queries, without starting or stopping its
-driver. Import `router` from `arkoren.dev/core/http/router`, `database` from
-`arkoren.dev/core/service/database`, and `postgresdatabase` from
+Inside your composition callback, `composer` is a `*application.Composer` from
+`arkoren.dev/core/application`. Assume `dsn` is your configured PostgreSQL
+connection string and `routes` is a `*router.Router` from
+`arkoren.dev/core/http/router`. Import `database` from
+`arkoren.dev/core/service/database` and `postgresdatabase` from
 `arkoren.dev/driver/postgres/postgresdatabase`.
+
+Construct the driver and immediately register its release, before any later
+construction can fail:
 
 ```go
 connection := composer.Must(postgresdatabase.New(dsn))
 composer.Cleanup(connection.Stop)
 composer.Startup(connection.Start)
-db := database.New(connection)
 
-mountCatalog(routes, db)
-mountOrders(routes, db)
+db := database.New(connection)
 ```
 
-Both consumers receive the same `*database.Database`; their signatures let the
-compiler check the dependency without depending on PostgreSQL. The driver's
-`New` validates configuration and creates a lazy pool; it does not connect.
-Cleanup is registered immediately, even if
-later composition fails or startup never reaches this driver. The handlers must
-not query during composition: `Start` verifies connectivity later.
+`New` validates configuration and creates a lazy pool without network I/O.
+`Start` verifies connectivity later. The facade does not start or stop its driver;
+the acquiring composition code owns that resource. Do not issue queries during
+composition when connectivity has not been established.
 
-## Extract construction when ownership should travel with it
-
-If several executables need the same database setup, move construction and its
-lifecycle registrations together. A `Factory[T]` is a defined callback type that
-receives `*application.Composer` and returns `T`. With `application` imported
-from `arkoren.dev/core/application`, this helper owns the driver it constructs:
+Your application-owned `mountCatalog` and `mountStock` functions each accept
+`(*router.Router, *database.Database)`. They register handlers that borrow the
+facade without managing its lifecycle:
 
 ```go
-func Database(dsn string) application.Factory[*database.Database] {
+mountCatalog(routes, db)
+mountStock(routes, db)
+```
+
+Both receive the same concrete facade. Their signatures make the dependency
+visible to the compiler without tying handlers to PostgreSQL. Returning or
+passing a value transfers no cleanup ownership.
+
+## Stop Failed Construction
+
+`Must` unwraps a successful `(value, error)` result. On error it aborts composition:
+later construction and every startup callback are skipped. Earlier registered
+cleanup runs before `Start` or `Run` returns the original error, joined with
+cleanup or telemetry-finalization errors if needed. Use `errors.Is` or `errors.As`
+to classify the returned cause.
+
+This ordering matters when a server's startup registration precedes another
+constructor: an invalid later constructor fails first, because no startup
+callback runs until all composition succeeds. Cleanup follows registration
+position, not the number of successful startup callbacks.
+
+For an operation returning only an error, use `Require`. With an existing
+`migrator *migrate.Migrator` and `definitions []migrate.Definition`, both from
+`arkoren.dev/core/service/database/migrate`, validate registration during composition:
+
+```go
+composer.Require(migrator.Add(definitions...))
+```
+
+Invalid or duplicate definitions abort construction; `Add` executes no SQL.
+[Migrations](../migrations/overview.md) owns execution and deployment policy.
+Use `composer.Context()` if synchronous construction needs the startup context.
+
+`Must`, `MustDefer`, and `Require` are valid only during synchronous composition,
+even for successful results. Return ordinary errors from startup, runners, and
+cleanup. Do not recover their private abort: the first failure stays recorded,
+and a factory cannot publish a result after swallowing it. Unrelated composition
+panics remain programmer failures and re-panic unchanged after cleanup.
+
+## Extract Owned Construction
+
+If multiple executables need the same database setup, extract construction and
+its lifecycle registrations together. A `Factory[T]` is a defined callback type
+that publishes one typed result:
+
+```go
+func InventoryDatabase(dsn string) application.Factory[*database.Database] {
 	return func(composer *application.Composer) *database.Database {
 		connection := composer.Must(postgresdatabase.New(dsn))
-
 		composer.Cleanup(connection.Stop)
 		composer.Startup(connection.Start)
 
@@ -69,63 +106,34 @@ func Database(dsn string) application.Factory[*database.Database] {
 }
 ```
 
-Replace the inline construction with one `Use` call, then pass its result just
-as before:
+The helper captures configuration; acquisition happens inside the returned
+callback. Replace the direct construction with one invocation:
 
 ```go
-db := composer.Use(Database(dsn))
+db := composer.Use(InventoryDatabase(dsn))
 
 mountCatalog(routes, db)
-mountOrders(routes, db)
+mountStock(routes, db)
 ```
 
-`Database(dsn)` captures configuration; `Use` executes its callback synchronously
-and returns the concrete value unchanged. Apply the factory once to share one
-pool: another `Use(Database(dsn))` constructs another driver. There is no cache,
-cloning, or dependency registry. Returning a value transfers no ownership, and
-nested factories share the enclosing context and cleanup stack rather than
-creating a separate lifecycle.
+`Use` invokes the callback synchronously and returns its result unchanged.
+Calling it again creates another driver: there is no cache, cloning, registry,
+or automatic lifecycle adoption. Nested factories share the enclosing context
+and cleanup stack, not a separate lifecycle.
 
-### Stop on a construction error
+For several related outputs, return a small named struct and pass individual
+fields to consumers. Avoid a global bundle of every dependency: it hides what
+each consumer needs. If you use a dependency-injection container, resolve typed
+values during composition and choose either the container or the application
+to own each resource's startup and release—never both.
 
-The factory uses `Must` because `postgresdatabase.New` returns `(value, error)`.
-On success, `Must` returns the value unchanged. On error, it aborts composition
-before that driver's cleanup registration; previously registered cleanup still
-runs. After cleanup, `Start` or `Run` returns the original error, joined with
-cleanup or telemetry-finalization errors if necessary. Later composition and
-startup do not run. Classify returned errors with `errors.Is` or `errors.As`,
-because cleanup errors can be joined with the original cause.
+## Own Subscriptions
 
-For an operation returning only an error, use `Require`. For example, if you
-already have a `*migrate.Migrator` and your application's migration definitions
-as `migrations []migrate.Definition`, validate their registration during composition:
-
-```go
-composer.Require(migrator.Add(migrations...))
-```
-
-Here `migrate` is `arkoren.dev/core/service/database/migrate`. Invalid or
-duplicate definitions abort composition rather than allowing startup with an
-incomplete registration. `Add` does not run SQL; see
-[database migrations](../database/migrations.md) for execution. If this fails
-after `Database` ran, its cleanup already owns the pool.
-
-Use `composer.Context()` when synchronous construction needs the startup
-context. `Must`, `MustDefer`, and `Require` belong only in synchronous composition, even when
-the error is nil. Return ordinary errors from startup, runners, and cleanup;
-their [failure handling belongs to the lifecycle](lifecycle-and-ownership.md).
-Do not recover the helpers' private abort: the first failure remains recorded
-and a factory cannot publish a result after swallowing it. An unrelated
-composition panic remains a programmer failure and re-panics after cleanup;
-`Must` does not convert arbitrary panics into errors.
-
-## Own subscriptions and infallible releases
-
-A listener registration returns an unsubscribe function, not a context-aware
-stop method. To keep it active until application cleanup and remove it on
-rollback or shutdown, use `MustDefer`. Inside composition, with `application`
-imported as above and an existing `onStarted func(context.Context, event.Void) error`
-handler (`event` is `arkoren.dev/core/event`):
+An event subscription returns an unsubscribe function rather than a fallible
+stop method. At the top of composition, obtain the specific event handle, then
+use `MustDefer` to acquire and own the subscription. Here `onStarted` is your
+existing `func(context.Context, event.Void) error` callback, with `event` from
+`arkoren.dev/core/event`:
 
 ```go
 events := composer.App().Events()
@@ -133,43 +141,30 @@ events := composer.App().Events()
 composer.MustDefer(events.Listen(application.Started, onStarted))
 ```
 
-This listener is removed during cleanup, before `Stopped` or rollback `Failed`
-is emitted. If you need those outcomes, keep the subscription until `Run` returns
-as shown in [lifecycle observation](lifecycle-and-ownership.md#observe-outcomes-without-controlling-them),
-rather than registering its unsubscribe with `MustDefer`.
+The subscription lasts until rollback or shutdown cleanup, not until the
+composition function returns. A failed acquisition registers no release, even
+if it returns one: the acquiring operation must clean up partial results itself.
+A successful acquisition must return a nonnil release.
 
-If registration fails, composition aborts with that error and earlier releases
-still run. The failed registration's release is not registered, even if non-nil;
-the acquiring operation must release partial results itself before returning an
-error. A successful registration must return a non-nil release.
+For an already acquired `cancel context.CancelFunc`, use `composer.Defer(cancel)`.
+`Defer` accepts `func()`; `Cleanup` accepts `func(context.Context) error`. They
+share one once-only, reverse-registration-order stack. Nil releases panic with
+`ErrNilFunc`; release panics follow cleanup's panic-to-error handling.
 
-For a release you already have, such as a resource-specific `cancel context.CancelFunc`,
-register it directly:
+Cleanup removes this listener before `Stopped` or rollback `Failed`. Keep
+subscriptions needed for those events outside the cleanup stack, as shown in
+[outcome observation](lifecycle-and-ownership.md#observe-outcomes).
+`Defer` and `Cleanup` can also register releases inside an executing startup
+callback; `MustDefer` cannot.
 
-```go
-composer.Defer(cancel)
-```
+## Package Registration
 
-`Defer` accepts `func()`; use `Cleanup` for `func(context.Context) error` instead.
-All releases share one reverse-order cleanup stack and run once, even when later
-composition or startup fails. Release panics are handled like other cleanup
-panics. Unlike Go's `defer`, neither method releases at the end of the composing
-function. A nil release panics with `ErrNilFunc`.
-
-`Defer` may also register an acquired release inside an executing startup
-callback. `MustDefer` is composition-only like `Must`: during startup, handle
-acquisition errors normally, then register successful releases with `Defer`.
-
-## Package registrations that have no output
-
-When a helper only registers work, use an `Action` instead of inventing a return
-value. For an existing `listener *server.Server`, assume its acquiring owner
-already registered `listener.Stop` with `Cleanup`. This action borrows that
-server to register initialization and serving. Import `server` from
-`arkoren.dev/core/http/server`:
+Use an `Action` when a helper registers work without producing a value. Given an
+existing `listener *server.Server` from `arkoren.dev/core/http/server`, whose
+acquiring owner already registered `listener.Stop`, this helper borrows it:
 
 ```go
-func Serve(listener *server.Server) application.Action {
+func ServeInventory(listener *server.Server) application.Action {
 	return func(composer *application.Composer) {
 		composer.Startup(listener.Start)
 		composer.Run(listener.Serve)
@@ -177,44 +172,50 @@ func Serve(listener *server.Server) application.Action {
 }
 ```
 
-Call `composer.Use(Serve(listener))` once, after the routes are wired. The action
-adds no resource or second cleanup owner. The callback returns nothing, so call
-`Use` as a statement and ignore its empty completion result. Registration
-does not bind or serve immediately. Root functions passed to `app.Start` or
-`app.Run` remain plain `func(*application.Composer)` callbacks, not actions.
+Invoke `composer.Use(ServeInventory(listener))` after wiring routes. The action
+adds startup and supervised serving, not a second cleanup owner. It returns no
+application value; call `Use` as a statement and ignore its empty completion
+result. Root callbacks passed directly to application `Start` or `Run` remain
+ordinary `func(*application.Composer)` functions.
 
-## Select optional features before constructing them
+## Select Optional Features
 
-If an HTTP feature is disabled, skip both its dependency and its routes. As an
-alternative to the always-on database above, assume `cfg.CatalogEnabled` is a
-boolean and `cfg.CatalogDSN` is the connection string for an optional catalog:
+If a catalog is disabled, skip its dependency and its routes together. As an
+alternative to the always-on database above, assume validated configuration with
+these typed fields:
 
 ```go
-db, selected := composer.UseWhen(cfg.CatalogEnabled, Database(cfg.CatalogDSN))
+type CatalogSettings struct {
+	Enabled bool
+	DSN     string
+}
+```
 
+With `catalog CatalogSettings`, construct only when selected:
+
+```go
+db, selected := composer.UseWhen(catalog.Enabled, InventoryDatabase(catalog.DSN))
 if selected {
 	mountCatalog(routes, db)
 }
 ```
 
-When disabled, the factory callback never runs: no pool or cleanup is created,
-and the branch registers no routes. Keep construction inside that callback.
-Go still evaluates helper arguments before selection, so passing an already
-opened resource to a helper would acquire it even on the skipped path.
+When disabled, the callback never runs: no pool, cleanup, or catalog routes are
+created. Keep acquisition inside the callback. Go evaluates helper arguments
+before selection, so passing an already opened resource does not defer acquisition.
 
-For a factory, selectors return `(T, bool)`: skipped means the zero value of `T`
-and `false`; selected means the callback's result and `true`, even for a valid
-zero or nil result. Test the boolean for presence, not success or non-nilness.
-A `Must`, `MustDefer`, or `Require` error aborts composition; it never becomes `false`.
-Selectors also accept actions; call them as statements if neither the empty
-completion result nor selection flag is needed.
+Selectors return `(T, bool)`. A skipped factory returns zero and false; a selected
+factory returns its value and true, even when zero or nil is legitimate. Test
+the boolean for presence, not success. Construction errors abort composition;
+they never become false. Selectors also accept actions; their result pair can
+be ignored when no later branch needs it.
 
-### Choose debug or environment policy deliberately
+### Choose Selection Policy
 
-Use a configuration boolean for a product feature. For optional developer aids,
-choose debug selection when operators should opt in independently of deployment,
-or environment selection when the deployment itself determines the policy.
-Given an existing `diagnostics application.Action`, these are alternatives:
+Use a configuration boolean for a product feature. For a developer aid, choose
+debug selection when operators opt in independently of deployment, or environment
+selection when deployment determines policy. Given an existing
+`diagnostics application.Action`, choose one of these alternatives:
 
 ```go
 composer.UseDebug(diagnostics)
@@ -222,38 +223,19 @@ composer.UseIn(application.Development, diagnostics)
 composer.UseInAny([]application.Environment{application.Development, application.Staging}, diagnostics)
 ```
 
-`UseDebug` reads the construction-time `Debug(true)` setting on
-`application.Builder`, which defaults to false. Development does not enable it,
-production does not disable it, and changing the runtime log level does not
-change it. `UseIn` and `UseInAny` match the application's single environment
-exactly, including custom values; debug mode does not affect matching.
-[`UseInAny`](https://pkg.go.dev/arkoren.dev/core/application#Composer.UseInAny)
-invokes the callback at most once, even if several entries match.
-Selection is not access control: protect diagnostic endpoints before exposing
-them remotely, following [diagnostic endpoint protection](../observability/exposing-diagnostics.md).
+`UseDebug` reads the construction-time `Debug` flag, which defaults to false;
+environment and runtime log-level changes do not alter it. `UseIn` and `UseInAny`
+match the single application environment exactly, including custom values.
+`UseInAny` runs at most once; duplicate matches do not repeat it, and an empty
+slice skips it. See [environment settings](../first-steps/configuration.md#environment-settings)
+for configuration. Selection is not access control: protect
+[diagnostic endpoints](../diagnostics/capture-setup.md) separately.
 
-Call `Use`, its selectors, `Must`, `MustDefer`, and `Require` only during synchronous
-composition, not in startup, runners, cleanup, or spawned goroutines; calls
-outside composition panic with `ErrInvalidPhase`. For `Use` and its selectors,
-nil or typed-nil operations panic with `ErrNilFunc`, even when skipped.
-Skipping does not bypass a previously recorded failure.
-See the [`UseWhen` contract](https://pkg.go.dev/arkoren.dev/core/application#Composer.UseWhen)
-for these validation rules.
+Call `Use` and its selectors only during synchronous composition, never from
+startup, runners, cleanup, or spawned goroutines. Invalid phases panic with
+`ErrInvalidPhase`. Nil or typed-nil operations panic with `ErrNilFunc` even on
+skipped branches; skipping also cannot erase a recorded composition failure.
+Do not retain the composer for later container callbacks.
 
-## Keep larger composition boundaries explicit
-
-If a feature produces several related values, return a small named struct from
-its factory and pass individual fields to consumers. The bundle does not change
-ownership. Avoid a global bundle of every dependency: it hides what each
-consumer needs.
-
-If you already use a dependency injection container, construct and resolve it
-inside synchronous composition, then pass typed values to business code.
-Arkoren needs no adapter. Choose either the container or the application to
-start and close each resource, never both, and do not retain the composer for
-later container callbacks.
-
-For all composition methods, see the
+For every composition method, see the
 [`application` API reference](https://pkg.go.dev/arkoren.dev/core/application).
-A started resource is not necessarily usable now. Continue to
-[health and readiness](health-and-readiness.md) to make that distinction observable.

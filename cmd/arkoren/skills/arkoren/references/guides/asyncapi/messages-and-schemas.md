@@ -1,139 +1,154 @@
 ---
 title: Messages and Schemas
-description: Distinguish logical values from wire envelopes, attach examples, and choose a supported schema for each message.
+description: Describe complete wire messages, expose decoded payload shapes, and work within the supported Draft 7 schema profile.
 order: 20
+summary:
+  - Distinguish complete wire envelopes from their separately documented logical payloads.
+  - Attach fictional wire examples and match message media types to the actual transport.
+  - Choose schema providers within the supported Draft 7 profile without implying runtime validation.
 ---
 
 # Messages and Schemas
 
-## Introduction
+A subscriber receives transport bytes, not your publisher's Go struct. Describe
+that complete **wire payload** in the message schema. For Arkoren JSON envelopes,
+the typed helpers also expose a **logical payload** schema: the application value
+inside the envelope after decoding.
 
-A consumer needs the shape of the bytes it receives, not only the Go value your
-publisher started with. AsyncAPI message declarations describe the complete
-wire payload. The typed helpers also preserve the decoded application schema
-so readers can understand both layers.
+The examples reuse `Ready`, `ReportReady`, and the `reports` channel from the
+[overview](overview.md#shared-definitions). They use `asyncapi`, `broadcast`, and
+`validate` from `arkoren.dev/core/asyncapi`, `arkoren.dev/core/service/broadcast`,
+and `arkoren.dev/foundation/validate`.
 
-Start with the typed topic and `Document` in the
-[AsyncAPI overview](overview.md#generating-your-first-document). This page changes
-that declaration without repeating the broker and operation setup.
+## Wire and Logical
 
-## Understanding the wire envelope
-
-`JSONTopic` describes a JSON-encoded Arkoren broadcast envelope. For the
-`OrderCreated{OrderID: "ord-1"}` value, a wire payload can look like this:
-
-```json
-{
-  "name": "order.created",
-  "payload": "eyJvcmRlcl9pZCI6Im9yZC0xIn0="
-}
-```
-
-The `name` is the topic discriminator. The `payload` is a **base64 string**
-containing the JSON encoding of `OrderCreated`, not an inline object. The wire
-schema includes the name constant and optional envelope metadata. After base64
-decoding, the application value is:
+`JSONTopic("ready", Ready, validate.Infer[ReportReady]())` describes the JSON
+encoding of `broadcast.Message`. A minimal report announcement looks like this
+on the wire:
 
 ```json
 {
-  "order_id": "ord-1"
+  "name": "report.ready",
+  "payload": "eyJyZXBvcnRfaWQiOiJycHQtMSJ9"
 }
 ```
 
-`JSONTopic` separately stores that logical schema under
-`components.schemas["orders.created"]`: the component key combines the channel
-ID and message ID, not their transport names. The channel message includes this
-annotation:
+The `payload` string is base64-encoded JSON. Decode it to obtain the logical
+value `{"report_id":"rpt-1"}`. The wire schema requires `name` and `payload`,
+fixes `name` to `report.ready`, and also describes optional `id` and string-valued
+`metadata` fields. It does not replace the base64 string with the logical object.
+
+The helper puts the logical schema in
+`components.schemas["reports.ready"]`, using the channel ID and message ID, not
+the topic name or address. On the channel message it adds:
 
 ```json
 {
-  "x-arkoren-logical-payload": "#/components/schemas/orders.created"
+  "x-arkoren-logical-payload": "#/components/schemas/reports.ready"
 }
 ```
 
-This plain pointer string is an Arkoren annotation, **not a `$ref` object**.
-Neither it nor the wire schema's Draft 7 content annotations validates decoded
-base64 contents. A standard AsyncAPI viewer may not follow the annotation; read
-the referenced component separately for the decoded value's shape.
+This is a plain JSON Pointer string in an Arkoren annotation, not a `$ref`
+object. External viewers might not follow it. The wire schema's Draft 7
+`contentEncoding` and `contentMediaType` annotations do not decode or validate
+the base64 contents; read the logical component separately.
 
-`JSONJob` follows the same separation for queue envelopes. Its wire schema also
-contains the job name, logical queue, and delivery fields; see
-[Queues and Operations](queues-and-operations.md#documenting-two-jobs-on-one-queue).
+`JSONJob` uses the same separation for a queue message. It also describes job
+identity and delivery fields, as shown in
+[Queues and Operations](queues-and-operations.md#shared-queue-messages).
 
-## Adding a wire example
+## Wire Examples
 
-Examples help readers recognize a real delivery, but they must represent the
-whole envelope rather than only `OrderCreated`. With the overview's imports and
-`Created` topic, replace the original `JSONTopic` call with:
+Examples let consumers recognize deliveries, but they are exported data. Use
+fictional values and review schemas for internal field names before distributing
+the document. An inferred schema exposes the described fields even if examples
+omit them; inference is not a privacy filter.
+
+To attach a report announcement without manually encoding base64, prepare a real
+wire envelope. Import `encoding/json/v2` for the logical JSON encoding:
 
 ```go
-channel.JSONTopic("created", Created, validate.Infer[OrderCreated](), func(message *asyncapi.MessageBuilder) {
-	message.Summary("An order was created")
-	message.Description("Published after the order is committed.")
-	message.WireExample("created-order", map[string]any{
-		"name":    "order.created",
-		"payload": "eyJvcmRlcl9pZCI6Im9yZC0xIn0=",
-	})
+payload, err := json.Marshal(ReportReady{ReportID: "rpt-1"})
+```
+
+After successful encoding, construct the envelope with those bytes:
+
+```go
+example := broadcast.Message{
+	Name:    Ready.Name(),
+	Payload: payload,
+}
+```
+
+Use that value in place of the overview's original `JSONTopic` declaration,
+inside the `reports` channel callback:
+
+```go
+channel.JSONTopic("ready", Ready, validate.Infer[ReportReady](), func(message *asyncapi.MessageBuilder) {
+	message.Summary("A report is ready")
+	message.Description("Published after the report artifact is stored.")
+	message.WireExample("completed-report", example)
 })
 ```
 
-`WireExample` encodes and copies the value when declared. Examples are JSON
-documentation values and are not checked against the schema. Unsupported JSON
-values become deferred export errors. Keep private data out of examples.
+`WireExample` JSON-encodes and copies the whole envelope at declaration time, so
+its byte payload becomes the base64 string shown above. It does not check that
+the example satisfies the schema. Unsupported JSON values become deferred export
+errors. The description records an application promise; it does not arrange
+storage or publication ordering.
 
-The description records when your application publishes the message; it does not
-arrange publication after a commit. Keep that statement aligned with your runtime
-publisher.
+## Transport Media Types
 
-## Matching a transport's content type
-
-The default content type is `application/json`. If your transport advertises a
-different media type, override it to match. For example, Arkoren's MQTT transport
-advertises its JSON envelope as `application/octet-stream`; use this message
-callback instead:
+Messages default to `application/json`. If the transport advertises another
+media type for that same JSON envelope, set the message's content type to match.
+For example, Arkoren's MQTT transport advertises `application/octet-stream`:
 
 ```go
-channel.JSONTopic("created", Created, validate.Infer[OrderCreated](), func(message *asyncapi.MessageBuilder) {
+channel.JSONTopic("ready", Ready, validate.Infer[ReportReady](), func(message *asyncapi.MessageBuilder) {
 	message.ContentType("application/octet-stream")
 })
 ```
 
-This changes documentation, not transport bytes or headers. Use the typed helper
-only when your transport actually carries that JSON envelope.
+This is an alternative declaration, not a second registration of `ready`.
+`ContentType` changes metadata only; it neither changes the bytes nor configures
+transport headers. Do not use `JSONTopic` or `JSONJob` for a transport that carries
+a different wire representation.
 
-## Describing another wire format
+## Other Wire Formats
 
-An integration may send a text status instead of an Arkoren envelope. Use
-`Message` with the actual wire schema in an existing channel callback:
+An external integration might send a text status directly instead of an Arkoren
+envelope. In its channel callback, use `Message` with the actual wire schema:
 
 ```go
 channel.Message("status", asyncapi.RawSchema(`{"type":"string"}`), func(message *asyncapi.MessageBuilder) {
 	message.ContentType("text/plain")
-	message.WireExample("ready", "ready")
+	message.WireExample("completed", "ready")
 })
 ```
 
-This declares the text payload itself; there is no implicit Arkoren envelope or
-separate logical schema. Select `status` in the relevant operation's `Messages`
-call. For multiple raw messages on a channel, ensure their schemas distinguish
-possible wire values yourself; the exporter does not prove schema disjointness.
+This message describes the text itself, with no implicit envelope or separate
+logical component. Select `status` in the relevant operation's `Messages` call.
+If several raw messages share a channel, you must ensure their wire schemas
+distinguish them; the exporter does not prove that raw alternatives are disjoint.
 
-## Choosing a schema
+## Schema Providers
 
-Schema providers implement `JSONSchema() ([]byte, error)`. Published validation
-schemas and `validate.Infer[T]()` satisfy this interface. During `New`, each
-message declaration calls its non-nil provider once and immediately copies the
-returned bytes. Reusing a provider in several message declarations calls it once
-per declaration. Provider errors are retained for `JSON()` or the handler.
+A provider implements `JSONSchema() ([]byte, error)`. Published `validate`
+schemas and `validate.Infer[T]()` implement that interface. Each declaration
+calls its non-nil provider once during document construction and immediately
+copies the returned bytes. Sharing a provider across declarations calls it once
+per declaration. Errors are retained for `Document.JSON()` or the HTTP handler;
+nil and typed-nil providers are errors rather than empty schemas.
 
-Every provider's output must fit the supported, self-contained Draft 7 subset.
-Schema acceptance does not prove equivalence to runtime validation:
-normalization, cross-field rules, custom encoders, and domain checks still need
-review. The exporter does not perform instance validation or fetch schemas.
+All providers must produce the same supported, self-contained Draft 7 profile.
+Implementing the interface alone does not make a schema acceptable. See
+[Validation's JSON Schema guide](../validation/json-schema.md) for export and
+inference limits, including omitted rules and custom JSON encoders. A schema
+accepted here does not prove equivalence to runtime validation, normalization,
+or domain checks. Providers must not perform network resolution.
 
-`RawSchema` accepts object and boolean schemas, composition, and Draft 7 tuple
-`items`. For example, a raw message can accept either a nonempty identifier or
-an integer status code:
+For a raw alternative, `RawSchema` accepts object or boolean schemas, including
+composition. This message permits a nonempty text result or an integer code:
 
 ```go
 channel.Message("result", asyncapi.RawSchema(`{
@@ -144,39 +159,39 @@ channel.Message("result", asyncapi.RawSchema(`{
 }`))
 ```
 
-The keyword gate checks schema-bearing positions and keyword shapes, not
-satisfiability. `$ref`, `$id`, definitions, unknown non-extension keywords, and
-other dialects are rejected; even Draft 7 `dependencies` is unsupported.
-Arbitrary Draft 2020-12 schemas are not converted. Do not relabel a newer schema
-as Draft 7 to bypass these limits. If present, `$schema` must be
-`http://json-schema.org/draft-07/schema#`.
+The exporter checks keyword shapes in schema positions, not satisfiability or
+instance validity. Exported message payloads use an explicit Multi Format Schema
+Object with `schemaFormat: "application/schema+json;version=draft-07"`.
 
-`x-` extension contents and values inside `default`, `const`, `enum`, and
-`examples` remain opaque data, not nested schemas. Formats and patterns are
-annotations here, not executed constraints. Exported messages use an explicit
-Multi Format Schema Object with `application/schema+json;version=draft-07`.
+## Draft 7 Profile
 
-### Supported Draft 7 profile
+Use this accepted keyword profile when preparing a provider or raw schema:
 
-Use this profile when preparing a raw schema or checking a provider's output.
-It describes accepted declaration shapes, not runtime instance validation:
-
-| Group | Keywords |
+| Purpose | Accepted Keywords |
 | --- | --- |
 | Types and values | `type`, `enum`, `const` |
 | Objects | `properties`, `patternProperties`, `additionalProperties`, `propertyNames`, `required`, `minProperties`, `maxProperties` |
-| Arrays | `items` (schema or nonempty tuple), `additionalItems`, `contains`, `uniqueItems`, `minItems`, `maxItems` |
-| Composition and conditions | `allOf`, `anyOf`, `oneOf`, `not`, `if`, `then`, `else` |
+| Arrays | `items`, `additionalItems`, `contains`, `uniqueItems`, `minItems`, `maxItems` |
+| Composition | `allOf`, `anyOf`, `oneOf`, `not`, `if`, `then`, `else` |
 | Numbers | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` |
 | Strings | `minLength`, `maxLength`, `pattern`, `format`, `contentEncoding`, `contentMediaType` |
-| Documentation | `title`, `description`, `default`, `examples`, `readOnly`, `writeOnly`, `$comment` |
+| Annotations | `title`, `description`, `default`, `examples`, `readOnly`, `writeOnly`, `$comment` |
 | Dialect and extensions | `$schema`, any `x-` keyword |
 
-Composition arrays must be nonempty, counts nonnegative integers, and
-`multipleOf` positive. Newer features such as `$defs`, `prefixItems`, and
-`contentSchema` are rejected in schema positions. The gate does not execute
-constraints or decode encoded content.
+`items` accepts a schema or a nonempty Draft 7 tuple. Composition arrays must be
+nonempty, counts must be nonnegative integers, and `multipleOf` must be positive.
+If supplied, `$schema` must equal `http://json-schema.org/draft-07/schema#`.
 
-For message options, run `go doc arkoren.dev/core/asyncapi.MessageBuilder`
-in your application's module, or see the
-[`asyncapi` source reference](https://pkg.go.dev/arkoren.dev/core/asyncapi).
+References and identifiers (`$ref`, `$id`), definitions, `dependencies`, unknown
+non-extension keywords, and newer-dialect features such as `$defs`, `prefixItems`,
+and `contentSchema` are rejected in schema positions. No schema fetching,
+reference resolution, or conversion from Draft 2020-12 occurs. Changing a dialect
+label does not convert a schema.
+
+Contents of `x-` extensions and data inside `default`, `const`, `enum`, and
+`examples` remain opaque. Property names are not interpreted as keywords.
+Formats and patterns are annotations here: the exporter neither executes them
+nor converts regular expressions for another validator.
+
+For message and schema options, see the
+[`asyncapi` API reference](https://pkg.go.dev/arkoren.dev/core/asyncapi).

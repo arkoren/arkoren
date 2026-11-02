@@ -1,229 +1,146 @@
 ---
 title: Language Models Overview
 nav: Overview
-description: Create a model, run an agent, generate a single turn, keep a conversation, handle errors, and see what is reported.
+description: Generate a model reply and distinguish response data, agent execution, and application-owned conversation state.
 order: 10
+summary:
+  - Generate one reply through a configured model without running tools automatically.
+  - Interpret stop reasons, token caps, and provider failures before accepting an answer.
+  - Observe usage and outcomes without recording prompt or tool contents.
 ---
 
 # Language Models Overview
 
-## Introduction
+A language model receives a conversation and produces its next message. Use
+`*llm.Model` to send those requests through a driver with shared defaults,
+validation, events, and telemetry. Configure a hosted or local connection in
+[Drivers](drivers.md); the examples here assume a configured `driver`, a model
+ID in `modelID`, and an operation context `ctx`.
 
-When your service needs to summarize a ticket or answer a question, you send a
-conversation to a language model and receive its next message. The model may
-ask your code to run a tool before it can answer. The server can be hosted by a
-vendor or run locally. Arkoren models these calls as the `llm` contract. A `Driver` performs one
-model turn against a vendor, and the `*llm.Model` facade wraps it with the
-model ID, defaults, validation, telemetry, and events. Your calling code uses the
-same request types for hosted and local servers. Switching servers changes the
-driver configuration and model ID; check the [driver compatibility matrix](drivers.md#compatibility-matrix)
-before relying on the same tools, schemas, or media inputs.
+The model does not store a conversation or execute requested tools by itself.
+Your application owns [conversation history](conversation-history.md). An
+[agent](running-agents.md) adds the repeated turns needed to execute tools and
+validate a final answer. [Embeddings](embeddings.md) use a separate facade for
+vectors rather than generated replies.
 
-The facade retains no conversation state: you keep the slice of messages, so
-you can store, trim, and test it. `Generate` performs one turn without facade
-retries. An agent manages repeated turns and tool calls for you; start with the
-text agent below, then add [tools](agents-and-tools.md) when it needs application
-data or [structured output](structured-output.md) when your code needs typed
-fields rather than prose.
+Focused examples show error results but omit routine propagation. Handle errors
+before using results in your application. Import `llm` from
+`arkoren.dev/core/service/llm`; the snippets also use standard `fmt` and `errors`.
 
-To display progress instead of waiting for the complete answer, use
-[streaming](streaming.md). For similarity search rather than generated replies,
-use the separate [embedding facade](embeddings.md).
+## Generating Replies
 
-## Creating a model
-
-Start in a Go module with Go 1.27 or later and install both modules:
-
-```sh
-go get arkoren.dev/core arkoren.dev/driver/openai
-```
-
-For the hosted path below, you need an OpenAI API key, network access to OpenAI,
-and access to the chosen model (`gpt-5.2` here). Calls may incur provider charges.
-Set `OPENAI_API_KEY` in your environment before running your code. For a local
-server without an OpenAI key, follow [Local Development with Ollama](local-development-with-ollama.md)
-instead. Keep keys out of source control.
-
-The OpenAI driver speaks to OpenAI and compatible APIs. These imports are used
-by the examples on this page:
+To summarize a maintenance notice, create a reusable model and send one user
+message. Use the incoming request context in an HTTP handler, or a bounded
+command context, so cancellation reaches the provider.
 
 ```go
-import (
-	"context"
-	"errors"
-	"fmt"
-
-	"arkoren.dev/core/service/llm"
-	"arkoren.dev/driver/openai/openaillm"
-)
-```
-
-Create a driver and wrap it with the model ID:
-
-```go
-driver, err := openaillm.New() // reads OPENAI_API_KEY
-
-model := llm.New(driver, "gpt-5.2")
-```
-
-`New` does no I/O, so a wrong key or an unreachable server shows up on the
-first call. To check at startup, register the driver's `Ping` as a
-[health check](../application/health-and-readiness.md). Build the model once and
-share it; it is safe for concurrent use when its driver and shared callbacks are.
-The model ID is required, and `Request.Model` overrides it for one call. [Language Model
-Drivers](drivers.md) lists the options of the driver.
-
-Focused examples keep error results visible but omit routine error handling.
-Check errors before using results in your application.
-
-## Running an agent
-
-The simplest way to get an answer is an agent that returns text. An agent is a
-package-level definition: a name, instructions, and optionally tools and an
-output type. Declare this definition outside your calling function:
-
-```go
-var assistant = llm.NewAgent("assistant", func(agent *llm.AgentBuilder[string]) {
-	agent.Instructions("Answer in one short sentence.")
+model := llm.New(driver, modelID)
+reply, err := model.Generate(ctx, llm.Request{
+	Instructions: "Summarize the notice in one sentence.",
+	Messages: []llm.Message{
+		llm.UserText("Search will be unavailable Sunday from 02:00 to 02:15 UTC."),
+	},
 })
 ```
 
-With `model` from the setup above, call the agent from your function. Here
-`context.Background()` is suitable for a command; in an HTTP handler, use the
-incoming request's context so disconnects cancel the call:
+`Generate` performs one turn without facade retries. The reply's message can
+contain text, reasoning, or tool requests; it is not necessarily a final answer.
+To display its text parts:
 
 ```go
-ctx := context.Background()
-result, err := model.Run(ctx, assistant, []llm.Message{
-	llm.UserText("Why is the sky blue?"),
-})
-fmt.Println(result.Text)
-```
-
-`result.Messages` is the input plus every message the run added. Store it and
-pass it back with a new user message to continue the conversation:
-
-```go
-history := append(result.Messages, llm.UserText("And at sunset?"))
-followup, err := model.Run(ctx, assistant, history)
-```
-
-On success, `result.Text` contains the first answer and `followup.Text` contains
-the answer with the earlier conversation included. The wording varies by model.
-
-A `Message` encodes to JSON with a `"type"` tag on every part, so history
-round-trips through `json.Marshal` and `json.Unmarshal` from `encoding/json/v2`
-and can live in your database. Images and PDFs are parts too:
-`llm.User(llm.Text{Text: "What is this?"}, llm.Image{URL: url})`.
-
-`llm.User(parts...)` copies the outer parts slice, so replacing an element in
-your original slice does not change the constructed message. It does not copy
-nested buffers such as `Image.Data`, `Document.Data`, or `ToolCall.Arguments`.
-Finish configuring those buffers before submitting a request, and do not mutate
-messages or their buffers during a call or while consuming a stream.
-
-## Generating one turn
-
-If your application already controls the conversation or handles tool calls
-itself, you may not need an agent to manage the loop. `Generate` gives you one
-model response to one request, without running further turns:
-
-```go
-response, err := model.Generate(ctx, llm.Request{
-	Instructions: "Answer in one short sentence.",
-	Messages:     []llm.Message{llm.UserText("Why is the sky blue?")},
-})
-for _, part := range response.Message.Parts {
+for _, part := range reply.Message.Parts {
 	if text, ok := part.(llm.Text); ok {
 		fmt.Println(text.Text)
 	}
 }
 ```
 
-`response.StopReason` says why the turn ended: `StopEndTurn`, `StopToolUse`,
-`StopMaxTokens`, `StopRefusal`, or `StopContentFilter`. `Generate` returns a
-truncated or refused reply as a successful call, because the reply is still
-data. `Run` is stricter: a final `StopMaxTokens` becomes `llm.ErrTruncated`, and
-a refusal or filtered reply becomes `llm.ErrRefused`.
+The wording depends on the model. A requested tool is data in this response,
+not an executed application action. Use [Running Agents](running-agents.md) when
+Arkoren should manage that loop, or [Streaming Replies](streaming.md) to display
+fragments as they arrive.
 
-### Limiting output
+## Reading Outcomes
 
-If calls need a shared output-token budget, set it when constructing the model:
+Check `reply.StopReason` before treating the reply as complete:
+
+| Reason | Meaning |
+| --- | --- |
+| `llm.StopEndTurn` | The model ended its turn. |
+| `llm.StopToolUse` | The model requested tool execution. |
+| `llm.StopMaxTokens` | The output limit stopped the reply. |
+| `llm.StopRefusal` | The model refused. |
+| `llm.StopContentFilter` | A content filter stopped the reply. |
+
+`Generate` returns truncated and refused replies as successful response data.
+Agent runs instead return `llm.ErrTruncated` or `llm.ErrRefused` for those
+outcomes, before tool execution or final-output decoding.
+
+## Setting Defaults
+
+If all calls need an output cap, publish it with the model:
 
 ```go
-model := llm.New(driver, "gpt-5.2", func(generation *llm.ModelBuilder) {
-	generation.MaxTokens(2048)
+model := llm.New(driver, modelID, func(model *llm.ModelBuilder) {
+	model.MaxTokens(1024)
 })
 ```
 
-This supplies the cap when a request or run sets none. Without it, the provider's
-default applies. Reaching the cap can truncate the reply; inspect the stop reason
-or agent error described above rather than assuming the answer is complete.
+A request's positive `MaxTokens` overrides that fallback; zero leaves it to the
+facade default, then the provider. This cap applies to each turn, not the total
+tokens of an agent run. Reaching it can leave incomplete output.
+`Request.Model` similarly overrides the facade's model ID for one request.
 
-## Errors
+Construction does no I/O. An empty model ID or nil driver is reported when you
+call the facade. Share the model when its driver and shared callbacks support
+concurrent use; the acquiring owner manages the driver's lifetime separately.
+Construction callbacks publish copied settings, not a reconfigurable facade.
 
-Drivers map vendor failures onto sentinel errors that you match with
-`errors.Is`, and the vendor's own error stays in the chain:
+## Handling Failures
+
+Drivers preserve provider errors while adding portable sentinels. Match them
+with `errors.Is`, rather than parsing a diagnostic:
 
 ```go
 switch {
-case errors.Is(err, llm.ErrRateLimited), errors.Is(err, llm.ErrUnavailable):
-	// try again later
 case errors.Is(err, llm.ErrContextLength):
-	// shorten the history
+	// Trim the conversation before another attempt.
+case errors.Is(err, llm.ErrRateLimited), errors.Is(err, llm.ErrUnavailable):
+	// Apply your application's retry or fallback policy.
 case errors.Is(err, llm.ErrRefused):
-	// the model declined to answer
+	// Return an application-approved refusal response.
 }
 ```
 
-The facade does not retry failed provider requests, and the OpenAI driver's SDK
-retries are off by default. A rate limit or a 5xx is the moment to decide whether
-to wait, switch to another model, or fail the request, and that depends on your
-application. Send the call from a [queue](../queues/overview.md) job when a
-retry should survive a restart. The full list of sentinels is in the
-[`llm` API reference](https://pkg.go.dev/arkoren.dev/core/service/llm).
+The facade does not retry provider failures. The OpenAI driver's SDK retries
+also default to off. Decide whether another attempt is safe, especially after
+an agent has performed tool effects; cancellation cannot undo those effects.
 
-## Usage, events, and telemetry
+## Observing Calls
 
-Every response carries `Usage`: input, output, cache, and reasoning tokens. A
-count the vendor does not report stays 0. `Run` sums usage across its steps in
-`Result.Usage`.
+`Response.Usage` reports input, output, cache, and reasoning tokens. Counts the
+provider omits stay zero. `Result.Usage` sums the turns of an agent run.
 
-With `llm.ModelBuilder.Events(bus)` standalone turns publish response events and
-agent runs publish agent and tool events instead. An embedder has its own event
-setting. A consumer-stopped stream publishes no operation outcome, even if the
-consumer stops at `Done`; [streaming outcomes](streaming.md#stopping-a-stream)
-explains the distinction from a provider failure.
-[Built-in Events](../events/built-in-events.md#language-models) lists the topics.
-With telemetry set, calls produce spans and metrics that follow the OpenTelemetry
-generative AI conventions: a `chat {model}` span per turn, `invoke_agent` and
-`execute_tool` spans around agents. Prompts, replies, tool arguments, and tool
-results are never recorded by telemetry. Event payloads omit those contents and
-raw errors. `ResponseFailedEvent`, `EmbeddingsFailedEvent`, and `AgentFailedEvent`
-expose `ErrorType` instead of the former `Err` field. Update listeners to compare
-that string rather than call `errors.Is` on a payload error. Its value is a
-package sentinel name such as `llm.ErrRateLimited`, a context classification
-(`context.Canceled` or `context.DeadlineExceeded`), or `unknown` for an
-unrecognized failure. Context errors take precedence; execution policy failures
-otherwise use `llm.ErrToolAvailability` rather than their `ErrPermanent` wrapper.
+Set `ModelBuilder.Events(bus)` to publish standalone response outcomes and agent
+or tool outcomes. Agent turns do not also publish standalone response events.
+An embedder has its own event setting. See [built-in LLM events](../events/built-in-events.md#language-models)
+for payloads and topics, and [stream outcomes](streaming.md#stopping-streams)
+for consumer stops.
 
-If a panic unwinds an operation whose observation has begun, Arkoren finalizes
-that observation with the bounded telemetry class `llm.interrupted`. It does not
-record the panic's value, type, or text, convert the panic to an error, or invent
-a success or failure event for the interrupted operation. The panic still
-propagates; observations that completed before it are not retracted. This is not
-panic recovery, especially for [tool goroutines](agents-and-tools.md#errors-a-tool-returns).
+Telemetry creates `chat {model}` spans, with `invoke_agent` and `execute_tool`
+spans for agent execution. Prompts, replies, tool arguments, and tool results
+are absent from telemetry and event payloads. Failure events carry bounded
+`ErrorType` values rather than raw errors: a sentinel name, `context.Canceled`,
+`context.DeadlineExceeded`, or `unknown`. Context classifications take precedence;
+execution-policy failures otherwise use `llm.ErrToolAvailability`, not their
+`ErrPermanent` wrapper.
 
-Errors returned from the operation still preserve their original causes and can
-contain vendor, tool, policy, or schema diagnostics. Review them before forwarding
-them to logs or clients; bounded event classifications do not sanitize returned
-errors or your saved conversation. Auditing what users asked belongs in your own
-code. See [Events](../events/overview.md)
-and [Telemetry](../observability/telemetry.md) for how both work.
+A panic still propagates. An observation it unwinds ends with telemetry class
+`llm.interrupted`, without panic data or an invented outcome event. Previously
+completed observations remain published; this is not panic recovery.
 
-## Testing
+Returned errors and saved history can still contain provider, tool, policy, or
+schema diagnostics. Review them before logging or returning them to a client.
+Bounded event classifications do not sanitize application-owned data.
 
-Use a scripted fake for repeatable application tests. Keep live-provider checks
-separate and opt-in; [Testing Language Models](testing.md) shows both boundaries.
-
-For every function and option, see [the `llm` API reference](https://pkg.go.dev/arkoren.dev/core/service/llm).
+For all functions and options, see the [llm API reference](https://pkg.go.dev/arkoren.dev/core/service/llm).

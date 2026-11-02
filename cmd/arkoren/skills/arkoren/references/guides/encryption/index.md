@@ -1,6 +1,6 @@
 ---
 title: Encryption
-description: Encrypt values that must be read back, store them, and manage and rotate the keys.
+description: Encrypt recoverable values, choose a local cipher, rotate keys, and persist authenticated records.
 order: 73
 section: Security
 ---

@@ -1,74 +1,79 @@
 ---
 title: Abuse Prevention Overview
 nav: Overview
-description: Combine request limits and CAPTCHA verification to protect sensitive operations without treating either as identity or permission.
+description: Choose request budgets and browser verification for sensitive endpoints without confusing abuse checks with permission.
 order: 10
+summary:
+  - Distinguish request budgets, browser verification, authentication, and permission checks.
+  - Place inexpensive rejections before external verification and protected effects.
+  - Test denial and outage paths without exposing tokens or client keys.
 ---
 
 # Abuse Prevention Overview
 
-## Introduction
+A public contact form can receive valid input faster than your application can
+process it. Abuse prevention controls how much work a caller can trigger and
+whether a browser submission needs additional verification. Choose these controls
+for the operation you are protecting, rather than applying one policy to every request.
 
-Public forms and login endpoints receive automated submissions as well as
-legitimate traffic. Abuse prevention limits how much work a caller can trigger
-and adds checks before sensitive operations. Use rate limiting to control
-request volume and CAPTCHA to evaluate a provider-issued browser token.
+## Choose Controls
 
-Neither control replaces [authentication](../authentication/overview.md),
-[authorization](../authorization/overview.md), or
-[CSRF protection](../browser-security/csrf-protection.md). A caller within a
-rate limit or holding an accepted CAPTCHA token still needs permission for
-the operation.
+Use [rate limiting](rate-limiting.md) to give callers a request budget over a time
+window. The cache-backed middleware rejects requests over that budget before
+calling the protected handler. It counts admitted attempts, not successful
+business outcomes: an attempt can consume budget even if the handler later fails.
 
-## Start with request limits
+Add [CAPTCHA verification](captcha.md) when a browser submission needs another
+abuse signal. Cloudflare Turnstile verifies a token against your hostname and
+action policy. Google reCAPTCHA returns a risk score as well; your application
+chooses whether to accept that score, deny the submission, or require another factor.
 
-Apply [body limits](../http-fundamentals/body-limit.md) before reading request
-bodies and [content-type checks](../http-fundamentals/content-type.md) before
-decoding them. These checks bound input size and reject representations your
-endpoint does not accept. They do not determine whether a submission is genuine.
+Neither control establishes [identity](../authentication/overview.md) or grants
+[permission](../authorization/overview.md). An authenticated user can exceed an
+abuse budget, and an accepted CAPTCHA token does not authorize access to another
+user's data. Browser session endpoints still need the appropriate
+[CSRF protection](../browser-security/csrf-protection.md).
 
-Add [rate limiting](rate-limiting.md) before expensive work such as password
-hashing or external token verification. Choose limits for the operation:
-login attempts and a public read-only endpoint need different budgets.
-Use distinct key prefixes when policies should count separately.
+## Place Checks
 
-A client key defines who shares a budget. IP-based limits can group unrelated
-visitors behind one network; user-based limits need authentication first.
-Behind a proxy, configure trusted proxy networks instead of trusting arbitrary
-forwarded headers. Use a shared cache across replicas so each process does not
-grant a separate budget. Cache failures fail the request rather than allowing
-it through.
+For a JSON contact submission, reject an unsupported
+[content type](../http-fundamentals/content-type.md) and bound the
+[body size](../http-fundamentals/body-limit.md) before decoding. Apply a rate
+budget before expensive work, including external CAPTCHA calls. Decode and
+validate the contact input, verify its token once, then perform the contact effect.
+Follow [middleware ordering](../http-fundamentals/middleware.md#order-policies)
+and [scope selection](../http-fundamentals/middleware.md#choose-scope) when placing
+those checks on your routes.
 
-## Add browser verification where needed
+The budget's key determines who shares it. An IP key can group unrelated people
+behind one network; an account key requires authentication before the limiter.
+Behind a reverse proxy, trust only the proxy networks you control, not arbitrary
+forwarded headers. Separate unrelated budgets with distinct cache names, and use
+a shared backend when replicas must consult the same counters. Backend failures
+stop the protected request; they do not disable the limiter.
 
-Use [CAPTCHA](captcha.md) when a public browser operation needs an additional
-abuse signal, such as a contact submission or account registration. Obtain a
-token for that operation and verify it on the server before performing the
-side effect. Cloudflare Turnstile provides an accepted-or-rejected token check;
-Google reCAPTCHA returns a risk assessment that needs an application-owned
-score policy.
+For CAPTCHA, choose handler verification when the token is part of JSON. Use the
+optional header middleware instead when the token arrives separately. Do not use
+both for one token: verification consumes a single-use credential. If verification
+fails or its outcome is unknown, stop the effect and obtain a fresh token for a
+later attempt, rather than retrying the same verification.
 
-For JSON submissions, decode and validate in the handler, then verify the token
-once. Header-based tokens can instead use the optional route middleware.
-Choose one path: tokens are single-use, so middleware and the handler must not
-both verify the same token. Apply size, content-type, and rate checks before
-contacting the provider to avoid spending external calls on requests you can
-already reject.
+A fresh token does not make a repeated submission safe. Keep duplicate-effect
+handling in the business operation; neither rate limiting nor CAPTCHA promises
+exactly-once execution. Likewise, [signed links](../http-capabilities/secure-links.md)
+protect URL integrity and expiry, not request volume or general permission.
 
-If verification fails or the provider is unavailable, do not perform the
-protected operation. Ask for a fresh token on another attempt rather than
-retrying the same verification. CAPTCHA does not make an operation idempotent;
-prevent duplicate business effects separately.
+## Check Rejections
 
-## Check the protected operation
+Test that an over-budget request never reaches the handler, and that CAPTCHA
+rejection or provider unavailability leaves the protected effect untouched. For
+Google, include a valid token whose score fails your policy. Exercise different
+client keys and the backend failure path, not only successful requests.
 
-Test each rejection path and assert that it leaves the protected side effect
-untouched. Exercise rate-limit keys and shared counters, and test rejected,
-expired, and unavailable CAPTCHA responses. For Google, also test a valid
-assessment below your score threshold.
+Use [request logging](../observability/request-logging.md) for request outcomes
+and [cache monitoring](../cache/monitoring.md) for backend failures. Keep browser
+tokens and credentials out of logs. Client keys and concrete URL paths can also
+identify people or resources; restrict and redact them before export.
 
-Use [request logging](../observability/request-logging.md) and
-[built-in events](../events/built-in-events.md#http) to investigate denials
-without logging browser tokens or credentials. Begin with the
-[rate limiting guide](rate-limiting.md), then add [CAPTCHA verification](captcha.md)
-where the operation needs it.
+Start with a [route budget](rate-limiting.md), then add
+[browser verification](captcha.md) where that operation needs it.

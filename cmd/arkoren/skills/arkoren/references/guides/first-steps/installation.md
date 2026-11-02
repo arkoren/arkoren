@@ -1,160 +1,147 @@
 ---
 title: Installation
-description: Bootstrap a project with the Arkoren CLI and add modules as you need them.
+description: Choose Arkoren modules and add a capability to an existing Go application without changing its structure.
 order: 10
+summary:
+  - Check the Go requirement and select the module that owns your dependency.
+  - Install core, independent foundation libraries, or vendor integrations as needed.
+  - Adopt a cache without replacing your router, entry point, or dependency wiring.
 ---
 
 # Installation
 
-## Introduction
+Add the Arkoren capability your application needs, keeping your existing packages
+and entry point. You do not need the CLI, a generated project, an Arkoren router,
+or `application.Application` to use a library or service facade.
 
-Arkoren is not a single dependency. It is a set of Go modules that you add to
-your project one at a time, as you need them. A service that only serves HTTP
-needs the core module. A service that also stores data in PostgreSQL adds the
-PostgreSQL driver module. Go downloads those modules and their dependencies;
-only packages your program imports, directly or indirectly, are compiled into
-your binary.
+For a new HTTP service with bootstrap files, use [Creating Projects](creating-a-project.md)
+after checking the requirements below. Installation itself does not generate an application.
 
-For a new service, start with `arkoren new` as shown below. This page also
-explains how to add individual modules to an existing project. The
-[Quickstart](quickstart.md) extends the generated service with a route, a cache
-counter, and error responses.
+## Go Requirements
 
-## Requirements
-
-Arkoren requires **Go 1.27** or later. The core packages use generic methods,
-which earlier Go versions do not support. Check your version with:
+Use Go 1.27 or later. Check the toolchain before adding dependencies:
 
 ```sh
 go version
 ```
 
-The core module has no other requirements: it depends only on the standard
-library and on Arkoren's own foundation modules. Drivers have the
-requirements of the systems they talk to. A PostgreSQL driver needs a
-PostgreSQL server to connect to, for example, and each driver's guide explains
-local setup when a local backend is supported.
+Run installation commands from the directory containing your application's
+`go.mod`. In a repository with several Go modules, choose the module that will
+import the package. If you have no module yet, create one in your application's
+directory with `go mod init example.com/your-app`, using your intended module path.
 
-## Creating a project
+Core has no external-service prerequisite. Vendor integrations can require a
+running backend, credentials, or native dependencies; follow the relevant
+[driver guide](../drivers/choosing-a-driver.md) before connecting one.
 
-Install the [Arkoren CLI](../cli/overview.md#installing-the-cli), then run this
-from the directory that will contain your new project:
+## Choosing Modules
 
-```sh
-arkoren new hello --module example.com/hello
-cd hello
-```
+`arkoren.dev` is an import namespace, not a module you install. Choose the module
+that contains the package you want:
 
-The command writes an HTTP service with configuration, health probes, lifecycle
-wiring, and debug-only MCP route diagnostics, but no tests. It does not download
-dependencies. Resolve imports and check the code from the project root:
+| Need | Module | Example Import |
+| --- | --- | --- |
+| HTTP, application lifecycle, or service facades | `arkoren.dev/core` | `arkoren.dev/core/service/cache` |
+| An independent library | `arkoren.dev/foundation/<name>` | `arkoren.dev/foundation/validate` |
+| A vendor integration | `arkoren.dev/driver/<vendor>` | `arkoren.dev/driver/redis/rediscache` |
 
-```sh
-go get arkoren.dev/core arkoren.dev/driver/mcp
-go mod tidy
-go vet ./...
-```
-
-Then follow the [Quickstart](quickstart.md#your-first-application) to test your
-first request.
-
-For previews, directory safety, and direct composition, see
-[Creating a Project](creating-a-project.md).
-
-## How the modules are named
-
-Every Arkoren import path starts with `arkoren.dev`. The domain is a namespace,
-not a module: there is no `arkoren.dev` module to install. Below it, the
-modules fall into three families.
-
-The **core** module is `arkoren.dev/core`. One `go get` gives you every core
-package: the application lifecycle in `arkoren.dev/core/application`, the HTTP
-packages under `arkoren.dev/core/http/` (such as `router`, `server`,
-`request`, `response`, and the middleware under `http/middleware/`), and the
-services under `arkoren.dev/core/service/` (such as `cache`, `database`,
-`queue`, and `mail`) and their test helpers. Most services include a memory
-driver; the database uses SQLite for local tests, mail has a log driver, and
-language models use a scripted fake.
-
-The **foundation** modules are small libraries that do not depend on the rest
-of Arkoren: `arkoren.dev/foundation/certificate`, `arkoren.dev/foundation/collection`,
-`arkoren.dev/foundation/key`, `arkoren.dev/foundation/problem`,
-`arkoren.dev/foundation/query`, and `arkoren.dev/foundation/validate`. Each one is
-a module of its own and can be used without core. Installing core brings its
-foundation dependencies automatically; add independent modules such as
-[`certificate`](../http-networking/certificates.md) explicitly when your
-application imports them.
-
-The **driver** modules connect a service to a vendor. There is one module per
-vendor, named `arkoren.dev/driver/<vendor>`, and one package inside it per
-service the vendor supports, named `<vendor><service>`. For example, the Redis
-module `arkoren.dev/driver/redis` contains `rediscache` for the cache and
-`redisbroadcast` for broadcasting. Because the package name always combines
-the vendor and the service, it never collides with the service package
-(`cache`) and you never need an import alias:
-
-```go
-import (
-	"arkoren.dev/core/service/cache"
-	"arkoren.dev/driver/redis/rediscache"
-)
-```
-
-## Installing the core
-
-Add the core module from the root of your Go module:
+To use a core package, add core:
 
 ```sh
 go get arkoren.dev/core
 ```
 
-This is the only module most services need to begin with. It includes an
-in-process memory driver for most services, so you can build and test a
-complete application before you pick any infrastructure.
+This includes the core service contracts and their bundled local implementations,
+including the memory cache. It does not start services or require that you use
+other core packages. Go compiles only packages reachable through your imports.
 
-## Installing drivers
-
-When you are ready to connect a service to real infrastructure, add the
-vendor's module. To store data in PostgreSQL and cache it in Redis, for
-example:
-
-```sh
-go get arkoren.dev/driver/postgres
-go get arkoren.dev/driver/redis
-```
-
-Installing a vendor module gives you every package in it, but only the
-packages you import are compiled into your binary. Each vendor module brings
-in that vendor's client library, such as `pgx` for PostgreSQL or `go-redis`
-for Redis; that is the reason drivers live outside the core.
-
-[Choosing a driver](../drivers/choosing-a-driver.md) lists every service and
-the drivers available for it.
-
-Some driver modules serve a protocol rather than connect to infrastructure.
-To expose MCP tools, add the `arkoren.dev/driver/mcp` module alongside core:
-
-```sh
-go get arkoren.dev/driver/mcp
-```
-
-This module contains `mcpserver`, an HTTP handler backed by
-the official Go MCP SDK. [Your First MCP Server](../mcp/first-server.md) covers
-the complete installation, listener, and client connection.
-
-## Installing foundation modules on their own
-
-If you only need one of the foundation libraries, for example the validation
-package in a command-line tool, install it directly:
+Foundation libraries are independent modules. If you need validation without
+core, install it directly:
 
 ```sh
 go get arkoren.dev/foundation/validate
 ```
 
-## Next steps
+Each foundation module uses only the standard library. When core already requires
+a foundation library, Go resolves that dependency automatically.
 
-The [Quickstart](quickstart.md) walks you through creating and extending a
-service with the CLI: routes, JSON responses, a cache counter, error responses,
-health probes, and graceful shutdown. If you use a coding agent, also install the
-documentation as an agent skill, as described in
-[Working with Agents](../agent-skills/working-with-agents.md).
+Add a vendor module when your application needs its implementation. For example,
+a shared Redis cache uses:
+
+```sh
+go get arkoren.dev/driver/redis
+```
+
+The module contains vendor-specific packages such as `rediscache`, rather than
+replacing the core `cache` package. Installing it does not configure credentials,
+connect to Redis, or register cleanup. [Cache Drivers](../cache/drivers.md) owns
+that setup. Integrations marked pending in the driver guides are unpublished;
+do not infer an installation command from their proposed package names.
+
+## Existing Applications
+
+Keep dependency construction wherever your application already does it. A cache
+has a **facade**, which application code calls, and a **driver**, which stores
+the values. With these imports, construct a process-local cache:
+
+```go
+import (
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
+)
+```
+
+The construction needs no network service or credentials:
+
+```go
+driver := memorycache.New()
+store := cache.New(driver)
+```
+
+Pass `store` to the code that needs it through your existing constructors or
+struct fields. A library can accept a caller-supplied cache instead of creating
+one. Neither approach requires changes to your HTTP stack.
+
+To cache a rebuildable display label, define its value type and write it using
+an existing operation context `ctx`. Import `time` for the expiry:
+
+```go
+label := cache.NewKey[string]("catalog.label.featured", func(entry *cache.KeyBuilder) {
+	entry.TTL(time.Minute)
+})
+err := store.Put(ctx, label, "Featured Items")
+```
+
+The key supplies the exact storage name, `string` value type, and one-minute write
+TTL. Check `err` in application code. The guides' focused fragments keep routine
+error results visible without repeating propagation; complete runnable examples
+handle their errors.
+
+The memory driver's constructor starts no goroutines. Expired entries are not
+returned even without its optional expiry janitor. Values disappear on process
+exit and are not shared between replicas, so this is not durable storage. If you
+start the janitor or adopt a network driver, the code that owns the driver must
+also stop it; see [Cache Drivers](../cache/drivers.md).
+
+Continue with [Cache Overview](../cache/overview.md) for reads and misses, or
+[Key Definitions](../cache/keys.md) for reusable names and expiry policies.
+
+## Optional Tooling
+
+The CLI is separate from runtime dependencies. Install it if you want project
+generation, bundled documentation, or diagnostics commands:
+
+```sh
+go install arkoren.dev/cmd/arkoren@latest
+```
+
+Alternatively, pin it as a tool in your application's module:
+
+```sh
+go get -tool arkoren.dev/cmd/arkoren@latest
+```
+
+Use `go tool arkoren` for the module-tool installation. For executable lookup
+and `PATH`, see [CLI Installation](../cli/overview.md#installing-arkoren).
+Then [create a project](creating-a-project.md) or keep integrating individual
+packages into the application you already have.

@@ -1,347 +1,265 @@
 ---
 title: CAPTCHA
-description: Verify Turnstile tokens or Google reCAPTCHA assessments before accepting a submission, with explicit action, hostname, and risk policies.
+description: Verify browser tokens with Turnstile or Google reCAPTCHA using trusted hostname, action, and score policies before protected effects.
 order: 30
+summary:
+  - Choose a provider and configure reusable verifiers with server-owned credentials and hostnames.
+  - Obtain single-use browser tokens for the action your server expects.
+  - Verify typed JSON submissions once and apply an explicit Google risk-score policy.
+  - Use header middleware as an alternative and distinguish rejection from provider failure.
 ---
 
 # CAPTCHA
 
-## Introduction
+A feedback form can receive automated submissions even when every field passes
+validation. CAPTCHA adds a provider-issued browser token that your server verifies before
+accepting the feedback. An accepted token is an abuse signal, not proof of identity
+or permission; it does not replace [CSRF protection](../browser-security/csrf-protection.md).
 
-Public forms attract automated submissions even when their input is valid.
-CAPTCHA adds a provider-issued browser token that your server verifies before
-performing the protected operation. It is an abuse signal, not proof of identity
-or permission, and does not replace authentication, authorization, or
-[CSRF protection](../browser-security/csrf-protection.md).
+Arkoren ships vendor-local verifiers and optional route middleware. There is no
+core CAPTCHA contract, and the two providers' tokens are not interchangeable.
 
-Arkoren provides vendor-local verifiers and optional route middleware in the
-Cloudflare and Google Cloud modules. There is no core CAPTCHA contract: the
-providers have different browser integrations and different acceptance policies.
+## Provider Choice
 
-## Choosing a provider
+Choose Cloudflare Turnstile for an accepted-or-rejected token check. Choose Google
+reCAPTCHA when your application needs a risk assessment and owns the decision to
+accept, deny, or require more verification. A valid Google token can have a low
+score: direct `Verify` returns that assessment successfully. Only the optional
+middleware applies a configured minimum score automatically.
 
-Choose the provider before building the browser integration; its tokens are not
-interchangeable.
+### Compatibility Matrix
 
-| Provider | Choose when | Server decision |
-| --- | --- | --- |
-| Cloudflare Turnstile | You want a valid-or-rejected token check. | Verify token validity, allowed hostname, and expected action. |
-| Google reCAPTCHA | You need a risk assessment and application-owned score policy. | Verify token validity, allowed hostname, and expected action, then evaluate the score. |
+This comparison covers Arkoren's server-side adapters, not every vendor feature
+or a guarantee that a visitor is human.
 
-A valid Google token can have a low score. Direct `Verify` returns that
-assessment successfully so you can reject it or require another factor. The
-Google middleware instead applies your explicit minimum score and rejects scores
-below it. Turnstile does not provide an equivalent score; there is no universal
-threshold shared by these providers.
-
-## Compatibility matrix
-
-Compare the verification policy exposed by Arkoren's adapters. These are
-server-side checks, not guarantees that a visitor is human or authorized.
-
-| Provider | Hostname allowlist | Expected-action check | Risk score | Route middleware | Middleware score threshold |
+| Provider | Hostname Allowlist | Expected Action | Risk Score | Route Middleware | Middleware Score Policy |
 | --- | --- | --- | --- | --- | --- |
 | [Cloudflare Turnstile](#cloudflare-turnstile) | Yes | Yes | No | Yes | No |
-| [Google reCAPTCHA](#google-recaptcha) | Yes | Yes | Yes | Yes | Yes — Requires an explicitly configured finite threshold in [0, 1]. |
+| [Google reCAPTCHA](#google-recaptcha) | Yes | Yes | Yes | Yes | Yes — Requires an explicit finite minimum in [0, 1]. |
 
-Action checks require a nonempty server-owned action. Turnstile hostname
-matching is case-sensitive; Google's is case-insensitive. Direct Google
-verification returns a valid low-score assessment without rejecting it: your
-application owns that decision unless you use the score-checking middleware.
-These cells are backed by adapter source and controlled HTTP tests, not a
-live-cloud Google assessment or a real-browser challenge. Diagnostic formatting
-does not add verification capabilities or change these cells.
+Both adapters require an allowlist from trusted deployment configuration. Supply
+bare hostnames, not URLs, wildcards, or a list derived from the incoming `Host`
+header. Neither implicitly trusts subdomains. Turnstile compares case-sensitively;
+Google compares case-insensitively.
 
-## Setting up the provider
+Choose an action literal on the server, such as `feedback`, and use it in the
+browser integration too. Empty `ExpectedAction` or middleware `Action` skips the
+local action comparison. Do not copy the expected value from the submitted body.
 
-Create the verifier once during application composition and reuse it across
-requests. Keep provider credentials in server-side configuration, never in HTML
-or browser JavaScript. Site keys identify the browser integration and are public.
+Create one verifier during application setup, handle construction errors before
+mounting routes, and reuse it concurrently. Neither verifier has lifecycle or
+readiness hooks. Keep secrets and API credentials on the server; browser site
+keys are public.
 
-Allowed hostnames must come from trusted deployment configuration, such as
-`[]string{"app.example.com"}`. Supply hostnames, not URLs. Never build this list
-from an incoming request's `Host` header: that lets the caller choose what the
-verifier trusts.
-
-Each provider subsection is an alternative, not a cumulative setup. In the
-route examples, `routes` is your existing `*router.Router` from
-`arkoren.dev/core/http/router`; inside handler fragments, `r` is the incoming
-`*http.Request`. See [routing](../http-fundamentals/routing.md) for construction
-and registration. Select the verifier for the provider whose token you receive.
-
-### Cloudflare Turnstile
+## Cloudflare Turnstile
 
 [Create a Turnstile widget](https://developers.cloudflare.com/turnstile/get-started/)
-for your site's hostnames in Cloudflare. Keep its
-secret on the server and put its site key in the browser.
-
-#### Installation
-
-Install the module from your application's module directory:
+for your deployment's hostnames. Store its secret in server configuration and
+use its public site key in the browser. From your application module, install:
 
 ```sh
 go get arkoren.dev/driver/cloudflare
 ```
 
-#### Connecting
+### Server Setup
 
-With `secret` loaded from your server configuration, construct the verifier
-using `arkoren.dev/driver/cloudflare/cloudflarecaptcha`:
+Import `arkoren.dev/driver/cloudflare/cloudflarecaptcha`. With `secret` loaded
+from server configuration, construct the verifier:
 
 ```go
 verifier, err := cloudflarecaptcha.New(secret, []string{"app.example.com"})
 ```
 
-Handle construction errors before registering routes. This verifier calls
-Turnstile's Siteverify API; its nil verification error means the provider accepted
-the token and the configured hostname and requested action checks passed.
-There are no lifecycle hooks to register.
+Construction validates local settings without network I/O. A blank secret, empty
+allowlist, or invalid hostname returns `ErrConfiguration`; handle `err` before
+using `verifier`. Verification uses Turnstile's HTTPS Siteverify endpoint.
 
-#### Configuration
-
-Verification has a ten-second total
-timeout by default; `Builder.Timeout` changes that limit, and an earlier caller
-deadline still wins.
-
-To shorten the budget, import `time` and pass this policy as the trailing
-argument to the `New` call above:
+The default verification deadline is ten seconds, including response reading.
+If feedback needs a shorter budget, import `time` and use this alternative
+construction:
 
 ```go
-budget := func(connection *cloudflarecaptcha.Builder) {
-	connection.Timeout(3 * time.Second)
-}
+verifier, err := cloudflarecaptcha.New(secret, []string{"app.example.com"},
+	func(connection *cloudflarecaptcha.Builder) {
+		connection.Timeout(2 * time.Second)
+	})
 ```
 
-The resulting verifier uses at most three seconds per verification.
-Zero restores the ten-second default; negative timeouts fail construction.
+An earlier caller deadline still wins. Zero restores ten seconds; negative
+timeouts fail construction. `Builder.HTTPClient` can borrow an existing
+`*http.Client`: construction snapshots its fields, disables redirects in the
+snapshot, and retains its transport and cookie jar without modifying your client.
+A shorter native timeout still applies. Configure shared objects before
+concurrent use; the verifier closes neither client nor transport.
 
-`Builder.HTTPClient` snapshots a supplied client value and replaces the snapshot's
-redirect policy without changing your client. It retains the borrowed transport
-and cookie jar. A shorter native client timeout still applies. Configure those
-shared objects before concurrent use; neither the client nor its transport is
-closed by this verifier.
+Verification makes one attempt and does not send Siteverify's optional
+idempotency key. Do not add a retrying transport: a timeout can mean the token
+was consumed. Empty tokens or tokens over 2,048 bytes reject before I/O. Nil
+error means provider success, a nonzero challenge timestamp, an allowed hostname,
+and a matching action when requested. Returned `CData` remains untrusted,
+potentially sensitive client-originated metadata, not a permission claim or risk score.
 
-#### Verifying tokens
+Formatting a verifier value or pointer with `%v`, `%+v`, or `%#v` emits
+`[REDACTED Turnstile verifier]` without traversing its borrowed objects. This is
+not a general sanitization boundary for reflection, serialization, invalid format
+verbs, or native objects, and does not apply to the Google verifier. There is no
+explicit secret-zeroization operation.
 
-Use the [Turnstile widget](#turnstile-widget), then follow
-[Decoding and verifying](#decoding-and-verifying) to verify its token before
-accepting a JSON submission. Use [header middleware](#protecting-a-header-based-route)
-instead when your browser sends the token separately from the body.
+### Browser Token
 
-#### Behavior and limits
+Define the token callback before loading the widget script. Replace
+`TURNSTILE_SITE_KEY` with your public key:
 
-Turnstile returns evidence, not a risk score. Hostname matching is exact and
-case-sensitive. The adapter performs one verification attempt, never retries,
-and treats provider failures as unavailable rather than permitting the operation.
-There is no local emulator or memory driver; use the controlled HTTP transport
-described under [Testing](#testing).
+```html
+<script>
+  function feedbackToken(token) {
+    // Attach token as captcha_token to the pending feedback submission.
+  }
+</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+<div class="cf-turnstile" data-sitekey="TURNSTILE_SITE_KEY"
+     data-action="feedback" data-callback="feedbackToken"></div>
+```
 
-The verifier owns its secret and allowlist, but has no `Start`, `Stop`, or readiness
-hook and no explicit secret-zeroization operation. Its `fmt.Formatter` method
-writes `[REDACTED Turnstile verifier]` for `%v`, `%+v`, and `%#v` on a `Verifier`
-value or pointer without traversing the borrowed client, transport, or jar.
-This does not promise sanitization through arbitrary serialization, reflection,
-invalid `fmt` verbs, native objects, or caller-owned data. This formatting hook
-does not apply to the Google verifier or its credential-bearing construction draft.
+The callback receives a credential, not verification success. Attach it to your
+submission and wait for the server's result. Clear stored tokens on widget error
+or expiry and reset the widget before another attempt. Traditional forms instead
+receive a `cf-turnstile-response` field; decode that representation explicitly
+rather than treating it as JSON.
 
-#### API references
+[Turnstile tokens](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)
+expire after five minutes and are single-use. Continue with
+[JSON verification](#json-verification), or choose [header middleware](#header-middleware)
+instead; do not verify the same token in both places.
 
-See the [Cloudflare CAPTCHA API reference](https://pkg.go.dev/arkoren.dev/driver/cloudflare/cloudflarecaptcha)
-for borrowed clients, timeouts, error classes, and evidence fields.
+For constructor and evidence details, see the
+[Cloudflare CAPTCHA API reference](https://pkg.go.dev/arkoren.dev/driver/cloudflare/cloudflarecaptcha).
 
-### Google reCAPTCHA
+## Google reCAPTCHA
 
 Create a Google Cloud project, enable the reCAPTCHA Enterprise API, and
 [create a score-based website key](https://docs.cloud.google.com/recaptcha/docs/create-key-website)
-for your hostnames. Use the same project and site key on
-the server.
-
-#### Installation
-
-Install the module:
+for your hostnames. Use that project and site key on the server. Install:
 
 ```sh
 go get arkoren.dev/driver/gcp
 ```
 
-#### Connecting
+### Server Setup
 
-Before constructing the verifier, configure Google Cloud authentication for
-assessment creation. By default, use Application Default Credentials (ADC)
-with `roles/recaptchaenterprise.agent` on the project. A restricted server API
-key is an alternative; a browser site key is not that API key. The
-[Google adapter reference](captcha.md#google-authentication-and-transport)
-explains `APIKey` and borrowed preauthenticated HTTP clients, both of which
-bypass ADC.
-
-With authentication configured, `ctx` from application setup, and `projectID`
-and `siteKey` from trusted configuration, construct the verifier using
-`arkoren.dev/driver/gcp/gcpcaptcha`:
+Configure Application Default Credentials (ADC) for assessment creation, with
+`roles/recaptchaenterprise.agent` on the project. Import
+`arkoren.dev/driver/gcp/gcpcaptcha`. With the setup context `ctx`, trusted
+`projectID`, and public `siteKey`, construct the verifier:
 
 ```go
 verifier, err := gcpcaptcha.New(ctx, projectID, siteKey, []string{"app.example.com"})
 ```
 
-Handle construction errors before registering routes.
-ADC discovery can perform credential-loading I/O and cannot itself be interrupted
-by the constructor context. That context is checked around discovery and is not
-retained for later token refresh; see the reference for the exact boundary.
-There are no lifecycle hooks to register. Each verification, including native
-ADC token refresh, is bounded to ten seconds or the caller's earlier deadline.
+Construction validates settings and loads credentials; it does not create an
+assessment or perform readiness checks. ADC discovery can do credential-loading
+I/O, and its synchronous discovery call cannot be interrupted by `ctx`. The
+constructor checks cancellation around discovery and uses `ctx` for quota-project
+lookup, but does not retain it. Later native token refresh uses each verification
+request's bounded context; asynchronous background refresh is disabled.
 
-#### Configuration
-
-The builder selects `APIKey` or a borrowed `HTTPClient`; it has no timeout or
-score-threshold setting. Bound direct calls with a shorter caller context when
-needed. Set score policy in application code or explicitly configure the optional
-middleware's `MinScore`.
-
-For the API-key alternative, pass this policy to `New`; `apiKey` is your
-restricted server key, not the public browser site key:
+If you use a restricted server API key instead of ADC, pass it in this alternative
+construction. `apiKey` is not the public browser site key:
 
 ```go
-credentials := func(access *gcpcaptcha.Builder) {
-	access.APIKey(apiKey)
-}
+verifier, err := gcpcaptcha.New(ctx, projectID, siteKey, []string{"app.example.com"},
+	func(access *gcpcaptcha.Builder) {
+		access.APIKey(apiKey)
+	})
 ```
 
-This selects API-key authentication and skips ADC discovery. Do not combine it
-with a borrowed client unless you intentionally need both authentication paths.
+This bypasses ADC and sends the key as `X-Goog-Api-Key`, never in the URL. Keep
+the key and credential-bearing construction draft out of logs.
 
-#### Verifying tokens
+### Borrowed Clients
 
-Obtain a token with the [Google browser integration](#google-score-based-key),
-then use the Google branch in [Decoding and verifying](#decoding-and-verifying).
-That example checks authenticity and your score threshold before the effect;
-[Requiring another login factor](#requiring-another-login-factor) shows a richer
-application policy.
-
-#### Behavior and limits
-
-This adapter uses the current `projects.assessments.create` API
-(`CreateAssessment`), not the legacy Google Siteverify endpoint or its shared
-secret flow. A successful assessment exposes `Score`, `Name`, and `Reasons` for
-your application policy; it does not sign the visitor in.
-
-Hostname matching is exact and case-insensitive, without implicit subdomain
-trust. Verification never retries. There is no local emulator or memory driver;
-use a controlled HTTP transport for deterministic [tests](#testing).
-
-#### API references
-
-See the [Google CAPTCHA API reference](https://pkg.go.dev/arkoren.dev/driver/gcp/gcpcaptcha)
-for authentication ownership, response defaults, evidence fields, and errors.
-
-## Google authentication and transport
-
-Use `Builder.APIKey` for an API key restricted to this backend and API. It is
-sent as `X-Goog-Api-Key`, not in the URL; never expose it to the browser or log
-the construction draft.
-
-If your application already owns an authenticated HTTP client, pass it to the
-verifier instead of discovering ADC. With your project, site key, and allowed
-hostnames from the Google setup, the construction callback can select it:
+If your application already owns an authenticated `*http.Client` named `client`,
+select it instead of ADC:
 
 ```go
-func(access *gcpcaptcha.Builder) {
-	access.HTTPClient(authenticated)
-}
+verifier, err := gcpcaptcha.New(ctx, projectID, siteKey, []string{"app.example.com"},
+	func(access *gcpcaptcha.Builder) {
+		access.HTTPClient(client)
+	})
 ```
 
-Here `authenticated` is your existing `*http.Client`; use the callback in
-`gcpcaptcha.New` above. A nonnil client bypasses ADC entirely. Without an API
-key, its transport must add authentication. With an API key, the adapter adds
-that header without removing authentication supplied by the transport. Passing
-nil restores normal ADC/API-key selection.
+A nonnil client bypasses ADC completely. Without `APIKey`, its transport must
+authenticate requests. If you intentionally configure both, the adapter adds
+the API-key header without removing transport authentication. A nil client
+restores normal ADC/API-key selection.
 
-The client value is snapshotted, but its transport remains borrowed and is
-never closed by the verifier. Configure shared transport state before concurrent
-use. Redirects are disabled and the cookie jar is discarded, even for a supplied
-client. Positive timeouts below ten seconds are retained; zero, negative, or
-larger values become ten seconds. Every verification also has a ten-second
-context bound and honors an earlier caller deadline.
+Construction snapshots the client, discards its jar, and disables redirects.
+Its transport remains borrowed and is never closed. Positive client timeouts
+shorter than ten seconds are retained; zero, negative, or longer timeouts become
+ten seconds. Each verification, including ADC token refresh, also has a ten-second
+context limit and honors an earlier caller deadline. Custom transports must be
+concurrency-safe, honor cancellation, and never retry tokens. The builder has no
+timeout or score-threshold setting; use a shorter caller context and choose score
+policy separately.
 
-Custom transports and authentication must support concurrent requests, honor
-cancellation, and never replay them. Tokens are single use and Google does not
-document assessment idempotency; retrying middleware can consume a token without
-giving your application usable evidence.
+This adapter uses `projects.assessments.create` (`CreateAssessment`), not legacy
+Siteverify or a shared-secret flow. It makes one attempt. Empty tokens and tokens
+over 64 KiB reject locally; that size is an application guard, not a documented
+Google maximum. Successful assessments expose `Score`, `Name`, and reason/evidence
+fields. They do not authenticate a visitor or expose other Fraud Defense APIs.
 
-## Obtaining a browser token
+### Browser Token
 
-Generate a token for the operation you are about to submit. The examples use
-the action `contact`; configure that same literal as the server's expected
-action. Treat an action name as server policy, not a field the caller chooses.
-Both adapters skip local action comparison if `ExpectedAction` or middleware
-`Action` is empty; set it explicitly for each protected operation in this guide.
-
-### Turnstile widget
-
-Replace `TURNSTILE_SITE_KEY` with your widget's public site key. Define
-`receiveToken` before loading the provider script:
-
-```html
-<script>
-  function receiveToken(token) {
-    // Pass token as captcha_token in the next contact submission.
-  }
-</script>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-<div class="cf-turnstile" data-sitekey="TURNSTILE_SITE_KEY"
-     data-action="contact" data-callback="receiveToken"></div>
-```
-
-The callback receives the token, not a verification result. Your application
-must attach it to the submission and wait for server verification before showing
-success. Clear stored tokens when the widget expires or errors, and reset the
-widget to obtain a fresh token for another attempt. In a traditional form,
-Turnstile also inserts a `cf-turnstile-response` field; choose and decode that
-form representation explicitly instead of using the JSON example below.
-
-### Google score-based key
-
-Replace both occurrences of `RECAPTCHA_SITE_KEY` with your public score-based
-site key. In your existing contact-submit callback, after loading this script,
-execute the action and attach the resulting token:
+Load the Enterprise script with your public score-based site key:
 
 ```html
 <script src="https://www.google.com/recaptcha/enterprise.js?render=RECAPTCHA_SITE_KEY"></script>
 ```
 
+In your existing feedback-submit callback, execute the matching action. Replace
+the key here with the same value:
+
 ```js
 grecaptcha.enterprise.ready(async () => {
   const token = await grecaptcha.enterprise.execute("RECAPTCHA_SITE_KEY", {
-    action: "contact",
+    action: "feedback",
   });
-  // Pass token as captcha_token in this contact submission.
+  // Attach token as captcha_token to this feedback submission.
 });
 ```
 
-Handle script-load and execution failures in your submit UI; do not send a
-protected operation as though CAPTCHA succeeded. Execute on the interaction,
-not long before it: the server must create the assessment within two minutes
-of token generation. Turnstile tokens expire after five minutes. Both are
-single-use, so obtain a fresh token after expiry or a failed submission.
+Handle script-load and execution errors in your UI; do not submit as though
+verification succeeded. Generate the token at the interaction, not when the page
+first opens. [Google tokens](https://docs.cloud.google.com/recaptcha/docs/create-assessment-website)
+expire after two minutes and can be assessed only once. Obtain a fresh token after
+expiry or a failed submission. Continue with [JSON verification](#json-verification)
+or the alternative [header middleware](#header-middleware).
 
-## Verifying a JSON submission
+For authentication and assessment fields, see the
+[Google CAPTCHA API reference](https://pkg.go.dev/arkoren.dev/driver/gcp/gcpcaptcha).
 
-For JSON requests, decode the body once in the handler, validate the application
-fields, then call the verifier before the side effect. This keeps body ownership
-with the handler and avoids middleware consuming a stream the handler still
-needs. Apply [content-type checks](../http-fundamentals/content-type.md), [body limits](../http-fundamentals/body-limit.md),
-and [rate limiting](rate-limiting.md) before any external verification call.
-`request.JSON` does not enforce `Content-Type` itself.
+## JSON Verification
 
-Verification spends a single-use token. Verify once before effects; on another
-attempt, obtain a fresh token instead of retrying verification. A lost response
-may mean the provider already consumed the token. Keep verification fail-closed
-and avoid retrying HTTP transports.
+For a token inside JSON, let the handler decode the body once and verify the token
+before its effect. Apply [body limits](../http-fundamentals/body-limit.md),
+[content-type checks](../http-fundamentals/content-type.md), and
+[rate limiting](rate-limiting.md) before external verification;
+`request.JSON` does not enforce `Content-Type` itself. See
+[middleware ordering](../http-fundamentals/middleware.md#order-policies) when
+placing those checks.
 
-### Mapping verifier errors
+Use one provider branch below, not both. Neither adapter retries automatically,
+and custom HTTP transports must not replay a verification. If a response is lost,
+the token might already be spent: stop the effect and ask for a fresh token on a
+later attempt. A fresh token does not deduplicate feedback or any other business
+operation; application-owned idempotency remains separate.
 
-Direct `Verify` returns plain errors, not HTTP problems. Before registering
-the handler, map its selected provider's sentinels with
-`arkoren.dev/core/http/middleware/errormap`, `arkoren.dev/foundation/problem`,
-and `net/http`:
+### Map Failures
+
+Direct `Verify` returns plain classified errors, not HTTP problems. Before
+registering a Turnstile handler, map them with
+`arkoren.dev/core/http/middleware/errormap`, `arkoren.dev/foundation/problem`, and
+`net/http`. Here `routes` is your existing router:
 
 ```go
 routes.Use(errormap.Middleware(
@@ -353,189 +271,171 @@ routes.Use(errormap.Middleware(
 ))
 ```
 
-Use `gcpcaptcha` in all three mappings for a Google route. These mappings keep
-provider details out of the response while preserving the cause for internal
-handling. Without mapping, returning a plain rejection error produces the
-router's generic `500`, not a `403`. Context cancellation and deadline errors
-remain identifiable with `errors.Is`; do not classify them as a bad token.
+For Google, replace the three sentinel qualifiers with `gcpcaptcha`. Rejection
+then returns `403`, provider unavailability `503`, and configuration failure
+`500`, without publishing provider diagnostics. Without mapping, a plain rejection
+gets the router's generic `500`, not `403`. Cancellation and deadline causes remain
+identifiable with `errors.Is`; they are operational failures, not bad tokens.
 
-The adapters' `Error()` text uses bounded classifications, not native diagnostics.
-Original causes remain available through `errors.Is`/`errors.As`, but those causes
-can contain confidential transport or provider data. Inspect identities deliberately;
-do not dump unwrapped objects or treat arbitrary formatting/serialization of error
-wrappers as a sanitization boundary.
+Both adapters keep native diagnostics out of their `Error()` text. Original
+causes remain inspectable with `errors.Is` and `errors.As`, however, and can contain
+confidential transport or provider data. Do not dump unwrapped causes or assume
+arbitrary formatting and serialization of wrappers sanitizes them.
 
-### Decoding and verifying
+### Decode Input
 
-Using `request` from `arkoren.dev/core/http/request`, decode your application's
-existing contact request type, which includes a `CAPTCHAToken` field tagged
-`json:"captcha_token"`:
+Define the feedback request separately from provider input. JSON tags describe
+the browser's representation, not verification policy:
 
 ```go
-input, err := request.JSON[ContactRequest](r)
+type FeedbackInput struct {
+	Message      string `json:"message"`
+	CAPTCHAToken string `json:"captcha_token"`
+}
+```
+
+With `request` imported from `arkoren.dev/core/http/request` and `incoming` the
+handler's `*http.Request`, decode once:
+
+```go
+input, err := request.JSON[FeedbackInput](incoming)
 if err != nil {
 	return err
 }
 ```
 
-After validating the contact fields, verify the Turnstile token with the
-constructed `verifier`. Only proceed to your contact operation after nil error:
+Validate the message using your application's input rules before verification.
+Keep `CAPTCHAToken` out of request-body logging, traces, and validation diagnostics.
+
+### Verify Turnstile
+
+Using the Turnstile `verifier` from setup, require the server-owned feedback
+action and stop on every verification error:
 
 ```go
-_, err = verifier.Verify(r.Context(), cloudflarecaptcha.Input{
+_, err = verifier.Verify(incoming.Context(), cloudflarecaptcha.Input{
 	Token:          input.CAPTCHAToken,
-	ExpectedAction: "contact",
+	ExpectedAction: "feedback",
 })
 if err != nil {
 	return err
 }
-// Perform the validated contact operation here.
+// Accept the validated feedback here.
 ```
 
-For Google, replace that verification step with an assessment and your own
-server-configured `contactMinScore` policy. Higher scores indicate lower
-assessed risk. Choose the threshold from your site's observations, not a
-universal recommended value, and validate that it is finite and in `[0, 1]`
-when loading configuration.
+Only nil error permits the feedback operation to proceed. The hostname check
+always applies; the action check applies because you supplied a nonempty action.
 
-A zero threshold deliberately accepts every valid score but still checks the
-token, hostname, action, and risk-analysis message. Inside a present Google
-risk-analysis message, an omitted or null score means zero under ProtoJSON;
-a positive threshold rejects it as a policy denial, not a verification outage.
+### Evaluate Scores
 
-This example sends the visitor's user agent to Google;
-omit `UserAgent` if your privacy policy does not permit that disclosure:
+For Google, choose a finite `feedbackMinScore` in `[0, 1]` from your site's
+observations and validate it when loading server configuration. There is no
+universal safe threshold. Higher scores indicate lower assessed risk. Replace
+the Turnstile block with:
 
 ```go
-assessment, err := verifier.Verify(r.Context(), gcpcaptcha.Input{
+assessment, err := verifier.Verify(incoming.Context(), gcpcaptcha.Input{
 	Token:          input.CAPTCHAToken,
-	ExpectedAction: "contact",
-	UserAgent:      r.UserAgent(),
+	ExpectedAction: "feedback",
 })
 if err != nil {
 	return err
 }
-if assessment.Score < contactMinScore {
+if assessment.Score < feedbackMinScore {
 	return problem.Forbidden()
 }
-// Perform the validated contact operation here.
+// Accept the validated feedback here.
 ```
 
-The protected contact operation runs only after verification and the score
-policy succeed. A low valid score returns `403` without running that operation.
+The operation runs only after token verification and score policy succeed.
+Explicit zero accepts every valid score, but still requires valid token evidence,
+an allowed hostname, the requested action, and a present risk-analysis message.
+An omitted or null score inside a present message means zero under ProtoJSON;
+a positive threshold denies it as policy, not a verification outage. A missing
+risk-analysis message instead fails verification.
 
-### Requiring another login factor
+For login, direct verification can support a step-up decision instead of a flat
+denial. After checking credentials and verifying once with `ExpectedAction: "login"`,
+a low score can start an application-owned pending factor challenge.
+That branch must not create an authenticated session. Verify the extra factor
+on a separate endpoint before signing in. A high score never replaces factors
+your authentication policy always requires.
 
-For login, a low valid Google score can start an additional verification step
-instead of denying the visitor outright. In an application that has already
-checked credentials and obtained a `candidate`, verify the login token once with
-`ExpectedAction: "login"` and handle errors before evaluating its `assessment`.
-Use a separately configured, validated `loginMinScore` threshold.
+Optional `Input.RemoteIP` is a `netip.Addr`; supply it only from your trusted
+client-address resolver, never directly from arbitrary forwarded headers. Google
+also accepts optional `Input.UserAgent`. Sending these fields discloses visitor
+data to the provider; omit them unless your privacy policy permits and needs
+that disclosure. The examples omit both.
 
-Here `factors` and `sessions` are application-owned collaborators, not CAPTCHA
-APIs. `factors.Begin` must create only a short-lived pending challenge, not an
-authenticated session. A separate endpoint verifies that factor and only then
-signs in the candidate. Apply any factor your authentication policy always
-requires on both branches; a high CAPTCHA score never substitutes for it:
+## Header Middleware
 
-```go
-if assessment.Score < loginMinScore {
-	return factors.Begin(r.Context(), candidate)
-}
-return sessions.SignIn(r.Context(), candidate)
-```
+If the token travels separately in a header, use middleware instead of handler
+verification. It extracts and verifies once, then calls the handler only on
+success. Neither adapter automatically parses JSON or forms, stores evidence in
+request context, or infers client IP; Google middleware also infers no user agent.
+Use direct verification when you need an assessment for a step-up decision.
 
-The low-score path starts a pending challenge and returns without signing in.
-
-## Protecting a header-based route
-
-If the browser sends its token in a header, optional middleware can reject the
-request without reading the body. The extractor owns token location; neither
-adapter automatically parses JSON or forms. Use this instead of handler-level
-verification; the `contact` handler must not verify the token again. Keep body
-limits, content-type checks, and rate limiting outside CAPTCHA middleware.
-For a cross-origin browser, configure [CORS](../browser-security/cors.md) to allow the token header.
-With `net/http` imported, define the extractor:
+Keep body limits, content-type checks, and rate budgets outside CAPTCHA middleware.
+For cross-origin browser requests, [CORS](../browser-security/cors.md) must permit
+the token header. With `net/http` imported, define a body-preserving extractor:
 
 ```go
-extract := func(r *http.Request) (string, error) {
-	return r.Header.Get("X-CAPTCHA-Token"), nil
+extract := func(incoming *http.Request) (string, error) {
+	return incoming.Header.Get("X-CAPTCHA-Token"), nil
 }
 ```
 
-For a Turnstile route, set the server-owned action before registering your
-existing `contact` handler:
+For an existing Turnstile verifier and application handler `feedback`, mount:
 
 ```go
 routes.With(cloudflarecaptcha.Middleware(verifier, extract,
 	func(policy *cloudflarecaptcha.MiddlewareBuilder) {
-		policy.Action("contact")
-	},
-)).Post("/contact", contact)
+		policy.Action("feedback")
+	})).Post("/feedback", feedback)
 ```
 
-For Google, explicitly set both the action and a finite minimum score in
-`[0, 1]`; omitting `MinScore` is a configuration error, not an implicit default:
+For Google, use this alternative and explicitly configure the minimum score:
 
 ```go
 routes.With(gcpcaptcha.Middleware(verifier, extract,
 	func(policy *gcpcaptcha.MiddlewareBuilder) {
-		policy.Action("contact")
-		policy.MinScore(contactMinScore)
-	},
-)).Post("/contact", contact)
+		policy.Action("feedback")
+		policy.MinScore(feedbackMinScore)
+	})).Post("/feedback", feedback)
 ```
 
-The middleware returns safe HTTP problems: `403` for rejection (including a
-Google score below the threshold), `503` for provider unavailability, and `500`
-for configuration failures. It fails closed and never calls the handler on
-verification failure. Use direct verification instead when the handler needs
-the Google assessment for a step-up decision. Both adapters map ordinary
-extraction errors to `403`, and cancellation, deadline, or unavailable extraction
-errors to `503`. Configuration errors take precedence and return `500`.
-The original causes remain identifiable with `errors.Is`; operational extraction
-failures do not acquire a token-rejection classification.
+The handler must not verify that token again. Google requires a finite minimum
+in `[0, 1]`; omission is a configuration error, not a default threshold.
 
-Turnstile requires nonnil verifier, extractor, and next-handler values; nil is
-programmer misuse and panics during middleware wiring. Google's middleware instead
-reports a nil verifier or extractor, or missing/invalid score policy, as a safe
-configuration `500` on requests without extracting or verifying a token.
+Both middleware adapters return safe HTTP problems: rejection is `403`, including
+a Google score below the minimum; provider unavailability is `503`; configuration
+failure is `500`. Ordinary extractor errors reject with `403`. Extractor errors
+wrapping cancellation, deadline, or unavailability return `503` without adding a
+token-rejection identity. Configuration takes precedence over other classes.
+Original causes remain inspectable, but their text is not rendered to the client.
 
-## Production boundaries
+Turnstile panics during wiring for a nil verifier, extractor, next handler, or
+construction callback. A zero verifier instead fails requests with configuration
+errors. Google reports a nil verifier/extractor or missing/invalid score policy
+as `500` on requests without extracting or verifying. Nil construction callbacks
+panic in both adapters. These are configuration faults, not permission to bypass
+the check.
 
-Neither adapter retries verification automatically. A lost response can mean
-the provider already consumed the token; do not add a retrying HTTP transport
-or replay the same token on a timeout. Keep a bounded request deadline and
-fail closed during an outage. Ask the browser for a fresh token on another
-attempt. Business-operation idempotency is separate: a fresh CAPTCHA token
-does not prevent a payment, message, or account operation from running twice.
+## Rejection Tests
 
-`Input.RemoteIP` is an optional `netip.Addr`. Supply it only from a trusted
-client-address resolver; arbitrary forwarded headers are attacker-controlled
-unless your proxy trust boundary validates them. Sending IP addresses and
-Google user agents discloses visitor data to the provider; apply your privacy
-policy and omit optional data you do not need. Keep tokens and provider
-credentials out of logs, traces, and error responses.
+Inject a controlled `*http.Client` through each provider's `Builder.HTTPClient`
+for deterministic responses. Google tests with a supplied client bypass ADC;
+they do not verify live credentials or IAM permissions. Neither adapter has a
+memory driver or local emulator. A stub proves application decisions, not a
+genuine browser challenge.
 
-## Testing
+Test accepted and missing tokens, rejection, hostname/action mismatches,
+unavailability, and cancellation. For Google, include the exact score boundary,
+a valid score below it, ProtoJSON's zero score, and missing middleware `MinScore`.
+Assert that every failure leaves the feedback effect untouched. If login uses a
+step-up branch, assert that it creates only a pending challenge, never a session.
+Keep real-browser and live-provider checks separate from deterministic tests.
 
-Use a controlled HTTP client through `Builder.HTTPClient` to return provider
-responses without network access. See the provider reference for authentication
-behavior when supplying that client. There is no memory CAPTCHA driver: a
-local stub proves your decision logic, not that a browser challenge is genuine.
-
-Test an accepted token, a rejected or missing token, an action mismatch, a
-hostname mismatch, upstream failure, and canceled requests. For Google, also
-test a valid low score, the threshold boundary, missing `MinScore` in middleware,
-and that a pending second factor never creates an authenticated session. Assert
-that rejected requests leave the protected side effect untouched. Keep live
-provider checks separate from deterministic unit tests.
-
-Local Google tests can establish request/authentication wiring, ProtoJSON defaults,
-context handling, and score-policy behavior. They do not establish live ADC/IAM
-permissions, provider acceptance of production credentials, or real-browser
-challenge behavior.
-
-For configuration, error, and HTTP-client details, see the
+For complete contracts, see the
 [Cloudflare CAPTCHA API reference](https://pkg.go.dev/arkoren.dev/driver/cloudflare/cloudflarecaptcha)
 and [Google CAPTCHA API reference](https://pkg.go.dev/arkoren.dev/driver/gcp/gcpcaptcha).

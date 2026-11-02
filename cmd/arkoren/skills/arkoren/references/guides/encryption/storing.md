@@ -1,172 +1,281 @@
 ---
-title: Storing Encrypted Data
-nav: Storing Data
-description: Store encrypted values in binary or text columns, find rows by an encrypted value with a keyed hash, and re-encrypt after a key rotation.
-order: 30
+title: Storing Data
+description: Persist encrypted records with explicit schema, identity binding, encoding, and guarded re-encryption.
+order: 40
+summary:
+  - Store binary ciphertext through typed writes while keeping plaintext out of database records and logs.
+  - Bind credentials to their expected record and handle text encoding and equality-lookup trade-offs.
+  - Replace old ciphertext with concurrency guards and preserve key, context, and schema compatibility.
 ---
 
-# Storing Encrypted Data
+# Storing Data
 
-## Introduction
+Encrypting a credential protects its contents, but your application still owns
+the row that contains it, the metadata used to interpret it, and the rules for
+replacing it. Decide those boundaries before writing ciphertext so future
+deployments and backups remain readable.
 
-An encrypted value is only useful if it can be stored and found again. It is
-binary, a little longer than the original, and different every time the same
-value is encrypted, which affects the column it goes in, how it travels as
-text, and whether you can look rows up by it.
+## Choosing Storage
 
-This page covers those practical questions: the column types and encodings,
-how to find a row by a value you only store encrypted, and how to move stored
-values to a new key after a [rotation](keys.md#rotating-keys).
+Prefer a binary column for ciphertext: PostgreSQL `BYTEA`, MySQL `VARBINARY`
+or `BLOB`, or SQLite `BLOB`. Scan it into `[]byte`. Both shipped drivers return
+a 12-byte nonce followed by encrypted bytes and a 16-byte tag, adding 28 bytes
+to the raw plaintext length. `Encrypt` adds JSON encoding first, so field names
+and JSON escaping also affect size. Size a bounded column for the largest
+encoded payload or choose an appropriate unbounded column.
 
-## Columns and sizes
+Encrypt only fields that need recovery. Leaving identifiers and routing fields
+outside ciphertext permits normal queries, but exposes those fields to anyone
+who can read storage. Encrypting a whole payload hides more content while
+removing ordinary filtering and indexing over its contents. Ciphertext still
+reveals its length and does not replace database access controls or encrypted
+transport.
 
-Examples use `database` from `arkoren.dev/core/service/database` through an
-existing facade named `db`, `query` from `arkoren.dev/foundation/query`, and
-`crypto` from `arkoren.dev/core/service/crypto`. The encoding and lookup helpers
-use standard-library `encoding/base64`, `crypto/hmac`, `crypto/sha256`, and
-`strings`; the row types belong to your application. Import standard-library
-`errors` for the rotation conflict below.
+## Writing Credentials
 
-An encrypted value is 28 bytes longer than its input with both drivers: a
-12-byte nonce in front and a 16-byte authentication tag behind. Store it in a
-binary column, such as `BYTEA` in PostgreSQL, `VARBINARY` or `BLOB` in MySQL,
-or `BLOB` in SQLite, and scan it into a `[]byte` field:
+Assume `enc` is your configured `*crypto.Encrypter`, `db` is your configured
+`*database.Database`, and `ctx` is the operation context. Imports are
+`arkoren.dev/core/service/crypto`, `arkoren.dev/core/service/database`, and
+`arkoren.dev/foundation/query`. The application owns a `calendar_connections`
+table with `id`, `account_id`, and binary `credentials` columns. The connection
+and account identifiers come from an authorized application operation, not
+arbitrary writable request fields.
+
+Use a named payload that keeps record identity with the credential. Here
+`credentials` is a validated `CalendarCredentials` value from
+[Overview](overview.md#encrypting-values), and `connectionID` and `accountID`
+identify the authorized target:
 
 ```go
-type Connection struct {
-	ID          int    `db:"id"`
-	UserID      int    `db:"user_id"`
-	Credentials []byte `db:"credentials"` // sealed with enc.Encrypt
+type StoredCalendar struct {
+	Version      int                 `json:"version"`
+	ConnectionID int64               `json:"connection_id"`
+	AccountID    int64               `json:"account_id"`
+	Credentials  CalendarCredentials `json:"credentials"`
 }
 ```
 
-Values encrypted with `Encrypt` are JSON before encryption, so their size
-depends on the field names too. Size a fixed-length column for the largest
-JSON value plus 28 bytes, or use a column without a length limit.
+Encrypt that payload before building the database update:
 
-### Encrypted values as text
+```go
+sealed, err := enc.Encrypt(StoredCalendar{
+	Version:      1,
+	ConnectionID: connectionID,
+	AccountID:    accountID,
+	Credentials:  credentials,
+})
+if err != nil {
+	return err
+}
+```
 
-Where only text fits, for example in a cookie, a URL, or a JSON response,
-encode the value with `base64.RawURLEncoding`, which uses only characters that
-are safe in URLs and cookies:
+Do not write a result from a failed encryption. The identity fields and version
+are encrypted and authenticated together with the credentials. For the database
+write, expose only the intended ciphertext column through a separate typed input:
+
+```go
+type CredentialUpdate struct {
+	Credentials []byte `db:"credentials"`
+}
+
+input := CredentialUpdate{Credentials: sealed}
+statement := query.Table("calendar_connections", func(statement *query.Builder) {
+	statement.Where("id", connectionID)
+	statement.Where("account_id", accountID)
+	statement.Update(query.Values(input))
+})
+affected, err := db.Exec(ctx, statement)
+```
+
+Check the write error and affected-row count before reporting success. No
+matching row is not a successful credential replacement. The database `db` tags
+control column mapping; the payload's `json` tags control the encrypted JSON.
+Do not persist the plaintext alongside the ciphertext or include it in query logs.
+
+## Binding Records
+
+A purpose string such as `calendar-credentials:v1` in
+[driver AAD](drivers.md#binding-context) prevents using that ciphertext under a
+different purpose. It does not stop copying ciphertext between two calendar
+connections that share the same driver context. AAD is fixed at driver
+construction; the facade has no per-operation AAD argument.
+
+To reject record substitution with the payload above, compare its authenticated
+identity against the independently established account and requested connection.
+With standard-library `errors` imported, check both decryption and the embedded
+metadata before using a credential:
+
+```go
+payload, err := enc.Decrypt[StoredCalendar](stored)
+if err != nil {
+	return err
+}
+if payload.Version != 1 {
+	return errors.New("unsupported calendar payload version")
+}
+if payload.ConnectionID != connectionID || payload.AccountID != accountID {
+	return errors.New("calendar payload belongs to another connection")
+}
+```
+
+Here `stored` is the selected row's ciphertext. Do not take the expected identity
+from the decrypted payload itself or trust an attacker-supplied account ID.
+Cleartext columns and external version headers are not automatically
+authenticated by encryption. Put security-relevant metadata inside the encrypted
+payload or bind it through the exact configured AAD, then verify its meaning.
+Neither approach replaces access authorization or prevents replay of an older
+valid payload for the same record.
+
+## Encoding Text
+
+Where a transport accepts only text, encode the complete ciphertext. With
+standard-library `encoding/base64`, URL-safe unpadded encoding is suitable for
+an application token:
 
 ```go
 token := base64.RawURLEncoding.EncodeToString(sealed)
-
-sealed, err := base64.RawURLEncoding.DecodeString(token)
 ```
 
-Encoding makes the value about a third longer. Cookies are limited to about
-4 KB, so keep what you encrypt into them small.
+Encoding adds roughly one third to the length; it is not another encryption
+layer. Keep cookie payloads small enough for browser limits and account for
+headers and other cookie fields. Avoid putting credentials in URLs, where
+history, referrers, and access logs can expose replayable values.
 
-## Finding rows by an encrypted value
-
-Because each encryption uses a fresh nonce, encrypting an email address again
-does not reproduce the stored ciphertext. You cannot find the row by encrypting
-the search value and comparing ciphertexts. To look rows up by a value you store
-encrypted, store a second column
-next to it: a **keyed hash** of the value, computed with HMAC-SHA256 and a key
-of its own. The same input always gives the same hash, so the column can be
-indexed and compared, while nobody without the key can compute it:
+Decode using the matching encoding before decrypting:
 
 ```go
-func lookupHash(key []byte, email string) []byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(strings.ToLower(strings.TrimSpace(email))))
+stored, err := base64.RawURLEncoding.DecodeString(token)
+if err != nil {
+	return err
+}
+```
+
+A base64 error is an encoding failure, not `crypto.ErrInvalidCiphertext`.
+Successful decoding says nothing about authenticity; decryption must still
+succeed. Apply transport size limits before allocating or decoding untrusted
+input. Never use base64 to justify logging a key, plaintext, or ciphertext token.
+
+## Searching Values
+
+Random nonces mean encrypting a search term again does not reproduce stored
+ciphertext. Query by an ordinary identifier whenever possible. If equality
+lookup over encrypted data is necessary, an application-owned indexed keyed
+hash can accompany the ciphertext, but reveals which rows share a value.
+
+For an application that deliberately treats contact addresses case-insensitively,
+this helper uses standard-library `crypto/hmac`, `crypto/sha256`, and `strings`:
+
+```go
+func contactLookup(secret []byte, email string) []byte {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(normalized))
 
 	return mac.Sum(nil)
 }
 ```
 
-Here `lookupHash` is application code, not a shipped helper. Normalize the
-value before hashing, as above, so that `Ada@Example.com` and
-`ada@example.com` find the same row. This application treats email addresses
-case-insensitively; choose normalization that agrees with your own account
-policy and use it on both writes and lookups. Store the hash in an indexed binary
-column, and query by it using your existing `db` facade and `User` row type:
+Choose normalization according to your account policy and apply it identically
+on writes and searches. Use an independent protected lookup key, not the
+encryption key. Store the result in an indexed binary column such as
+`contacts.email_lookup`, updating it consistently with the encrypted address.
+A plain unkeyed hash permits guessing common addresses from a database copy.
+
+With validated `email`, protected bytes `lookupKey`, and your application row
+type `Contact`, restrict the lookup to the authorized account:
 
 ```go
-user, err := db.Find[User](ctx, query.Table("users", func(statement *query.Builder) {
-	statement.Where("email_hash", lookupHash(hashKey, email))
+contact, err := db.Find[Contact](ctx, query.Table("contacts", func(statement *query.Builder) {
+	statement.Where("account_id", accountID)
+	statement.Where("email_lookup", contactLookup(lookupKey, email))
 }))
 ```
 
-Use a separate key for the hash, not the encryption key, and keep it in the
-secret store with the other keys. A keyed hash reveals which rows hold the
-same value, which is the point of it; only add one for values you actually
-need to search by.
+The hash supports equality, not arbitrary encrypted search. Add it only when
+the lookup is needed, and plan a separate index migration if its key or
+normalization changes. Arkoren does not generate or rotate this index for you.
 
-> [!NOTE]
-> A plain SHA-256 hash, without a key, is not enough here. Email addresses,
-> phone numbers, and similar values are easy to guess, so anyone with the
-> database could hash candidates until one matches.
+## Re-encrypting Values
 
-## Re-encrypting stored values
-
-Rotation never rewrites stored data by itself. To move a value to the new key,
-decrypt it with `DecryptWithRotation`, which also reports whether an old key
-was needed, and store it again. Here `enc` accepts the current and previous
-keys, `conn` is a stored `Connection`, and `Credentials` is the plaintext type
-from [the overview](overview.md#encrypting-values):
-
-Match the original ciphertext when writing the replacement. This prevents a
-rotation from overwriting credentials changed by another request.
+[Key rotation](keys.md#rotating-keys) only changes future encryption. To replace
+old stored ciphertext, configure current and previous drivers and ask whether
+a previous driver authenticated the value. For an authorized loaded row
+`connection`, read its `Credentials []byte` field:
 
 ```go
-creds, rotated, err := enc.DecryptWithRotation[Credentials](conn.Credentials)
+payload, previous, err := enc.DecryptWithRotation[StoredCalendar](connection.Credentials)
 if err != nil {
 	return err
 }
-if rotated {
-	fresh, err := enc.Encrypt(creds)
-	if err != nil {
-		return err
-	}
-	n, err := db.Exec(ctx, query.Table("connections", func(statement *query.Builder) {
-		statement.Where("id", conn.ID)
-		statement.Where("credentials", conn.Credentials)
-		statement.Update(map[string]any{"credentials": fresh})
-	}))
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errors.New("credentials changed; retry rotation with the current row")
-	}
-}
 ```
 
-Keep the error checks here: a failed decryption or encryption must never
-replace stored credentials. Check the database write error too before treating
-that row as rotated. The original-ciphertext predicate handles concurrent
-credential changes; alternatively, lock the row in a transaction before reading
-and rotating it.
-
-Doing this whenever a value is read moves active data over gradually. To
-finish a rotation, run a [queue job](../queues/overview.md) or a one-off
-command that walks the table in batches and applies the steps above, wrapped
-in a `rotate` function, to every row:
+Check `err` first: `previous` can be true even if later JSON decoding fails.
+Apply the version and identity checks from [Binding Records](#binding-records)
+before using or rewriting `payload`. If `previous` is false, no key replacement
+is needed. Otherwise encrypt the verified payload with the current driver:
 
 ```go
-for conn, err := range db.Each[Connection](ctx, query.Table("connections", func(statement *query.Builder) {
-	statement.OrderBy("id")
-}), 500).Iter() {
-	if err != nil {
-		return err
-	}
-	if err := rotate(ctx, conn); err != nil {
-		return err
-	}
+fresh, err := enc.Encrypt(payload)
+if err != nil {
+	return err
 }
 ```
 
-`rotate` above is your own function implementing the per-row operation, not an
-Arkoren helper. `Each` reads one batch at a time by `id`, so updating the rows it has already
-passed is safe, and memory stays bounded however large the table is. The job
-can be stopped and run again: rows already on the new key report
-`rotated == false` and are left alone. When a full run finds nothing to
-rotate, and no writer still uses the old key, remove the previous driver from
-the encrypter. Retain the key securely for any backups that still need it, as
-described in [Rotating keys](keys.md#rotating-keys).
+Do not overwrite a credential changed by another request. Use the original
+ciphertext as a compare-and-swap condition alongside the authorized target.
+The update reuses `CredentialUpdate` from the write example:
 
-For the encrypter, see the [`crypto` API reference](https://pkg.go.dev/arkoren.dev/core/service/crypto).
+```go
+input := CredentialUpdate{Credentials: fresh}
+affected, err := db.Exec(ctx, query.Table("calendar_connections", func(statement *query.Builder) {
+	statement.Where("id", connection.ID)
+	statement.Where("account_id", accountID)
+	statement.Where("credentials", connection.Credentials)
+	statement.Update(query.Values(input))
+}))
+if err != nil {
+	return err
+}
+if affected == 0 {
+	return errors.New("calendar credentials changed; reload before rotating")
+}
+```
+
+These replacement steps run only for a successfully decoded, identity-checked
+payload with `previous == true`. A failed write leaves rotation incomplete.
+Alternatively, lock the row within your [transaction](../database/transactions.md)
+before reading and replacing it.
+
+Read-time replacement gradually migrates active rows. To finish, run a bounded
+application-owned batch job over every relevant row, handle conflicts by
+reloading, and record completion without logging payloads. Already-migrated
+rows report `previous == false`, so the key-replacement check is repeatable.
+Do not retire old keys until no live writer or stored value needs them, and
+retain keys required by backups.
+
+For opaque byte payloads, `DecryptRawWithRotation` and `EncryptRaw` preserve
+the byte format without JSON decoding. Application format validation still
+belongs before any replacement.
+
+## Keeping Compatibility
+
+Persist complete ciphertext bytes; do not split or reinterpret the nonce and
+tag in application code. The raw format carries no cipher, key identifier, AAD,
+or schema version. Keep that configuration recoverable for old values and
+backups. Changing AAD requires the original context on the old driver and the
+new context on the new driver; changing a purpose string without retaining
+the old decoder makes existing values fail authentication.
+
+The version inside `StoredCalendar` is an application field, not an Arkoren
+version protocol. Reject unsupported versions and preserve the original bytes.
+If incompatible payload shapes need separate decoders, define an explicit
+application format and validate its discriminator rather than guessing from
+decryption failures. Unknown external discriminators must not select arbitrary
+keys or cause plaintext fallback.
+
+A successful JSON decode does not prove that a schema change preserved meaning:
+renamed or absent fields can still produce zero values. Validate required fields
+and version semantics before use or re-encryption. Key replacement and schema
+migration are separate decisions; verify both before rewriting durable data.
+
+For typed and raw rotation operations, see the [`crypto` API reference](https://pkg.go.dev/arkoren.dev/core/service/crypto).

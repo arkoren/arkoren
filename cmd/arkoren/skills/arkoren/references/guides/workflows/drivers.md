@@ -1,272 +1,238 @@
 ---
 title: Workflow Drivers
 nav: Drivers
-description: Choose between the memory, Temporal, and Restate workflow drivers, with pending Hatchet integration notes.
-order: 50
+description: Choose and configure memory, Temporal, or Restate for workflow execution.
+order: 20
+summary:
+  - Compare available drivers by persistence, child ownership, retries, and cancellation retention.
+  - Wire memory, Temporal, or Restate to the shared workflow client and verify delivery locally.
+  - Preserve native policy limits and retained histories during worker replacement.
 ---
 
 # Workflow Drivers
 
-## Introduction
+Use memory for process-local work and tests. Choose Temporal or Restate when
+runs must survive worker replacement, provided the engine retains their history.
+An existing engine is a useful starting point, but check the operations and
+retention your process needs before committing to it. Hatchet is pending and
+unpublished; it is not an available integration.
 
-Memory loses runs on exit; Temporal and Restate survive worker restarts.
-Prefer your existing engine if it supports your operations: Restate lacks `Child`,
-and the pending Hatchet integration lacks both `Child` and `Spawn`. Start with the [overview](overview.md)
-for portable definitions or [Choosing a Driver](../drivers/choosing-a-driver.md)
-for other services. Install modules from your application's directory.
+Examples use the [onboarding definitions](overview.md#defining-work) and import
+`arkoren.dev/core/service/workflow`. Handle registry and constructor errors
+before using their results. A **runner** registers definitions for execution;
+a **driver** starts and controls runs. Native drivers share a
+[worker host](shared-worker-host.md) with scheduler drivers.
 
-Declare workflows and steps with each workflow's `MaxDuration` as in the overview
-before wiring a driver.
+## Compatibility Matrix
 
-A [host](shared-worker-host.md) manages shared native resources and their ownership.
-**Runners** register
-definitions before startup; **drivers** control runs, including from client-only
-processes.
+These capabilities describe Arkoren's adapters, not the vendors' entire SDKs.
+Restart survival assumes retained engine data, not protection against engine
+data loss. Memory clients must share one driver in one process.
 
-## Compatibility matrix
-
-Hatchet is pending and unpublished, not an available driver in these matrices.
-
-Compare Arkoren's workflow operations, not each engine's full SDK. Restart
-survival requires retained engine history; it does not cover engine data loss.
-
-| Driver | Runs survive worker restart | `Child` | `Spawn` | Start delay | Separate client-only process |
+| Driver | Restart Survival | Owned Child Runs | Detached Runs | Start Delay | Client-Only Process |
 | --- | --- | --- | --- | --- | --- |
 | [Memory](#memory) | No | Yes | Yes | Yes | No |
 | [Temporal](#temporal) | Yes | Yes | Yes | Yes | Yes |
 | [Restate](#restate) | Yes | No | Yes | Yes | Yes |
 
-`Child` acquires cancellation ownership only when it creates the run. Joining an
-existing same-ID run ignores new input and ends only the wait on parent
-cancellation or timeout; it never takes ownership from another caller. Memory and
-Temporal preserve that decision atomically, including across Temporal replay.
-Restate rejects `Child` before sending, attaching, or canceling; Hatchet rejects
-both child operations. These rejections return `workflow.ErrUnsupported`.
-`Spawn` is explicitly detached work, not a lifetime-equivalent fallback for `Child`.
-Memory requires one shared process-local driver. Hatchet also rejects delays
-above its timeout margin. Check each provider's retention and replay limits.
+`Child` owns cancellation only when it creates a run; joining an existing run
+must never acquire that ownership. Memory and Temporal preserve this distinction
+atomically. Restate returns `workflow.ErrUnsupported` before submitting child
+work. `Spawn` is detached and is not a cancellation-equivalent fallback.
 
-Cancellation acceptance is not the same as retained cancellation. In particular,
-Restate's retained results and duplicate-start protection for delayed or queued
-runs require positive retention and the
-[operator-managed preflight-retention profile](#retaining-canceled-runs-before-execution).
-Without that profile, a canceled pre-execution invocation can disappear.
+| Driver | Finished Retention Setting | Retained Pre-Execution Cancellation | Zero-Backoff Retries |
+| --- | --- | --- | --- |
+| [Memory](#memory) | Yes — One hour by default, in this process only. | Yes — While the process and retained record remain. | Yes |
+| [Temporal](#temporal) | Partial — Namespace policy; workflow Retention is ignored. | Yes — Subject to native history retention. | No — Multiple attempts with zero initial backoff are rejected. |
+| [Restate](#restate) | Yes — One day by default. | Partial — Requires positive retention and persisted preflight-retention activation. | Partial — Explicit zero is supported with native millisecond precision. |
 
-Hatchet is pending and unpublished, so it is excluded from the availability
-matrices. Its retained notes describe a development profile, not a published
-or independently verified driver. Reported concurrent conformance exposes an SDK
-shutdown race; startup cancellation and asynchronous SDK panics also remain
-unresolved. Keep the
-[native limits](#hatchet) as pending context, not an installation recommendation.
+Cancellation acceptance alone does not establish a retained outcome or permission
+to reuse an identifier. See [Restate retention](#cancellation-retention) before
+depending on duplicate protection for delayed or queued runs.
 
-Use the [shared client/worker observability wiring](overview.md#events-and-telemetry)
-for every driver below.
-For Temporal, deploy carrier-aware workers before traced producers: old workers
-cannot decode traced input envelopes. Pause producers if worker-first rollout
-cannot be guaranteed. Legacy untraced histories retain their argument shape.
+All three drivers support [client and worker observations](running-workflows.md#events-and-telemetry).
+Their propagation boundaries differ:
 
-| Driver | Client calls | Step attempts | Start-to-attempt carrier | `Child` / `Spawn` carrier |
+| Driver | Client Calls | Step Attempts | Start-To-Attempt Carrier | Child/Spawn Carrier |
 | --- | --- | --- | --- | --- |
 | [Memory](#memory) | Yes | Yes | Yes — Copied start carrier. | Yes |
-| [Temporal](#temporal) | Yes | Yes | Yes — Input envelope. | Yes |
-| [Restate](#restate) | Yes | Yes | Yes — Invocation headers, extracted in Run attempts. | Partial — Spawn only; Child is unsupported. |
-
-Examples assume the [overview's definitions](overview.md#a-first-workflow).
-Handle registry/constructor errors before using results or starting hosts; wire
-lifecycle hooks with the [host guide](shared-worker-host.md).
+| [Temporal](#temporal) | Yes | Yes | Yes — Dedicated input envelope. | Yes |
+| [Restate](#restate) | Yes | Yes | Yes — Invocation headers extracted in actual attempts. | Partial — Spawn only; Child is unsupported. |
 
 ## Memory
 
-Memory ships in `arkoren.dev/core`. Runs cannot survive process exit; sleeps,
-retries, timeouts, and delays use the system clock, controlled by `testing/synctest`.
+Memory is included in `arkoren.dev/core`. It runs workflows in local goroutines;
+replicas share neither runs nor signals, and restart loses both. It uses the
+system clock, so [synctest](testing.md#workflow-decisions) can advance waits and
+backoff without real delays. It does not replay coordination code.
 
-### Connecting
+### Connecting Locally
 
-Build from a registry and wrap the driver in the ordinary client:
+Build a registry before constructing the driver:
 
 ```go
-import (
-	"arkoren.dev/core/service/workflow"
-	"arkoren.dev/core/service/workflow/memoryworkflow"
-)
+import "arkoren.dev/core/service/workflow/memoryworkflow"
 
 registry, err := workflow.Handlers(Onboard, SendWelcome)
+```
+
+After handling `err`, wrap the driver in the ordinary facade:
+
+```go
 driver := memoryworkflow.New(registry)
 client := workflow.NewClient(driver)
 ```
 
-The memory driver has no startup hook. Register `driver.Stop` for application
-cleanup with a bounded context; it cancels runs but cannot forcibly terminate
-application code. See [Lifecycle and Ownership](../application/lifecycle-and-ownership.md).
+There is no startup hook. Register `driver.Stop` with application cleanup and
+give cleanup a deadline. Stop cancels runs and joins workflow and step-attempt
+goroutines until they return or its context ends. It cannot kill code that
+ignores cancellation; a later Stop can continue joining it. After Stop, new
+starts return `memoryworkflow.ErrStopped`. A nil registry executes nothing.
 
-### Configuration
+### Local Policy
 
-`memoryworkflow.Builder.Logger` selects logging (nil: `slog.Default()`). There are
-no connection, persistence, or pool settings; step policies belong to definitions.
+The only driver setting is `memoryworkflow.Builder.Logger`; nil selects
+`slog.Default()`. Step retry and timeout policies belong to the definitions,
+not the driver. Finished runs remain for their `Retention`, one hour when zero;
+expiry removes results and duplicate-start protection.
 
-### Starting and confirming onboarding
+Use [Starting Runs](running-workflows.md#starting-runs) with this `client`.
+With the confirmation-aware definition, signaling then reading `Result` returns
+the supplied token. Signals buffer at most 1024 undelivered values per run and
+signal name; another send returns `memoryworkflow.ErrQueueFull` without enqueuing
+that value. Unknown or finished runs return `workflow.ErrNotFound`.
 
-Use the [start/signal examples](overview.md#talking-to-a-run) with this `client`.
-`Result` returns the confirmation token. Client and worker must share this driver.
-
-### Behavior and limits
-
-Runs live in process-local goroutines: restart loses them, and signals to other
-replicas find no run. A nil registry runs nothing. `Stop` cancels runs; afterward,
-`Start` returns `memoryworkflow.ErrStopped`. Cancellation and timeouts cancel
-the run's context, not code that ignores it. Give `Stop` a deadline: its context
-bounds the cleanup wait, not the lifetime of noncooperative application code.
-Arrange for workflow and step bodies to honor cancellation, and separately join
-any background work your application starts.
-
-Signals buffer up to 1024 values per run and signal name, then return
-`memoryworkflow.ErrQueueFull`. Unknown or finished runs return `workflow.ErrNotFound`.
-Without replay, this driver cannot reveal nondeterministic functions.
-
-### API references
-
-See [the `memoryworkflow` API reference](https://pkg.go.dev/arkoren.dev/core/service/workflow/memoryworkflow).
+See the [`memoryworkflow` API reference](https://pkg.go.dev/arkoren.dev/core/service/workflow/memoryworkflow).
 
 ## Temporal
 
-Temporal maps workflows to workflows and steps to activities, using its retries,
-timers, signals, and replay. Choose it for an existing Temporal engine or its tooling.
-
-### Installation
+Temporal executes workflow functions as native workflows and steps as activities.
+Choose it when you use Temporal's workers and tooling, or need parent-owned child
+runs. From your application's module directory, install the driver:
 
 ```sh
 go get arkoren.dev/driver/temporal
 ```
 
-### Connecting
+### Connecting Workers
 
-Register definitions on a [Temporal host](shared-worker-host.md#temporal) before
-`host.Start`. Construction does no I/O; `runner.Driver()` supplies the driver:
+Create a [Temporal host](shared-worker-host.md#temporal) and register your runner
+before starting that host. Construction does no network I/O:
 
 ```go
 import "arkoren.dev/driver/temporal/temporalworkflow"
 
-registry, err := workflow.Handlers(Onboard, SendWelcome)
 runner, err := temporalworkflow.NewRunner(host, registry)
+```
+
+After checking the constructor error, use its client driver:
+
+```go
 client := workflow.NewClient(runner.Driver())
 ```
 
-A client-only process sets `temporal.Builder.NoWorker(true)` in the host callback
-and supplies the registry in a driver callback:
+For a separate producer process, set the host's `NoWorker(true)` and use
+`NewDriver`, supplying the registry to derive native execution timeouts and
+reject unknown workflow names:
 
 ```go
 driver, err := temporalworkflow.NewDriver(host, func(driver *temporalworkflow.DriverBuilder) {
 	driver.Registry(registry)
 })
 ```
-Client-only construction can precede or follow host startup. A dialing host
-needs `Start` before operations; `NewFrom` exposes its supplied native client
-immediately, without transferring ownership or replacing worker startup.
 
-### Configuration
+Without that optional registry, the runner still enforces `MaxDuration`, but the
+client sets no server execution-timeout backstop. A dialing host needs `Start`
+before calls; a host made with `temporal.NewFrom` exposes the borrowed client
+immediately without replacing worker startup or taking ownership of that client.
 
-Worker and client `DriverBuilder.Prefix` and `RunnerBuilder.Prefix` must match
-(default `arkoren`) to address the same registered types.
+### Matching Processes
 
-A client-only driver needs definitions via `DriverBuilder.Registry` to set
-execution timeouts from `MaxDuration`; an
-unknown workflow name then returns `workflow.ErrNotFound`. `NewRunner` takes
-its registry positionally, and `RunnerBuilder` has no `Registry` setter.
-Both builders expose `Logger`; nil selects `slog.Default()` for adapter records.
-Workflow logging uses Temporal's replay-aware logger, resolves bound and grouped
-`slog.LogValuer` attributes before forwarding, and retains native level filtering.
-The host's settings (address, namespace, task queue, TLS) are in
-[Shared Worker Host](shared-worker-host.md#temporal).
-Metadata stays in memo; no host propagator hook is required. Observe the
-[worker-first tracing rollout constraint](#compatibility-matrix) before enabling
-traced producers.
+Client and worker must agree on namespace, task queue, codec, and prefix. Both
+`DriverBuilder.Prefix` and `RunnerBuilder.Prefix` default to `arkoren`; both also
+accept a `Logger`, defaulting to `slog.Default()` for adapter records. The
+runner's required positional registry also supplies its driver registry; there
+is no `RunnerBuilder.Registry` setting.
 
-### Starting and confirming onboarding
+Workflow logging uses Temporal's replay-aware logger and native level filtering.
+Bound and grouped `slog.LogValuer` attributes resolve before forwarding, preserving
+their redaction behavior. Host connection, TLS, and native SDK options belong to
+[Worker Hosts](shared-worker-host.md#temporal).
 
-Use the [start/signal examples](overview.md#talking-to-a-run), matching namespace,
-task queue, and driver prefix across processes. `Result` returns the token.
+The workflow type is `<prefix>-wf-<name>`, its step activity is
+`<prefix>-step-<name>`, and the facade run ID is the native workflow ID. IDs are
+unique across workflow names in one namespace while history remains. Result,
+status, cancel, and signal calls describe and verify the workflow type first;
+a wrong workflow name returns `ErrNotFound` without issuing a command or returning
+output. Grant describe permission as well as command permissions. These checks
+do not replace application authorization.
 
-### Behavior and limits
+Use the [run-control examples](running-workflows.md) after host startup. With
+matching routing, a signaled onboarding run returns its confirmation token.
+Metadata is stored in memo; tracing uses a separate input envelope and needs no
+host propagator hook. Deploy carrier-aware workers before traced producers:
+older workers cannot decode traced envelopes. Pause producers if worker-first
+rollout is not possible. Legacy untraced histories keep their argument shape.
 
-A workflow type is `<prefix>-wf-<name>`, a step is an activity named
-`<prefix>-step-<name>`, and the run identifier is the Temporal workflow ID. Start
-rejects a duplicate identifier even after that run has ended while native history
-is retained, so identifiers are unique per namespace within that window. The
-failure is `workflow.ErrAlreadyStarted`. `Result`, `Status`, `Cancel`, and `Signal`
-describe the native execution and verify its
-workflow type first. A handle with the wrong workflow name returns
-`workflow.ErrNotFound`, without returning output or issuing the command. Grant
-native describe permission as well as the permissions for the requested operation.
+### Retry Limits
 
-`Delay` becomes a start delay. A positive step timeout becomes the activity's
-start-to-close timeout. `StepBuilder.Timeout(0)` leaves that attempt timeout
-unset; the activity's schedule-to-close bound is the workflow's `MaxDuration`,
-not an invented one-minute limit. `workflow.Permanent` becomes a non-retryable
-error. Positive retry backoff is capped from the first retry; an uncapped policy
-requests Go's largest duration rather than Temporal's implicit retry cap. The
-server can reduce that value: native server 1.29.1 persisted `876000h` (100 times
-365 days) in the tested two-attempt policy. This is not a universal backend bound
-or a guarantee that every Go duration is representable; check the persisted
-policy on your server.
+Positive step timeouts become activity start-to-close timeouts. `Timeout(0)`
+removes that attempt limit; the workflow's `MaxDuration` supplies the native
+schedule-to-close bound. A permanent failure becomes non-retryable.
+The worker logs an error for each failed step attempt, including attempts that
+will be retried; an attempt log does not by itself mean the run failed.
 
-Exact multi-attempt retries with zero initial backoff are not representable by
-Temporal's native activity retry policy. The affected `Step` call returns
-`workflow.ErrUnsupported` before encoding or scheduling any activity, even if its
-handler would succeed on the first attempt. There is no one-nanosecond approximation
-or whole-workflow retry fallback. Single attempts and positive initial backoff
-remain supported. To retain an intentionally positive delay, configure it
-explicitly, including on derived steps; the old fallback was one second before
-applying the cap.
+Positive backoff caps apply from the first retry. An uncapped declaration asks
+for Go's largest duration rather than the native implicit cap, but server limits
+can reduce it. The tested two-attempt policy on native server 1.29.1 retained
+`876000h`; this is evidence for that server and policy, not a universal maximum.
+Inspect the persisted policy if this limit matters.
+
+Multiple attempts with zero initial backoff return `workflow.ErrUnsupported`
+before activity encoding or scheduling, even if the handler would succeed first
+time. The driver does not substitute a positive interval or retry the whole
+workflow. Single attempts and explicitly positive backoff remain supported.
 
 > [!WARNING]
-> Older zero-initial-backoff histories recorded an activity command that the new
-> worker now rejects. Replaying them on that worker can fail with `TMPRL1100`.
-> Keep affected executions on their original workers until completion, or drain
-> them before replacement. An unversioned task queue shared by old and new workers
-> is not safe routing. The driver adds no replay marker or automatic migration;
-> replay representative retained histories before rollout.
+> Older zero-backoff histories recorded an activity command that replacement
+> workers now reject; replay can fail with `TMPRL1100`. Keep affected runs on
+> their original workers until completion, or drain them before replacement.
+> Mixed workers on an unversioned task queue are not safe routing. There is no
+> automatic migration or added replay marker; replay retained histories before
+> rollout.
 
-A sleep is a Temporal timer, and `Wait` and `Select` wait
-on signal channels, cancellation, and timers. `MaxDuration` is enforced by a
-timer inside the workflow, with Temporal's execution timeout as a backstop.
+### Run Lifetimes
 
-Step-result, child-result, existing-child join, and Spawn acknowledgment waits
-observe the parent's cancellation and `MaxDuration`, without waiting for the
-native future itself to finish. This ends the parent's wait, not arbitrary
-application code that ignores cancellation.
+Sleep uses a native timer; waits select over signals, timers, and cancellation.
+An internal timer enforces `MaxDuration`, with the native execution timeout as a
+backstop. Step, child-result, existing-child join, and Spawn-acknowledgment waits
+end on the parent's cancellation or duration limit without waiting for their
+native futures to finish.
 
-`Child` owns cancellation only after Temporal atomically creates the native child;
-newly created children stop with the parent through cancellation or parent-close
-termination. If that ID already exists, the runner's join activity observes its
-existing result, ignores the new input, and acquires no ownership, even if another
-parent created the run. Parent cancellation or timeout ends only that observation.
-Replay preserves the native creation decision without a new history command or
-version marker. `Spawn` uses detached ownership but waits for start acknowledgment
-within the parent's budget. An acknowledgment-wait error does not prove the child
-never started: reconcile the same ID before submitting replacement work.
-External client `Start` still rejects duplicate IDs.
+Only an atomically created child is owned by the parent; it receives cancellation
+or parent-close termination. Joining an existing ID observes its original run
+and ignores new input, without canceling that run when the parent ends. This
+ownership decision survives replay without another history command or marker.
+Spawn is detached but waits for start acknowledgment within the parent's budget.
+An acknowledgment error does not prove the child never started: reconcile that
+same ID before replacing work.
 
-Result conversion preserves the terminal failure in native chain order. An outer
-timeout maps to `workflow.ErrTimeout` even if it carries an earlier application
-failure; an outer application failure is not replaced by a timeout cause.
-Application error kinds remain matchable, and unrelated native lookup/transport
-errors remain errors, including non-comparable Go error values.
+Terminal errors preserve native chain order: an outer timeout remains
+`ErrTimeout`, and an outer application error is not replaced by a timeout cause.
+Application error kinds remain matchable; unrelated lookup and transport errors
+remain errors. Workflow panics fail the run rather than retrying a workflow task.
+`Retention` and `Description` are ignored; retention belongs to the namespace.
+Poll `c.Done()` non-blockingly, never by a blocking native channel read.
 
-`Retention` and `Description` are ignored.
-Inside the workflow, poll `Done` with a non-blocking `select` and never wait on
-it, because Temporal reports a blocked read as a deadlock. A panic in workflow
-code fails the workflow and is not retried as a task.
+### Native Access
 
-### Using Temporal SDK capabilities
+`host.Client()` exposes `go.temporal.io/sdk/client.Client`, and `c.Raw()` exposes
+`go.temporal.io/sdk/workflow.Context`. Native operations bypass facade observations
+and do not relax the [replay rules](overview.md#replay-rules).
 
-`host.Client()` exposes `client.Client` from `go.temporal.io/sdk/client`; the
-host guide shows borrowing one with `temporal.NewFrom`. `c.Raw()` exposes
-`go.temporal.io/sdk/workflow.Context`; follow the
-[replay rules](overview.md#rules-for-workflow-functions).
+### Local Engine
 
-### Running locally
-
-With Docker installed, save this as your application's `compose.yaml`:
+For a disposable development engine, save this in your application's `compose.yaml`:
 
 ```yaml
 services:
@@ -277,415 +243,145 @@ services:
       - "127.0.0.1:17233:7233"
 ```
 
-Run `docker compose up -d`, then
+Run `docker compose up -d`, then run
 `docker compose exec temporal temporal operator cluster health --address 127.0.0.1:7233`
-until it succeeds. Create the host using the published module:
+until it succeeds. Configure the host's `HostPort("127.0.0.1:17233")` and
+`TaskQueue("onboarding")`, then register the runner and
+[lifecycle hooks](shared-worker-host.md#temporal). Start a run and read its result
+to verify delivery, not merely server health. `docker compose down --volumes`
+removes the disposable engine and history. The CLI image tag does not establish
+the native server's version or duration limits.
 
-```go
-import "arkoren.dev/driver/temporal"
-
-host := temporal.New(func(worker *temporal.Builder) {
-	worker.HostPort("127.0.0.1:17233")
-	worker.TaskQueue("onboarding")
-})
-```
-
-Wire the runner and host hooks, then start/signal onboarding; `Result` returns
-the token. This is development-only: `docker compose down --volumes` deletes history.
-
-### API references
-
-See [the `temporalworkflow` API reference](https://pkg.go.dev/arkoren.dev/driver/temporal/temporalworkflow).
-
-## Hatchet
-
-> [!NOTE]
-> Pending and unpublished: `arkoren.dev/driver/hatchet` is not available to
-> install. The following examples and operational notes are retained development
-> context, not usable setup instructions or verified public API documentation.
-> Choose memory, Temporal, or Restate above for an available driver.
-
-Hatchet maps workflows to durable tasks and steps to standalone tasks. Durable
-eviction needs engine v0.80.0+, but the repaired registered retry timing needs
-v0.111.0+ with an adequate native retry-delay cap. The host's older-version gate
-does not establish retry-timing compatibility. The local profile below pins
-v0.111.0, which supports these overrides; the pinned SDK's startup and shutdown
-limits still apply.
-
-### Installation
-
-Installation is unavailable until the Hatchet module is published.
-
-### Connecting
-
-With a [configured Hatchet host](shared-worker-host.md#hatchet), register the
-definitions before `host.Start`, then wrap the runner's driver:
-
-```go
-import "arkoren.dev/driver/hatchet/hatchetworkflow"
-
-registry, err := workflow.Handlers(Onboard, SendWelcome)
-runner, err := hatchetworkflow.NewRunner(host, registry)
-client := workflow.NewClient(runner.Driver())
-```
-
-A client-only process sets `hatchet.Builder.NoWorker(true)` in its host callback
-and uses `hatchetworkflow.NewDriver(host)` without a registry.
-
-### Configuration
-
-Match `DriverBuilder.Prefix`, `RunnerBuilder.Prefix` (default `arkoren`), and the
-effective host namespace across worker/client processes. Within one tenant,
-different namespaces isolate executions with the same prefix, workflow name,
-and logical ID. Namespaces route; they do not authorize.
-
-Both builders expose the same timing settings. `ScheduleTimeout` (24 hours)
-bounds the wait for a worker slot. Once admitted, a waiting run keeps its slot
-for `EvictionTTL` (one minute) before leaving it. `TimeoutMargin` (one minute)
-is added to `MaxDuration` for Hatchet's execution timeout and also limits the
-start delay you can request.
-
-`Lookback` (30 days) bounds searches for runs started elsewhere and sets
-signal-marker idempotency; see retention requirements below. `PollInterval`
-(five seconds, jittered) bounds result-poll gaps. `LookupGrace` (1.5 seconds)
-budgets discovery retry waits while engine listings become visible; negative
-disables waiting. Native request time is additional, so it is not an operation
-deadline.
-The host's options are in [Shared Worker Host](shared-worker-host.md#hatchet).
-Hatchet's carrier uses a dedicated wire field, not identity metadata. Older
-workers ignore it; upgrade them before expecting the
-[shared trace behavior](overview.md#events-and-telemetry).
-
-### Starting and confirming onboarding
-
-Use the [start/signal examples](overview.md#talking-to-a-run), matching host
-namespace and driver prefix. `Result` returns the token. Use new logical IDs for
-unrelated work: duplicate-start protection expires.
-
-### Behavior and limits
-
-Hatchet scopes run identifiers by the effective host namespace, driver prefix,
-workflow name, and logical ID. A duplicate start of the same tuple is
-`workflow.ErrAlreadyStarted`, also after the run has finished, until the
-MaxDuration plus Retention window expires. If the workflow omits `Retention`,
-the driver uses `Lookback` for that part of the window.
-
-`NewRunner` rejects registered `StepBuilder.Timeout(0)` with
-`workflow.ErrUnsupported` before registration: Hatchet needs a finite native
-execution timeout. It also rejects retry counts, factors, caps, and timeout
-arithmetic outside supported native ranges instead of narrowing or overflowing
-them. Step timeouts are cooperative; a late successful return after the local
-deadline becomes `workflow.ErrTimeout`. Native execution timeouts round up to
-whole seconds, with one second of reporting grace for steps; neither timeout
-forcibly stops application code.
-
-Registered `Initial`, `Factor`, and `Max` produce explicit native retry delays.
-The SDK truncates them to milliseconds, and a supporting engine can clamp them
-to its configured maximum. Engine v0.111.0+ is required to honor these overrides;
-older engines use factor/max backoff that cannot preserve arbitrary initial
-delays. An explicit zero asks for no deliberately positive retry delay, not zero
-scheduling latency or unlimited attempts. The SDK's precision and the engine's
-configured cap still apply on supporting engines.
-
-A `Delay` is a durable sleep at run start; exceeding the timeout margin returns
-`workflow.ErrUnsupported`. Options given to a step for a single call can only
-shorten the attempts and the timeout registered for it. Nonzero per-call backoff
-is ignored; a derived zero initial delay overrides the registered positive delay.
-Before deploying that override, follow the [affected-history rollout](#upgrading-legacy-runs).
-Hatchet delivers the newest of several events that arrived before a
-wait, so the first value of a signal is stored in a small marker run, and
-waiters read it from there to keep the "first value wins" rule of the contract.
-Signal values are scoped to the verified physical Hatchet execution, not the
-reusable application ID. Reusing an application ID after workflow TTL expiry
-cannot deliver an earlier execution's signal.
-
-Marker idempotency lasts `Lookback` (30 days) from the first signal. Keep it and
-engine event/marker retention through queueing, execution, and recovery: expiry
-can lose signals or first-value guarantees. Separately, logical duplicate-start
-protection expires `MaxDuration + Retention` after submission. Size both windows
-for your required lifetime; see [retention details](hatchet-recovery.md#retaining-signals-through-recovery).
-
-Signals accepted while queued remain eligible while their history is retained.
-`MaxDuration` begins at the first worker invocation, with `Delay` added to the
-deadline; `ScheduleTimeout` separately bounds worker admission.
-
-`Child` and `Spawn` return `workflow.ErrUnsupported` without submitting work.
-Workflows calling them fail unless they handle that error. `Step` and external
-client `Start` remain supported. Native submission or ordinary `Start` inside a
-parent is not a safe workaround: it can repeat completed child work on replay.
-
-Discovery and signals verify the exact workflow and physical execution.
-Unproven ownership returns `workflow.ErrNotFound`; verification can fail after
-work starts. The driver caches only verified executions, not submission receipts.
-Each logical lookup rediscovers and verifies the current execution; a recently
-verified execution enables retries within its remaining `LookupGrace`, while an
-unknown ID gets one discovery pass. The final retry uses the remaining grace
-instead of dropping it when a full backoff would not fit. This does not guarantee
-visibility or extend the wait window; native request time remains additional.
-Reconcile trusted engine data before treating a verification error as proof that
-no work started. See the
-[recovery guide](hatchet-recovery.md#keeping-execution-identity-stable) for execution
-keys, marker ownership, and wire fields. Native startup and asynchronous SDK
-panic limits remain qualified by the pinned SDK; do not assume a fixed startup
-time or that every worker failure returns from `host.Start`. See the
-[host lifecycle limits](shared-worker-host.md#hatchet).
-
-Attempt telemetry observes the handler's return, not subsequent native result
-acceptance. A handler that returns nil after its deadline produces one successful
-handler-attempt observation, while the adapter reports native
-`workflow.ErrTimeout`. The adapter emits no second attempt observation for that
-decision. Client `Result` observes the timeout separately; the successful handler
-observation is not durable engine completion.
-
-### Upgrading legacy runs
-
-Legacy `<prefix>:<name>:<id>` runs are inaccessible to new clients, and new
-workers reject them before application code, including during replay.
-
-> [!WARNING]
-> Pause producers and signal senders, drain old runs with the old
-> deployment, then replace workers and clients together before resuming. Do not
-> mix old and new formats in a rolling deployment. Manage remaining old runs
-> through Hatchet only after verifying their exact workflow and physical ID.
-> Reconcile their effects before starting those logical IDs again: new keys do
-> not collide with old idempotency records and can repeat business work.
-
-Drain v2 runs lacking a signal version or using `signal_version: 1` too. Workers
-accept only version 2; older v2 runs remain queryable/cancelable, not signalable
-or replayable. Follow the [upgrade procedure](hatchet-recovery.md#replacing-an-older-deployment),
-keeping namespace and prefix stable while runs must remain accessible.
-
-> [!WARNING]
-> Child/Spawn calls now return `workflow.ErrUnsupported`, including on replay of
-> `signal_version: 2` workflows. Pause producers, drain affected workflows on the
-> old deployment, then replace clients/workers together. Before retrying or
-> replacing runs, reconcile existing child effects by verified physical ID:
-> containment does not undo work. Never mix workers that submit children with
-> workers that reject them.
-
-Derived zero-delay overrides add a private `retry_without_delay` step-input field;
-old workers ignore it. Upgrade every worker before relying on that field. Drain
-existing workflows containing affected derived calls on their original deployment
-before replacing it: replay can otherwise change a recorded native child input.
-Unaffected calls retain their earlier input shape; this adds no durable node or
-automatic history migration.
-
-### Using Hatchet SDK capabilities
-
-`host.Client()` exposes `*hatchet.Client` from
-`github.com/hatchet-dev/hatchet/sdks/go`; `c.Raw()` exposes its `DurableContext`.
-Follow the [replay rules](overview.md#rules-for-workflow-functions); native
-submission does not supply portable Child/Spawn trigger-and-join behavior.
-
-### Running locally
-
-With Docker installed, the following `compose.yaml` supplies an isolated
-development engine, never production. It pins engine v0.111.0, the first release
-with explicit retry-delay overrides, to a multi-architecture image digest. This
-does not update the Go SDK or prove a sufficient engine retry-delay cap for your
-policy. The startup and shutdown limits above still apply despite a passing full
-native suite. Validate your deployed profile before depending on those guarantees.
-
-```yaml
-services:
-  postgres:
-    image: postgres:15.19
-    environment:
-      POSTGRES_USER: hatchet
-      POSTGRES_PASSWORD: hatchet
-      POSTGRES_DB: hatchet
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hatchet -d hatchet"]
-      interval: 2s
-      timeout: 5s
-      retries: 20
-  hatchet:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-lite:v0.111.0@sha256:0776a420bc6af14cc0ca4e5ddb0f6ad6e64375ccbeb2accdc1a88c9877969085
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://hatchet:hatchet@postgres:5432/hatchet?sslmode=disable
-      SERVER_AUTH_COOKIE_DOMAIN: localhost
-      SERVER_AUTH_COOKIE_INSECURE: "t"
-      SERVER_AUTH_SET_EMAIL_VERIFIED: "t"
-      SERVER_GRPC_BIND_ADDRESS: 0.0.0.0
-      SERVER_GRPC_INSECURE: "t"
-      SERVER_GRPC_BROADCAST_ADDRESS: localhost:17077
-      SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: localhost:7077
-      SERVER_GRPC_PORT: "7077"
-      SERVER_URL: http://localhost:18888
-      SERVER_DEFAULT_ENGINE_VERSION: V1
-    ports:
-      - "127.0.0.1:17077:7077"
-      - "127.0.0.1:18888:8888"
-```
-
-Run `docker compose up -d`, then
-`curl --fail http://localhost:18888/api/ready` until it succeeds. Open
-`http://localhost:18888`, sign in with the local Hatchet Lite administrator
-account (`admin@example.com`, initial password `Admin123!!`), and create an API
-token for its tenant. Set `HATCHET_CLIENT_TOKEN` to that token. Never use these
-local credentials or plaintext transport in production.
-
-```go
-import "arkoren.dev/driver/hatchet"
-
-host := hatchet.New(func(worker *hatchet.Builder) {
-	worker.HostPort("127.0.0.1:17077")
-	worker.TLSStrategy("none")
-})
-```
-
-Wire the runner/hooks and start/signal onboarding; `Result` returns the token.
-`docker compose down --volumes` deletes the engine, database, tokens, and history.
-
-### API references
-
-The [`hatchetworkflow` API reference URL](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow)
-is pending publication; it does not establish package availability.
+See the [`temporalworkflow` API reference](https://pkg.go.dev/arkoren.dev/driver/temporal/temporalworkflow).
 
 ## Restate
 
-Restate serves workflows as workflow services and steps inline as durable
-actions. Choose it for durable runs on Restate without a separate worker fleet.
-
-### Installation
+Restate calls an HTTP endpoint in your application. Workflow functions become
+workflow services, and steps run inline as durable actions. Choose it for durable
+execution through that serving model when you do not need parent-owned `Child`
+runs. Install from your application's module directory:
 
 ```sh
 go get arkoren.dev/driver/restate
 ```
 
-### Connecting
+### Connecting Workers
 
-First configure a reachable endpoint and request-identity keys with the
-[Restate host guide](shared-worker-host.md#restate). Before `host.Start`, bind one
-service per workflow through the runner, then create the client driver:
-
-> [!WARNING]
-> Upgrading changes the journal sequence of workflows that called `Child`:
-> those calls now return `workflow.ErrUnsupported`. Drain affected runs on their
-> original deployment before replacement; do not force-migrate their histories.
-> The driver adds no replay marker or automatic migration. Completed retained
-> outputs remain readable, but `Spawn` is not an equivalent cancellation fallback.
+Configure a reachable endpoint and request-identity keys using the
+[Restate host](shared-worker-host.md#restate). Before `host.Start`, bind the
+workflow services and construct a separate client driver:
 
 ```go
 import "arkoren.dev/driver/restate/restateworkflow"
 
-registry, err := workflow.Handlers(Onboard, SendWelcome)
-_, err = restateworkflow.NewRunner(host, registry)
+runner, err := restateworkflow.NewRunner(host, registry)
+```
+
+After handling that error, create the facade:
+
+```go
 driver, err := restateworkflow.NewDriver(host)
 client := workflow.NewClient(driver)
 ```
 
-Register `host.Start`/`host.Stop` with `composer.Startup`/`composer.Cleanup` and `host.Serve`
-with `composer.Run` inside a composer, as in
-the host guide. Binding neither starts the listener nor registers the deployment.
+Binding does not listen, serve, or register a deployment. Register host `Start`
+and `Stop` as startup/cleanup hooks and `Serve` as a runner, as described in
+[Worker Hosts](shared-worker-host.md#restate). A producer-only process uses
+`ClientOnly(true)` and `NewDriver`, which binds no services.
 
-A client-only process sets `restate.Builder.ClientOnly(true)` in its host callback
-and uses `NewDriver`, which binds nothing. See [Shared Worker Host](shared-worker-host.md#restate)
-for identity keys and other host options.
+### Matching Processes
 
-### Configuration
+Use the same codec and prefix in every client and worker. Both role builders
+expose `Prefix` (default `arkoren`) and `Logger` (nil selects `slog.Default()`).
+Service naming removes prefix separators and uppercases the following letter;
+the default workflow `onboard` becomes `ArkorenWf_onboard`. `runner.Services()`
+returns the bound service names in workflow-name order.
 
-Match `Prefix` (default `arkoren`) and codec across processes so the driver
-addresses the runner's bound services.
-`DriverBuilder` and `RunnerBuilder` each expose `Prefix` and `Logger`. When
-forming service names, the driver removes dots and dashes from the prefix and
-uppercases the following letter.
-Restate's `arkoren-trace-*` invocation headers are separate from `arkoren-meta-*`
-metadata and native attempt headers. Older workers ignore them; upgrade workers
-before expecting the [shared trace behavior](overview.md#events-and-telemetry).
+After deployment registration, use [run control](running-workflows.md) to start
+and signal the confirmation-aware onboarding workflow. Reading the token from
+`Result` verifies endpoint delivery. Duplicate starts return `ErrAlreadyStarted`;
+an undeployed workflow returns `ErrNotFound`.
 
-### Starting and confirming onboarding
+Signals resolve durable promises, keeping the first value. For accepted runs
+still queued or delayed, the adapter forces delivery only after proving pending
+state. Lookup and output-probe failures remain errors rather than being treated
+as missing runs. Cancel needs access to admin SQL introspection as well as ingress.
 
-After endpoint registration, use the [start/signal examples](overview.md#talking-to-a-run)
-with matching prefix/codec across processes. `Result` returning the token confirms
-execution by that endpoint.
+Trace headers use `arkoren-trace-*`, separate from `arkoren-meta-*` metadata and
+native attempt headers. Upgrade old workers before expecting trace continuity.
 
-### Behavior and limits
+### Retry Limits
 
-Duplicate starts return `workflow.ErrAlreadyStarted`; undeployed workflows
-return `workflow.ErrNotFound`. Result errors preserve sentinel and application
-error kinds. Signals resolve durable promises with first-value-wins behavior.
-`Cancel` closes a local run's `Done`, then requests native cancellation at a
-durable-operation boundary. Retention before execution is conditional; configure
-the [preflight-retention profile](#retaining-canceled-runs-before-execution) before
-relying on canceled results or duplicate-start protection for delayed or queued
-runs. Do not use cancellation acceptance or a missing lookup alone as permission
-to reuse a logical ID.
+The adapter explicitly supplies initial delay, multiplier, attempts, and maximum
+interval. Zero initial delay stays zero; zero maximum requests Go's largest
+duration instead of the SDK default cap. Native delays have millisecond precision
+and the multiplier is `float32`.
 
-The adapter explicitly supplies the initial retry interval, multiplier, maximum
-attempts, and maximum interval. Zero initial backoff remains an explicit zero;
-zero maximum uses Go's largest duration instead of the SDK's default cap. Native
-retry timing has millisecond precision and the multiplier uses `float32`.
-Step attempts run cooperatively, without an adapter goroutine that abandons the
-body. After the body returns, its context is checked: late success after an
-attempt deadline is `workflow.ErrTimeout`, not a successful result. A body that
-ignores cancellation can still prevent return.
+Step execution is cooperative. Positive `Timeout` supplies a context deadline;
+after the body returns, late success becomes `workflow.ErrTimeout`. No adapter
+goroutine abandons the body to escape that deadline, so noncooperative code can
+prevent return. Zero supplies no attempt deadline. The SDK logs an error for
+each failed attempt it retries.
 
-`MaxDuration` is a durable timer that begins when the run first executes, and it
-is enforced at blocking runtime operations; it does not forcibly interrupt a
-running Go step. The handler's own inactivity timeout is a fixed 24 hours.
-`Child` returns `workflow.ErrUnsupported` before any send, attach, or cancellation:
-the durable receipt identifies an invocation but cannot atomically distinguish
-creation from joining across replay. A lookup followed by a send cannot establish
-cancellation ownership. `Spawn` remains supported only for detached work; it is
-not a fallback when the parent must own child cancellation.
+### Run Lifetimes
 
-`Retention` becomes the Restate workflow retention, one day by default. The Restate
-SDK logs an error line for each failed step attempt that will be retried.
+`MaxDuration` starts a durable timer when execution begins, not at submission.
+Blocking runtime operations observe it; it does not forcibly interrupt running
+Go code. Native handler inactivity and abort timeouts are fixed at 24 hours.
+Cancel closes a local attempt's Done and requests native cancellation; a running
+step or another process observes it at a durable-operation boundary.
 
-The Restate server must reach the advertised URL, and the deployment must be
-registered, by `restate.Builder.Register(true)` or by an operator. Each rollout is a new
-deployment, so keep workflows compatible with runs in flight. The Cancel call
-reads Restate's introspection tables through the admin API, which must therefore
-be reachable. Secondary result and pending-state probes preserve lookup failures
-instead of treating unavailable APIs as `workflow.ErrNotFound`. Signal delivery
-is forced only after proving that the invocation is pending. The local server
-profile pins Restate 1.7.12.
+`Child` returns `ErrUnsupported` before send, attach, or cancellation. A durable
+receipt identifies an invocation but cannot atomically distinguish creating it
+from joining another owner's run across replay. A lookup then send is not safe
+ownership. Spawn remains supported for explicitly detached work only.
 
-### Retaining canceled runs before execution
+> [!WARNING]
+> Drain runs that called the earlier `Child` implementation on their original
+> deployment before replacing it. Rejection changes their journal sequence;
+> forced registration does not migrate that history. Completed retained outputs
+> remain readable. Spawn is not an equivalent cancellation fallback.
 
-Portable retained cancellation of delayed or queued workflows requires positive
-effective workflow `Retention` and the persisted server feature
-`preflight_invocation_termination_retention`. With that profile, a canceled
-pre-execution run retains `workflow.ErrCanceled`, `Canceled` status, and duplicate
-protection for its retention window. Without the feature, the legacy server
-profile discards the invocation: `Result` and `Status` return
-`workflow.ErrNotFound`, a repeated `Cancel` can return `ErrNotFound`, and `Start`
-can immediately reuse the key. This native behavior is not permission to repeat
-business work without reconciliation.
+### Cancellation Retention
 
-Restate 1.7.12 includes the opt-in feature introduced in 1.7.8. Operators request
-it with
+`Retention` keeps finished outputs and promises for the configured window; zero
+uses Restate's one-day default. Retained cancellation of delayed or queued runs
+additionally requires positive effective retention and persisted activation of
+`preflight_invocation_termination_retention` on the relevant partitions.
+
+With that profile, pre-execution cancellation keeps `ErrCanceled`, `Canceled`
+status, and duplicate protection for the retention window. Without it, the legacy
+profile discards the invocation: Result and Status return `ErrNotFound`, another
+Cancel can return `ErrNotFound`, and Start can immediately reuse the key. That
+native behavior is not permission to repeat business work without reconciliation.
+
+The tested Restate 1.7.12 includes the opt-in feature introduced in 1.7.8. Operators
+request it with
 `RESTATE_EXPERIMENTAL_ENABLE_PREFLIGHT_INVOCATION_TERMINATION_RETENTION=true`
-and must ensure its persisted activation on the relevant partitions. Enabling it
-establishes a persistent minimum server version; plan the compatibility change
-before applying it to an existing cluster. After the feature barrier applies, do
-not downgrade below Restate 1.7.8. The feature cannot restore records already
-discarded. See the [native feature's release notes](https://github.com/restatedev/restate/blob/v1.7.12/release-notes/v1.7.8.md#opt-in-retention-for-terminated-pre-flight-invocations).
+and must ensure persisted activation. Activation establishes a minimum server
+version: plan the compatibility change before applying it to an existing cluster,
+and do not downgrade below 1.7.8 after the feature barrier applies. It cannot
+recover already discarded records. See the
+[native release notes](https://github.com/restatedev/restate/blob/v1.7.12/release-notes/v1.7.8.md#opt-in-retention-for-terminated-pre-flight-invocations).
 
-The driver neither enables nor verifies this operator-managed profile. `/health`
-checks HTTP readiness; `/version` reports requested flags, not per-partition
-barrier activation. Public admin SQL on pinned 1.7.12 cannot expose the internal
-feature state needed to prove that activation. None is a retained-cancellation
-readiness gate, and no local tombstone or silent fallback supplies the guarantee.
-VQueues are not required for preflight retention itself.
+The driver neither enables nor verifies this profile. Health proves HTTP
+readiness; `/version` reports requested flags, not partition-barrier activation.
+Public admin SQL on 1.7.12 cannot expose the internal feature state needed to
+prove activation. None is a retained-cancellation readiness gate, and there is
+no local tombstone or silent fallback. VQueues are not required for the feature.
 
-### Using Restate SDK capabilities
+### Native Access
 
 `c.Raw()` exposes `restate.WorkflowContext` from `github.com/restatedev/sdk-go`;
-follow the [replay rules](overview.md#rules-for-workflow-functions).
-`runner.Services()` lists bound services. `host.Query` accesses admin SQL:
-restrict its credentials and never expose arbitrary queries to untrusted callers.
+keep its calls [replay-safe](overview.md#replay-rules). `host.Query` accesses admin SQL:
+restrict credentials and never expose arbitrary queries to untrusted callers.
+Each rollout is a new deployment, so preserve compatibility with runs in flight.
 
-### Running locally
+### Local Engine
 
-With Docker installed, save this as your application's `compose.yaml`. This
-profile requests preflight retention on a fresh disposable server. Do not reuse
-it to change an existing cluster without the compatibility planning above; the
-environment flag alone does not prove persisted activation.
+For a fresh disposable server, save this as your application's `compose.yaml`.
+The flag requests preflight retention; it is not proof of persisted activation
+or a safe upgrade procedure for an existing cluster.
 
 ```yaml
 services:
@@ -701,33 +397,29 @@ services:
 ```
 
 Run `docker compose up -d`, then `curl --fail http://localhost:19070/health`
-until it succeeds. This confirms HTTP readiness, not retained-cancellation
-readiness. For a Go process running on your machine, configure the
-ingress, admin API, and reverse connection explicitly:
+until it succeeds. This checks HTTP health only. For an application on your
+machine, configure the host to reach ingress/admin and let the server reach back:
 
 > [!WARNING]
-> This local configuration disables request-identity verification and listens
-> on port 9080. Anyone who can reach that port can invoke handlers. Use it only
-> on an isolated development machine; production needs identity keys and network
-> access controls.
+> The following endpoint skips request-identity verification. Anyone who can
+> reach port 9080 can invoke handlers. Use it only on an isolated development
+> machine; production requires identity keys and network access controls.
 
 ```go
 import "arkoren.dev/driver/restate"
 
-host := restate.New(func(worker *restate.Builder) {
-	worker.Addr(":9080")
-	worker.IngressURL("http://localhost:18080")
-	worker.AdminURL("http://localhost:19070")
-	worker.AdvertisedURL("http://host.docker.internal:9080")
-	worker.Register(true)
-	worker.AllowInsecure(true)
+host := restate.New(func(host *restate.Builder) {
+	host.Addr(":9080")
+	host.IngressURL("http://localhost:18080")
+	host.AdminURL("http://localhost:19070")
+	host.AdvertisedURL("http://host.docker.internal:9080")
+	host.Register(true)
+	host.AllowInsecure(true)
 })
 ```
 
-Wire `host.Start`/`Serve`/`Stop` as in Connecting and start/signal onboarding.
-`Result` returning the token confirms registration and execution.
-`docker compose down --volumes` deletes the disposable server and history.
+Bind the runner, wire the host hooks, and read an onboarding result to confirm
+registration and execution. `docker compose down --volumes` deletes the disposable
+server and history.
 
-### API references
-
-See [the `restateworkflow` API reference](https://pkg.go.dev/arkoren.dev/driver/restate/restateworkflow).
+See the [`restateworkflow` API reference](https://pkg.go.dev/arkoren.dev/driver/restate/restateworkflow).

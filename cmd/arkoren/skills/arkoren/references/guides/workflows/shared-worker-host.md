@@ -1,124 +1,95 @@
 ---
-title: Shared Worker Host
-description: Share a host between Temporal or Restate drivers, with pending Hatchet host notes.
-order: 40
+title: Worker Hosts
+description: Share native workflow and scheduler resources with explicit startup, readiness, and cleanup ownership.
+order: 60
+summary:
+  - Register workflow and scheduler work on one native host before startup.
+  - Wire Temporal or Restate lifecycle hooks with explicit readiness and cleanup boundaries.
+  - Preserve client ownership, request verification, and journal compatibility across deployments.
 ---
 
-# Shared Worker Host
+# Worker Hosts
 
-> [!NOTE]
-> Hatchet is pending and unpublished. All Hatchet examples and behavior below
-> are retained development context, not usable setup instructions or verified
-> public API documentation. Use Temporal or Restate for an available shared host.
+When one application uses an engine for workflows and scheduled tasks, a **host**
+owns their shared connection and execution endpoint. Pass one Temporal or Restate
+host to both drivers, then wire its lifecycle once. Memory drivers have no shared
+host; Hatchet is pending and unpublished.
 
-## Introduction
+This page owns lifecycle for both [workflow drivers](drivers.md) and
+[scheduler drivers](../scheduled-tasks/drivers.md). Driver-specific registration
+belongs on those pages. Examples assume an existing application composer and a
+validated workflow registry.
 
-If one service uses an engine for both workflows and scheduled tasks, it should
-not need a separate connection and worker for each driver. A **host** manages those
-shared resources, including their ownership rules. The Temporal and
-Restate modules each provide a host that their workflow and scheduler drivers
-use together.
+## Registration Order
 
-The host is why the engine drivers read differently from the
-[memory driver](drivers.md#memory). You build the host first and pass it to the
-drivers, and the drivers register what they need with it. Then the application
-starts the host and stops it at shutdown. Temporal and Hatchet start a worker;
-Restate instead needs a serving endpoint, as described below.
-This page describes that arrangement once, for [workflow drivers](drivers.md)
-and [scheduler drivers](../scheduled-tasks/drivers.md) alike. The memory drivers
-have no host.
+Construct the host, register or bind all work, then start the host. Construction
+does no network I/O. A workflow `NewRunner` and a scheduler constructor add work
+to the host; a workflow `NewDriver` only controls runs. Late registration returns
+the vendor's `ErrStarted`.
 
-## The order that works
+Inside a composer, register cleanup at the acquiring owner, before later
+construction can fail. Use `composer.Must` for fallible construction there;
+startup callbacks complete before application runners begin. See
+[Lifecycle and Ownership](../application/lifecycle-and-ownership.md).
 
-Build the host and register work before starting it. Construction performs no
-I/O; drivers **register** workflows and activities with Temporal and Hatchet,
-or **bind** services to Restate. Once the host starts, registration is closed
-and later registration fails with that vendor's `ErrStarted`.
+Builder callbacks run synchronously once, in order, on one fresh draft. Nil
+entries panic; expanded nil or empty slices supply no edits. Publication detaches
+owned settings and containers from the retained draft, not native SDK internals,
+hooks, clients, or captured services. Finish configuring shared native objects
+before publishing them.
 
-For Temporal and Hatchet, `Start` connects, applies registrations, and starts
-the worker. Restate splits startup: `Start` opens the listener, then `Serve`
-serves requests and optionally registers the deployment. Construct anything
-that registers or binds work (`New` for a scheduler, `NewRunner` for workflows)
-before `host.Start`. A client-only workflow `NewDriver` registers no work.
+## Temporal
 
-These snippets use your existing `*application.Application` named `app` and
-the `Onboard` workflow and `SendWelcome` step from the
-[workflow overview](overview.md#a-first-workflow). Check constructor and
-registry errors before registering lifecycle hooks.
+The `arkoren.dev/driver/temporal` host shares a client, task queue, and worker.
+Within your composer, create and register it before either driver:
 
 ```go
-import (
-	"arkoren.dev/core/service/workflow"
-	"arkoren.dev/driver/temporal"
-	"arkoren.dev/driver/temporal/temporalschedule"
-	"arkoren.dev/driver/temporal/temporalworkflow"
-)
+import "arkoren.dev/driver/temporal"
 
 host := temporal.New(func(host *temporal.Builder) {
 	host.HostPort("temporal:7233")
 	host.TaskQueue("app")
 })
-
-registry, err := workflow.Handlers(Onboard, SendWelcome)
-
-runner, err := temporalworkflow.NewRunner(host, registry)
-
-driver, err := temporalschedule.New(host)
-
-compose := func(composer *application.Composer) {
-	composer.Cleanup(host.Stop)
-	composer.Startup(host.Start)
-	composer.Check("temporal", host.Ping)
-}
+composer.Cleanup(host.Stop)
 ```
 
-Three composer registrations complete the wiring. `composer.Startup(host.Start)` connects and
-starts the worker; a wrong address or a stopped server fails startup instead of
-the first request, and start hooks finish before any runner begins, so the
-workflow client and the scheduler's `Run` find a running host. `composer.Cleanup(host.Stop)`
-stops the worker and releases its owned client; a borrowed Temporal client stays
-open. `Check` registers `host.Ping` as a readiness check for native API
-reachability, not proof of worker liveness or scheduler dispatch readiness. See
-[Lifecycle and Ownership](../application/lifecycle-and-ownership.md) for the hooks
-and [Health and Readiness](../application/health-and-readiness.md) for checks.
+Register workflow and schedule work on that same host. Here `registry` already
+contains your workflows and steps:
 
-A host is also a place to register once and share. When a service uses Temporal
-for both workflows and scheduled tasks, pass the same host to both drivers, as
-above. They share one connection and one task queue, and one worker serves all of
-it. Keep the vendors apart, though: a Temporal host and a Hatchet host are
-different objects from different modules.
+```go
+import (
+	"arkoren.dev/driver/temporal/temporalschedule"
+	"arkoren.dev/driver/temporal/temporalworkflow"
+)
 
-## Temporal
+runner := composer.Must(temporalworkflow.NewRunner(host, registry))
+schedules := composer.Must(temporalschedule.New(host))
+```
 
-The Temporal host belongs to `arkoren.dev/driver/temporal`, in package
-`temporal`. `temporal.New` returns a host that dials the server in `Start` and
-closes the client in `Stop`. Builder settings include the server address
-(`HostPort`, default `localhost:7233`), the namespace (`Namespace`,
-default `default`), the task queue the worker polls (`TaskQueue`, default
-`arkoren`), a logger, and the SDK's own client and worker options for TLS,
-credentials, and interceptors. Nil host `Logger` adapts `slog.Default()` when
-dialing; an explicit native `ClientOptions.Logger` wins. Host address and
-namespace, including defaults, override the matching native client fields.
+The runner's Driver supplies the workflow client; `schedules` supplies the
+scheduler driver. Neither starts a worker. Add host lifecycle and readiness hooks:
 
-`Builder.WorkerStopTimeout` supplies native graceful-stop policy: ten seconds by
-default, zero restores that default, and a negative host value disables grace.
-A nonzero native `WorkerOptions.WorkerStopTimeout` takes precedence. The SDK can
-apply grace separately to internal workers, then cancel activity contexts; this
-is not a total shutdown deadline or forced termination of application callbacks.
+```go
+composer.Startup(host.Start)
+composer.Check("temporal", host.Ping)
+```
 
-Serialize `Start` and `Stop`. An already-canceled startup context acquires
-nothing. Native worker startup has no context parameter: cancellation during
-that call is observed only after it returns, then acquired worker resources and
-any owned client are released. Registration callbacks and SDK hooks must return;
-the host cannot forcibly interrupt them. Registration panics propagate after
-owned-client cleanup.
+Start dials, applies registrations, and starts the worker. Ping checks native API
+reachability, not worker liveness or scheduler dispatch readiness. A wrong address
+fails startup rather than waiting for the first client request. The scheduler's
+own run lifecycle is separate and uses the already-started host.
 
-`Stop` initiates worker cleanup even with an expired context and waits only until
-its context ends. Cleanup continues afterward; the host closes an owned client
-only after worker cleanup returns. A context error therefore does not prove
-cleanup finished. Repeated calls wait on the same cleanup with their own contexts.
+### Connection Policy
 
-If your program already has a Temporal client, wrap it with `temporal.NewFrom`:
+Defaults are `HostPort("localhost:7233")`, namespace `default`, and task queue
+`arkoren`. Configure TLS, credentials, interceptors, and other native settings
+through `ClientOptions` and `WorkerOptions`. When dialing, host address and
+namespace override matching native fields, including when using host defaults.
+The host adapts `slog.Default()` when no logger is supplied; an explicit native
+client logger takes precedence. SDK option records are value copies, not
+recursive snapshots.
+
+If you already own a native client, wrap it instead:
 
 ```go
 host := temporal.NewFrom(client, func(host *temporal.Builder) {
@@ -126,188 +97,135 @@ host := temporal.NewFrom(client, func(host *temporal.Builder) {
 })
 ```
 
-The host then uses your client, and `Stop` leaves it open, since you own it.
-Only `TaskQueue`, `WorkerOptions`, `WorkerStopTimeout`, and `NoWorker` apply.
-Host `Logger` and connection settings do not. The worker inherits your client's
-logger; configure that logger before creating the native client, not on the
-wrapper. `host.Client()` returns the SDK client, nil before `Start` unless you
-used `NewFrom`.
+Stop leaves this borrowed client open. Only TaskQueue, WorkerOptions,
+WorkerStopTimeout, and NoWorker apply; host logger and connection settings do
+not. Configure the borrowed client's logger before wrapping it: the worker
+inherits that logger. `host.Client()` is available immediately for NewFrom,
+but is nil before Start for a dialing host. A nil borrowed client fails startup.
 
-SDK option records are copied by value, not recursively. Host address and
-namespace override native client fields only when the host dials. `NewFrom`
-retains the caller's client configuration and ownership.
+### Shutdown Boundaries
 
-## Hatchet
+Serialize Start and Stop; call Stop after Start returns. An already-canceled
+startup context acquires nothing. Native worker startup has no context parameter,
+so cancellation during that call is observed only after it returns, followed by
+resource cleanup. Registration callbacks and SDK hooks must return. Registration
+panics propagate after owned-client cleanup.
 
-This host is pending and unavailable to install. The following notes preserve
-its development lifecycle and safety constraints for a future publication.
+`WorkerStopTimeout` defaults to ten seconds; zero restores the default and a
+negative host value disables grace. A nonzero native
+`WorkerOptions.WorkerStopTimeout` wins. Native grace can apply separately to
+internal workers before activity contexts are canceled: it is not a total
+shutdown deadline and cannot terminate arbitrary callbacks.
 
-The Hatchet host belongs to `arkoren.dev/driver/hatchet`, in package `hatchet`.
-It needs an API token, either with `Builder.Token` or in the `HATCHET_CLIENT_TOKEN`
-environment variable, and the gRPC address of the engine with `Builder.HostPort`,
-as `host:port`. `Builder.TLSStrategy("none")` connects without TLS, which a local
-engine needs; an empty value or `"tls"` uses the SDK defaults, which read
-`HATCHET_CLIENT_TLS_*` variables. `Builder.Namespace` prefixes workflow and event
-names; set it on the host and not in the SDK's client options, because the
-drivers must know it to match their waits. `Builder.WorkerName` (default `arkoren`),
-`Builder.Slots` (default 100), and `Builder.DurableSlots` size the worker. Native
-ClientOptions follow derived settings, but the host Logger replaces the SDK logger.
+Stop starts worker cleanup even with an expired context, then waits only until
+its context ends. Cleanup continues afterward. The owned client closes only
+after worker cleanup returns; a context error does not prove cleanup finished.
+Repeated Stop calls wait on the same cleanup using their own contexts. Borrowed
+clients remain yours to close.
 
-`Start` creates the client, runs the registrations, and starts the worker. When
-durable tasks are registered, it checks the engine version. A recognized version
-older than 0.80.0 fails with `hatchet.ErrEngineUnsupported`. If the version cannot
-be parsed as semantic versioning, the check logs a warning and lets startup
-continue; this does not confirm engine compatibility. `host.Client()` returns
-the SDK client, nil until `Start` succeeds.
-
-The outer ClientOptions slice copies on input and publication; native functions
-and their captures remain shared.
-
-The v0.80.0 durable-eviction check is not a retry-timing check. Registered retry
-delay overrides require v0.111.0+ and adequate native caps; see
-[workflow timing limits](drivers.md#hatchet). The local engine profile pins
-v0.111.0, which supports those overrides; it does not fix the SDK lifecycle limits
-below. A passing full native race suite does not establish race-free shutdown:
-repeated concurrent conformance still reports the SDK race.
-
-Some native startup RPCs use background contexts, and `RegisterTimeout` budgets
-registration-log observation, not the whole startup. Cancellation during that
-observation waits for the registration handoff or its budget before synchronous
-cleanup. The SDK can panic in an internal goroutine outside the host's recovery
-boundary. These startup and asynchronous-panic limits remain open; use a process
-supervisor rather than assuming every failure returns as a startup error.
-
-Do not infer caller-bounded shutdown either. The host cancels and joins admitted
-application callbacks, which must cooperate, but the SDK does not expose all
-intake/reporting goroutines for joining. Its ordinary `Client.Close` does not
-close gRPC connections; embedded-mode release is different. The pinned SDK also
-has a durable-eviction shutdown race between reading and clearing wait state;
-the adapter cannot lock that private state. Keep calling `Stop`, but do not treat
-native close or functional recovery as proof of complete cleanup or race-free
-shutdown. These SDK limits require a separate dependency correction, not a claim
-of caller-bounded lifecycle behavior.
+See the [`temporal` host API](https://pkg.go.dev/arkoren.dev/driver/temporal).
 
 ## Restate
 
-The Restate host belongs to `arkoren.dev/driver/restate`, in package `restate`,
-and differs from the other two in one way: Restate calls *your* process. The
-host serves an HTTP endpoint that the Restate server invokes, so it has a third
-lifecycle method, `Serve`, and drivers **bind** their services to it instead of
-registering them.
+Restate reaches an endpoint in your application rather than polling a worker.
+The host therefore has three lifecycle operations: Start opens a listener, Serve
+handles requests, and Stop releases it.
+
+Configure ingress/admin URLs that your process can reach, and an advertised URL
+the Restate server can reach. Before constructing the host, obtain the server's
+request-identity public keys (`publickeyv1_...`):
 
 ```go
-import (
-	"os"
-
-	"arkoren.dev/driver/restate"
-)
+import "arkoren.dev/driver/restate"
 
 host := restate.New(func(host *restate.Builder) {
 	host.Addr(":9080")
 	host.IngressURL("http://restate:8080")
 	host.AdminURL("http://restate:9070")
 	host.AdvertisedURL("http://app:9080")
+	host.IdentityKeys(identityKeys...)
 	host.Register(true)
-	host.IdentityKeys(os.Getenv("RESTATE_IDENTITY_KEY"))
 })
-
-compose := func(composer *application.Composer) {
-	composer.Cleanup(host.Stop)
-	composer.Startup(host.Start)
-	composer.Run(host.Serve)
-	composer.Check("restate", host.Ping)
-}
+composer.Cleanup(host.Stop)
 ```
 
-`Start` builds the endpoint and opens the listener without serving. `Serve`
-serves requests, registers the deployment with the admin API when
-`Builder.Register(true)` is set, and blocks until the application stops, so it is a
-runner. Register cleanup immediately after construction: `Stop` also closes a
-listener opened by `Start` when `Serve` never runs, including startup rollback.
-Canceling `Serve` or a deployment-registration failure does not replace `Stop`.
+Here `identityKeys` is your configured `[]string` of server public keys. A serving
+host without keys fails Start with `restate.ErrNoIdentityKeys`.
+`AllowInsecure(true)` skips verification and permits anyone who can reach the
+listener to invoke handlers; use it only for
+[isolated local development](drivers.md#local-engine-1), never as a production
+startup repair. The endpoint supports HTTP/1.1 and unencrypted HTTP/2; establish
+production network access controls and transport protection separately.
 
-`Stop` waits for active HTTP requests until its context expires, then closes
-remaining connections and returns the shutdown error. Connection closure cancels
-request contexts; it cannot stop application code that ignores cancellation.
-The shared `HTTPClient` remains caller-owned and is not closed by the host.
-`Ping` checks only the admin API's health, not ingress reachability, endpoint
-registration, successful workflow delivery, or persisted activation of the
-[workflow preflight-retention profile](drivers.md#retaining-canceled-runs-before-execution).
-
-The ingress and admin URLs are where your process reaches the server. The
-advertised URL is where the *server* reaches your process, and it must be
-reachable from there; the default is `http://localhost` plus the listen address,
-which only works when both run on one machine. The endpoint speaks HTTP/2
-without TLS and HTTP/1.1.
-
-> [!WARNING]
-> The endpoint verifies that each request was signed by the Restate server.
-> Set `Builder.IdentityKeys` to the server's request-identity public keys
-> (`publickeyv1_...`). A host that would listen without keys fails `Start` with
-> `restate.ErrNoIdentityKeys`. `Builder.AllowInsecure(true)` skips the check, and
-> belongs to local development only: anyone who can reach the listener could
-> invoke your handlers.
-
-Registration needs care in production. `Builder.Register(true)` is convenient, and
-it registers a new deployment on every rollout. `Builder.RegisterForce` overwrites a
-deployment at the same URL, and should only be used when no work of the old one
-is in flight; `Builder.RegisterBreaking` accepts a deployment that removes services.
-If your operators register deployments themselves, leave `Builder.Register` off. An
-admin API protected by a key takes `Builder.AdminAuthKey`, and a protected ingress
-`Builder.AuthKey`.
-
-Before upgrading workflows that called `Child`, drain affected runs on their
-original deployment. New workers reject `Child` before submission; the changed
-journal sequence is not made replay-safe by forced registration. There is no
-automatic history migration. See [Restate workflow rollout and ownership limits](drivers.md#restate).
-
-When this host also serves schedules, preserve their retained generations and
-finish in-flight `Remove` invocations on the old deployment before replacing an
-incompatible journal. If an older deployment already removed an entry, drain its
-pending ticks before reusing that name. See the
-[Restate schedule rollout constraints](../scheduled-tasks/drivers.md#restate);
-forced registration does not make incompatible histories replay-safe.
-
-## Processes that only start work
-
-A web process often needs to start workflows or defer tasks but should not run
-any. Each host can be built as a **client only**: it connects, and starts no
-worker and opens no listener.
+Bind workflow and scheduler services to this host before startup, using their
+constructors from the respective Drivers pages. Then add all three hooks:
 
 ```go
-host := temporal.New(func(host *temporal.Builder) {
-	host.TaskQueue("app")
-	host.NoWorker(true)
-})
-driver, err := temporalworkflow.NewDriver(host, func(driver *temporalworkflow.DriverBuilder) {
-	driver.Registry(registry)
-})
+composer.Startup(host.Start)
+composer.Run(host.Serve)
+composer.Check("restate", host.Ping)
 ```
 
-Temporal and Hatchet `Builder.NoWorker(true)` skip the worker, and Restate
-`Builder.ClientOnly(true)` skips the listener. NoWorker defaults false; setting
-false later restores it, but never forces a worker without registrations. A host with nothing
-registered behaves the same way. In these processes use the workflow
-`NewDriver`, which only needs a client, and not the `NewRunner`, which needs a
-worker and returns an error on such a host. The scheduler driver registers work
-on the host, so run the scheduler in a worker process. Keep the prefix and the
-task queue identical in both kinds of process, so a run started by the web
-process reaches the worker. Hatchet HasWorker reports permission, not evidence
-of a running worker. Temporal WorkerDisabled reports the stored NoWorker flag.
+Start builds the endpoint and opens the listener without serving. Serve begins
+request handling, optionally registers the deployment, and blocks until the
+application stops. Stop also owns an opened listener if Serve never runs, such
+as during startup rollback. Canceling Serve or a registration failure does not
+replace cleanup.
 
-Construction callbacks run directly once, synchronously in order on one fresh
-draft. Nil entries panic; expanded nil/empty slices omit edits. Methods return
-the same draft. Publication detaches owned roots and containers, including
-Hatchet ClientOptions and Restate IdentityKeys; native SDK records, client
-handles, hooks and their captures remain shared. Retaining a draft cannot
-reconfigure the host. Workflow DriverBuilder and RunnerBuilder are separate;
-NewRunner's required registry remains positional and takes precedence. A missing
-host or registry is a construction error, not an optional builder setting. Only
-Temporal DriverBuilder exposes Registry; its RunnerBuilder has no Registry
-setter, and NewRunner's required registry supplies both runner and driver.
+Ping checks the admin API's health, not ingress reachability, registration,
+successful workflow delivery, or persisted activation of the
+[preflight-retention profile](drivers.md#cancellation-retention). Verify an actual
+run when delivery readiness matters. The default advertised URL is
+`http://localhost` plus the listen address; that only works when the server can
+reach the application there.
 
-For every function and builder method, see the API references for the hosts' drivers:
-[`temporalworkflow`](https://pkg.go.dev/arkoren.dev/driver/temporal/temporalworkflow),
-[`restateworkflow`](https://pkg.go.dev/arkoren.dev/driver/restate/restateworkflow), and the pending
-[`hatchetworkflow` URL](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow)
-(unpublished, not evidence of package availability).
+### Deployment Policy
+
+`Register(true)` asks Serve to register a deployment; otherwise operators must
+register it. Each rollout creates a new deployment. `RegisterForce` overwrites
+a deployment at the same URL and is appropriate only when none of the old work
+is in flight. `RegisterBreaking` permits registration that removes services.
+Neither option makes incompatible journals replay-safe. Use `AdminAuthKey` for
+a protected admin API and `AuthKey` for protected ingress.
+
+Drain workflow runs that used the earlier Child implementation on their original
+deployment before upgrading to its rejection; there is no automatic history
+migration. See [workflow rollout limits](drivers.md#run-lifetimes-1).
+
+When the same host serves schedules, preserve retained generations and finish
+in-flight Remove invocations on the old deployment before replacing an
+incompatible journal. If an older deployment removed an entry, drain its pending
+ticks before reusing its name. The
+[Restate scheduler guidance](../scheduled-tasks/drivers.md#restate) owns those
+schedule-specific constraints.
+
+### Shutdown Boundaries
+
+Stop waits for active HTTP requests until its context expires. It then closes
+remaining connections and returns the shutdown error. Closing connections cancels
+request contexts, not arbitrary Go code that ignores cancellation. The shared
+HTTP client remains caller-owned and is not closed by endpoint cleanup.
+
+`host.Query` runs admin SQL; restrict its credentials and never accept arbitrary
+queries from untrusted callers. See the
+[`restate` host API](https://pkg.go.dev/arkoren.dev/driver/restate).
+
+## Client-Only Hosts
+
+A web process can start work without serving it. For Temporal, set
+`temporal.Builder.NoWorker(true)` and construct `temporalworkflow.NewDriver`.
+For Restate, set `restate.Builder.ClientOnly(true)` and construct
+`restateworkflow.NewDriver`. These host settings skip the worker or listener;
+native connection and authentication still belong to the host.
+
+Use the workflow driver's [client-only setup](drivers.md), not NewRunner.
+Temporal rejects a runner on a NoWorker host. Scheduler drivers register work,
+so construct those in the serving process instead. Match codec, prefix, and
+native routing across producers and workers.
+
+A host with no registered work also behaves client-only. NoWorker defaults false;
+setting it false later restores permission but never forces a worker without
+registrations. Temporal's WorkerDisabled reports the stored flag, not liveness.
+
+Continue with [Running Workflows](running-workflows.md) once the host is started,
+or return to [Scheduled Tasks](../scheduled-tasks/overview.md) for scheduler use.

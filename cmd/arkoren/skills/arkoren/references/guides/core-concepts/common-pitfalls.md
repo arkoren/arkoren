@@ -1,207 +1,205 @@
 ---
 title: Common Pitfalls
-description: Mistakes that recur when wiring Arkoren services, why each one happens, and the habit that avoids it.
+description: Recognize unsafe assumptions about ownership, configuration, HTTP behavior, data access, and deployment.
 order: 50
+summary:
+  - Avoid late cleanup, unchecked connectivity, and overly broad service dependencies.
+  - Diagnose callback precedence and missing event or telemetry configuration.
+  - Recognize middleware, recovery, validation, SQL dialect, and pagination mistakes.
+  - Protect operator endpoints and align backend state and shutdown behavior with deployment requirements.
 ---
 
 # Common Pitfalls
 
-## Introduction
+When a service starts but behaves differently than expected, first check the
+boundary involved: who owns the resource, when configuration takes effect, and
+which guarantees the selected backend provides. These mistakes can leave code
+that compiles but does not do what its caller assumes.
 
-Arkoren keeps its behavior explicit, which means most mistakes are visible in
-the code once you know what to look for. This page collects the ones that come
-up most often, grouped by where they happen. Each entry explains what goes
-wrong, why, and the habit that prevents it. Many of them fail loudly at
-startup; a few fail quietly, and those are marked.
+## Resource Ownership
 
-Wiring snippets assume an existing application named `app`, backend
-driver `db`, and HTTP server `srv`. Follow the
-[Quickstart](../first-steps/quickstart.md) if you need that initial setup.
+### Late Cleanup
 
-## Wiring the application
+If composition acquires a resource and then fails while constructing a
+consumer, cleanup registered afterward is never reached. Register release as
+soon as you own the resource, before the next fallible operation.
 
-### Registering cleanup after another fallible operation
+Application cleanup becomes active immediately and runs in reverse registration
+order, even if startup never runs. A registered stop function must therefore
+tolerate an unstarted resource. Keep that ownership in one place using
+[Lifecycle and Ownership](../application/lifecycle-and-ownership.md), rather
+than duplicating lifecycle wiring in every feature.
 
-Composition can fail before any startup hook runs. Register cleanup as soon as
-you own a resource, before constructing its consumers. Cleanup becomes active
-immediately and runs even if that resource never starts, so its stop method
-must tolerate that state. Inside a composition function, register an existing
-database and server like this:
+### Unchecked Connectivity
 
-```go
-compose := func(composer *application.Composer) {
-	composer.Cleanup(db.Stop)
-	composer.Startup(db.Start)
-	composer.Cleanup(srv.Stop)
-	composer.Startup(srv.Start)
-}
-```
+A constructed driver is not necessarily connected. For example, Redis cache's
+constructor creates its client without network I/O; `Start` checks connectivity.
+Omitting startup moves that failure to the first operation instead of rejecting
+startup.
 
-[Lifecycle and ownership](../application/lifecycle-and-ownership.md)
-explains reverse-order cleanup and resources acquired inside startup callbacks.
+Follow the selected driver's setup, including its available startup, cleanup,
+and readiness methods. Do not assume every driver has all three: some are
+stateless, and some memory drivers need no startup. Register lifecycle work
+with either your existing host/container or Arkoren's application, not both.
 
-### Expecting the constructor to fail on an unreachable server
+### Broad Dependencies
 
-For drivers with a `Start` method, such as the SQL drivers, construction
-validates configuration but does not verify connectivity. If you omit the
-start hook, a bad address fails the first query instead of startup. Register
-each lifecycle method and readiness check the driver provides. Cloud drivers
-that initialize an SDK client at construction can have different requirements;
-see [Lifecycle and ownership](../application/lifecycle-and-ownership.md).
+Passing `*application.Application` into business services gives them host
+control and runtime state they do not need. Passing a composer also permits
+hidden lifecycle registration. Keep those objects at the composition boundary;
+pass typed services, a logger, or an event bus explicitly.
 
-### Passing the application to your services
+An event subscription is also an owned resource. Register its unsubscribe
+function for release instead of leaving listeners attached across repeated
+composition or tests; [Own Subscriptions](../application/composition.md#own-subscriptions)
+shows the focused pattern.
 
-A service that receives the whole `*application.Application` can change the
-log level or read runtime state unrelated to its responsibility. Passing the
-composer would also permit hidden lifecycle registration. Keep both in bootstrap
-code and pass what the service needs instead: the logger from
-`app.Logger()` and the event bus from `app.Events()`.
+## Construction Policies
 
-### Registering the same driver lifecycle twice
+### Override Order
 
-When a dependency injection container also manages lifecycles, registering a
-driver's `Start` and `Stop` with both the container and the application
-connects twice and closes twice. Pick one lifecycle per service, as described
-in [Application Composition](../application/composition.md).
-
-## Configuration
-
-### Applying a shared policy after its local override
-
-Construction policies run in argument order on one draft. Put shared defaults
-first and the local override last. With an existing `cache.Driver` named
-`driver` and a shared `cache.BuilderFunc` named `defaults`, import
-`arkoren.dev/core/service/cache`:
+Construction callbacks run in argument order on one draft. When a setting
+replaces an earlier value, put shared defaults first and the local override
+last. With an existing `cache.Driver` named `driver` and a shared
+`cache.BuilderFunc` named `defaults`, import `arkoren.dev/core/service/cache`:
 
 ```go
 store := cache.New(driver, defaults, func(store *cache.Builder) {
-	store.Name("accounts")
+	store.Name("reports")
 })
 ```
 
-Reversing them lets `defaults` replace the local name. There is no cache
-`Config` input. Configurable vendor drivers also use ordered callbacks rather
-than whole-record configuration replacement.
+The final name is `reports`; reversing the callbacks lets `defaults` replace
+it. This is construction-time configuration, not a runtime settings API.
+Changing a retained draft cannot reconfigure the published facade. See
+[Configuration](../first-steps/configuration.md#shared-policies) for reusable
+policies and validation boundaries.
 
-### Forgetting events or telemetry (fails quietly)
+### Missing Observations
 
-Packages publish events only when you give them a bus: `ConsumerBuilder.Events`
-for queue/broadcast consumers, `Builder.Events` for HTTP and service facades,
-and `ClientBuilder.Events` for OAuth. A
-listener registered on the application's bus for a database or queue topic
-never fires if the facade was built without a bus. Likewise, a facade
-built without explicit telemetry uses the process-wide default telemetry, which
-records nothing until you set one. If an event or a metric is missing, check
-the constructor first. Add the bus or telemetry service when constructing the
-component; changing a retained builder later does not reconfigure it.
-[Configuration](../first-steps/configuration.md#the-shape) explains publication
-and callback validation. For application diagnostic tools, also check their
-[capture and failure behavior](../observability/exposing-diagnostics.md): a
-failed declaration does not necessarily undo capture attachment.
+Registering an event listener does not connect every facade to that bus.
+Components that expose an `Events` setting publish only when given a bus; a
+database listener on the application's bus sees nothing if the database facade
+uses no bus. Application lifecycle events are separate from facade events.
 
-## HTTP
+Likewise, a facade with no explicit telemetry follows `telemetry.Default()`;
+the initial process default records nothing. Setting a default does not start
+its exporters. Check both the component's construction and the selected
+telemetry's lifecycle before diagnosing a missing metric. Use
+[Observe Outcomes](../application/lifecycle-and-ownership.md#observe-outcomes)
+for lifecycle reporting and [Capture Setup](../diagnostics/capture-setup.md)
+for diagnostic capture. A failed diagnostic-tool declaration does not
+necessarily undo capture attachment.
 
-### Calling `Use` after registering routes
+## HTTP Boundaries
 
-Router middleware wraps the routes registered after it. A middleware added
-after a route would silently skip that route, which is dangerous for
-authentication, so `Use` panics when routes were already registered through
-the router. Add middleware first, then routes. Import
-`arkoren.dev/core/http/router` and `arkoren.dev/core/http/auth`; `authenticator`,
-`User`, and `me` are your existing authenticator, user type, and handler:
+### Middleware Registration
+
+Router middleware is applied when routes are registered. Calling `Use` after
+registering a route through that router or one derived from it panics; existing
+routes would otherwise silently miss the new policy. Add shared middleware
+before routes, and choose a group or `With` for narrower policies as described
+in [Choose Scope](../http-fundamentals/middleware.md#choose-scope).
+
+### Explicit Recovery
+
+`router.New` does not install panic recovery. For a buffered handler, install
+recovery before registration so an ordinary panic can become a `500` Problem
+Details response. Import `arkoren.dev/core/http/router`; `status` below is your
+existing `router.Handler`:
 
 ```go
-r := router.New()
-r.Use(router.Recover())
-r.Use(auth.Middleware(authenticator), auth.Require[User]())
-r.Get("/me", me)
+routes := router.New()
+routes.Use(router.Recover())
+routes.Get("/status", status)
 ```
 
-To apply middleware to only some routes, use a group or `With`, described in
-[Routing](../http-fundamentals/routing.md).
+Recovery protects only the middleware and handlers inside it. Keep request
+logging outside recovery so it observes the converted error; [Order Policies](../http-fundamentals/middleware.md#order-policies)
+explains the order. Once a response is committed, recovery cannot replace bytes
+already sent with a fresh error document.
 
-### Assuming panics are recovered
+### Hidden Errors
 
-`router.New` does not install panic recovery. A panic in a handler without
-`router.Recover()` in the middleware chain is caught by Go's HTTP server,
-which logs it and closes the connection without a response. Add
-`router.Recover()` around the handlers and middleware it must protect so the
-client receives a `500` Problem Details response instead. Keep request logging
-outside recovery so it sees the converted error; see
-[middleware ordering](../http-fundamentals/middleware.md#ordering).
+Writing an error-shaped JSON body and returning `nil` tells outer middleware
+that the handler succeeded. It also bypasses central Problem Details rendering
+and its request-instance handling. Return the error instead of manually
+writing its representation, using [Error Handling](../http-fundamentals/error-handling.md).
+Streams have a separate commitment boundary; follow
+[Streaming Responses](../http-fundamentals/streaming-responses.md) rather than
+trying to render a second response after streaming starts.
 
-### Writing error responses by hand
+### Optional Zero Values
 
-Writing an error body with `response.JSON` and returning `nil` works, but the
-response then bypasses the router's central error rendering: it is not a
-Problem Details document, middleware that inspects the returned error never sees it, and it does not carry
-the request's instance path. Return the error instead, and let the router
-render it. [Error handling](../http-fundamentals/error-handling.md) shows how to return
-errors with a specific status and extra fields.
+Go-value validation treats scalar `0`, `""`, and `false` as absent. Ordinary
+range and format rules skip absent values, so an integer schema with only
+`Min(1)` accepts zero. Add `Required` when zero means missing. If zero is a
+real supplied value that must be checked, use a pointer schema so a non-nil
+pointer is present and its pointee is validated.
 
-### Treating zero values as missing in validation (fails quietly)
+Decoding alone does not apply these rules. Follow
+[Validate Input](../http-fundamentals/requests.md#validate-input) to run the
+schema at the request boundary, and [Validation](../validation/overview.md)
+for presence semantics. Exact encoded JSON validation has different presence
+rules from validation of Go zero values.
 
-The validation package considers `0`, `""`, and `false` absent, and rules other
-than `Required` skip absent values. An integer schema with only `Min(1)` therefore accepts
-`0`. Add `Required()`, or use a pointer field with `validate.Ptr` when zero is a
-real value that must be range-checked. See [Validation](../validation/overview.md).
+## Data Assumptions
 
-## Data
+### Dialect Selection
 
-### Building SQL for the wrong database (fails quietly)
+`query.Query.Build()` uses ANSI SQL with `?` placeholders. Sending that SQL
+directly to PostgreSQL does not select PostgreSQL's `$1` placeholders; MySQL
+also has different identifier quoting. Pass published queries to the database
+facade so it compiles for the configured driver's dialect. If you need SQL
+text, use `BuildFor` with the intended dialect, as shown in
+[Query Builder](../queries/query-builder.md).
 
-`query.Table(...).Build()` emits ANSI SQL with `?` placeholders. PostgreSQL
-expects `$1`, and MySQL quotes identifiers differently. Pass published query values to the
-database facade, which compiles them for the configured driver's dialect,
-instead of building SQL strings yourself. If you do need the SQL text, use
-`BuildFor` with the dialect. See [Query builder](../database/query-builder.md).
+### Stable Pagination
 
-### Paginating on a column that is not unique
-
-Cursor pagination needs a total order. If the last `OrderBy` column is not
-unique, rows with the same value can be skipped or repeated between pages.
-Always end the order with a unique column, typically the primary key. Import
-`arkoren.dev/foundation/query` for this query definition:
+Cursor pagination needs a total order. Ordering only by a non-unique timestamp
+can skip or repeat rows at page boundaries. For a `reports` table with a unique
+`id`, import `arkoren.dev/foundation/query` and end the order with that key:
 
 ```go
-query.Table("posts", func(statement *query.Builder) {
+reports := query.Table("reports", func(statement *query.Builder) {
 	statement.OrderByDesc("created_at")
 	statement.OrderByDesc("id")
 })
 ```
 
-See [Pagination](../database/pagination.md).
+Rows sharing `created_at` now have a deterministic tie-breaker. Use
+[Pagination](../queries/pagination.md) for cursor construction and
+[Batching and Streaming](../database/batching-and-streaming.md) for traversing
+larger result sets; ordering alone does not choose a traversal strategy.
 
-## Production
+## Deployment Limits
 
-### Running memory drivers in production
+### Process-Local State
 
-Memory drivers are complete implementations, but their data lives in one
-process. With two replicas, each has its own cache and queue, and everything
-is lost on restart. They suit development, tests, and intentionally ephemeral
-single-process state. Before you deploy, replace drivers whose state must be
-durable or shared; see
-[Choosing a driver](../drivers/choosing-a-driver.md).
+Memory drivers are useful for tests, development, and intentionally ephemeral
+state. Separate replicas do not share their contents, and a restart loses
+them. Before deploying state that must survive or be shared, select a suitable
+backend and verify its persistence configuration using
+[Choosing a Driver](../drivers/choosing-a-driver.md).
 
-### Exposing operator endpoints publicly
+### Operator Exposure
 
-`InfoHandler` and the verbose readiness report reveal versions, build
-revisions, and check details. They have no protection of their own. Serve them
-on a second server bound to an internal address, as shown in
-[Deployment](../first-steps/deploying.md#operator-endpoints).
+`InfoHandler`, verbose readiness, and diagnostic tools can reveal internal
+metadata. They do not become protected merely because they are mounted on a
+second port. Add an actual network or authorization boundary before exposing
+them. [Mount Probes](../application/health-and-readiness.md#mount-probes)
+distinguishes minimal probes from detailed reports.
 
-### Shutting down slower than the platform allows
+### Shutdown Budgets
 
-If the application's shutdown timeout is longer than the platform's grace
-period, the platform kills the process before stop hooks finish, and database
-connections and in-flight jobs are cut off. Keep the server's drain timeout
-inside the application's shutdown timeout, and allow extra platform time for
-telemetry cleanup. See the [shutdown budget](../first-steps/deploying.md#graceful-shutdown)
-before setting the platform's grace period.
+If the platform kills a process before draining and cleanup finish, connections
+and in-flight work can be cut off. Keep the HTTP drain timeout inside the
+application budget and allow additional platform time for cleanup and telemetry
+finalization. Follow [Shutdown Budgets](../first-steps/deploying.md#shutdown-budgets)
+instead of copying one timeout to every layer.
 
-### Long-lived responses that ignore shutdown
-
-Shutdown does not cancel the contexts of requests already in progress. A
-server-sent event stream or long poll that only watches the request context
-keeps running until the drain timeout cuts it off. Watch
-`server.ShuttingDown(ctx)` in such handlers and return when it fires.
+Shutdown does not automatically cancel request contexts already in progress.
+A long poll or server-sent event handler must also observe
+`server.ShuttingDown(ctx)` and return cooperatively; otherwise it can hold the
+drain open until the timeout. [Streaming Responses](../http-fundamentals/streaming-responses.md)
+shows that cancellation boundary.

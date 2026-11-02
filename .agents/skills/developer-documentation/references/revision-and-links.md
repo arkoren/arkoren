@@ -148,8 +148,10 @@ runnable examples.
 
 ### Review procedure
 
-1. Identify the changed pages' reader tasks and page types using the table below.
-   A mixed page must satisfy the requirements of its teaching tasks.
+1. Follow [Writing a Page](page-writing.md) to establish category boundaries and
+   each changed page's starting state, outcome, scope, and evidence. Identify its
+   reader tasks and page type using the table below. A mixed page must satisfy
+   the requirements of its teaching tasks.
 2. Review each whole page in reader order for comprehension, then perform the
    [fidelity pass](#compare-meaning-after-editing) against every rule below. Use the
    linked references for details. For drivers pages and embedded Drivers
@@ -182,19 +184,19 @@ notation before its entries and omit an `Introduction` heading.
 
 | ID | Passing condition | Check |
 | --- | --- | --- |
-| G01 Identity | Accurate, nonempty metadata; one descriptive H1 matching the title; useful navigation label. | Metadata validation, rendered title checks and editorial review. |
+| G01 Identity | Accurate, nonempty metadata; one H1 matching the title; useful navigation label; completed new or materially revised guides have source-authored descriptive summary sentences supported by the body. | Metadata validation, rendered title checks and [Page Summary](page-writing.md#page-summary) review. |
 | G02 Orientation | Opening establishes the reader's goal, necessary definitions, and scope without a feature dump. | [Prose style](prose-style.md#paragraph-rhythm). |
 | G03 Prerequisites | Tools, permissions, resources, variables, and existing setup are established before use; linked setup is sufficient. No literal `Prerequisites` heading is required. | Reader-order review. |
 | G04 Order | Choice criteria precede setup; the safe recommended path precedes alternatives and exhaustive maps, except when the risk model or map is prerequisite. | [Page patterns](page-patterns.md). |
-| G05 Navigation | Title Case titles/labels; sentence-case internal headings preserving names and identifiers; parallel siblings, valid hierarchy through H4. | Editorial review against [guide conventions](guides.md#titles-and-sidebar-labels). |
-| G06 Examples | Purpose, assumed setup, and result are clear in context; complete examples compile and handle errors; focused fragments retain consequential checks. | [Examples](examples-and-reference.md#example-completeness) and verification evidence. |
+| G05 Navigation | Short Title Case titles and headings, normally two or three words, four when needed; official names and identifiers preserved; parallel siblings, valid hierarchy through H4. | Editorial review against [guide conventions](guides.md#titles-and-sidebar-labels). |
+| G06 Examples | Small blocks teach one operation or decision, with prose between meaningful steps of larger examples; typed application inputs use realistic structs where appropriate; purpose, setup, and result are clear; complete examples compile and handle errors; fragments retain consequential checks. | [Examples](examples-and-reference.md#example-completeness) and verification evidence. |
 | G07 Behavior | Relevant defaults, failures, ownership, mutation, timing, ordering, and limits are explicit and agree with current source/tests. | [Behavioral details](behavioral-details.md). |
 | G08 Safety | Essential risk, cause, and safe action appear before or beside the first consequential use; longer explanations may follow. | [Contracts and caveats](contracts-and-caveats.md#notes-and-warnings). |
 | G09 Links | Descriptive links appear where needed; internal relative `.md` targets and fragments resolve; authoritative external HTTPS sources are allowed. | Rendered checks plus manual offline source-link and editorial review. |
 | G10 Completion | Task readers can recognize success; package guides end with the relevant API. Non-package pages link a next task when useful, without a forced API link or unrelated ending. | Reader-order review. |
 | G11 Driver coverage | Every provider on a drivers page or in a Drivers section follows the [per-driver structure](guides.md#per-driver-structure); its relevant shipped capabilities have setup, task examples, constraints, and reference links. The mandatory [compatibility matrix](guides.md#compatibility-matrices) covers every provider and matches current implementation/tests and prose after every page or behavior change. Omit inapplicable optional sections rather than adding empty headings. | Provider-by-provider editorial review against vendor packages, examples and guides, plus rendered matrix checks. Applies when the page has driver sections. |
 | G12 Consumer relevance | Every section serves someone using Arkoren in their own application, following the [consumer audience rules](guides.md#consumer-audience). Published imports and application paths are relevant; toolkit source layout, internal dependencies, and maintenance instructions belong in contributor documentation. | Section-by-section editorial review. N/A only for explicitly identified toolkit-contributor documentation. |
-| G13 Reading paths | Before style approval, identify what each section enables the reader to understand, do, or decide next and why it belongs here. Incoming links, page order, and assumed knowledge form a coherent path. Fail disconnected facts, unexplained alternatives, separated prerequisites/results, and reference inventories that delay the ordinary path. Lookup pages retain direct answers rather than a forced story. | [Reader-order review](#review-in-reader-order), including the cross-page journey, headings-only, and continuous-prose passes. Repair organization before sentence-level polish; length alone is not evidence. |
+| G13 Reading paths | Each page has a justified reader outcome and scope; each section advances that outcome in a coherent order. Facade use stays separate from provider setup unless setup is the task. Incoming links, page order, and assumptions connect; no mandatory Introduction, operations, or testing sections inflate the page. Lookup pages retain direct answers rather than a forced story. | [Writing a Page](page-writing.md) and [reader-order review](#review-in-reader-order), including cross-page, headings-only, and continuous-prose passes. Repair organization before sentence-level polish; length alone is not evidence. |
 | G14 Fidelity | Editing preserves verified claims, units, scope, conditions, obligations, uncertainty, and technical tokens; source-backed corrections are identified separately. Unknown intent is flagged and excluded from publishable instructions. | [Original/revision claim comparison](#compare-meaning-after-editing) plus source/API checks. N/A only when the page has no prior version; source grounding still applies under G07. |
 
 These rules standardize reader orientation and safety, not identical headings
@@ -234,6 +236,8 @@ result or the missing visual verification.
 ## Page-Ready Checklist
 
 - [ ] The page has one primary reader goal.
+- [ ] Its scope is justified within its category; short headings and section order support that goal rather than an API inventory.
+- [ ] A completed new or materially revised guide has a descriptive `summary` frontmatter list written from its settled body, not copied headings or anchor links.
 - [ ] The page follows the resolved writing settings: package usage unless another purpose was requested, small focused examples without unrelated code or unnecessary error checks, and authored contents only when explicitly requested.
 - [ ] The introduction defines the capability, problem, and main entry point.
 - [ ] The default path is complete, safe, and verified before alternatives appear.

@@ -1,201 +1,206 @@
 ---
 title: Testing Workflows
 nav: Testing
-description: Test code that starts workflows with a fake driver, and workflow logic on the memory driver with instant time.
-order: 30
+description: Separate submission tests, in-process workflow decisions, and native replay or retention checks.
+order: 80
+summary:
+  - Verify submission with a fake and script results without executing workflow bodies.
+  - Exercise workflow decisions with memory and virtual time while retaining cleanup ownership.
+  - Separate portable conformance from native replay, retention, and lifecycle regressions.
 ---
 
 # Testing Workflows
 
-> [!NOTE]
-> Hatchet references below are retained development context for a pending,
-> unpublished integration, not available driver support. See the
-> [workflow comparison](drivers.md#compatibility-matrix) for available drivers.
+Test the request to start work separately from the work itself. A signup handler
+test should prove that it submits onboarding for the right user, without sending
+mail. A workflow test should exercise the process's decisions. Replay and native
+retention need an engine test: neither a fake nor memory executes durable history.
 
-## Introduction
+The following are fragments inside an existing `Test...` function with
+`t *testing.T`. They use `arkoren.dev/core/service/workflow` and the
+[onboarding definitions](overview.md#defining-work). Use the
+[confirmation-aware body](signals-and-waiting.md#awaiting-confirmation) for timeout
+and signal tests.
 
-Test the handoff separately from the work. A signup handler needs to start the
-right onboarding run with the right input; its test does not need to send mail
-or wait for confirmation. Use the `workflowtest` fake to record that handoff
-without executing the workflow.
+## Submission Tests
 
-To test the workflow's decisions, run its real logic on the memory driver.
-Combine it with `testing/synctest` to exercise sleeps, retries, and missing-signal
-timeouts without real waits. Neither tool needs Temporal, Hatchet, or Restate,
-but neither proves durable replay compatibility. Use a real engine for that
-integration check and for engine-driver conformance.
-
-Match that integration test to the deployed engine version and feature profile.
-Memory and fake tests cannot establish native retry precision/caps, cancellation
-retention, startup cleanup, or asynchronous SDK failure behavior. The
-[driver comparison](drivers.md#compatibility-matrix) identifies the remaining
-Hatchet SDK limits and the operator-managed Restate retention profile. A native API
-health check does not verify that profile or close native lifecycle gaps.
-
-## Testing the code that starts a run
-
-With the workflow definitions from the [overview](overview.md), create a fake
-driver for your application code. `workflowtest.New` returns a `workflow.Driver`.
-Hand it to `workflow.NewClient`, run the code under test, and assert on what was recorded.
-The fake never executes workflow bodies; a run stays running until the test
-ends it:
-
-Here, `signup` is the application function under test: it accepts the workflow
-client and starts the `Onboard` workflow.
+Create a fake driver and pass its ordinary client to the application code under
+test:
 
 ```go
-import (
-	"arkoren.dev/core/service/workflow"
-	"arkoren.dev/core/service/workflow/workflowtest"
-)
+import "arkoren.dev/core/service/workflow/workflowtest"
 
-func TestSignupStartsOnboarding(t *testing.T) {
-	fake := workflowtest.New()
-	client := workflow.NewClient(fake)
+fake := workflowtest.New()
+client := workflow.NewClient(fake)
+```
 
-	err := signup(t.Context(), client, User{ID: 42})
-	if err != nil {
-		t.Fatal(err)
-	}
+Here `signup` is your application function: it accepts a client, persists or
+validates signup according to your application, and starts Onboard. Exercise it,
+then assert the typed payload:
 
-	fake.AssertStarted(t, Onboard, func(in User) bool {
-		return in.ID == 42
-	})
+```go
+if err := signup(t.Context(), client, User{ID: 42}); err != nil {
+	t.Fatal(err)
 }
+
+fake.AssertStarted(t, Onboard, func(user User) bool {
+	return user.ID == 42
+})
 ```
 
-The assertions are typed by the workflow, so the predicate receives a `User`
-and a wrong type is a compile error. There are assertions for a start, no start,
-a number of starts, a signal that was sent, and a cancel. For code that waits
-for the result, script the outcome with `Complete` or `Fail`:
+The assertion proves submission of that input, not that onboarding executed or
+the signup/database handoff was atomic. The fake never calls workflow or step
+bodies. Every workflow name is considered registered, so validate your real
+registry in separate tests. Runs stay Running until you call Complete, Fail,
+or Cancel.
+
+Use the fake's assertions for no starts, start counts, signals, and cancellation
+when those are the behavior under test. Failed driver calls are not recorded.
+
+## Scripted Results
+
+If application code waits for a result, script the outcome before calling it:
 
 ```go
-fake.Complete(Onboard.Name(), "user-42", "welcome")
-
-run := client.Run(Onboard, "user-42")
-out, err := run.Result(t.Context()) // "welcome", nil
+fake.Complete(Onboard.Name(), "user-42", "confirmed")
 ```
 
-`Fail` ends a run with an error. The error crosses the same wire encoding as in
-production, so only its kind and message survive; use `workflow.NewError` for
-the errors your code recognizes:
+Completing a run before Start stores a script; the later start returns a finished
+run. Completing an already-started run releases its waiters. A repeated Start
+still returns `workflow.ErrAlreadyStarted` with the existing handle.
+
+To exercise an application error branch, script a stable error kind:
 
 ```go
-fake.Fail(Onboard.Name(), "user-42", workflow.NewError("card-declined", "declined"))
+var ErrInvitationRevoked = workflow.NewError("onboarding.revoked", "invitation revoked")
+
+fake.Fail(Onboard.Name(), "user-42", ErrInvitationRevoked)
 ```
 
-Completing or failing a run that has not started yet scripts it, so the later
-`Start` returns a run that is already finished. A second `Start` with the same
-identifier returns `workflow.ErrAlreadyStarted`, as a real driver does. To test
-how your code reacts when the driver itself fails, `FailNext` makes the next call
-return an error and `FailWith` makes every call return one.
+Use a fresh fake or a separate run ID for this alternative. Fail uses the same
+wire representation as real workflow failures, so arbitrary worker-side Go types
+do not survive. Application code should match the kind with `errors.Is`.
 
-## Testing a workflow's logic
+`fake.FailNext(err)` fails the next driver operation; `fake.FailWith(err)` fails
+every subsequent operation until cleared with nil. These model command/lookup
+failures, not a failure returned by the workflow body. Distinguish the two in
+your assertions.
 
-Use the same `workflow.New` and `workflow.NewStep` builder callbacks as in
-production. Set `Builder.MaxDuration` before building the registry.
-For a single-call policy variation, use `Step.Derive`; it keeps the typed body
-and inherited settings without changing the registered default.
+## Workflow Decisions
 
-To test the workflow function, build a registry from the definitions and run it
-on the memory driver. Inside a `synctest` bubble, a three-day wait or a
-backoff of an hour needs no real wait. Use the overview's `Onboard` definition
-with a `SendWelcome` step backed by a fake mail sender, so this test exercises
-the timeout branch without sending mail:
+Use memory to execute the real workflow function, replacing its external
+dependencies with fakes. For onboarding, define SendWelcome against a fake mail
+sender so this test does not send real mail. Its handler should return promptly
+and honor cancellation.
+
+Inside your test, `synctest` advances the process-local clock when all work is
+blocked. The three-day confirmation deadline needs no wall-clock wait:
 
 ```go
 import (
 	"context"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"arkoren.dev/core/service/workflow/memoryworkflow"
 )
 
-func TestOnboardExpires(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		registry, err := workflow.Handlers(Onboard, SendWelcome)
-		if err != nil {
-			t.Fatal(err)
-		}
+synctest.Test(t, func(t *testing.T) {
+	registry, err := workflow.Handlers(Onboard, SendWelcome)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-		driver := memoryworkflow.New(registry)
-		t.Cleanup(func() {
-			_ = driver.Stop(context.Background())
-		})
-		client := workflow.NewClient(driver)
-
-		run, err := client.Start(t.Context(), Onboard, "user-42", User{ID: 42})
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		out, err := run.Result(t.Context())
-		if err != nil || out != "expired" {
-			t.Fatalf("Result = %q, %v; want expired", out, err)
+	driver := memoryworkflow.New(registry)
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := driver.Stop(cleanup); err != nil {
+			t.Error(err)
 		}
 	})
-}
+	client := workflow.NewClient(driver)
+
+	run, err := client.Start(t.Context(), Onboard, "user-42", User{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := run.Result(t.Context())
+	if err != nil || out != "expired" {
+		t.Fatalf("Result = %q, %v; want expired", out, err)
+	}
+})
 ```
 
-Nobody sends the confirmation signal, so the `Wait` times out after 72 hours of
-fake time and the workflow returns `"expired"`. To test the other branch, call
-`client.Signal` before asking for the result. Steps run their real functions, so
-replace the services they call (the mail sender, the payment gateway) with fakes
-in the test, as you would for any code.
+No confirmation is sent, so the wait expires and the workflow returns
+`"expired"`. To test confirmation instead, send EmailConfirmed after Start and
+before Result, then assert that token. Add retry tests only for decisions that
+belong to your workflow or step policy, with explicit counts on the fake service.
+See [Controlling Time](../testing/time.md).
 
-Two details keep these tests honest. Cancellation does not forcibly stop your
-code. Give `driver.Stop` a context with a deadline when a workflow function
-could ignore cancellation. Arrange for workflow bodies and fake step services
-to honor cancellation and join any application-owned background work; a cleanup
-deadline bounds your wait, not that code's lifetime.
+Cleanup deadlines bound the Stop caller's wait, not the lifetime of code that
+ignores cancellation. Workflow bodies and fake services must cooperate, and
+application-owned background work must be joined. A synctest bubble also cannot
+finish while its goroutines remain blocked indefinitely.
 
-The memory driver also never replays a workflow, so it cannot show you a
-determinism bug. Keep the function free of clock, random, and I/O calls by
-review, and run the same workflow against an engine in an integration test
-when the risk is high. [Controlling Time](../testing/time.md) covers `synctest`
-in more detail.
+## Engine Regressions
 
-## Testing a driver
+Memory never replays the workflow function, so a passing memory test cannot
+establish determinism. Review coordination code for clock, random, I/O, goroutine,
+and native-channel use, then test representative retained histories against the
+actual engine when deploying changes.
 
-Use the conformance suite, `workflowtest.Run`, to check common contract behavior;
-it does not replace deployed-engine regression and replay tests. Build the
-registry with `workflowtest.Registry` inside
-the function that creates the driver, and the suite runs its cases against it:
+Match integration tests to the deployed server version and feature profile.
+Native retry precision/caps, delayed or queued cancellation retention, endpoint
+registration, startup rollback, and shutdown cleanup are distinct boundaries.
+A healthy native API proves none of them. The [driver comparison](drivers.md)
+identifies Temporal policy rejections and Restate's operator-managed retention
+profile.
+
+For joined children, wait until the engine acknowledges the join before ending
+the parent. Seeing the parent start does not prove it joined. Verify that an
+existing run finishes with its original input and without duplicate work, while
+a newly created child stops with its owner. Unsupported Child must reject before
+submission and leave independent runs untouched.
+
+## Driver Conformance
+
+If your application supplies a custom driver, use `workflowtest.Run` to exercise
+the portable contract. Build the suite's registry inside the factory, not from
+your onboarding definitions:
 
 ```go
-func TestConformance(t *testing.T) {
-	workflowtest.Run(t, func(t *testing.T) workflow.Driver {
-		driver := memoryworkflow.New(workflowtest.Registry(t))
-		t.Cleanup(func() {
-			if err := driver.Stop(context.Background()); err != nil {
-				t.Error(err)
-			}
-		})
-
-		return driver
-	}, workflowtest.WithSynctest())
-}
+workflowtest.Run(t, func(t *testing.T) workflow.Driver {
+	driver := memoryworkflow.New(workflowtest.Registry(t))
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := driver.Stop(cleanup); err != nil {
+			t.Error(err)
+		}
+	})
+	return driver
+}, workflowtest.WithSynctest())
 ```
 
-`WithSynctest` runs cases sequentially in separate bubbles for drivers that use
-the `time` package. Each case constructs its own driver inside its bubble, and
-cleanup registered on the supplied `t` runs before that bubble ends.
+WithSynctest creates a driver inside each separate bubble and runs cases
+sequentially; cleanup registered on the supplied test runs before the bubble
+ends. Never use it for an external engine.
 
-Without `WithSynctest`, the factory runs once with the parent test and parallel
-subtests share the resulting driver. The driver, registry dependencies, and
-other shared fixtures must support concurrent use. Register cleanup on the
-factory's supplied `t`, as above, so it runs after the parallel subtests finish;
-do not defer a stop in the parent test. Drivers backed by an engine use this
-mode against a real server, usually from an integration test.
+Without that option, the factory runs once with the parent test, and parallel
+subtests share the driver and its dependencies. All shared fixtures must support
+concurrent use. Register cleanup on the factory's `t` so it runs after those
+subtests; a deferred stop in the parent function runs too early.
 
-Child ownership tests distinguish creation from joining: canceling or timing out
-a join must leave the existing run able to finish with its original input and
-without duplicate work, while a newly created child must stop with its parent.
-An unsupported driver must reject before submission and leave independent runs
-untouched. For a native join regression, observe the engine's join acknowledgment
-before ending the parent; seeing the parent start is not proof that it joined.
-See [Integration Tests](../testing/integration-tests.md) and [Driver Conformance
-Suites](../testing/conformance-suites.md).
+Declare unsupported operations with `WithoutChild`, `WithoutSpawn`, or
+`WithoutImmediateStepRetries` when applicable. These options assert rejection
+before submission or affected-handler execution rather than silently skipping
+the contract. Keep every suite definition registered. Conformance complements,
+not replaces, deployed-engine replay and regression tests. See
+[Driver Conformance Suites](../testing/conformance-suites.md) and
+[Integration Tests](../testing/integration-tests.md).
 
-For every function and option, see [the `workflow` API reference](https://pkg.go.dev/arkoren.dev/core/service/workflow).
+For fake assertions and suite options, see the
+[`workflowtest` API reference](https://pkg.go.dev/arkoren.dev/core/service/workflow/workflowtest).

@@ -1,52 +1,59 @@
 ---
-title: OIDC Bearer Verification
-nav: OIDC Bearer Tokens
-description: Verify provider-issued JWT access tokens for an API, require the exact identity type, and map verified claims to an application user.
+title: OIDC Tokens
+description: Verify provider-issued JWTs for an API and resolve the exact request identity your handlers need.
 order: 50
+summary:
+  - Configure API audiences and discovery before accepting provider-issued JWTs.
+  - Understand signature, issuer, key retrieval, clock, and token-purpose verification boundaries.
+  - Require the exact external or local identity type and preserve safe failure handling.
 ---
 
-# OIDC Bearer Verification
+# OIDC Tokens
 
-## Introduction
+An API can accept an existing JWT issued by a trusted OpenID Connect provider
+without browser routes or a session. `oauthauth.Client.Verify` validates the
+token and returns an external identity; `auth.Bearer` connects that result to
+request authentication.
 
-An API client can present a JWT access token issued by your identity provider.
-Your service verifies that token and resolves the identity for the request;
-it does not need a browser login route or a session. Use `oauthauth.Client.Verify`
-with [`auth.Bearer`](api-tokens.md#accepting-bearer-tokens) for this task.
+The provider or a separate client flow acquires and refreshes tokens. This
+adapter does not implement a token endpoint, authorization server, opaque-token
+introspection, or provider revocation checks. Plain OAuth2 adapters, including
+GitHub, cannot use `Verify`. For browser sign-in, use [OAuth Login](oauth.md).
 
-This guide accepts existing tokens. The provider or a separately implemented
-client flow acquires and refreshes them. Arkoren does not provide a full OAuth
-authorization server, token endpoint, or client acquisition flow. Plain OAuth2
-providers such as the GitHub preset do not support `Verify`; opaque tokens need
-an application verifier or introspection integration instead.
+## Prepare Verification
 
-## Preparing the verifier
+Register an audience intended for this API with your provider. An **audience**
+names a token's intended recipient. Prefer separate API and browser-client
+audiences; do not accept a browser client ID merely because it is convenient.
+Use a trusted issuer from application configuration, never from unverified
+request claims.
 
-Install `arkoren.dev/driver/oauth` and import
-`oauth "arkoren.dev/driver/oauth/oauthauth"`. Register your API audience at the
-provider and explicitly configure the audiences intended for this API. Prefer
-distinct API and browser-client audiences; do not treat audience overlap as proof
-of token purpose. With an existing `cipher` (`*crypto.Encrypter`) and registered
-`clientID`, construct a verifier:
+Install `arkoren.dev/driver/oauth` as shown in
+[OAuth client setup](oauth.md#configure-clients). With an existing
+`cipher *crypto.Encrypter` from [Encryption](../encryption/overview.md) and your
+registered `clientID`, configure the verifier:
 
 ```go
+import oauth "arkoren.dev/driver/oauth/oauthauth"
+
 client, err := oauth.New(
-	oauth.OIDC("https://id.example.com/realms/app"),
+	oauth.OIDC("https://id.example.com/realms/invoices"),
 	cipher,
 	clientID,
-	func(client *oauth.ClientBuilder) {
-		client.Audiences("https://api.example.com")
+	func(verification *oauth.ClientBuilder) {
+		verification.Audiences("https://api.example.com/invoices")
 	},
 )
 ```
 
-Handle the constructor error before using `client`. The constructor requires
-a non-nil encrypter and nonempty client ID even for bearer-only use. It does
-not perform discovery. No redirect URL or client secret is needed for this
-verification path.
+Handle the constructor error before use. The API-only path still requires a
+non-nil encrypter and nonempty client ID because they are constructor inputs;
+it needs no redirect URL or client secret. `Audiences` is required by `Verify`.
+Without it, verification returns `ErrNoAudiences` rather than defaulting to the
+browser client ID.
 
-Import `application` from `arkoren.dev/core/application` for lifecycle wiring.
-Register discovery before serving requests, using your existing application:
+Construction performs no network I/O. Register `client.Start` in your existing
+application composer, importing `arkoren.dev/core/application`:
 
 ```go
 compose := func(composer *application.Composer) {
@@ -54,135 +61,161 @@ compose := func(composer *application.Composer) {
 }
 ```
 
-`Start` discovers the provider; signing-key retrieval may occur during token
-verification. `Verify` checks signature, expiry, issuer, a nonempty final subject
-after provider-specific mapping, and whether at least one token audience matches
-a configured audience. Without `Audiences`, it
-returns `ErrNoAudiences`; before successful discovery it returns `ErrNotStarted`.
-It also rejects tokens containing a `nonce` claim or a `typ` claim equal to
-`ID` (case-insensitive) in the JWT payload. These are purpose heuristics, not a
-universal access-token profile: an unmarked JWT with an accepted audience can
-pass. The adapter neither requires every provider to use `at+jwt` nor rejects
-audience overlap by itself.
+Startup discovers endpoints and prepares the verifier. Until it succeeds,
+verification returns `ErrNotStarted`. Key retrieval can occur later during
+verification, so successful discovery does not prove every request can reach
+the signing-key endpoint. Keep the returned client pointer; it owns no stop
+hook and does not stop its shared encrypter.
 
-Choose an audience policy that excludes browser ID tokens and enforce the
-provider's additional token-purpose rules in your application verifier. If those
-rules need checks beyond `client.Verify`, wrap it with those checks or use a
-provider-specific verifier. No generic marker check substitutes for that policy,
-and a verified token still needs application authorization.
+## Set Verification Boundaries
 
-When native discovery or the native token verifier returns an error after
-cancellation or a deadline, the returned chain retains that native error and makes
-`context.Canceled` or `context.DeadlineExceeded` identifiable with `errors.Is`.
-Configuration exits and local claim/policy denials are not automatically joined
-with context errors. A cached verification need not fail on an ended context.
-Do not dump native error chains into logs: they can include provider-controlled
-claims. Optional
-[token-rejection events](oauth.md#events) carry only an opaque bounded error,
-not that native cause.
+`Verify` checks the JWT signature, expiry, trusted issuer, and whether at least
+one token audience matches a configured API audience. It requires a nonempty
+final subject after any provider-specific mapping. Google and Microsoft apply
+their [preset identity checks](oauth.md#choose-providers); generic OIDC does not
+infer tenant restrictions or email-verification policy.
 
-The same started OIDC client can handle
-[browser login and API verification](oauth.md#protecting-an-api).
-`ClientBuilder.Audiences` applies only to `Verify`; browser callbacks always
-require the positional `clientID` passed to `oauth.New` in the ID token's `aud`.
-For combined use, also configure the browser redirect URL and credentials required
-by the provider.
+The discovered provider supplies signing keys through its JWKS endpoint, a
+published set of verification keys. The underlying OIDC verifier caches keys
+and can fetch them during signature verification. Accepted algorithms come
+from supported discovery metadata, with an RS256 fallback when none are set;
+the token header alone does not define the trust policy. Arkoren's builder does
+not expose a custom algorithm allowlist or native-verifier configuration. Use a
+different application verifier when your policy needs controls this adapter
+does not expose.
 
-## Requiring an identity
+Time checks use the service's wall clock. The current native verifier rejects
+expired tokens and allows five minutes of tolerance for a future `nbf`
+(not-before) claim; that is not a general five-minute expiry grace period.
+There is no clock or skew setting on `ClientBuilder`. Keep service clocks
+synchronized, and do not assume signature/expiry checks enforce a maximum token
+age or every provider's additional time policy.
 
-Import `auth` from `arkoren.dev/core/http/auth` and `request` from
-`arkoren.dev/core/http/request`. `api` is your existing router group. The
-`context` package used by the mapping example is from the standard library.
+> [!WARNING]
+> Audience and signature checks do not prove a JWT is an API access token.
+> `Verify` rejects any payload `nonce` claim and a payload `typ` equal to `ID`
+> case-insensitively, but an unmarked JWT with an accepted audience can pass.
+> Enforce your provider's access-token purpose policy before granting API access.
 
-For an API that works directly with provider identities, keep the exact type
-returned by `Verify` through authentication, required-user checks, and handlers.
+These marker checks are heuristics, not a universal access-token profile; the
+adapter does not require every provider to use `at+jwt`. If additional signed
+claims must be checked, wrap `client.Verify` with your application checks or
+use a provider-specific verifier. A successful verification still needs
+[authorization](../authorization/overview.md).
 
-The examples below assume its checks and your audience configuration satisfy the
-provider's access-token policy. If additional purpose checks are required, pass
-your application verifier to `auth.Bearer` in place of `client.Verify`.
+Local JWT verification is not an online check that the provider still accepts
+the token or account. A token can remain acceptable until expiry even after
+provider-side revocation. A current local-account lookup can enforce your own
+disabled-account policy, but cannot substitute for provider introspection.
+
+## Require Identity
+
+When handlers work directly with the provider identity, use its exact type
+throughout middleware and lookup. Import `auth` and `request` from their
+`arkoren.dev/core/http/` packages. With your existing API router group `api`:
 
 ```go
 api.Use(auth.Middleware(auth.Bearer(client.Verify)))
 api.Use(auth.Require[oauth.Identity]())
 ```
 
-`auth.Middleware` alone allows a request with no credentials to continue
-anonymously. `auth.Require[oauth.Identity]()` closes that path. Invalid tokens
-become `401` with `WWW-Authenticate: Bearer error="invalid_token"` through
-`auth.Bearer`; the response does not expose the verifier's error message.
+This assumes the audience and purpose policy above is sufficient for your
+provider. Otherwise pass your stricter application verifier instead of
+`client.Verify`. Authentication middleware alone permits missing credentials;
+`Require` rejects that anonymous path. Invalid bearer credentials produce `401`
+with `WWW-Authenticate: Bearer error="invalid_token"`.
 
-Read the same type in a handler:
+In a handler, read the same identity type:
 
 ```go
-identity, err := request.User[oauth.Identity](r)
+external, err := request.User[oauth.Identity](r)
 if err != nil {
 	return err
 }
 ```
 
-`oauth.Identity`, `*oauth.Identity`, and your application's `User` are different
-context keys. Asking for a different type produces a missing-user result, not
-a conversion. Scope policy for this identity belongs in
-[Writing Policies](../authorization/policies.md#token-scopes), and resource
-visibility belongs in [Row-Level Access](../authorization/row-access.md).
-`oauth.HasScopes(required...)` captures an independent copy of the required
-scope names, so later edits to your input slice cannot weaken an existing rule.
-It checks an identity's scopes; it does not authenticate a request or grant
-resource access by itself.
+`external.Issuer` and `external.Subject` identify the external account.
+`*oauth.Identity` and your local `User` are different context keys, not alternate
+views of this value. `Claims`, `Email`, and `Name` remain provider-controlled
+data; do not log arbitrary claims or use email to link local accounts.
 
-## Mapping to an application user
+## Load Local Accounts
 
-If handlers need your local user, wrap verification with a lookup by issuer
-and subject. Here `users.ByIdentity` is your application's existing lookup,
-returning `User`; `User.Scopes` is a request-local `[]string` field. Import
-`slices` from the standard library for the scope copy:
+If handlers need current local permissions, map the verified issuer/subject
+pair to an existing account. Keep token scopes request-local instead of mutating
+a shared cached account. For example:
 
 ```go
-verifyUser := func(ctx context.Context, token string) (User, error) {
-	identity, err := client.Verify(ctx, token)
-	if err != nil {
-		return User{}, err
-	}
-	if identity.Issuer == "" || identity.Subject == "" {
-		return User{}, auth.ErrUnauthenticated
-	}
-
-	user, err := users.ByIdentity(ctx, identity.Issuer, identity.Subject)
-	if err != nil {
-		return User{}, err
-	}
-	user.Scopes = slices.Clone(identity.Scopes)
-
-	return user, nil
+type User struct {
+	ID     int
+	Scopes []string
 }
 ```
 
-The example's `client` and `users` are injected collaborators in the enclosing
-application. The lookup must
-return an error other than `auth.ErrNoCredentials` for an unknown or disabled
-account, so a presented token fails instead of falling through to another
-authenticator. Do not mutate a shared cached user when attaching token scopes.
+With standard-library `context` and `slices`, `accounts.ByIdentity` returning
+your application's `Account`, and a `client` satisfying your provider's purpose
+policy, use:
 
-Wire `auth.Bearer(verifyUser)` with `auth.Require[User]()`, not
-`auth.Require[oauth.Identity]()`. Check `User.Scopes` with a
-[User-typed scope policy](../authorization/policies.md#token-scopes);
-`oauth.HasScopes` expects `oauth.Identity` and therefore cannot read this user.
-Token scopes limit the client's authority and do not replace the user's
-resource permissions.
+```go
+verifyUser := func(ctx context.Context, token string) (User, error) {
+	external, err := client.Verify(ctx, token)
+	if err != nil {
+		return User{}, err
+	}
+	account, err := accounts.ByIdentity(ctx, external.Issuer, external.Subject)
+	if err != nil {
+		return User{}, err
+	}
+	if account.Disabled {
+		return User{}, auth.ErrUnauthenticated
+	}
 
-Never link accounts by email alone. Generic `OIDC` passes through the email
-claim even if it is unverified; see the
-[provider email behavior](oauth.md#mapping-identities-to-users) before trusting
-an address.
+	return User{ID: account.ID, Scopes: slices.Clone(external.Scopes)}, nil
+}
+```
 
-## Using the verifier with MCP
+The repository must reject unknown links with an error other than
+`auth.ErrNoCredentials`. That sentinel would permit credential fallback, not
+reject the presented token. A zero user with nil error would count as a success.
+Do not create or merge accounts automatically from the email claim; see
+[local-account linkage](oauth.md#link-local-accounts).
 
-Apply the same bearer and required-user middleware outside an MCP HTTP mount.
-The Arkoren CLI sends an existing bearer API key, JWT, or OAuth access token;
-it does not acquire or refresh one. Protocol metadata, challenges, endpoint
-admission, tool availability, and resource checks are separate concerns in
-[Securing MCP](../mcp/securing-mcp.md). Authentication alone does not authorize
-every advertised tool or every resource it accesses.
+Wire the mapped type, not the external type:
 
-For every function and option, see the
+```go
+api.Use(auth.Middleware(auth.Bearer(verifyUser)))
+api.Use(auth.Require[User]())
+```
+
+Scope checks and resource permissions belong in
+[Authorization Policies](../authorization/policies.md). `oauth.HasScopes` works
+with `oauth.Identity`, not this local `User`; use a User-typed rule for the mapped
+identity. Token scopes limit the presented credential's authority rather than
+replacing the account's resource permissions.
+
+## Handle Verification
+
+Direct `Verify` calls preserve their error identity and native causes. After
+unsupported-provider and missing-audience checks, an ended context is rejected
+with `context.Canceled` or `context.DeadlineExceeded`, including when cached or
+local keys could otherwise succeed. A final context check also prevents identity
+publication after cancellation during verification. These checks do not promise
+that every underlying key-fetch operation stops with the request.
+
+Through `auth.Bearer`, verifier errors become an invalid-token HTTP response,
+without exposing the error message to the client. The attached cause can still
+reach diagnostics. Native errors can contain provider-controlled claims, so
+inspect deliberately instead of logging entire chains. Optional
+[token-rejection events](oauth.md#events) contain a bounded opaque error instead;
+they do not retain the native cause.
+
+One started OIDC client can handle browser callbacks and APIs, but each uses
+its own audience rule: callbacks require the positional client ID, while
+`Verify` uses configured API audiences. For MCP, apply the same bearer and
+required-user middleware outside the mount and follow
+[MCP endpoint security](../mcp/securing-mcp.md) for challenges, admission, and
+tool/resource authorization. The CLI sends existing credentials; it does not
+acquire or refresh them.
+
+For all functions and options, see the
 [`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).

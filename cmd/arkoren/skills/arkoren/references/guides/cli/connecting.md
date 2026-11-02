@@ -1,142 +1,157 @@
 ---
-title: Connecting the CLI
-nav: Connecting
-description: Select a trusted MCP endpoint, supply an existing credential, and verify discovery.
+title: Connecting
+description: Approve an MCP destination, supply an existing bearer credential, and verify discovery.
 order: 20
+summary:
+  - Pin a trusted MCP URL and supply an existing bearer credential before discovery.
+  - Resolve flags, environment variables, and files without leaking inherited tokens to a checkout's URL.
+  - Distinguish discovery from status calls and resolve authentication, TLS, and tunnel failures.
 ---
 
-# Connecting the CLI
+# Connecting
 
-## Introduction
+Before calling a tool, establish which server will receive your credential.
+Start with the [installed CLI](overview.md#installing-arkoren), an existing MCP
+endpoint, and a token that endpoint accepts. If you own the application but have
+not exposed diagnostics, follow [Capture Setup](../diagnostics/capture-setup.md)
+first.
 
-Start with the [installed CLI](overview.md#installing-the-cli), an existing MCP
-endpoint, and a credential accepted by that endpoint. The URL identifies the
-MCP mount itself, such as `https://admin.example.com/mcp`, not a tool URL.
-If you own the application but have no endpoint yet, [expose selected
-diagnostics](../observability/exposing-diagnostics.md) first.
+## Select Destination
 
-## Supplying an existing credential
+Use the MCP mount URL, such as `https://admin.example.com/mcp`, not a tool URL.
+There is no default destination. The CLI accepts HTTP or HTTPS URLs with a host,
+but rejects userinfo, query strings, and fragments before requesting anything.
+Credentials belong in the token setting, never in the URL. Invalid-URL errors
+omit the supplied value, including in verbose mode.
 
-Obtain a bearer API key, JWT, or OAuth access token through your application's
-credential workflow or authorization server. This is not a separate inspection
-secret. The CLI sends `Authorization: Bearer <token>`; it does not log in,
-refresh tokens, manage cookies, or automatically configure mutual TLS.
+Keep private endpoints on loopback or a private network. Use HTTPS beyond
+loopback or a protected tunnel. Server-side authentication, TLS, allowed Host
+values, and Origin validation remain the endpoint owner's responsibility;
+[Securing MCP](../mcp/securing-mcp.md) explains those boundaries. A terminal
+client does not make browser-facing protections unnecessary.
 
-Keep credentials out of version control. Prefer environment or trusted files
-over `-token` when shell history or process arguments could reveal it. Use HTTPS
-beyond loopback or a protected tunnel. A client token is not server
-authentication configuration; the server independently verifies it and authorizes
-tools. See [Securing MCP](../mcp/securing-mcp.md).
-
-With your issued token already in `ACCESS_TOKEN`, explicitly select its intended
-destination and verify the connection:
+Select the trusted destination explicitly before supplying a credential:
 
 ```sh
 export ARKOREN_MCP_URL=https://admin.example.com/mcp
+```
+
+The CLI normalizes literal trailing slashes but preserves escaped path
+separators: `/admin%2Fmcp` does not become `/admin/mcp`. It does not append tool
+names or follow HTTP redirects.
+
+## Verify Discovery
+
+Obtain a bearer API key, JWT, or OAuth access token through your application's
+existing credential workflow. With that value already in `ACCESS_TOKEN`, supply
+it without putting the literal secret in a command argument:
+
+```sh
 export ARKOREN_MCP_TOKEN="$ACCESS_TOKEN"
+```
+
+The CLI sends `Authorization: Bearer <token>`. It does not log in, refresh tokens,
+manage cookies, or automatically configure mutual TLS. Keep tokens out of
+version control and shared logs; environment variables and trusted files still
+need access protection. `--token` can expose a value in history or process
+arguments.
+
+Discover tools without invoking their handlers:
+
+```sh
 arkoren tools
 ```
 
-`tools` initializes MCP and reads `tools/list` without invoking any tool,
-including identity or health tools. Check that `inspector.state` is `ok`:
-discovery can report a missing or unreachable endpoint without a nonzero exit.
-Successful discovery includes the negotiated `protocol` and, when supplied,
-the server implementation version in `arkoren`. It does not include tool-derived
-application identity or identity-tool version overrides.
+Check that the JSON report has `inspector.state: "ok"`. A missing or unreachable
+endpoint can produce a report with exit 0, so the exit code alone does not prove
+discovery succeeded. Successful discovery includes the negotiated `protocol`
+and any server-supplied implementation version in `arkoren`, not tool-derived
+application identity.
 
-Inspect `command`, `description`, `kind`, and `follow` in the JSON `tools` array
-to confirm the expected tools are available. These are advertised capabilities,
-not authorization or read-only guarantees. An empty catalog can mean the caller
-has no visible tools, not that the server has none.
+The `tools` array lists commands, descriptions, `kind`, and `follow` support.
+These are advertised hints, not authorization or read-only guarantees. An empty
+catalog can mean this caller sees no tools. Remote tool help also performs only
+discovery; it does not invoke identity, health, or other tools.
 
-## Requesting an application status report
+## Configuration Sources
 
-Use `status` when you intend the endpoint's identity and health handlers to run,
-not merely to verify discovery. It explicitly invokes the uniquely advertised
-`identity` role, then the uniquely advertised `health` role, with `{}` inputs.
-If discovery does not expose exactly one tool for a role, `status` skips that
-role. Neither role guarantees read-only behavior; review the endpoint's tool
-contracts before running the command:
+URL and token independently select their first nonempty value:
+
+| Setting | First | Second | Third |
+| --- | --- | --- | --- |
+| Endpoint | `--url` | `ARKOREN_MCP_URL` environment variable | `ARKOREN_MCP_URL` in `./.env` |
+| Credential | `--token` | `ARKOREN_MCP_TOKEN` environment variable | `ARKOREN_MCP_TOKEN` in `./.env` |
+
+Empty values do not clear lower-precedence values. `ARKOREN_INSPECT_TOKEN` is
+not an alias. Without a URL, tool calls and `status` fail with exit 2; `tools`
+instead reports `inspector.state: "not configured"`.
+
+Only those two keys are read from the current directory's `.env`; parent
+directories are not searched. The file may be absent. Its syntax supports
+`KEY=VALUE`, an optional `export ` prefix, quoted values, and `#` comments.
+There is no interpolation: `$HOME` stays literal. Double quotes support `\n`,
+`\"`, and `\\` escapes.
+
+`--env-file PATH` replaces `.env`, and the named file must exist. Relative paths
+resolve from the working directory, without fallback to `.env`.
+`--env-file ''` disables file loading, not environment variables or flags.
+
+## Approve File URLs
+
+A checkout can supply its own `.env`. If that implicitly loaded file's URL would
+receive a token selected from your environment or `--token`, the CLI exits 2
+before any network request. It does not discard the inherited token or fall
+back to a file token.
+
+Prefer pinning a trusted URL with `--url` or `ARKOREN_MCP_URL`. If you instead
+want the file to choose the destination, review it before explicitly approving
+it for this invocation:
+
+```sh
+arkoren --env-file ./trusted-admin.env tools
+```
+
+This permits the file's URL to receive an environment or flag token; it does not
+change precedence. Explicit `--env-file .env` is approval too. Never add it
+blindly to bypass a refusal in an untrusted checkout. If a previous client sent
+a token to an unintended destination, rotate that token.
+
+A URL and token both selected from the same file work without extra approval.
+An implicit file URL without any token also works. Keep paired configuration in
+a trusted, untracked file when using that arrangement.
+
+## Request Status
+
+Use `status` only when you intend application handlers to run. It invokes the
+uniquely advertised `identity` role, then the uniquely advertised `health` role,
+once each with `{}`. Missing or ambiguous roles are skipped. Review their
+contracts first: a role does not guarantee read-only behavior.
 
 ```sh
 arkoren status
 ```
 
-The report includes the negotiated protocol and configuration sources without
-printing the token. Identity can add application fields, process identity, and
-an implementation-version override. An identity failure stops before health or
-report output. A health failure appears in the report without by itself failing
-the command, so `status` is not a readiness gate. A stdout write failure still
-takes precedence and exits 1.
+The report includes configuration sources without printing the token. Identity
+can add application and process details and override the reported server version.
+An identity failure stops before health or report output. A health failure is
+included in the report without itself failing the command; `status` is not a
+readiness gate. Use a [condition wait](waiting-and-following.md#gate-readiness)
+for that purpose.
 
-## Choosing configuration sources
+## Resolve Failures
 
-URL and token each use the first nonempty value in this order:
+An actual HTTP 401 exits 4: obtain or replace the accepted credential. An empty
+catalog or admission denial requires checking server policy, not guessing tool
+names. TLS verification, networking, and protocol failures are separate from
+authentication; consult [exit codes](reference.md#exit-codes).
 
-| Setting | Flag | Environment | Current-directory file |
-| --- | --- | --- | --- |
-| Endpoint | `-url` | `ARKOREN_MCP_URL` | `ARKOREN_MCP_URL` in `./.env` |
-| Credential | `-token` | `ARKOREN_MCP_TOKEN` | `ARKOREN_MCP_TOKEN` in `./.env` |
+For private HTTPS, configure the intended
+[client trust](../http-networking/certificates.md#choose-client-trust). Do not
+disable certificate verification to hide a trust mismatch. CLI help and version
+output are offline and cannot verify TLS or endpoint availability.
 
-There is no default URL. Calling a tool or requesting `status` requires a URL;
-`tools` instead reports `inspector.state: "not configured"` when none is selected.
-URL userinfo (`user:password@host`), query strings, and fragments are rejected
-before any request. Supply credentials through the token setting, never the URL.
-Invalid-URL diagnostics omit the supplied value, including with `--verbose`.
-Literal trailing slashes are normalized without decoding escaped path separators:
-`/admin%2Fmcp` stays distinct from `/admin/mcp`.
-Empty values do not clear lower-precedence values. `ARKOREN_INSPECT_TOKEN` is not
-an alias.
-
-The CLI reads only these two file keys, only in the current directory, never a
-parent. The file may be absent. Its minimal syntax supports `KEY=VALUE`, an
-optional `export ` prefix, quotes, and `#` comments. It performs no interpolation:
-`$HOME` stays literal. Double quotes support `\n`, `\"`, and `\\` escapes.
-
-Use `-env-file path` to replace `.env`; the named file must exist. Relative paths
-are relative to the current directory, with no fallback to `.env`.
-`-env-file ''` disables file loading, not environment or flag configuration.
-
-## Trusting a file's destination
-
-A project can control its `.env` URL. If that implicitly loaded URL would receive
-a token selected from your environment or `-token`, the CLI refuses the command
-with exit code 2 before any network request. It neither drops your token nor
-substitutes a lower-precedence file token.
-
-Pin the trusted destination with `-url` or `ARKOREN_MCP_URL`. Alternatively,
-after reviewing the file, explicitly approve it for this run:
-
-```sh
-arkoren -env-file ./trusted-admin.env tools
-```
-
-This approves that file's URL for environment and flag tokens; precedence does
-not change. Explicit `-env-file .env` is approval too. Do not add it blindly to
-bypass a refusal in an untrusted checkout. Rotate a token if an older client
-already sent it to an unintended destination.
-
-A URL and token both selected from the same file work without extra approval.
-An implicit file URL with no token also works. Keep paired local configuration
-in a trusted, untracked file if that matches your workflow.
-
-## Resolving connection failures
-
-An actual HTTP 401 during connection or discovery exits 4: obtain or replace the
-endpoint's credential. Missing tools or admission denial require checking server
-policy, not guessing command names. Network, TLS, and protocol failures are
-distinct from authentication;
-[CLI reference](reference.md#exit-codes) describes their exit statuses.
-
-All connecting commands, including remote help, enforce the trust check.
-Bare `arkoren` and `arkoren --help` print offline root help and exit 0 without
-reading configuration. `arkoren --version` prints only the installed CLI version,
-also offline. `new` and `new --help` are offline too. Use `tools` for a
-discovery-only connection check; remote help also discovers tools without
-invoking them. Local help and version output do not establish a connection.
-
-To reach a loopback admin listener on another machine, forward its port instead
-of publishing it publicly:
+If an admin listener is loopback-only on another machine, forward its port
+instead of publishing it publicly:
 
 ```sh
 ssh -L 9090:127.0.0.1:9090 user@host
@@ -144,7 +159,4 @@ ssh -L 9090:127.0.0.1:9090 user@host
 
 While the tunnel is open, explicitly select `http://127.0.0.1:9090/mcp` and
 supply the endpoint's existing credential. The tunnel does not replace endpoint
-authentication.
-
-Once discovery succeeds, [call a tool](calling-tools.md). For server-side
-transport behavior, see the [MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).
+authentication. Once discovery succeeds, continue with [Calling Tools](calling-tools.md).

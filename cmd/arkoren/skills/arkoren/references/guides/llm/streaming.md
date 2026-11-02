@@ -1,13 +1,14 @@
 ---
 title: Streaming Replies
-nav: Streaming
-description: Stream model output and agent progress as it arrives, and send it to a browser with response.SSEJSON.
-order: 40
+description: Display incremental replies and tool progress while preserving cancellation, completion, and browser-delivery boundaries.
+order: 70
+summary:
+  - Consume text and agent progress without mistaking a fragment for a completed answer.
+  - Distinguish natural completion, provider failure, and a consumer-stopped stream.
+  - Deliver events with SSE or collect a finite stream without accidentally repeating model calls.
 ---
 
 # Streaming Replies
-
-## Introduction
 
 A long answer leaves the user waiting if you display it only after generation
 finishes. Streaming lets you show text as it arrives; it does not promise a
@@ -23,17 +24,21 @@ Materialize once if you need to reuse the observed events without another run.
 
 The examples use `llm` from `arkoren.dev/core/service/llm` and the standard
 `fmt` package. Reuse `model` and `ctx` from the
-[overview setup](overview.md#creating-a-model).
+[driver setup](drivers.md#connecting). Use an operation context with a deadline;
+the request context is appropriate inside an HTTP handler.
 
-## Streaming one turn
+## Streaming Text
 
 If you want to print an answer as it is written, read text fragments from
 `Stream` rather than waiting for `Generate` to return the whole response. Use
 your existing `model` and a `request` of type `llm.Request`, with the same
-shape as [a single-turn request](overview.md#generating-one-turn):
+shape as [a single-turn request](overview.md#generating-replies):
 
 ```go
 for event, err := range model.Stream(ctx, request) {
+	if err != nil {
+		return err
+	}
 	if delta, ok := event.(llm.TextDelta); ok {
 		fmt.Print(delta.Text)
 	}
@@ -49,16 +54,19 @@ result from `Done`. A stream that ends without `Done` or an error yields
 A terminal error means the stream failed; text already shown to the user does
 not mean a complete answer was received.
 
-## Streaming an agent
+## Streaming Agents
 
 An agent may pause its answer while it looks up an order or calls another tool.
 Showing that progress helps the person waiting understand what is happening.
 `RunStream` forwards the text from each turn along with tool-progress events.
-Use the `support` agent from [Agents and Tools](agents-and-tools.md) and your
+Use the `assistant` agent from [Running Agents](running-agents.md) and your
 stored `history`:
 
 ```go
-for event, err := range model.RunStream(ctx, support, history) {
+for event, err := range model.RunStream(ctx, assistant, history) {
+	if err != nil {
+		return err
+	}
 	switch e := event.(type) {
 	case llm.TextDelta:
 		fmt.Print(e.Text)
@@ -89,7 +97,7 @@ For a [structured-output agent](structured-output.md), streamed text can still
 be incomplete or fail final validation. Do not treat a text delta as a validated
 typed result; keep reading the stream's error value.
 
-## Stopping a stream
+## Stopping Streams
 
 To record a normally completed standalone turn, consume `Model.Stream` through
 its natural end. Breaking or returning from a successful event, including
@@ -103,10 +111,10 @@ the agent outcome event. Completed tool observations remain published. Tool
 handlers must honor cancellation; stopping the consumer cannot undo effects or
 forcibly terminate a blocked handler. A panic also propagates rather than
 becoming a successful stop; the
-[observation rules](overview.md#usage-events-and-telemetry) explain its bounded
+[observation rules](overview.md#observing-calls) explain its bounded
 telemetry and lack of an invented outcome event.
 
-## Sending a stream to the browser
+## Browser Delivery
 
 For a chat page, the fragments need to reach the browser as they arrive at your
 server. `response.SSEJSON` sends each iterator value as a JSON-encoded
@@ -121,7 +129,7 @@ Inside your existing Arkoren handler, with `w`, `req`, and the conversation `his
 already available, import `response` from `arkoren.dev/core/http/response`:
 
 ```go
-return response.SSEJSON(w, req, model.RunStream(req.Context(), support, history).Iter())
+return response.SSEJSON(w, req, model.RunStream(req.Context(), assistant, history).Iter())
 ```
 
 In the browser, read the stream with `fetch` for a `POST`, or with `EventSource`
@@ -143,7 +151,7 @@ blocked outside `yield`. Arrange for that work to stop on request cancellation
 and the shutdown signal, or give it another bounded way to exit. Passing only
 `req.Context()` does not guarantee prompt graceful shutdown while work is blocked;
 a noncooperative producer can keep `SSEJSON` waiting indefinitely.
-[Responses](../http-fundamentals/responses.md#streaming) explains the write
+[Streaming Responses](../http-fundamentals/streaming-responses.md) explains the write
 deadline and cooperative shutdown behavior of streaming responses.
 
 > [!NOTE]
@@ -153,7 +161,7 @@ deadline and cooperative shutdown behavior of streaming responses.
 > If the browser needs an error event, send an application-approved message from
 > a wrapper iterator, not raw provider, tool, or schema diagnostics.
 
-## Selecting and collecting events
+## Collecting Events
 
 To display only text, filter the stream directly; no collection conversion or
 additional import is required:
@@ -164,6 +172,9 @@ text := model.Stream(ctx, request).Filter(func(_ int, item llm.Event) (bool, err
 	return ok, nil
 })
 for item, err := range text {
+	if err != nil {
+		return err
+	}
 	fmt.Print(item.(llm.TextDelta).Text)
 }
 ```

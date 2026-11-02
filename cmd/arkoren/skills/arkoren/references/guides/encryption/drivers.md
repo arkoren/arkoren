@@ -1,216 +1,196 @@
 ---
 title: Encryption Drivers
 nav: Drivers
-description: Choose AES-GCM or ChaCha20-Poly1305, install the driver, pass it a key, and bind it to a purpose with additional data.
-order: 40
+description: Choose and configure a local authenticated cipher, including purpose binding and cleanup ownership.
+order: 20
+summary:
+  - Compare the two local ciphers and their shared key, nonce, and authentication limits.
+  - Construct a driver and facade, bind a stable purpose, and release owned resources safely.
+  - Observe complete facade operations without exporting encrypted values in metric labels.
 ---
 
 # Encryption Drivers
 
-## Introduction
-
-Choose **AES-GCM** for the usual server deployment with hardware AES
-instructions. Choose **ChaCha20-Poly1305** when your processor lacks those
-instructions, such as some ARM boards; it performs well in pure software.
-
-Both drivers provide authenticated encryption with the same output size: a
-random 96-bit nonce, a 128-bit authentication tag, and 28 bytes added to every
-value. Both require exactly 32-byte secrets. This choice changes the cipher, not your
-responsibility to protect keys and authorize decryption.
-
-Values encrypted with one cannot be decrypted with the other. Moving from one
-to the other is a key rotation, with the new driver as the current one and the
-old driver as a previous one, as described in
-[Encryption Keys](keys.md#rotating-keys). Both drivers accept
-[additional data](keys.md#separating-purposes) with `Builder.AdditionalData`, and
-both have a `Stop` method that zeroes their copy of the key.
+Choose AES-GCM for a server with hardware AES support. Consider
+ChaCha20-Poly1305 when AES acceleration is unavailable; benchmark your workload
+if performance determines the choice. Both run in your process without a cloud
+encryption service and require a persistent 32-byte `key.Shared` value.
+[Encryption Keys](keys.md) explains loading and rotating that material.
 
 ## Compatibility matrix
 
-Compare the cipher variants and key lengths accepted by Arkoren's drivers,
-not every mode offered by the underlying cryptography libraries. Additional
-data binds all operations on a driver to the same configured purpose.
+This compares Arkoren's shipped drivers, not every cipher mode available from
+their underlying libraries. Facade metrics apply only when operations go through
+`crypto.Encrypter`.
 
-| Driver | Authenticated encryption | Additional data | Requires `key.Shared` | 16- or 24-byte keys | 32-byte keys | 192-bit nonces | Aggregate facade metrics |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| [AES-GCM](#aes-gcm) | Yes | Yes | Yes | No | Yes | No | Yes — Through crypto.Encrypter. |
-| [ChaCha20-Poly1305](#chacha20-poly1305) | Yes | Yes | Yes | No | Yes | No | Yes — Through crypto.Encrypter. |
+| Driver | Authenticated encryption | Purpose AAD | 32-byte keys | 16- or 24-byte keys | 192-bit nonces | Facade metrics |
+| --- | --- | --- | --- | --- | --- | --- |
+| [AES-GCM](#aes-gcm) | Yes | Yes | Yes | No | No | Yes |
+| [ChaCha20-Poly1305](#chacha20-poly1305) | Yes | Yes | Yes | No | No | Yes |
 
-Metrics are shared by both drivers through the facade. Configure
-`crypto.Builder.Telemetry` in the trailing `crypto.New` callback using your
-[telemetry service](../observability/telemetry.md), not on a driver builder.
-Nil follows `telemetry.Default()` per call; `telemetry.New(nil)` disables
-reporting explicitly. Direct driver calls emit no facade metrics.
-
-Counts and durations cover each complete facade call, including JSON failures
-and all key attempts, without traces or events. Decryption records one final
-logical outcome, not one failure per attempted key. Successful fallback does not
-mean the caller persisted a rotated value. Keys, plaintext, ciphertext and native
-error text never become labels. See the [crypto metric names and label values](https://pkg.go.dev/arkoren.dev/core/service/crypto).
-
-Both drivers generate random 96-bit nonces; the ChaCha20 driver does not expose
-XChaCha20. Rotate keys before 2^32 encryptions per key across all instances.
-Ciphertexts are not interchangeable between drivers, and decryption requires
-the original key and exact additional-data bytes.
+Both use a random 96-bit nonce and add 28 bytes to the raw plaintext length.
+Rotate before 2^32 encryptions under one key across all replicas. Neither
+driver exposes XChaCha20 or a caller-supplied nonce. Changing cipher requires
+keeping the original driver available to decrypt old values; see
+[Rotating Keys](keys.md#rotating-keys).
 
 ## AES-GCM
 
-The AES driver uses AES in Galois/Counter Mode, the most widely used
-authenticated cipher. It runs in your process and needs no external service.
+The AES driver uses AES-256 in Galois/Counter Mode. It needs no account,
+credentials beyond the encryption key, network connection, or `Start` call.
 
-### Installation
+### Installing AES
 
-Run this command from your application's module directory:
+From your application's module directory, install the driver:
 
 ```sh
 go get arkoren.dev/driver/aes
 ```
 
-### Connecting
+### Creating Encrypters
 
-Load a persistent `key.Shared` value named `material` as described in [Encryption Keys](keys.md#loading-the-key-at-startup).
-The key package requires exactly 32 bytes, so this driver uses AES-256-GCM.
-Other lengths fail during key import; a zero typed value is rejected by the driver:
+Import `crypto` from `arkoren.dev/core/service/crypto` and `aescrypto` from
+`arkoren.dev/driver/aes/aescrypto`. With validated material named `material`,
+construct the driver and then its facade:
 
 ```go
-import (
-	"arkoren.dev/core/service/crypto"
-	"arkoren.dev/driver/aes/aescrypto"
-)
-
 driver, err := aescrypto.New(material)
 enc, err := crypto.New(driver)
 ```
 
-Construction builds the cipher without network I/O. Register `driver.Stop` with
-[application cleanup](../application/lifecycle-and-ownership.md) immediately after
-acquiring the driver; the hook clears its raw key copy after consumers finish.
-Register cleanup for each previous driver too. The internal cipher state can
-retain key material until garbage collection; `Stop` is not a memory-erasure guarantee.
-It waits for in-flight encryption/decryption before clearing the owned raw key
-and releasing the cipher reference. An expired or canceled cleanup context does
-not interrupt that wait or skip release. It does not clear the caller's key value.
+These are focused fragments; handle each construction error before continuing.
+The driver builds its cipher locally and rejects a zero `key.Shared` with
+`key.ErrInvalid`. Key import rejects lengths other than 32 bytes, so this is
+not an AES-128 or AES-192 interface. `crypto.New` rejects nil current or previous
+drivers with `crypto.ErrInvalidDriver`.
 
-### Configuration
+Register `driver.Stop` with [application cleanup](../application/lifecycle-and-ownership.md)
+immediately after successful acquisition. Keep the constructor's pointer rather
+than copying the driver, which contains synchronization state. The facade
+shares that driver and does not stop it for you. Use `enc` for the ordinary
+[typed encryption task](overview.md#encrypting-values).
 
-By default no additional authenticated data is bound. To prevent a ciphertext
-from being used for another purpose, add a stable purpose when constructing the
-driver:
+### Binding Context
+
+**Additional authenticated data** (AAD) binds ciphertext to known context
+without encrypting that context. For a calendar-only driver, use a stable
+purpose string when constructing it instead of the unconfigured constructor:
 
 ```go
-configure := func(encrypter *aescrypto.Builder) {
+driver, err := aescrypto.New(material, func(encrypter *aescrypto.Builder) {
 	encrypter.AdditionalData([]byte("calendar-credentials:v1"))
-}
+})
 ```
 
-Pass `configure` to `aescrypto.New(material, configure)`. The additional-data bytes are copied;
-repeated settings replace them, and nil or empty clears them. Decryption needs
-the exact same bytes, including on previous drivers. This setting does not add
-bytes to the output. There are no timeout or retry settings for this local cipher.
+No AAD is bound by default. `AdditionalData` replaces and copies the bytes;
+nil or empty clears them. Construction copies the completed setting again.
+The exact bytes must match during decryption. They are not included in the
+ciphertext and do not increase its size. The setting applies to every operation
+on this driver, not to an individual call; [Storing Data](storing.md#binding-records)
+explains the record-binding boundary. There are no network, retry, or timeout
+settings.
 
-### Encrypting stored credentials
+### Handling Shutdown
 
-Use `enc` for the [typed encryption example](overview.md#encrypting-values),
-or raw bytes with `EncryptRaw`. Each successful call returns new ciphertext;
-store it only after checking the error.
+Operations support concurrent use. `Stop` waits for in-flight operations, clears
+the driver's owned raw key copy, and releases its cipher reference. Cancellation
+of the cleanup context does not interrupt that wait or skip release. Repeated
+stops are safe; later operations return `crypto.ErrEncrypterClosed`.
 
-### Behavior and limits
+This does not clear the caller's immutable key, exported bytes, plaintext, or
+all internal cipher state. Treat process memory as sensitive. The constructor
+pointer formats as `[REDACTED AES driver]` in ordinary `fmt` diagnostics, but
+arbitrary serialization, reflection, copied values, and explicit exports are
+not a sanitization boundary.
 
-The driver copies the key and builds the cipher once. It is safe for concurrent
-use. Its output is nonce, ciphertext, then tag: 28 bytes more than the input.
-Rotate before 2^32 encryptions under one key across all replicas. Modified or
-wrong-key input wraps `crypto.ErrInvalidCiphertext`; input shorter than the nonce
-also wraps `aescrypto.ErrMismatchedAESNonceSize`. After `Stop`, operations fail
-with `crypto.ErrEncrypterClosed`. No native client or additional adapter is shipped.
+Invalid ciphertext wraps `crypto.ErrInvalidCiphertext`; input shorter than the
+12-byte nonce additionally wraps `aescrypto.ErrMismatchedAESNonceSize`.
+No native client or companion encryption adapter is exposed.
 
-Keep the constructor's `*Driver`; copying its synchronization state is invalid.
-Its `fmt.Formatter` method writes `[REDACTED AES driver]` for `%v`, `%+v`, and `%#v`
-on that pointer without inspecting key, cipher state, or additional data. This
-does not promise sanitization through arbitrary serialization, reflection,
-invalid `fmt` verbs, copied values, or native/caller-owned objects. Explicit key
-exports, plaintext, and returned error causes still require your logging policy.
-
-### API references
-
-For every option, see the
-[`aescrypto` API reference](https://pkg.go.dev/arkoren.dev/driver/aes/aescrypto).
+For driver options, see the [`aescrypto` API reference](https://pkg.go.dev/arkoren.dev/driver/aes/aescrypto).
 
 ## ChaCha20-Poly1305
 
-The ChaCha20 driver uses ChaCha20-Poly1305 in your process. Choose it when your
-processor lacks efficient AES instructions; it needs no external service.
+The ChaCha20 driver uses the 96-bit nonce variant of ChaCha20-Poly1305, not
+XChaCha20. Choose it when software performance without AES acceleration suits
+your deployment. It needs no external service or `Start` call.
 
-### Installation
+### Installing ChaCha20
 
-Run this command from your application's module directory:
+From your application's module directory, install the driver:
 
 ```sh
 go get arkoren.dev/driver/chacha20
 ```
 
-### Connecting
+### Creating Encrypters
 
-Load a persistent `key.Shared` value named `material` as in [Encryption Keys](keys.md#loading-the-key-at-startup).
-The key must be exactly 32 bytes:
+Import `crypto` from `arkoren.dev/core/service/crypto` and `chacha20crypto` from
+`arkoren.dev/driver/chacha20/chacha20crypto`. With persistent `key.Shared`
+material named `material`, construct the driver and facade:
 
 ```go
-import (
-	"arkoren.dev/core/service/crypto"
-	"arkoren.dev/driver/chacha20/chacha20crypto"
-)
-
 driver, err := chacha20crypto.New(material)
 enc, err := crypto.New(driver)
 ```
 
-Construction is local; key import rejects other lengths. Register `driver.Stop`
-with [application cleanup](../application/lifecycle-and-ownership.md) immediately
-after acquiring it. Stop every current and previous driver after its consumers.
-`Stop` waits for in-flight encryption/decryption, then clears its owned raw key
-and releases the cipher reference. Cancellation or an expired cleanup context
-does not interrupt that wait or skip release. The caller's key is not cleared.
+Construction is local. Handle each error before proceeding: a zero key returns
+`key.ErrInvalid`, and key import rejects any length other than 32 bytes.
+Register `driver.Stop` with [application cleanup](../application/lifecycle-and-ownership.md)
+after acquiring it. Retain the pointer, not a copy, and stop it only after its
+consumers finish. The facade does not own cleanup. Use the shared
+[typed encryption task](overview.md#encrypting-values) with `enc`.
 
-### Configuration
+### Binding Context
 
-No additional data is bound by default. For purpose separation, pass this
-callback to `chacha20crypto.New(material, configure)`:
+To restrict this driver to calendar credentials, use the alternative constructor:
 
 ```go
-configure := func(encrypter *chacha20crypto.Builder) {
+driver, err := chacha20crypto.New(material, func(encrypter *chacha20crypto.Builder) {
 	encrypter.AdditionalData([]byte("calendar-credentials:v1"))
-}
+})
 ```
 
-The setting replaces and copies the bytes; nil or empty clears it. Use the same
-bytes when decrypting and on previous drivers. There are no network, retry, or
-timeout settings.
+The exact AAD bytes must match on decryption. No AAD is the default; repeated
+settings replace and copy the bytes, nil or empty clears them, and construction
+detaches the completed setting. Context is fixed for the driver's lifetime and
+is not stored in its output. There are no timeout, retry, or network settings.
 
-### Encrypting stored credentials
+### Handling Shutdown
 
-Use `enc` for [typed values](overview.md#encrypting-values) or raw byte encryption.
-Handle the returned error before storing or using the result.
+Operations are safe for concurrent use. `Stop` waits for in-flight operations
+even with a canceled context, clears its owned raw key copy, and releases the
+cipher reference. It is repeatable; subsequent calls to encrypt or decrypt
+return `crypto.ErrEncrypterClosed`. The caller's key and all internal cipher
+copies are not erased.
 
-### Behavior and limits
+The constructor pointer formats as `[REDACTED ChaCha20 driver]` in ordinary
+`fmt` diagnostics. This does not sanitize arbitrary serialization, reflection,
+copied values, explicit key exports, or application data.
 
-The driver uses the standard 96-bit nonce variant, not XChaCha20. Rotate before
-2^32 encryptions per key across all instances. Output overhead is 28 bytes and
-operations are safe for concurrent use. Authentication failure wraps
-`crypto.ErrInvalidCiphertext`; a too-short nonce also wraps
-`chacha20crypto.ErrMismatchedChaCha20NonceSize`. `Stop` clears the driver's raw
-key copy, not all internal cipher state; later calls fail with
-`crypto.ErrEncrypterClosed`. No native client or additional adapter is shipped.
+Authentication failures wrap `crypto.ErrInvalidCiphertext`. Input shorter than
+the 12-byte nonce also wraps `chacha20crypto.ErrMismatchedChaCha20NonceSize`.
+No native client or companion encryption adapter is exposed.
 
-Keep the constructor's `*Driver`, not a copy of its synchronization state. Its
-`fmt.Formatter` method writes `[REDACTED ChaCha20 driver]` for `%v`, `%+v`, and `%#v`
-on that pointer without inspecting owned key, cipher state, or additional data.
-No sanitization guarantee is made for arbitrary serialization, reflection,
-invalid `fmt` verbs, copied values, or native/caller-owned objects. Explicit
-exports and application data remain sensitive; formatting is not a
-memory-erasure guarantee.
+For driver options, see the [`chacha20crypto` API reference](https://pkg.go.dev/arkoren.dev/driver/chacha20/chacha20crypto).
 
-### API references
+## Facade Metrics
 
-For every option, see
-the [`chacha20crypto` API reference](https://pkg.go.dev/arkoren.dev/driver/chacha20/chacha20crypto).
+To observe logical encryption and decryption calls, pass your configured
+[telemetry service](../observability/telemetry.md), named `metrics`, to the facade:
 
-For the encrypter itself, see the [`crypto` API reference](https://pkg.go.dev/arkoren.dev/core/service/crypto).
+```go
+enc, err := crypto.New(driver, func(encrypter *crypto.Builder) {
+	encrypter.Telemetry(metrics)
+})
+```
+
+Without an explicit service, nil follows `telemetry.Default()` per call.
+`telemetry.New(nil)` explicitly disables reporting. Counts and durations include
+JSON work and all fallback attempts as one final operation, with no traces or
+events. A successful previous-key outcome does not mean replacement ciphertext
+was persisted. Labels contain no keys, plaintext, ciphertext, or native error
+text; application logging still needs its own exposure policy. Direct driver
+calls bypass these metrics.
+
+For the facade and metric definitions, see the [`crypto` API reference](https://pkg.go.dev/arkoren.dev/core/service/crypto).

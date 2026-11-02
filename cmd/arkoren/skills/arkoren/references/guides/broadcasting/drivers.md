@@ -1,74 +1,95 @@
 ---
 title: Broadcast Drivers
 nav: Drivers
-description: Choose between the memory, Redis, NATS, RabbitMQ, MQTT, and SNS broadcast drivers, and install, connect, and run each.
-order: 30
+description: Choose and connect a broadcast transport, including native resources and disposable local brokers.
+order: 20
+summary:
+  - Compare offline retention, replica sharing, and listener-error redelivery.
+  - Connect Memory, Redis, NATS, RabbitMQ, MQTT, and SNS with SQS.
+  - Keep owned and borrowed resources separate during startup and shutdown.
+  - Verify notifications using isolated local brokers and explicit cleanup.
+  - Use raw subscriptions and native clients without assuming facade guarantees.
 ---
 
 # Broadcast Drivers
 
-## Introduction
+Choose a transport by what recipients can miss and how service replicas share
+notifications. Memory stays within one process. Redis Pub/Sub and Core NATS suit
+live notifications; NATS queue groups can share them among replicas. RabbitMQ
+uses temporary AMQP subscriptions. MQTT suits MQTT 5 deployments, but its owned
+sessions are not persistent. SNS with subscribed SQS queues retains notifications
+for offline services, subject to queue policies.
 
-Topics, listeners, and patterns stay portable. Choose by whether offline services
-need missed events or can reload current state.
+None of these drivers confirms recipient handling to the publisher. A broker
+connection is not an active subscription, and protocol acknowledgement is not
+proof of a successful application effect. See [Message Delivery](message-delivery.md)
+for the consequences of retries and cancellation.
 
-Use memory in-process, Redis for existing Pub/Sub, NATS for lightweight or
-queue-group notifications, RabbitMQ for AMQP topics, MQTT for devices, and SNS
-with SQS for offline retention.
+## Compatibility Matrix
 
-Memory delivers asynchronously in process. Redis and NATS deliver at most once;
-RabbitMQ uses ephemeral, auto-acknowledged subscriptions, and MQTT delivery
-depends on QoS. With these default configurations, offline subscribers miss
-messages. RabbitMQ publication retries can duplicate a message when its first
-broker confirmation is lost.
-SNS with SQS provides at-least-once delivery and retains offline messages.
+This compares Arkoren's exposed behavior, not every feature of each broker.
+Replica sharing means competing for one service's notifications, not receiving
+independent fan-out copies. Listener retry means redelivery caused by the
+consumer's returned error, not native connection retries.
 
-Install from your application's module directory. Wrap each driver in
-`broadcast.NewPublisher` and `broadcast.NewConsumer`. Register listeners before
-running the consumer, and register driver cleanup before startup as in the
-[overview](overview.md#listening). Connection alone does not activate a consumer
-subscription; publishing success does not confirm listener processing.
+| Driver | Offline Retention | Replica Sharing | Listener Retry |
+| --- | --- | --- | --- |
+| [Memory](#memory) | No | No | No |
+| [Redis](#redis) | No | No | No |
+| [NATS](#nats) | No | Partial — Set the same queue group on replicas. | No |
+| [RabbitMQ](#rabbitmq) | No | No | No |
+| [MQTT](#mqtt) | No | No | No |
+| [SNS with SQS](#sns) | Partial — Subscribed queues retain messages under their retention and redrive policies. | Yes | Partial — Nonpermanent failures remain for native redelivery. |
+| [Direct SQS](#direct-sqs) | Partial — A provisioned queue retains messages under its policies. | Yes | Partial — Nonpermanent failures remain for native redelivery. |
 
-At-most-once delivery can lose messages. [Listener failures](overview.md#delivery)
-never reach publishers. Redelivery repeats all matching listeners: make effects idempotent.
-Drivers do not emit events; listener failure notifications come from the consumer
-facade, not the transport.
+The MQTT row describes `New`'s clean session. A caller-owned Paho manager keeps
+its native session policy; that does not add a portable persistence guarantee.
+With SNS, give each independent service its own queue, then share that queue
+among the service's replicas. Direct SQS alone is point-to-point, not fan-out.
 
-## Compatibility matrix
+## Driver Lifecycle
 
-The comparison covers behavior exposed by these drivers, not every broker
-feature. Replica sharing means competing consumers rather than independent
-fan-out copies; NATS requires a queue group. The MQTT row describes `New`'s owned,
-clean session; a caller-owned Paho manager retains its native session policy.
+Import `arkoren.dev/core/service/broadcast` for the facades. Install external
+driver modules from your application's module directory. These focused fragments
+assume an operation context `ctx`; handle constructor errors before registering
+or using a returned driver.
 
-| Driver | Offline retention | Replica sharing |
-| --- | --- | --- |
-| [Memory](#memory) | No | No |
-| [Redis](#redis) | No | No |
-| [NATS](#nats) | No | Partial — Requires the same queue group on replicas. |
-| [RabbitMQ](#rabbitmq) | No | No |
-| [MQTT](#mqtt) | No | No |
-| [SNS with SQS](#sns) | Partial — Requires subscribed queues; retention and redrive policies apply. | Yes |
-| [Direct SQS](#publishing-directly-to-sqs) | Partial — Requires a provisioned queue; retention and redrive policies apply. | Yes |
+For Redis, NATS, RabbitMQ, and MQTT, an existing application composer can own
+connection setup, readiness, and the consumer runner:
 
-SNS fan-out needs subscriptions: use one queue per independent service, shared
-among its replicas. Direct SQS has competing consumers; queue policies govern retention.
+```go
+composer.Cleanup(driver.Stop)
+composer.Startup(driver.Start)
+composer.Check("broadcast", driver.Ping)
+composer.Run(consumer.Run)
+```
 
-Redis, NATS, RabbitMQ, and MQTT offer raw subscriptions for non-envelope producers.
-With `handleBytes` of type `func([]byte)`, call
-`driver.Subscribe(ctx, "order.#", handleBytes)`. Handle setup errors and call the
-returned unsubscribe function when finished. This bypasses facade decoding,
-listener routing, and telemetry without adding retention or retries. See provider
-sections for routing and ownership constraints.
+Register cleanup before startup so acquired resources are released even after
+startup failure. Construct the consumer and register its listeners before the
+application runs. `Start` establishes connectivity; `consumer.Run` owns the
+subscription. For non-retaining transports, do not publish a required test
+notification until consumption is active. There is no shared subscription-ready
+method. See [Lifecycle and Ownership](../application/lifecycle-and-ownership.md)
+for application supervision.
+
+For Memory, register only `Stop` and `consumer.Run`: `Start` is a no-op and there
+is no `Ping`. SNS/SQS has no driver lifecycle hooks; register only the consumer
+runner. A publish-only service needs no consumer runner.
+
+Cancel and join consumers and release raw subscriptions before resource cleanup.
+Driver shutdown cannot forcibly stop arbitrary application callbacks. Borrowed
+native resources stay caller-owned; keep them alive until all users finish.
+
+The local examples use dedicated project names and loopback ports. Run each in
+a new directory with the shown Compose file. If its name or port is already in
+use, choose another disposable name or port; do not stop an existing deployment
+to make room. Never reuse these cleanup commands for production resources.
 
 ## Memory
 
-Memory is included in `arkoren.dev/core` for single-process development.
-For tests that only assert publications, use [the broadcast fake](overview.md#testing).
-
-### Connecting
-
-`New` never fails or starts work. `Start` does nothing; `Stop` shuts the broker down:
+Use the bundled memory driver for asynchronous notifications within one process.
+Use the [recording fake](overview.md#testing-publications) when a test only needs
+to assert publication. No broker or additional module is required:
 
 ```go
 import "arkoren.dev/core/service/broadcast/memorybroadcast"
@@ -78,14 +99,16 @@ publisher := broadcast.NewPublisher(driver)
 consumer := broadcast.NewConsumer(driver)
 ```
 
-Register `Stop` for cleanup after consumers stop. It closes admission and waits
-for admitted handlers only until its context ends; those handlers must bound
-their own work. See [application wiring](overview.md#wiring-into-the-application).
+Construction starts no work. Register the [order listener](overview.md#listening),
+run the consumer, then [publish an order](overview.md#publishing-facts) through
+the same driver instance. Only already-running consumers receive the message;
+each `Consume` gets its own payload bytes and metadata map. Restarting the
+process loses all broker state.
 
-### Configuration
+### Delivery Limits
 
-`memorybroadcast.Builder.MaxConcurrentDeliveries` caps concurrent message deliveries
-across consumers (default 1024). `Builder.Logger` logs listener failures (default `slog.Default()`):
+If listeners need a lower concurrency bound, change the shared handler admission
+limit at construction:
 
 ```go
 driver := memorybroadcast.New(func(broker *memorybroadcast.Builder) {
@@ -93,161 +116,138 @@ driver := memorybroadcast.New(func(broker *memorybroadcast.Builder) {
 })
 ```
 
-### Publishing and receiving notifications
+The default is 1024 simultaneous deliveries across consumers; nonpositive values
+restore that default. `Logger` defaults to `slog.Default()` and records delivery
+failures without retrying. A full consumer buffer blocks publication until space
+is available or the publishing context ends. A publication can fail after some
+consumers accepted their copies; fan-out is not an atomic transaction.
 
-With this `driver`, follow [Publishing](overview.md#publishing) and
-[Listening](overview.md#listening) to register the order listener and run the
-consumer before publishing; only running consumers receive notifications.
+Cancellation and `Stop` discard buffered messages and interrupt messages waiting
+for a handler slot. Admitted handlers preserve consumer context values but lose
+its cancellation and deadline; they can outlive `Consume`. Give each handler its
+own work deadline. `Stop` closes admission even with an expired context, then
+waits for admitted handlers only until its context ends. It neither cancels
+those handlers nor waits for `Consume` calls to return. A later `Stop` can wait
+for the same handlers again.
 
-### Behavior and limits
-
-Delivery is asynchronous and only reaches consumers already running. Each
-running `Consume` receives its own copy of the payload bytes and metadata map;
-this is per consumer, not per listener within a consumer. A full consumer buffer
-blocks `Publish` until space becomes available or its context ends.
-
-A message waiting for a shared handler slot is not yet in flight. Canceling
-`Consume` interrupts that wait with the context error; shutdown interrupts it
-with `memorybroadcast.ErrBrokerClosed`. Buffered messages and messages waiting
-for a slot are not drained into handlers after cancellation or shutdown.
-Already-admitted handlers keep the consumer context's values, but not its
-deadline or cancellation. `Consume` returns without waiting for those handlers.
-
-`Stop` closes admission and signals consumers even when its own context is
-already expired. It waits for admitted handlers only until that context ends,
-does not cancel their contexts, and does not wait for `Consume` calls to return.
-An admitted handler can start or finish after `Stop` returns. A later `Stop` can
-wait for the same handlers again. Listener errors are logged without retries.
-
-With valid inputs and a live context, new `Publish` and `Consume` calls after
-`Stop` return `memorybroadcast.ErrBrokerClosed`. An already-canceled context
-takes precedence, including after `Stop` and before `Consume`'s nil-handler
-check.
-
-### API references
+After shutdown, valid operations with live contexts return
+`memorybroadcast.ErrBrokerClosed`. An already-canceled context takes precedence.
 
 See the [`memorybroadcast` API](https://pkg.go.dev/arkoren.dev/core/service/broadcast/memorybroadcast).
 
 ## Redis
 
-Use Redis Pub/Sub for cross-process notifications if you run Redis and can lose
-messages during subscriber downtime.
-
-### Installation
+Choose Redis Pub/Sub if you already run Redis and recipients can reload state
+after missed notifications. Connected consumers each receive a copy; this driver
+does not use Streams, retention, consumer groups, or listener retries.
 
 ```sh
 go get arkoren.dev/driver/redis
 ```
 
-### Connecting
+### Connecting Redis
 
-Register driver [lifecycle](../application/lifecycle-and-ownership.md) hooks and
-wrap it in `broadcast.NewPublisher` and `broadcast.NewConsumer` as in the
-[overview](overview.md#publishing).
-
-`New` never fails or performs I/O. `Start` checks connectivity; misconfiguration
-fails startup:
+`New` constructs an owned client without network I/O. `Start` verifies
+connectivity; `Stop` closes that client and waits for subscription goroutines:
 
 ```go
 import "arkoren.dev/driver/redis/redisbroadcast"
 
 driver := redisbroadcast.New()
+publisher := broadcast.NewPublisher(driver)
+consumer := broadcast.NewConsumer(driver)
 ```
 
-This uses `localhost:6379` and the `arkoren.` prefix. Register `Stop` for cleanup
-before `Start` for startup, and use `Ping` for readiness. On a shared server,
-choose a distinct prefix in a construction callback:
+The defaults are TCP at `localhost:6379`, no credentials or TLS, and literal
+prefix `arkoren.`. Apply the [lifecycle hooks](#driver-lifecycle), then use the
+[typed order listener](overview.md#listening) and
+[publisher](overview.md#publishing-facts).
+
+On a shared server, choose a distinct namespace. Redis Pub/Sub ignores database
+numbers, so `DB` cannot isolate applications:
 
 ```go
 driver := redisbroadcast.New(func(broker *redisbroadcast.Builder) {
-	broker.Prefix("myapp.")
+	broker.Addr("localhost:6379")
+	broker.Prefix("orders:")
 })
 ```
 
-### Configuration
+Prefix bytes are literal, including Redis glob metacharacters.
+Set `Username`, `Password`, and `TLS` from your deployment configuration for
+authenticated, encrypted connections. Prefixes route messages; they do not
+authorize publishers. Use Redis channel ACLs or separate instances for untrusted
+applications. Overlapping broad subscriptions can transfer foreign bytes into
+the process before envelope rejection. For raw subscribers, use prefixes neither
+of which starts with the other, such as `orders:` and `billing:`.
 
-Default address: `localhost:6379`. Set `Username`, `Password`, and `TLS` for
-authentication/TLS; load secrets from configuration. `Prefix` defaults to literal
-`arkoren.`. Pub/Sub ignores database numbers: use disjoint prefixes such as
-`billing:` and `shipping:` on shared Redis.
+### Native Clients
 
-> [!WARNING]
-> Prefixes route but do not authorize. For mutually untrusted applications, use
-> Redis channel ACLs or separate instances. Database numbers do not isolate Pub/Sub;
-> overlapping broad subscriptions can receive foreign bytes before driver rejection.
-
-To share a client with another component, build it yourself and set its namespace:
+To reuse an existing `*redis.Client` from `github.com/redis/go-redis/v9`, borrow it
+with `NewFrom`:
 
 ```go
 driver := redisbroadcast.NewFrom(client, func(broker *redisbroadcast.Builder) {
-	broker.Prefix("myapp.")
+	broker.Prefix("orders:")
 })
 ```
 
-You own the client; only Prefix and Logger apply.
+Only `Prefix` and `Logger` apply. Configure native `ContextTimeoutEnabled` before
+wrapping the client if operation deadlines must bound command socket I/O; `New`
+enables it for its owned client. `Client()` exposes the same pointer without
+ownership transfer. End consumers and raw subscriptions before `Stop`, then let
+the owner close a borrowed client. Native calls bypass facade encoding and
+telemetry. Config formatting redacts `Password`, not direct field access or
+native configuration.
 
-### Publishing and receiving notifications
+Owned `Stop` closes its client even with an expired context, then waits for
+subscription goroutines only until that context ends.
 
-Use the [order publisher](overview.md#publishing) and
-[order listener](overview.md#listening) with this driver. Connected consumers
-each receive a copy; later consumers miss it.
+### Local Redis
 
-### Behavior and limits
-
-Redis has no persistence, retries, or consumer groups: connected replicas each
-receive a copy. `Stop` awaits subscription goroutines and closes only `New`'s
-client. Listener panics are recovered and logged.
-
-`Consume` drops malformed envelopes and names that differ from the channel
-suffix after literal prefix removal, before invoking listeners or telemetry.
-The [API caveats](drivers.md#behavior-and-limits-1) explain
-overlapping-prefix behavior and portable wildcard matching.
-
-Raw `Subscribe` skips envelope validation: avoid overlapping application prefixes
-and call its unsubscribe function. `Consume` unsubscribes when its context ends.
-
-### Using a shared Redis client
-
-`NewFrom` borrows a `*redis.Client` from `github.com/redis/go-redis/v9`.
-`driver.Client()` exposes native operations without automatic envelopes or facade
-telemetry. Close the borrowed client after consumers stop.
-
-### Running locally
-
-With Docker installed, save this as `compose.yaml` in your application:
+Use Docker in a new disposable directory, with this `compose.yaml`. A named
+project avoids operating an existing Compose deployment:
 
 ```yaml
 services:
   redis:
     image: redis:8-alpine
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:16379:6379"
 ```
 
-Run `docker compose up -d`, then `docker compose exec redis redis-cli ping`;
-`PONG` confirms readiness. For host-local Go, set `broker.Addr("localhost:6379")`.
-After consumer startup, publish an order and check the listener's effect.
-`docker compose down --volumes` removes the server and disposable in-memory state.
+Start and verify only this project:
 
-### API references
+```sh
+docker compose -p arkoren-broadcast-redis-demo up -d
+docker compose -p arkoren-broadcast-redis-demo exec redis redis-cli ping
+```
 
-See the [`redisbroadcast` API](https://pkg.go.dev/arkoren.dev/driver/redis/redisbroadcast).
+`PONG` confirms connectivity. Use `broker.Addr("localhost:16379")` in the
+constructor, start consumption, then publish `o-1042` and check the indexer's
+effect. These are separate checks: connectivity does not prove delivery.
+
+```sh
+docker compose -p arkoren-broadcast-redis-demo down --volumes
+```
+
+This removes only the disposable project's server and data. See the
+[`redisbroadcast` API](https://pkg.go.dev/arkoren.dev/driver/redis/redisbroadcast).
 
 ## NATS
 
-Core NATS needs a reachable server and suits lightweight notifications, with
-queue groups for replica sharing.
-
-### Installation
+Use Core NATS for live cross-process notifications. Set a queue group when replicas
+of one service should share notifications. This driver does not use JetStream;
+queue groups provide load sharing, not offline retention.
 
 ```sh
 go get arkoren.dev/driver/nats
 ```
 
-### Connecting
+### Connecting NATS
 
-`New` validates settings without network or file I/O; handle its error before
-registering hooks. `Start` connects; `Stop` drains and closes the owned connection:
+`New` validates settings without network or file I/O. `Start` connects, and `Stop`
+drains and closes the owned connection:
 
 ```go
 import "arkoren.dev/driver/nats/natsbroadcast"
@@ -255,173 +255,130 @@ import "arkoren.dev/driver/nats/natsbroadcast"
 driver, err := natsbroadcast.New()
 ```
 
-This selects the local default URL. Register `Stop` for cleanup before `Start`
-for startup, and use `Ping` for readiness. Configure TLS and authentication before
-connecting to a production server.
+The default URL is `nats://127.0.0.1:4222` and the subject prefix is `arkoren`.
+Handle construction errors, apply [lifecycle hooks](#driver-lifecycle), and wrap
+the driver in `broadcast.NewPublisher` and `broadcast.NewConsumer` for the
+[order notification](overview.md#listening).
 
-### Configuration
-
-`Builder.URLs` accepts failover servers, including schemeless hosts and the
-`nats`, `tls`, `ws`, and `wss` schemes. An omitted or empty list selects
-`nats://127.0.0.1:4222`; an empty entry, absent host, malformed URL, or unsupported
-scheme is invalid. URL validation errors omit the supplied address because it
-can contain credentials. Use TLS and load secrets from configuration for
-production rather than embedding them in URLs.
-
-`Builder.NKeySeed` takes encoded NATS **user seed material**, not a filename.
-`New` validates a nonempty seed without file I/O and retains it for signing
-server nonces; temporary signing keys are wiped, not the retained seed string.
-An empty seed omits this authentication mechanism. For a JWT/seed file, use
-`Builder.CredentialsFile` instead: the SDK reads that path during
-`Start`/authentication and may read it again on reconnect. Builder-based basic
-authentication applies only when both `Username` and `Password` are nonempty;
-`Token` is another authentication option.
-
-`Prefix` defaults to `arkoren`, including when set to empty. It must be a literal
-NATS subject without wildcards, spaces, tabs, line breaks, or empty dot-separated
-tokens. `QueueGroup` must not contain spaces, tabs, or line breaks.
-
-Reconnect attempts default to unlimited; `MaxReconnects(0)` also selects that
-default, a positive value limits attempts, and `NoReconnect(true)` disables
-reconnection. `ReconnectWait(0)` restores two seconds. `Timeout(0)` selects the
-native two-second connection timeout, not an operation deadline. `New` rejects
-negative `ReconnectWait` and `Timeout` values. Nil `Logger` selects `slog.Default()`.
-
-`Config` is diagnostic data, not constructor input. For configuration logs, pass
-your `natsbroadcast.Config` record directly to `slog` or call `record.String()`.
-These diagnostics hide nonempty `Password`, `Token`, `NKeySeed`, and parsed URL
-authority userinfo; `Username` remains visible. URL entries that fail parsing or
-lack an authority hostname, including schemeless server entries, are replaced
-wholesale. Formatting copies the URL slice without changing the original record
-or native connection inputs.
-
-`Config.Format` also protects numeric, boolean, and unknown `fmt` verbs dispatched
-to it. Go itself bypasses all formatting methods for invalid `%p` on a `Config`
-value and invalid `%w` on `Config` values or pointers; those format-error
-representations can expose raw fields. If the format string is externally
-chosen, pass the already-redacted string to `fmt`:
-`fmt.Sprintf(format, record.String())`, not `fmt.Sprintf(format, record)`.
-
-Diagnostic redaction does not apply to direct field access, serialization of the
-record, or method-free type conversions. It does not erase original values or
-recursively sanitize native objects or arbitrary errors.
-
-Every subscriber gets every message by default. For replica sharing, use one queue group:
+To share notifications among indexer replicas, use the same prefix and group:
 
 ```go
 driver, err := natsbroadcast.New(func(broker *natsbroadcast.Builder) {
-	broker.QueueGroup("billing")
-})
-```
-
-### Sharing notifications among replicas
-
-Use the [order publisher](overview.md#publishing) and
-[order listener](overview.md#listening) with this driver. Replicas using
-`QueueGroup("billing")` share each event; a different group receives its own
-copy. A queue group adds load sharing, not persistence.
-
-### Behavior and limits
-
-Core NATS has no persistence. `#` becomes exact plus `>` subscriptions because
-NATS `>` excludes zero tokens, preserving portable matching.
-
-`Consume` drops malformed envelopes and subject/name mismatches before invoking
-listeners or telemetry. Raw `Subscribe` does not validate envelopes.
-
-Already-canceled `Publish`, `Consume`, and `Subscribe` contexts return their
-context error before native access. This is admission checking, not a guarantee
-that later cancellation interrupts a native publish or subscription setup.
-Raw `Subscribe` uses its context only for setup; call the returned unsubscribe
-function to release it. Callback bytes are borrowed: copy bytes you retain or
-mutate. `Consume` unsubscribes when its context ends, without waiting for an
-application callback already running.
-
-For an open owned connection, `Stop` waits for native subscription and publisher
-draining and connection closure. If its context ends, including before the call,
-it force-closes the connection and returns the context error. Drain setup failure
-also closes the connection. A native drain timeout closes it and remains
-identifiable as `nats.ErrDrainTimeout`. Forced close cannot stop arbitrary
-application callbacks. Cancel and join `Consume` calls separately: closing the
-connection does not end their context-waiting loops.
-
-Canceling `Start` abandons the connection attempt and closes any connection
-obtained later; native dialing may finish in the background. Borrowed `Stop`
-does nothing, including no subscription cleanup; its owner handles draining and
-closure as described below.
-
-Enforce broker subject permissions: prefixes are not authorization. Use
-[bounded metric retention](../observability/telemetry-drivers.md#prometheus)
-to limit retained process memory when authorized publishers can create many subjects.
-
-### Using an existing NATS connection
-
-For custom native connection settings, borrow an existing nonnil `*nats.Conn`
-from `github.com/nats-io/nats.go`. With that connection named `connection`, use
-this fragment in a function returning `error`; handle the constructor error
-before using the driver:
-
-```go
-driver, err := natsbroadcast.NewFrom(connection, func(broker *natsbroadcast.Builder) {
-	broker.Prefix("billing")
+	broker.Prefix("orders")
 	broker.QueueGroup("indexers")
 })
 ```
 
-`NewFrom` returns `(*Driver, error)` and rejects nil connections or invalid
-routing with `natsbroadcast.ErrInvalidConfig`. Only `Prefix`, `QueueGroup`, and
-`Logger` apply; connection/authentication settings are ignored, and it never
-dials or reconfigures the supplied connection. With a live context, `Start` is
-a no-op. The caller keeps ownership: cancel and join consumers, call raw
-unsubscribe functions, then drain or close the native connection. Borrowed
-`Stop` is not a substitute for that cleanup.
+An independent group receives its own copy. An empty group gives every consumer
+a copy. Prefixes must be literal NATS subjects without wildcards, whitespace,
+or empty tokens; queue groups cannot contain spaces, tabs, or line breaks.
+Enforce broker subject permissions: a prefix is not an authorization boundary.
 
-`driver.Connection()` returns the shared native pointer without transferring
-ownership: nil before owned `Start`, or the supplied connection immediately
-after `NewFrom`. Do not close an owned connection outside `Stop`; keep a
-borrowed connection alive while the driver uses it. Native operations bypass
-envelope checks and facade telemetry.
+### Connection Policy
 
-### Running locally
+`URLs` accepts multiple failover servers, schemeless hosts, or `nats`, `tls`,
+`ws`, and `wss` URLs. Empty lists select the default; empty entries, missing hosts,
+and unsupported schemes fail validation without echoing the address. Use TLS and
+load credentials from configuration rather than hard-coding them in URLs.
 
-With Docker installed, save this as `compose.yaml` in your application:
+`CredentialsFile` is a JWT/seed file path read by the SDK during connection,
+authentication, and potentially reconnect. `NKeySeed` instead takes encoded
+user seed material, never a path. The seed string stays in memory for signing;
+wiping temporary signing keys does not erase it. Basic authentication applies
+only when both `Username` and `Password` are nonempty; `Token` is another option.
+
+Reconnect attempts default to unlimited; `MaxReconnects(0)` also selects that
+default. Set a positive limit or `NoReconnect(true)` to change it.
+`ReconnectWait(0)` restores two seconds. `Timeout(0)` selects the native
+two-second connection timeout, not an operation deadline. Negative wait and
+timeout values are invalid. `Logger(nil)` selects `slog.Default()`.
+
+Config's `String`, `GoString`, `LogValue`, and dispatched formatting hide Password,
+Token, NKeySeed, and URL userinfo; Username remains visible. Unparseable URLs and
+entries without an authority hostname are hidden wholesale. This does not redact
+direct fields, serialization, native objects, or arbitrary errors. Go bypasses
+formatting methods for invalid `%p` on a Config value and invalid `%w` on values
+or pointers. For an externally chosen format string, format `record.String()`,
+not the record itself, to avoid exposing raw credentials.
+
+### Native Connections
+
+With an existing nonnil `*nats.Conn` from `github.com/nats-io/nats.go`, borrow it
+instead of creating an owned connection:
+
+```go
+driver, err := natsbroadcast.NewFrom(connection, func(broker *natsbroadcast.Builder) {
+	broker.Prefix("orders")
+	broker.QueueGroup("indexers")
+})
+```
+
+Nil connections and invalid routing match `natsbroadcast.ErrInvalidConfig`.
+Only Prefix, QueueGroup, and Logger apply; `Start` does not reconfigure or dial
+the supplied connection. Borrowed `Stop` does nothing. Cancel and join consumers,
+release raw subscriptions, then drain or close the connection yourself.
+`Connection()` returns the borrowed pointer immediately, or nil before owned
+startup, without transferring ownership. Native operations bypass envelope checks
+and facade telemetry.
+
+Owned `Stop` waits for draining and closure. Its context ending forces close and
+returns the context error; native drain timeout remains identifiable as
+`nats.ErrDrainTimeout`. Forced close cannot stop an application callback.
+Connection closure does not end `Consume`'s context wait: cancel and join consumers
+separately. Canceling `Start` abandons dialing and closes any connection obtained
+later; native dialing can finish in the background.
+
+Already-canceled Publish, Consume, and Subscribe contexts are rejected before
+native access. Later cancellation is not a guarantee that a native publish or
+subscription setup is interrupted. Portable `#` patterns become exact and `>`
+subscriptions where needed because native NATS `>` excludes zero tokens.
+
+### Local NATS
+
+In a new disposable directory, save this `compose.yaml`:
 
 ```yaml
 services:
   nats:
-    image: nats:2.14.6
+    image: nats:2-alpine
     command: ["-m", "8222"]
     ports:
-      - "127.0.0.1:4222:4222"
-      - "127.0.0.1:8222:8222"
+      - "127.0.0.1:14222:4222"
+      - "127.0.0.1:18222:8222"
 ```
 
-Run `docker compose up -d`, then `curl --fail http://localhost:8222/healthz`.
-Use `broker.URLs("nats://localhost:4222")`. After consumer startup, publish an order
-and check the listener's effect. `docker compose down --volumes` removes the disposable server.
+Start the isolated project and check its local health endpoint:
 
-### API references
+```sh
+docker compose -p arkoren-broadcast-nats-demo up -d
+curl --fail http://localhost:18222/healthz
+```
+
+A successful response confirms readiness. Configure
+`broker.URLs("nats://localhost:14222")`, start the consumer, then publish `o-1042`
+and check the indexer. Remove the disposable server afterward:
+
+```sh
+docker compose -p arkoren-broadcast-nats-demo down --volumes
+```
 
 See the [`natsbroadcast` API](https://pkg.go.dev/arkoren.dev/driver/nats/natsbroadcast).
 
 ## RabbitMQ
 
-Choose RabbitMQ for existing AMQP topic routing. Each consuming process gets an
-ephemeral queue. For durable work, use the
-[queue driver](../queues/drivers.md#rabbitmq).
-
-### Installation
+Choose RabbitMQ if you already use AMQP topic routing. Each consuming process
+gets an exclusive, auto-delete queue with automatic acknowledgement. Offline
+subscribers miss notifications; for durable work use the
+[RabbitMQ queue driver](../queues/drivers.md#rabbitmq).
 
 ```sh
 go get arkoren.dev/driver/rabbitmq
 ```
 
-### Connecting
+### Connecting RabbitMQ
 
-`New` rejects blank AMQP URLs without network I/O. `Start` connects and declares
-the exchange. On this owned connection, cancellation during a blocking SDK call
-can close the socket and interrupt **every channel** sharing it, including native
-work obtained through `Connection()`. Keep unrelated work on another connection:
+Load the credential-bearing URL from configuration; use `amqps://` outside
+local development. `New` rejects blank URLs without network I/O:
 
 ```go
 import (
@@ -433,133 +390,98 @@ import (
 driver, err := rabbitmqbroadcast.New(os.Getenv("AMQP_URL"))
 ```
 
-Register `Stop` for cleanup before `Start` for startup, and `Ping` for readiness.
+`Start` connects and declares the topic exchange. Register the
+[lifecycle hooks](#driver-lifecycle) and wrap the driver in the facades to use
+the [order listener](overview.md#listening). Owned negotiation has a 30-second
+budget or the startup context's earlier end. Serialize `Start` and `Stop`.
 
-The URL carries credentials; load it from the environment or a secret manager and use
-`amqps://` outside development. Owned TCP/TLS/AMQP negotiation has a 30-second
-budget or the earlier end of the startup context. Serialize `Start` and `Stop`.
+`Exchange` defaults to `arkoren:events`; `Logger` defaults to `slog.Default()`.
+Use separate exchanges or virtual hosts to isolate applications. Shared exchanges
+also need topic permissions to restrict publication keys. Envelope routing checks
+do not authenticate a publisher or payload.
 
-### Configuration
+Publication waits for broker confirmation, retrying once after reopening the
+publisher channel on a non-cancellation failure. Losing the first confirmation
+can therefore duplicate an accepted publication. Automatic acknowledgement does
+not make the entire path at-most-once, and confirmation does not establish
+retention or processing.
 
-The only settings are `Builder.Exchange` (topic exchange, default `arkoren:events`)
-and `Builder.Logger`. Isolate applications with separate exchanges or virtual hosts.
+### Connection Ownership
 
-### Publishing and receiving notifications
+On an owned connection, canceling a blocking SDK setup or write can close the
+socket, interrupting every channel sharing it. Keep unrelated native work on a
+separate connection. Confirmation waiting is separately context-aware: its
+cancellation does not always close the socket or prove nondelivery.
 
-Use the [order publisher](overview.md#publishing) and
-[order listener](overview.md#listening) with this driver and the same exchange
-in both processes. Connected consumers each get a copy, not competing jobs.
+For an existing `*amqp091.Connection` from
+`github.com/rabbitmq/amqp091-go`, use `rabbitmqbroadcast.NewFrom(connection)`.
+It returns a driver and error; `Start` still opens a publisher channel and declares
+the exchange. `Stop` closes that channel but never the caller's connection.
+Borrowed SDK channel-open, topology, write, and close RPCs cannot be forcibly
+bounded by the driver's context. A responsive peer, native socket deadlines, or
+caller-managed connection close must unblock stuck operations.
 
-`Publish` JSON-encodes the complete `broadcast.Message`, including metadata, in
-the AMQP body. Native publishers targeting `Consume` must send that envelope
-with its `Name` matching the routing key, not just the application `Payload`.
-Payload bytes use the envelope's base64 JSON representation. Raw `Subscribe`
-passes through the native body unchanged; driver publications therefore arrive
-as complete envelopes, without validation or typed decoding.
+`Connection()` exposes the shared pointer without transferring ownership: nil
+before owned startup, immediately available when borrowed, and still available
+after shutdown. Do not close an owned connection outside `Stop`. Native calls
+bypass envelope and lifecycle protections and facade telemetry.
 
-### Behavior and limits
+Owned `Stop` is terminal and releases the connection before waiting on channel
+handshakes or confirmations. Graceful close has at most five seconds or the
+earlier end of its context; even expired contexts force socket release. It does
+not wait for application handlers. Consumer channel cleanup has its own five-second
+budget and can abort an unresponsive owned socket. A closed subscription makes
+`Run` return `rabbitmqbroadcast.ErrSubscriptionClosed` unless cancellation supplies
+the exit reason.
 
-Subscriber queues are exclusive and auto-delete; deliveries are auto-acknowledged.
-Offline subscribers lose messages. A closed subscription makes `Run` return
-`rabbitmqbroadcast.ErrSubscriptionClosed`; an application runner failure lets
-your platform restart the service.
+### Local RabbitMQ
 
-Publication waits for broker confirmation and retries once on a non-cancellation
-error after reopening the publisher channel. If the broker accepted the first
-publication but its confirmation failed, the retry can produce a duplicate.
-Do not treat auto-acknowledged consumption as an end-to-end at-most-once guarantee.
-
-Cancellation while waiting for confirmation is separately context-aware; it
-does not always close the socket or establish whether the broker accepted the
-message. Blocking SDK setup/write calls on owned connections can instead be
-interrupted by closing the socket, affecting all channels as described above.
-
-`Consume` drops malformed envelopes and routing-key/name mismatches before
-listeners or telemetry run. Dropped messages remain auto-acked. Raw `Subscribe`
-does not validate envelopes.
-
-For an owned connection, `Stop` marks the driver closed and releases the
-connection directly, before any publisher-channel close handshake or
-confirmation wait. It does not wait for application handlers. Graceful close
-has at most five seconds or the earlier end of its context; an already-expired
-context still interrupts the socket and returns the context error. `Stop` is
-terminal, and repeated calls return nil.
-
-`Consume` cancels its subscription and drains unread deliveries during channel
-cleanup. Owned channel cleanup has a separate five-second budget and may abort
-the entire owned socket to unblock a stalled close. Neither closing the socket
-nor canceling a context can forcibly stop application code. Raw unsubscribe
-waits for its running callback and a native channel-close RPC, so callbacks must
-return for cleanup to finish.
-
-Use broker permissions and separate exchanges or virtual hosts for untrusted
-publishers. Shared exchanges also need topic permissions; routing checks do not
-authorize publishers.
-
-### Using a shared AMQP connection
-
-`rabbitmqbroadcast.NewFrom(connection)` borrows a `*amqp091.Connection` from
-`github.com/rabbitmq/amqp091-go`. Handle errors and register the same hooks.
-`Start` still opens the publisher channel and declares the exchange. `Stop`
-closes only that channel, never the caller's connection, and does not wait for
-handlers or confirmations.
-
-Native setup, publish-write, and channel-close RPCs on borrowed connections are
-not forcibly cancelable by the driver. They need a responsive peer or
-caller-managed socket deadlines/connection close; a context deadline alone
-cannot bound a stuck RPC, including borrowed `Stop` or raw unsubscribe. Normally,
-cancel and join consumers and call raw unsubscribe functions before stopping
-the driver and closing the connection. If an RPC is unresponsive, its owner may
-need to close the connection to unblock that cleanup.
-
-`driver.Connection()` exposes the shared pointer without ownership transfer:
-nil before successful owned startup, immediately available for `NewFrom`, and
-still available after `Stop`. An owned connection is then closed; a borrowed
-connection still belongs to its caller. Native operations bypass envelope and
-driver lifecycle protections and facade telemetry.
-
-### Running locally
-
-With Docker installed, save this as `compose.yaml` in your application:
+In a new disposable directory, save this `compose.yaml`. These plaintext
+credentials are only for this loopback-bound development server:
 
 ```yaml
 services:
   rabbitmq:
-    image: rabbitmq:4.3.5-management-alpine
+    image: rabbitmq:4-alpine
     environment:
       RABBITMQ_DEFAULT_USER: local
       RABBITMQ_DEFAULT_PASS: local-only
     ports:
-      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:5672"
 ```
 
-Run `docker compose up -d`, then
-`docker compose exec rabbitmq rabbitmq-diagnostics -q ping` until successful.
-Set `AMQP_URL=amqp://local:local-only@localhost:5672/`. These credentials and plaintext
-transport are local-only. After consumer startup, publish an order and check the
-listener's effect. `docker compose down --volumes` removes the server and disposable queues.
+Start the isolated project and repeat the diagnostic until successful:
 
-### API references
+```sh
+docker compose -p arkoren-broadcast-rabbitmq-demo up -d
+docker compose -p arkoren-broadcast-rabbitmq-demo exec rabbitmq rabbitmq-diagnostics -q ping
+```
+
+Set `AMQP_URL=amqp://local:local-only@localhost:15672/` for your local application.
+After consumption is active, publish `o-1042` and check the indexer. Remove only
+the disposable project's resources:
+
+```sh
+docker compose -p arkoren-broadcast-rabbitmq-demo down --volumes
+```
 
 See the [`rabbitmqbroadcast` API](https://pkg.go.dev/arkoren.dev/driver/rabbitmq/rabbitmqbroadcast).
 
 ## MQTT
 
-Use MQTT 5 through Eclipse Paho for events on MQTT brokers such as Mosquitto,
-EMQX, or HiveMQ. It is experimental in
-[Choosing a Driver](../drivers/choosing-a-driver.md).
-
-### Installation
+Use the experimental MQTT 5 driver with brokers such as Mosquitto, EMQX, or
+HiveMQ. `New` owns a clean, nonpersistent session: offline subscribers lose
+notifications at every QoS. QoS 2 is a protocol guarantee, not exactly-once
+application effects.
 
 ```sh
 go get arkoren.dev/driver/mqtt
 ```
 
-### Connecting
+### Connecting MQTT
 
-`New` validates one or more broker URLs without network I/O; multiple URLs enable
-failover. `Start` creates an owned connection manager and awaits its first
-connection:
+`New` validates broker URLs and settings without network I/O. `Start` creates the
+owned Paho manager and waits for its first connection:
 
 ```go
 import "arkoren.dev/driver/mqtt/mqttbroadcast"
@@ -567,217 +489,170 @@ import "arkoren.dev/driver/mqtt/mqttbroadcast"
 driver, err := mqttbroadcast.New([]string{"mqtt://localhost:1883"})
 ```
 
-Register `Stop` for cleanup before `Start` for startup so acquired resources are
-released even after startup failure; use `Ping` for readiness.
+Handle the error, apply [lifecycle hooks](#driver-lifecycle), then use the facades
+for [typed notifications](overview.md#publishing-facts). Multiple URLs allow
+failover. Supported schemes are `mqtt`, `tcp`, `mqtts`, `ssl`, `tls`, `mqtt+ssl`,
+`tcps`, `ws`, and `wss`. All require a host. TCP/TLS URLs require ports 1–65535
+and reject paths and queries; WebSocket URLs preserve paths and queries and can
+omit the port. Fragments and URL userinfo are rejected without echoing URL
+credentials. Use `mqtts://` and builder `Username`/`Password` outside local
+development; passwords apply only with a nonempty username.
 
-Use `mqtts://` for TLS outside local development. Supported schemes are `mqtt`,
-`tcp`, `mqtts`, `ssl`, `tls`, `mqtt+ssl`, `tcps`, `ws`, and `wss`. A host is
-required, and explicit ports must be between 1 and 65535. TCP/TLS URLs require a
-port and reject paths and queries; WebSocket URLs preserve paths and queries
-and may omit the port. Unsupported schemes, malformed URLs, fragments, and URL
-userinfo such as `user:password@host` are rejected. Set authentication with the
-builder instead of embedding credentials in URLs; constructor errors do not
-echo those URL credentials.
+### Protocol Settings
 
-### Configuration
+The default QoS is 1. `QoS(0)` explicitly selects at-most-once protocol delivery;
+1 requests at-least-once and 2 requests exactly-once at the protocol level.
+Other values fail construction. QoS 1 and 2 publication waits for protocol
+completion and treats negative reason codes as errors, even if Paho returns no
+error. A timeout does not prove nondelivery. Listener errors do not request
+redelivery or prevent normal acknowledgement.
 
-`Builder.QoS` selects the publish and subscription quality of service: 0 for at
-most once, 1 for at least once, or 2 for exactly once at the MQTT protocol level.
-The default is 1; `Builder.QoS(0)` selects 0. `New` rejects other levels after
-construction callbacks finish. `NewFrom` has no error result, so its invalid QoS
-is reported by `Publish` or `Subscribe` before contacting Paho.
+Already-canceled Publish, Consume, and Subscribe contexts install or send
+nothing. Later cancellation of raw setup does not remove its subscription;
+call the returned unsubscribe function.
 
-`Builder.KeepAlive` takes a `time.Duration`. Zero restores the 30-second default;
-a negative value requests disabled keepalive. Positive values must be whole
-seconds from 1 through 65535 seconds, inclusive. `New` rejects other positive
-durations instead of truncating or overflowing the MQTT field. The broker can
-override the requested interval in its CONNACK response. To request
-45 seconds:
+With automatic acknowledgement, QoS 1 acknowledgement follows all matching
+callbacks, including failures. A borrowed manager retains any manual policy.
+Up to 1024 delivery callbacks run concurrently; saturation blocks admission and
+backpressures Paho's receive loop rather than dropping work.
+
+If your broker requires a different keepalive interval, use a duration:
 
 ```go
 import "time"
 
-driver, err := mqttbroadcast.New([]string{"mqtt://localhost:1883"}, func(broker *mqttbroadcast.Builder) {
-	broker.KeepAlive(45 * time.Second)
-})
+driver, err := mqttbroadcast.New([]string{"mqtt://localhost:1883"},
+	func(broker *mqttbroadcast.Builder) {
+		broker.KeepAlive(45 * time.Second)
+	})
 ```
 
-Replace old numeric-second calls such as `KeepAlive(30)` with
-`KeepAlive(30 * time.Second)`. `Config.KeepAlive` and `DefaultMQTTKeepAlive` are
-durations too; the native Paho configuration still uses its own seconds field.
+Zero restores 30 seconds; negative disables keepalive. Positive values must be
+whole seconds from 1 through 65535. The broker can override the interval in its
+CONNACK. Numeric `KeepAlive(30)` means 30 nanoseconds, not 30 seconds, and is invalid.
+`Logger(nil)` uses `slog.Default()` for panics and failed subscription restoration,
+not Paho's native loggers. Config formatting redacts Password, not direct fields
+or native data.
 
-`Builder.Username` and `Builder.Password` default to empty. Password is applied
-only with a nonempty username; load credentials from configuration or a secret
-manager and use TLS. Nil `Builder.Logger` selects `slog.Default()` for recovered
-handler panics and failed reconnect subscriptions, not Paho's separate native
-loggers. Config is diagnostic data, not constructor input; formatting redacts
-Password but retains Username. Callbacks run once in order on a fresh draft;
-retaining the draft cannot change the driver. For native connection settings,
-use the caller-owned Paho setup below.
+Names map dots to slashes, so `order.created` uses MQTT topic `order/created`.
+Pattern `*` maps to `+`, and final `#` remains `#`. Enforce broker topic ACLs or
+separate namespaces for untrusted publishers. Routing checks do not authorize
+publishers.
 
-### Publishing device notifications
+### Native Managers
 
-Use the [typed publisher](overview.md#publishing) and
-[listener](overview.md#listening) with this driver. A name such as
-`sensors.device1.temperature` uses MQTT topic `sensors/device1/temperature`.
-Native producers must send a `broadcast.Message` JSON envelope, not bare sensor
-JSON, for `Consume` to route it. Payload bytes use the envelope's base64 JSON
-representation. Metadata travels in that JSON body, not MQTT user properties;
-see [Broadcast Metadata and Telemetry](metadata-and-telemetry.md#message-metadata).
+To customize TLS, native logging, or session policy, borrow a Paho manager. The
+driver's filters belong to the whole native client; do not share those filters
+with unrelated subscriptions because cleanup unsubscribes them for that client.
+Only QoS and Logger apply to `NewFrom`; invalid QoS is reported at use because
+that constructor has no error result.
 
-At QoS 1 and 2, publication waits for the MQTT protocol result. Broker rejection
-is an error, including failed QoS 2 PUBREC or PUBCOMP response codes even when
-Paho returns a nil error. Success does not confirm listener processing, and a
-timeout does not prove that the message was not delivered.
-
-### Behavior and limits
-
-`New`'s clean, nonpersistent sessions lose offline messages at every QoS. QoS 2
-does not guarantee exactly-once application effects. Names replace `.` with `/`,
-`*` with `+`, and retain final `#`.
-
-`Consume` drops malformed envelopes and topic/name mismatches before listeners
-or telemetry run, through the normal MQTT acknowledgement path. Raw `Subscribe`
-does not validate envelopes. A returned listener error does not prevent MQTT
-acknowledgement or cause application-level retries; use the consumer's
-[failure events](overview.md#delivery) to observe those errors.
-
-With Paho's default automatic acknowledgements, QoS 1 acknowledgement follows
-all matching callbacks. A caller-owned manager with manual acknowledgements
-retains that policy. Up to 1024 driver delivery callbacks run concurrently;
-saturation blocks dispatch and backpressures Paho's receive loop. Raw callback
-bytes are shared read-only: copy them before retaining or mutating them.
-
-Already-canceled `Publish`, `Consume`, and `Subscribe` contexts perform no
-operation. Later cancellation of a raw subscription's context does not remove
-its callback; call the returned idempotent unsubscribe function. `Consume`
-releases its subscription when its context ends. Subscription changes and
-reconnect restoration serialize so an old unsubscribe cannot remove a replacement.
-
-`Stop` is terminal: it closes admission and waits for admitted deliveries and
-reconnect work until its context ends, then clears local registrations and
-attempts subscription cleanup even after a drain timeout. It cancels and
-disconnects `New`'s owned manager. For `NewFrom`, it attempts to unsubscribe this
-driver's filters but leaves the manager connected. Cancel `Consume` contexts
-separately; `Stop` does not end their context-waiting loops.
-
-Raw unsubscribe and borrowed-manager cleanup use a separate ten-second
-acknowledgement timeout even when the original context is expired. Cleanup
-serializes with subscription RPCs; neither cancellation nor `Stop` can forcibly
-stop arbitrary callbacks or native socket writes. Drain and cleanup errors are
-joined. If broker unsubscription fails, the native owner may need to disconnect
-its session to release the remaining filters.
-
-Enforce broker topic ACLs or separate namespaces between untrusted publishers;
-routing checks do not authorize publishers or authenticate payloads.
-
-### Using a caller-owned Paho client
-
-For custom TLS, authentication, session, or native logging settings, configure
-Paho yourself. MQTT topic filters belong to the whole native client: do not
-share this driver's filters with unrelated native subscriptions, because its
-cleanup unsubscribes those filters for the client.
-
-With your existing `autopaho.ClientConfig` named `config` containing broker URLs
-and native policy, install both driver hooks before creating the manager.
-This fragment assumes an operation context `ctx` and a named `(err error)`
-function result so deferred cleanup can join its errors with the operation's
-result. End and join any consumers before returning from that function:
+With your existing `autopaho.ClientConfig` named `config`, install both driver
+hooks before native construction:
 
 ```go
 import (
-	"context"
-	"errors"
-	"time"
-
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
 )
 
 driver := mqttbroadcast.NewFrom(nil)
 config.ClientConfig.OnPublishReceived = append(config.ClientConfig.OnPublishReceived, driver.HandlePublish)
-onConnectionUp := config.OnConnectionUp
-config.OnConnectionUp = func(manager *autopaho.ConnectionManager, acknowledgement *paho.Connack) {
-	if onConnectionUp != nil {
-		onConnectionUp(manager, acknowledgement)
+previous := config.OnConnectionUp
+config.OnConnectionUp = func(manager *autopaho.ConnectionManager, reply *paho.Connack) {
+	if previous != nil {
+		previous(manager, reply)
 	}
-	driver.HandleConnectionUp(manager, acknowledgement)
-}
-connection, err := autopaho.NewConnection(context.WithoutCancel(ctx), config)
-if err != nil {
-	return err
-}
-defer func() {
-	cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err = errors.Join(err, driver.Stop(cleanup), connection.Disconnect(cleanup))
-}()
-driver.SetClient(connection)
-if err := connection.AwaitConnection(ctx); err != nil {
-	return err
+	driver.HandleConnectionUp(manager, reply)
 }
 ```
 
-The manager outlives the operation context, so its owner must always disconnect
-it. The deferred cleanup stops the driver before disconnecting the native
-manager, including after a failed connection wait. Its five-second context
-bounds draining and the native disconnect wait, not arbitrary handler or socket
-execution or the driver's separate unsubscription wait.
+Callbacks must return promptly. `HandleConnectionUp` schedules filter restoration
+without waiting in the connection callback; failed restoration is logged once,
+not retried on the same connection.
 
-Only QoS and Logger apply to `NewFrom`; its `Start` is a no-op. `SetClient`
-attaches the manager once before publishing or consuming, without transferring
-ownership. `Client()` returns that shared pointer; native calls bypass envelope
-checks and facade telemetry, and native configuration/errors are not recursively
-sanitized.
+Create the manager under a separately owned, long-lived `sessionCtx`. With an
+owning application `composer`, register cleanup before waiting for connection:
 
-`HandleConnectionUp` schedules active-filter restoration without waiting for
-acknowledgements in Paho's connection callback. Existing native connection
-callbacks must also return promptly. Failed restoration is logged and is not
-retried on the same connection. Borrowed managers otherwise retain their native
-session and reconnect settings.
+```go
+import (
+	"context"
+	"errors"
+)
 
-### Running locally
+manager, err := autopaho.NewConnection(sessionCtx, config)
+if err != nil {
+	return err
+}
+driver.SetClient(manager)
+composer.Cleanup(func(cleanup context.Context) error {
+	return errors.Join(driver.Stop(cleanup), manager.Disconnect(cleanup))
+})
+err = manager.AwaitConnection(ctx)
+```
 
-With Docker installed, save this as `compose.yaml` in your application:
+The native owner must disconnect the manager even if `AwaitConnection` fails.
+The cleanup stops the driver before disconnecting, and preserves both errors.
+Do not make a request context own a shared connection. `SetClient` attaches once,
+installs no hooks, and transfers no ownership. `Client()` exposes the pointer;
+native operations bypass facade encoding and telemetry. With a borrowed manager,
+`Start` does nothing.
+
+Cancel and join consumers, then call `driver.Stop(cleanup)` before
+`manager.Disconnect(cleanup)`, using a fresh bounded cleanup context and handling
+both errors. `Stop` is terminal, drains admitted callbacks and reconnect work
+until its context ends, clears local registrations, and attempts filter cleanup
+even after a drain timeout. It disconnects owned managers only. Borrowed filter
+cleanup uses a separate ten-second acknowledgement timeout; native writes and
+arbitrary callbacks can outlive context deadlines. A failed unsubscribe may
+require the native owner to disconnect the session. `Stop` does not end
+`Consume`'s context wait.
+
+### Local MQTT
+
+In a new disposable directory, save this `compose.yaml`. The anonymous plaintext
+server is intentionally bound only to loopback:
 
 ```yaml
 services:
   mqtt:
-    image: eclipse-mosquitto:2.0.22
+    image: eclipse-mosquitto:2
     command: ["mosquitto", "-c", "/mosquitto-no-auth.conf"]
     ports:
-      - "127.0.0.1:1883:1883"
+      - "127.0.0.1:11883:1883"
 ```
 
-Run `docker compose up -d` and connect with
-`mqttbroadcast.New([]string{"mqtt://localhost:1883"})`. Successful `driver.Start(ctx)`
-confirms connection. Keep this anonymous plaintext server bound to loopback.
-After consumer startup, publish and check the listener's effect.
-`docker compose down --volumes` removes the server.
+Start only this project:
 
-### API references
+```sh
+docker compose -p arkoren-broadcast-mqtt-demo up -d
+```
+
+Connect with `mqttbroadcast.New([]string{"mqtt://localhost:11883"})`.
+Successful `Start(ctx)` confirms connectivity. Run the consumer, publish
+`o-1042`, and check the indexer to verify envelope delivery, not just connection.
+
+```sh
+docker compose -p arkoren-broadcast-mqtt-demo down --volumes
+```
 
 See the [`mqttbroadcast` API](https://pkg.go.dev/arkoren.dev/driver/mqtt/mqttbroadcast).
 
 ## SNS
 
-`awsbroadcast` publishes to SNS and consumes through SQS. Subscribe one queue per
-service for durable fan-out; offline delivery follows SQS retention and redrive policies.
-
-### Installation
+Use SNS with SQS when independent services must receive notifications published
+while they are offline. Provision an SNS topic, one SQS queue per service, and
+subscriptions first; the drivers create none of these resources. Retention,
+visibility, and redrive remain queue policies, not facade guarantees.
 
 ```sh
 go get arkoren.dev/driver/aws
 ```
 
-### Connecting
+### Connecting AWS
 
-Provision SNS topics, one SQS queue per consuming service, and subscriptions first;
-the drivers create none of them.
-
-`SNSDriver` publishes to topics; `SQSDriver` consumes/publishes queues. Neither
-has lifecycle hooks: register only the consumer runner. `NewSNS` maps names to
-topic ARNs; `NewSQS` takes the consumer queue. Both use the AWS default region/credential chain:
+The SNS driver only publishes. Map each logical broadcast name to an existing
+topic ARN; the default AWS region and credential chain supplies configuration:
 
 ```go
 import "arkoren.dev/driver/aws/awsbroadcast"
@@ -785,150 +660,220 @@ import "arkoren.dev/driver/aws/awsbroadcast"
 outbox, err := awsbroadcast.NewSNS(ctx, map[string]string{
 	"order.created": "arn:aws:sns:eu-west-1:123456789012:orders-created",
 })
-publisher := broadcast.NewPublisher(outbox)
 ```
 
-For a consuming service, configure its subscribed queue and consumer separately:
+Wrap `outbox` with `broadcast.NewPublisher`. The SQS driver receives from one
+service's subscribed queue:
 
 ```go
-inbox, err := awsbroadcast.NewSQS(ctx, func(queue *awsbroadcast.SQSBuilder) {
-	queue.QueueURL("https://sqs.eu-west-1.amazonaws.com/123456789012/billing-events")
+inbox, err := awsbroadcast.NewSQS(ctx, func(broker *awsbroadcast.SQSBuilder) {
+	broker.QueueURL("https://sqs.eu-west-1.amazonaws.com/123456789012/order-indexer")
 })
 consumer := broadcast.NewConsumer(inbox)
 ```
 
-Register `consumer.Run` as an application runner; there are no driver hooks.
+Register the [order listener](overview.md#listening) and consumer runner; neither
+AWS driver has Start, Stop, or Ping hooks. Construction does not verify resource
+existence, subscriptions, or permissions. Grant the publisher `sns:Publish`, the
+consumer `sqs:ReceiveMessage` and `sqs:DeleteMessage`, and the SNS topic permission
+to send to the queue through its queue policy. Use IAM and queue policies for
+authorization; local listener patterns are not access controls.
 
-Publish-only services need just SNS; listen-only services need just SQS.
-Construction and native-client access do not verify that topics, queues,
-subscriptions, or permissions are ready. Verify those resources separately and
-start the consumer before using its listener effects as a delivery check; an SDK
-client or successful SNS publish is not proof of queue delivery.
+### Queue Policies
 
-### Configuration
+The SNS map must be nonempty, with valid broadcast names and nonblank ARNs.
+SQS requires a consuming `QueueURL`, publishing `Queues`, or both. Invalid
+settings wrap `awsbroadcast.ErrInvalidConfig`; unmapped publication names match
+`awsbroadcast.ErrUnknownName`. Constructors copy routing maps. Nonblank ARN and
+URL syntax and actual permissions are verified by AWS when used.
 
-SNS has only its required topic map. `NewSNS` and `NewSNSFrom` reject an empty
-map, invalid broadcast names, or blank topic ARNs with an error wrapping
-`awsbroadcast.ErrInvalidConfig`. They copy the map; later caller mutations do
-not change routing. AWS validates nonempty ARN syntax and permissions when you
-use the client, not during this local mapping validation.
+SQS polls for 20 seconds and receives one message by default.
+`WaitTimeSeconds` accepts 1–20, `MaxMessages` accepts 1–10, and zero restores
+their defaults. `Logger(nil)` uses `slog.Default()` for invalid deliveries,
+handler errors, and deletion failures. It processes a batch sequentially and does
+not extend visibility while listeners run. Set the queue's visibility timeout to
+cover the entire batch, or another replica can process a delivery still being
+handled.
 
-SQS requires `QueueURL` for consuming or `Queues` for direct publishing, or both.
-Publisher mappings require valid broadcast names and nonblank queue URLs and
-are copied at capture and publication. `WaitTimeSeconds` defaults to 20; nonzero
-values must be 1–20 seconds. `MaxMessages` defaults to one; nonzero values must
-be 1–10. Invalid settings wrap `awsbroadcast.ErrInvalidConfig`. Nil `Logger`
-selects `slog.Default()`. Configure region, endpoint, and credentials on native
-clients passed to `NewSNSFrom` and `NewSQSFrom`; nil clients are rejected.
+Successful messages and malformed envelopes are deleted; so are deliveries whose
+listener failures are all permanent. Other failures remain for native redelivery
+to every matching listener. Even successful handling can repeat if deletion
+fails. Make effects idempotent and configure queue redrive for messages that keep
+failing. Permanent failures are deleted here, not moved to a dead-letter queue by
+the driver. Deletion uses a detached ten-second budget so cancellation after
+handling does not by itself prevent acknowledgement; failed deletion is logged.
 
-### Publishing durable notifications
+SNS supplies the message attribute `name`, so a subscription filter policy such
+as `{"name":["order.created"]}` can select names before queue delivery. This is
+broker configuration, separate from consumer patterns. Full broadcast envelopes
+arrive either directly or inside an SNS notification wrapper. Their payload bytes
+use the envelope's base64 JSON representation, not a bare order object.
 
-Use the [order publisher](overview.md#publishing)
-with `outbox` and the [order listener](overview.md#listening) with `inbox`.
-SQS retains notifications delivered by SNS under its retention and redrive
-policies. SNS acceptance does not confirm delivery to every queue. Grant the
-publisher `sns:Publish` on its topic and the consumer `sqs:ReceiveMessage` and
-`sqs:DeleteMessage` on its queue.
-The queue policy must allow that SNS topic to send messages.
+### Direct SQS
 
-To select broadcast names per queue, set its SNS subscription's message-attribute
-filter policy, for example `{"name":["order.created"]}`.
-The SNS driver supplies the string attribute `name`; this filter is broker
-configuration, separate from the consumer's local listener patterns.
-
-For an SNS FIFO topic whose ARN ends in `.fifo`, the driver groups publications
-by broadcast name. It uses `Message.ID` for deduplication when supplied directly
-to the driver, otherwise a fresh random ID. Facade publications supply no ID, so
-repeating `publisher.Publish` does not deduplicate an application event. Keep
-listener effects idempotent even with FIFO topics.
-
-### Behavior and limits
-
-Publish success means SNS/SQS acceptance, not processing. Both publishers send
-the complete JSON `broadcast.Message` envelope, including metadata; the SQS
-consumer accepts it directly or inside an SNS notification wrapper. Payload
-bytes use the envelope's base64 JSON representation. SNS sends no subject, so
-subject rules do not limit names. Unmapped valid names return
-`awsbroadcast.ErrUnknownName`.
-
-The consumer deletes successful deliveries, malformed envelopes, and deliveries
-whose listener failures are all permanent. Other listener failures leave the
-message for redelivery to every matching listener, so listeners must be
-idempotent. Unlike the SQS queue driver, this broadcast driver does not extend
-visibility while listeners run. Configure the queue's visibility timeout to cover
-the entire received batch, or another consumer can receive a message still being
-handled. Publishing straight to an SQS queue is point-to-point: one queue, competing
-consumers. Use an SNS topic for fan-out.
-
-### Publishing directly to SQS
-
-For one consuming service, bypass SNS with `SQSBuilder.Queues`:
+If only one service consumes a notification, publish directly to its provisioned
+queue instead of adding an SNS topic. With its URL named `queueURL`:
 
 ```go
 outbox, err := awsbroadcast.NewSQS(ctx, func(broker *awsbroadcast.SQSBuilder) {
 	broker.Queues(map[string]string{"order.created": queueURL})
 })
+publisher := broadcast.NewPublisher(outbox)
 ```
 
-`queueURL` must identify a provisioned queue. For a URL ending in `.fifo`, the
-driver supplies SQS's required `MessageGroupId` from the broadcast name and
-`MessageDeduplicationId` from `Message.ID` when supplied directly to the driver,
-otherwise a fresh random ID. These native fields do not change the envelope.
-As with SNS FIFO, facade publications supply no ID, so repeating a facade
-publish does not deduplicate an application event. Wrap `outbox` with
-`broadcast.NewPublisher`; replicas compete for messages.
+Replicas on that queue compete for messages. Use SNS subscriptions instead for
+independent fan-out copies.
 
-`NewSNSFrom` and `NewSQSFrom` borrow SDK clients, exposed by `Client()` without
-ownership transfer. Configure native policy before sharing the clients; native
-configuration and transport cleanup remain caller-owned. The drivers have no
-client-close lifecycle hooks. Native calls bypass facade encoding and telemetry.
+SNS ARNs and SQS queue URLs ending in `.fifo` cause publications to group by
+broadcast name. Native deduplication uses `Message.ID` if supplied directly to
+the driver, otherwise a fresh random ID. Facade publications supply no ID:
+repeating `publisher.Publish` does not deduplicate an application event, even on
+FIFO destinations.
 
-### Running locally
+### Native Clients
 
-Use the [local SQS emulator setup](../queues/drivers.md#running-locally-2)
-(Compose, credentials, SDK imports, readiness check). With its environment set, follow
-[local SNS provisioning](#local-sns-provisioning)
-to create the topic, queue policy, and subscription with the AWS CLI and Python 3.
+Use `NewSNSFrom` or `NewSQSFrom` with existing clients from the AWS SDK v2
+`service/sns` or `service/sqs` packages to customize region, endpoints, credentials,
+and native policy. Nil clients are rejected. `Client()` exposes the pointer
+without ownership transfer. The drivers have no client-close hooks; native
+configuration and transport cleanup remain caller-owned. Native calls bypass
+facade encoding and telemetry.
 
-Use the returned topic ARN in `NewSNSFrom` and the queue URL in `NewSQSFrom`.
-Build both native clients with the emulator configuration:
+### Local SNS
 
-```go
-import (
-	"github.com/aws/aws-sdk-go-v2/service/sns"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
-)
+Use Docker, AWS CLI, and Python 3 in a new disposable directory. Save this
+`compose.yaml`; only SNS/SQS run, bound to loopback:
 
-outbox, err := awsbroadcast.NewSNSFrom(sns.NewFromConfig(cfg), map[string]string{
-	"order.created": topicARN,
-})
-inbox, err := awsbroadcast.NewSQSFrom(sqs.NewFromConfig(cfg), func(broker *awsbroadcast.SQSBuilder) {
-	broker.QueueURL(queueURL)
-})
+```yaml
+services:
+  aws:
+    image: localstack/localstack:4
+    environment:
+      SERVICES: sns,sqs
+    ports:
+      - "127.0.0.1:14568:4566"
 ```
 
-Supply CLI results as `topicARN` and `queueURL`. Publish an order and check the
-listener's effect. `docker compose down --volumes` removes the disposable emulator,
-topics, subscriptions, and queues.
-
-### Local SNS provisioning
-
-After the linked SQS setup creates `queueURL`, use the AWS CLI and Python 3 to
-create a topic and subscribe that queue. These development commands replace the
-queue's access policy; do not run them against a production queue:
+Start the isolated project and check its health:
 
 ```sh
+docker compose -p arkoren-broadcast-aws-demo up -d
+curl --fail http://localhost:14568/_localstack/health
+```
+
+Wait for SNS and SQS to be available. In a disposable shell, disable AWS profiles
+and use dummy local credentials. Every provisioning command below explicitly
+targets the emulator, never a production account:
+
+```sh
+unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_SESSION_TOKEN
+export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+export AWS_DEFAULT_REGION=eu-west-1 AWS_EC2_METADATA_DISABLED=true
+queueURL=$(aws --endpoint-url http://localhost:14568 sqs create-queue --queue-name order-indexer --query QueueUrl --output text)
 topicARN=$(aws --endpoint-url http://localhost:14568 sns create-topic --name orders-created --query TopicArn --output text)
+```
+
+These commands return routing values for the local clients. The following policy
+replacement is only for this newly created disposable queue. Retrieve its ARN,
+then authorize this topic:
+
+```sh
 queueARN=$(aws --endpoint-url http://localhost:14568 sqs get-queue-attributes --queue-url "$queueURL" --attribute-names QueueArn --query Attributes.QueueArn --output text)
 policy=$(python3 -c 'import json,sys; print(json.dumps({"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":sys.argv[1],"Condition":{"ArnEquals":{"aws:SourceArn":sys.argv[2]}}}]}))' "$queueARN" "$topicARN")
 attributes=$(python3 -c 'import json,sys; print(json.dumps({"Policy":sys.argv[1]}))' "$policy")
 aws --endpoint-url http://localhost:14568 sqs set-queue-attributes --queue-url "$queueURL" --attributes "$attributes"
+```
+
+Subscribe the queue so SNS can route publications into it:
+
+```sh
 aws --endpoint-url http://localhost:14568 sns subscribe --topic-arn "$topicARN" --protocol sqs --notification-endpoint "$queueARN"
 ```
 
-Use `topicARN` and `queueURL` in the local clients above. Publish an order and
-check the listener's effect before cleaning up the emulator.
+For local Go code, configure the native SDK with static dummy credentials and
+explicit endpoints, rather than relying on your normal AWS profile:
 
-### API references
+```go
+import (
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/sns"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+)
+
+cfg := aws.Config{
+	Region:      "eu-west-1",
+	Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""),
+}
+client := sns.NewFromConfig(cfg, func(options *sns.Options) {
+	options.BaseEndpoint = aws.String("http://localhost:14568")
+})
+queue := sqs.NewFromConfig(cfg, func(options *sqs.Options) {
+	options.BaseEndpoint = aws.String("http://localhost:14568")
+})
+```
+
+Supply the CLI results as Go strings `topicARN` and `queueURL`, then construct
+the drivers without provisioning anything further:
+
+```go
+outbox, err := awsbroadcast.NewSNSFrom(client, map[string]string{
+	"order.created": topicARN,
+})
+inbox, err := awsbroadcast.NewSQSFrom(queue, func(broker *awsbroadcast.SQSBuilder) {
+	broker.QueueURL(queueURL)
+})
+```
+
+Use the facades to publish `o-1042` and check the indexer's effect. A successful
+SNS publication alone does not verify subscription delivery. Remove only this
+disposable project's emulator, topics, subscriptions, and queues afterward:
+
+```sh
+docker compose -p arkoren-broadcast-aws-demo down --volumes
+```
 
 See the [`awsbroadcast` API](https://pkg.go.dev/arkoren.dev/driver/aws/awsbroadcast).
+
+## Raw Subscriptions
+
+Redis, NATS, RabbitMQ, and MQTT also expose `Subscribe` for native producers that
+do not send Arkoren envelopes. With one of these drivers and
+`handleBytes func([]byte)`, own the returned resource explicitly:
+
+```go
+unsubscribe, err := driver.Subscribe(ctx, "order.#", handleBytes)
+if err != nil {
+	return err
+}
+err = unsubscribe()
+```
+
+Keep the subscription alive for the receiving scope; this final call illustrates
+its cleanup. The return type is `func() error`, unlike the facade's
+`broadcast.Unsubscribe`. Handle cleanup errors. Raw subscriptions bypass envelope
+validation, typed listener routing, and facade telemetry. Publications from these
+drivers arrive as full JSON `broadcast.Message` envelopes, not bare application
+payloads: payload bytes use the envelope's base64 JSON representation and metadata
+stays in the body, not protocol headers.
+
+The context governs raw setup; canceling it later is not a substitute for calling
+unsubscribe. NATS and MQTT raw callback bytes are borrowed/read-only: copy them
+before retaining or mutating. RabbitMQ raw unsubscribe waits for its running
+callback and channel-close RPC; callbacks must return, and a borrowed connection
+needs owner-managed interruption if the RPC stalls.
+
+MQTT unsubscribe is idempotent, returns its original cleanup result, and removes
+only its registration. The broker filter remains until the last matching local
+registration leaves. Subscription changes and reconnect restoration serialize so
+old cleanup cannot remove a replacement registration.
+
+Normal `Consume` validates envelope/routing identity before invoking facade
+listeners. Redis checks the literal channel suffix, NATS the prefixed subject,
+RabbitMQ the routing key, and MQTT the mapped topic. Malformed or mismatched
+envelopes are dropped before facade processing telemetry. RabbitMQ drops remain
+auto-acknowledged; MQTT follows its native acknowledgement path. These checks
+prevent routing confusion, not unauthorized publication.
+
+For the portable contracts, see the
+[`broadcast` API](https://pkg.go.dev/arkoren.dev/core/service/broadcast).

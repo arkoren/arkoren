@@ -1,92 +1,115 @@
 ---
 title: TLS Certificates
 nav: Certificates
-description: Provision local TLS identities, load existing certificates, and configure private CA trust and mutual TLS with native Go settings.
+description: Provision local identities, load certificate files, and configure server trust and mutual TLS without weakening verification.
 order: 30
+summary:
+  - Distinguish publicly trusted production identities from explicit local-development provisioning.
+  - Generate local server certificates and load existing identities without changing files or system trust.
+  - Choose private-only or additive system roots while preserving hostname and certificate verification.
+  - Configure both sides of mutual TLS and keep authentication separate from application authorization.
+  - Share detached certificate exports safely without mistaking native TLS clones for deep copies.
 ---
 
 # TLS Certificates
 
-## Introduction
+HTTPS needs two separate decisions: which identity a server presents, and which
+issuers a client trusts. An **identity** contains a certificate chain and its
+matching private key. A **certificate authority (CA)** signs certificates;
+clients must independently trust that authority before accepting its identities.
 
-When a local service needs HTTPS, provision its identity separately from starting
-the process. An **identity** is a certificate chain and its matching private key.
-A **certificate authority (CA)** signs certificates; clients must trust that CA
-before accepting the identities it issues.
-
-The `certificate` package generates a private root CA and local server
-identities, and loads existing client or server identities. It exports native
-Go TLS values for [servers](server.md) and [HTTP clients](http-client.md).
-For commands that write the files and optionally change system trust, use
+The `certificate` package provisions local-development identities and imports
+existing client or server credentials as native Go TLS values. Keep generic
+[application key management](../keys/overview.md) separate from certificate
+issuance. For file creation and trust-store command syntax, use
 [Certificate Commands](../cli/certificates.md).
 
-Focused provisioning snippets keep error results visible and assume success.
-Trust and TLS setup examples retain checks that prevent using incomplete credentials
-or falling back to unintended trust settings.
+## Choose Trust
 
-## Provisioning a local identity
+For a public production service, obtain a certificate from an issuer your
+clients already trust, or terminate TLS at an ingress that manages those
+certificates. This package's local CA is not publicly trusted and is not a
+production PKI, ACME client, or renewal service. Generating a certificate for
+a public hostname does not validate ownership of that name.
 
-Install the independent certificate module from your application's module:
+For local HTTPS, generate a dedicated development CA and configure a particular
+client to trust its public certificate. A client-specific pool keeps that
+decision out of the operating system's global trust store. Do not disable
+certificate verification to make local requests succeed: fix the trusted issuer,
+certificate names, or validity instead.
+
+The library neither writes files nor changes system trust. The examples below
+also do neither. If you later choose a CLI trust command, review its broader
+scope and required permissions separately.
+
+## Provision Locally
+
+Add the independent module from your application's module directory:
 
 ```sh
 go get arkoren.dev/foundation/certificate
 ```
 
-The module works without Arkoren core. For the server and retrying-client
-integrations below, also add `go get arkoren.dev/core` if your application does
-not already use it.
+It works without Arkoren core. The server and retrying-client integrations use
+`arkoren.dev/core`; follow
+[existing application installation](../first-steps/installation.md#existing-applications)
+if that dependency is not already present.
 
 > [!WARNING]
-> A stolen CA private key lets an attacker impersonate sites to clients that
-> trust the CA. Generate it in a protected environment, restrict access to its
-> private exports and parent directories, and never commit private keys.
-> Application startup must fail on missing material, not generate a replacement.
+> Anyone with a trusted CA's private key can issue identities accepted by its
+> clients. Protect private exports and their storage directories, never commit
+> them, and keep the CA key out of ordinary server deployments. Provision
+> deliberately; do not regenerate missing credentials during application startup.
 
-For an explicit provisioning operation, import
-`arkoren.dev/foundation/certificate` and create a root:
-
-```go
-authority, err := certificate.GenerateRoot("Example Local Development")
-```
-
-This returns an immutable CA identity in memory. It neither writes files nor
-installs trust. The default validity is 5 × 365 days. To select another duration,
-also import `time` and pass a construction callback:
+In an explicit provisioning operation, import
+`arkoren.dev/foundation/certificate` and generate the development authority:
 
 ```go
-authority, err := certificate.GenerateRoot("Example Local Development", func(root *certificate.RootBuilder) {
-	root.Validity(365 * 24 * time.Hour)
-})
+authority, err := certificate.GenerateRoot("Reports Local Development")
 ```
 
-Use that authority to issue a server identity for every name clients actually
-use. A subject alternative name (SAN) identifies a DNS name or IP address; the
-legacy common name is not a substitute:
+This creates an in-memory ECDSA P-256 root with a default lifetime of
+5 × 365 days. After checking the error, issue a server identity for the names
+your local clients actually use:
 
 ```go
 identity, err := certificate.GenerateServer(authority, []string{"localhost", "127.0.0.1", "::1"})
 ```
 
-The generated root and server keys use ECDSA P-256. No hostnames are inferred.
-The default server validity is 90 days, shortened if the issuer expires sooner.
-If you explicitly request a lifetime with `ServerBuilder.Validity` that extends
-beyond the issuer's validity, generation fails instead of silently shortening it.
-Zero selects the default; negative and positive subsecond durations are invalid.
-The issuer must be a currently valid, self-signed root authorized to sign
-certificates with path-length-zero constraints, as generated above. Names are
-bare ASCII DNS names or IP literals, not URLs or host-and-port pairs.
+The server certificate also uses P-256 and has server-authentication purpose.
+Its subject alternative names (SANs) are exactly the supplied DNS names and IP
+addresses; no localhost name is inferred. Supply bare ASCII DNS names or IP
+literals, not URLs or host-and-port pairs. A common name does not replace SANs.
 
-`identity.Bundle().PEM()` exports the public chain; `identity.PrivatePEM()`
-explicitly exports the unencrypted private key. Your provisioning operation owns
-secure persistence. The [CLI](../cli/certificates.md#generating-a-local-root)
-provides exclusive file creation if you do not need custom persistence.
-There is no ACME integration, renewal loop, intermediate CA generation, or
-client-certificate generation.
+The default server lifetime is 90 days, shortened to the issuer's remaining
+lifetime. To choose a shorter lifetime, import `time` and use a construction
+callback instead:
 
-## Loading a server identity
+```go
+identity, err := certificate.GenerateServer(authority, []string{"localhost"}, func(leaf *certificate.ServerBuilder) {
+	leaf.Validity(7 * 24 * time.Hour)
+})
+```
 
-With previously provisioned `server.pem` and `server-key.pem` in your deployment,
-load the same identity on each startup. Add `crypto/tls` to your imports:
+An explicit lifetime beyond the issuer's expiry fails rather than being
+shortened. Zero selects the default; negative or positive subsecond lifetimes
+are invalid. `RootBuilder.Validity` similarly selects a root lifetime. The
+issuer must be a currently valid, self-signed, certificate-signing root with
+path-length-zero constraints, as generated above; intermediate CA issuance is
+not supported.
+
+`identity.Bundle().PEM()` exports the public chain, leaf first.
+`identity.PrivatePEM()` explicitly exports the unencrypted private key. Your
+provisioning operation owns secure persistence and distribution; the
+[CLI provisioning commands](../cli/certificates.md) offer exclusive file
+creation when you do not need custom storage. The package provides no automatic
+renewal or client-certificate generator.
+
+## Load Identities
+
+During application startup, load previously provisioned credentials instead of
+generating replacements. With `certificate` imported, read the deployment's
+server chain and private key:
 
 ```go
 identity, err := certificate.LoadIdentity("server.pem", "server-key.pem")
@@ -97,35 +120,39 @@ credentials, err := identity.TLS()
 if err != nil {
 	return err
 }
+```
+
+These checks stop setup if files are missing or credentials cannot be converted.
+With `crypto/tls` imported, prepare the server's native configuration:
+
+```go
 settings := &tls.Config{
 	MinVersion:   tls.VersionTLS12,
 	Certificates: []tls.Certificate{credentials},
 }
 ```
 
-Pass `settings` to `server.Builder.TLS` as shown in
-[Serving HTTPS](server.md#serving-https). Missing or malformed files stop this
-setup before a listener is created. Loading also supports existing RSA, ECDSA,
-and Ed25519 identities; it does not restrict imported identities to P-256.
-The certificate chain is leaf-first and can omit its root. Private PEM accepts
-unencrypted PKCS #1, SEC 1, and PKCS #8; parsing rejects extra key blocks,
-headers, and non-whitespace junk. Each input or file read is bounded to 1 MiB.
+Pass it to the [server's HTTPS setup](server.md#serving-https) before startup.
+The loader accepts RSA, ECDSA, and Ed25519 identities, not just generated P-256
+keys. Chains are leaf-first and can omit the root. Private keys must be
+unencrypted PKCS #1, SEC 1, or PKCS #8 PEM. Each input or file read is bounded
+to 1 MiB; malformed blocks, extra keys, headers, and non-whitespace junk fail
+parsing. File errors preserve their OS causes.
 
-Parsing checks encoding, chain structure, and the key match. It does not prove
-that a certificate is currently valid, trusted, valid for the URL's hostname,
-or authorized for the intended TLS purpose. Native TLS verification performs
-those checks when peers connect. Use `x509.Certificate.Verify` if you need a
-separate verification step with explicit roots and policy.
+Parsing checks encoding, supplied chain order and signatures, and the key match.
+It does not establish trust, current validity, revocation, hostname coverage,
+or suitability for a particular TLS purpose. Peer verification during a native
+TLS handshake applies its policy; use `x509.Certificate.Verify` with explicit
+roots and options if you need a separate verification step.
 
-## Trusting a private CA in an HTTP client
+## Choose Client Trust
 
-A server sends its identity; a client separately decides which CAs it trusts.
-For a client that should trust only your private CA, load the public root and
-create a dedicated pool. This fragment also uses `net/http`, `time`, and
-`arkoren.dev/core/http/client`:
+For a client that must trust only your private CA, obtain its public root through
+a trusted distribution path. Parsing a downloaded certificate does not establish
+its provenance. Load that public file, not the CA's private key:
 
 ```go
-roots, err := certificate.LoadBundle("root.pem")
+roots, err := certificate.LoadBundle("development-ca.pem")
 if err != nil {
 	return err
 }
@@ -133,6 +160,14 @@ pool, err := roots.Pool()
 if err != nil {
 	return err
 }
+```
+
+`Pool` creates an independent private-only trust pool. It adds no system roots,
+so this pool does not also accept ordinary public issuers. With `net/http`,
+`time`, `crypto/tls`, and `arkoren.dev/core/http/client` imported, give the pool
+to a transport:
+
+```go
 transport, err := client.NewTransport(&tls.Config{
 	MinVersion: tls.VersionTLS12,
 	RootCAs:    pool,
@@ -140,30 +175,25 @@ transport, err := client.NewTransport(&tls.Config{
 if err != nil {
 	return err
 }
-outgoing := &http.Client{
-	Transport: transport,
-	Timeout:   10 * time.Second,
-}
+outgoing := &http.Client{Transport: transport, Timeout: 8 * time.Second}
 ```
 
-Use `outgoing` with the [request example](http-client.md#sending-a-request).
-Its URL must match a certificate SAN, such as `https://localhost:8443`.
-`RootCAs` controls verification of servers; it does not send a client identity.
-The bundle pool contains no system roots, so this client does not also trust
-ordinary public CAs. Never bypass verification with `InsecureSkipVerify`.
+Use this client with the [request example](http-client.md#read-responses).
+For the generated localhost identity, request `https://localhost:8443` from a
+server configured to listen there. The URL must match a SAN; trusting the CA
+does not bypass name checks. `RootCAs` verifies the server and does not present
+a client identity.
 
-`NewTransport` clones the current default's native proxy, connection-pool, and
-HTTP/2 settings. It returns an error if `http.DefaultTransport` is not a nonnil
-`*http.Transport`; for a custom base, use `client.Transport(base)` instead.
-The supplied TLS configuration is shallow-cloned, not mutated. Configure its
-referenced pools and certificates before sharing them. Call
-`outgoing.CloseIdleConnections()` when retiring the owned pool; active requests
-are not interrupted.
+`NewTransport` clones the current default native transport, preserving proxy,
+pooling, and HTTP/2 settings. A default that is not a nonnil `*http.Transport`
+returns an error; for a base you already own, use
+[custom transport ownership](http-client.md#own-transports). When retiring the
+owned pool, call `outgoing.CloseIdleConnections()`; active requests continue.
 
-### Keeping system roots as well
+### Add Public Roots
 
-If the same client calls both private and public services, start with the system
-pool instead. With the loaded `roots` bundle above:
+If this client intentionally calls both private services and public services,
+replace `roots.Pool()` with an additive system pool:
 
 ```go
 pool, err := roots.SystemPool()
@@ -172,19 +202,18 @@ if err != nil {
 }
 ```
 
-Use this `pool` in `RootCAs` instead of the private-only pool. Handle a system-pool
-error rather than silently falling back to private-only trust: `SystemPool`
-returns the loading error with its cause preserved. The returned pool is
-independent and does not modify the OS store or bundle. A zero bundle fails
-before system-root loading. Add only CA certificates you intend to trust;
-parsing a bundle does not establish its provenance.
+Use this pool in the same `RootCAs` field. It retains system roots and adds the
+bundle's certificates to an independent pool; it does not alter the OS store.
+A system-root loading error is returned with its cause, not silently replaced
+by private-only trust. A zero bundle fails before system roots are loaded.
+Add only issuers you intend this client to trust.
 
-## Presenting a client identity with mutual TLS
+## Require Client Identity
 
-Mutual TLS (mTLS) also authenticates the client to the server. Obtain a
-client-purpose certificate from your issuer; the local server generator does
-not create client identities. Load the public chain and matching private key
-with the same API:
+Mutual TLS (mTLS) adds client-certificate verification to server verification.
+Obtain a client-purpose identity from your issuer; `GenerateServer` deliberately
+does not issue client identities. Load the supplied client chain and key with
+the same checked conversion:
 
 ```go
 identity, err := certificate.LoadIdentity("client.pem", "client-key.pem")
@@ -197,57 +226,58 @@ if err != nil {
 }
 ```
 
-Using `pool` from the private-CA client above, create a transport that both
-verifies the server and presents this client identity:
+On the client, use `serverRoots`, a pool of CAs trusted to issue server
+certificates, and present these credentials:
 
 ```go
 transport, err := client.NewTransport(&tls.Config{
 	MinVersion:   tls.VersionTLS12,
-	RootCAs:      pool,
+	RootCAs:      serverRoots,
 	Certificates: []tls.Certificate{credentials},
 })
 if err != nil {
 	return err
 }
-outgoing := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+outgoing := &http.Client{Transport: transport, Timeout: 8 * time.Second}
 ```
 
-Use `outgoing` to send requests and call `outgoing.CloseIdleConnections()` when
-retiring it. Sending a client certificate does not replace verification of the
-server; keep `RootCAs` configured for that separate role.
+Sending a client identity does not replace verification of the server. Keep
+that separate trust policy and retire the owned client pool as above.
 
-On the receiving server, `ClientCAs` names the CAs trusted to issue client
-certificates. With `pool` built from your client CA's public bundle and
-`settings` from [Loading a server identity](#loading-a-server-identity), require
-verified client certificates before handing `settings` to the server:
+On the server, use `settings` containing its own server identity from
+[Load Identities](#load-identities). Before starting it, require verified client
+certificates with `clientRoots`, a pool made from the public client-issuing CA
+bundle:
 
 ```go
-settings.ClientCAs = pool
+settings.ClientCAs = clientRoots
 settings.ClientAuth = tls.RequireAndVerifyClientCert
 ```
 
-A missing, untrusted, expired, or wrong-purpose client certificate fails the
-handshake. Your application still owns authorization after TLS authentication;
-trusting a client CA is not permission to perform every operation.
+`ClientCAs` and the outgoing client's `RootCAs` have different roles and need
+not contain the same authorities. A missing, untrusted, expired, or wrong-purpose
+client certificate fails the handshake. After authentication, your application
+still decides which operations that identity may perform; trusting its CA does
+not grant unrestricted access.
 
-## Ownership and operational limits
+## Share Safely
 
-`Identity` and `Bundle` retain private immutable state. Their byte slices,
-certificates, pools, and TLS exports are detached; mutating an export does not
-change the original value. `TLS()` also detaches its private key. A zero value
-is invalid; handle `Err()` or the conversion error before use.
+`Identity` and `Bundle` are immutable. Native certificates, pools, PEM buffers,
+and TLS exports are detached, including the private key returned by `TLS()`.
+Changing an export does not change the original value. Their zero values are
+invalid; handle conversion errors or `Err()` before use. Do not log secret
+exports even though ordinary identity formatting is redacted.
 
-Once exported values are placed in a native `tls.Config`, normal Go ownership
-rules apply. `tls.Config.Clone` is not a recursive copy of pools, certificate
-slices, keys, or callbacks. Configure them before sharing and do not mutate
-them while a server or client uses them. Dynamic certificate callbacks remain
-native TLS behavior; they are not an automatic renewal facility.
+Once you place exported values into a native `tls.Config`, Go's ownership rules
+apply. `tls.Config.Clone` is shallow: referenced pools, certificates, keys, and
+callback state remain shared. Finish configuration before sharing it with a
+running server or client, and do not mutate it afterward. Native certificate
+callbacks can select prepared identities; they do not provide automatic renewal.
 
-The retrying HTTP client retains its ordinary outcome policy: TLS certificate
-errors are transport errors and can be retried for eligible requests. Retrying
-does not repair bad trust or names. This differs from the CLI's
-[condition-wait retry policy](../cli/reference.md#retry-rules), which treats
-certificate-verification failures as terminal.
+The retrying client's default policy treats TLS errors as transport errors for
+eligible requests. Retrying does not repair bad trust or names. This differs
+from the CLI's [condition-wait policy](../cli/reference.md#retry-rules), which
+treats certificate-verification failures as terminal.
 
-For parsing formats, bounds, and all exported operations, see the
+For parsing formats, generation constraints, and every export, see the
 [`certificate` API reference](https://pkg.go.dev/arkoren.dev/foundation/certificate).

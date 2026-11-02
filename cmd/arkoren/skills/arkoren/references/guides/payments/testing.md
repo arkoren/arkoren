@@ -1,45 +1,61 @@
 ---
 title: Testing Payments
 nav: Testing
-description: Exercise explicit local lifecycles or script provider outcomes without moving money.
-order: 30
+description: Simulate payment lifecycles or script uncertain provider replies without network calls or money movement.
+order: 90
+summary:
+  - Simulate approval and settlement separately or script precise provider replies.
+  - Test uncertain attempts, client handoffs, and pending refund progress without moving money.
+  - Choose conformance coverage deliberately and distinguish local fixtures from sandbox buyer flows.
 ---
 
 # Testing Payments
 
-## Introduction
+Use `memorypayment` when a test needs coherent local payment state. Use
+`paymenttest.Fake` when it needs an exact provider reply, including a lost
+response or missing relationship. Neither moves money, runs a buyer UI, or
+schedules renewals.
 
-Use `memorypayment` to exercise approval, completion, settlement, and cancellation
-as separate local steps. Use `paymenttest.Fake` when your application must react
-to particular provider replies or ambiguous failures. Neither integration makes
-network calls, schedules renewals, or settles money.
+The fragments belong inside your application tests with `t *testing.T` and
+`ctx := t.Context()`. Import `arkoren.dev/core/service/payment` plus the simulator
+or fake subpackage used below. They demonstrate the provider boundary; inject
+the resulting `payments` client into your real application helpers to test
+authorization, durable recording, and fulfillment policy.
 
-## Simulating a payment
+## Simulating Payments
 
-Import `arkoren.dev/core/service/payment` and
-`arkoren.dev/core/service/payment/memorypayment`. The fragments below use
-`t *testing.T` and `ctx := t.Context()`. Construct `simulator := memorypayment.New()` and
-`payments := payment.New(simulator)`. After your test creates `checkout` using
-the [ordinary request](overview.md#starting-a-payment), supply approval explicitly:
+Start a fresh simulator per test. It is bundled with core and requires no account:
 
 ```go
-err = simulator.ApproveCheckout(ctx, checkout.ID)
-if err != nil {
+import "arkoren.dev/core/service/payment/memorypayment"
+
+simulator := memorypayment.New()
+payments := payment.New(simulator)
+```
+
+Create an ordinary checkout with an explicit amount and key, as in
+[Hosted Checkout](hosted-checkout.md#starting-checkout). With that `checkout`
+already created, supply buyer approval and merchant completion separately:
+
+```go
+if err := simulator.ApproveCheckout(ctx, checkout.ID); err != nil {
     t.Fatal(err)
 }
 checkout, err = payments.CompleteCheckout(ctx,
-    payment.NewCompleteCheckoutRequest(checkout.ID, "order-42-complete"))
+    payment.NewCompleteCheckoutRequest(checkout.ID, "book-184-complete"))
 if err != nil {
     t.Fatal(err)
 }
+if checkout.PaymentStatus != payment.StatusPending {
+    t.Fatal("completion must leave collection pending")
+}
 ```
 
-Completion creates a pending payment, not successful collection. Resolve it
-explicitly, then retrieve it through the same client your application uses:
+Completion creates a pending payment, not financial success. Resolve it explicitly
+before reading through the facade:
 
 ```go
-err = simulator.ResolvePayment(ctx, checkout.PaymentID, payment.StatusSucceeded)
-if err != nil {
+if err := simulator.ResolvePayment(ctx, checkout.PaymentID, payment.StatusSucceeded); err != nil {
     t.Fatal(err)
 }
 observed, err := payments.GetPayment(ctx, checkout.PaymentID)
@@ -51,257 +67,151 @@ if observed.Status != payment.StatusSucceeded {
 }
 ```
 
-`observed.Status` is now succeeded. Repeating completion cannot create a second
-payment. Advancing time does not bill a subscription or settle a pending payment.
-Subscription activation uses a separate `ResolveSubscription` control and makes
-no claim about invoice payment. See
-[the simulator API](https://pkg.go.dev/arkoren.dev/core/service/payment/memorypayment) for state restrictions.
+The read reports the state you supplied; it proves no external settlement.
+Repeating completion cannot create another payment. Advancing time changes
+neither pending settlement nor recurring collection. `ResolveSubscription`
+supplies agreement lifecycle separately and creates no invoice/payment.
 
-## Scripting application outcomes
+## Scripting Outcomes
 
-With `arkoren.dev/core/service/payment/paymenttest` imported, queue the exact reply
-your application should see:
+For a policy test that must see a pending payment, script that exact reply.
+With a checked `amount` from `payment.NewMoney("EUR", 2500)`:
 
 ```go
+import "arkoren.dev/core/service/payment/paymenttest"
+
 fake := paymenttest.New()
-amount, err := payment.NewMoney("USD", 1200)
-if err != nil {
-    t.Fatal(err)
-}
 fake.ReplyGetPayment(payment.Payment{
-    ID:     "pi_test",
-    Status: payment.StatusPending,
+    ID:     "payment-test",
     Amount: amount,
+    Status: payment.StatusPending,
 }, nil)
 payments := payment.New(fake)
 ```
 
-Inject `payments` into your application and call its operation. A valid
-unexpected provider call returns `paymenttest.ErrUnexpectedCall` instead of
-fabricating success. Scripts are per operation; a completion reply does not
-implicitly create a later payment-read reply.
+Call your application's payment-checking operation with that client and assert
+that it does not fulfill. Scripts are independent FIFO queues per operation:
+a completion reply never creates a payment-read reply or a ledger entry.
+A valid unexpected call returns `paymenttest.ErrUnexpectedCall`, not invented
+success.
 
 `Attempted()` and `Accepted()` return copied typed histories. Inspect
-`Attempted().ReadPayments`, or use the fake's mutation assertions with
-`testing.TB` and request predicates. This separates what was requested from
-what the test deliberately models as accepted.
+`Attempted().ReadPayments` for reads or use mutation assertion helpers with
+`testing.TB` and request predicates. Acceptance models what the test declares
+accepted, not successful collection.
 
-## Testing uncertain mutation outcomes
+`FailNext(err)` overrides the next valid operation without consuming its script;
+`FailWith(err)` persists until cleared. One-shot failure takes precedence.
+Invalid input consumes neither failure. `Reset()` clears scripts and history.
+These controls are not a financial ledger or provider replay simulator.
 
-To model an effect that happened but whose response was lost, script a nonempty
-result ID together with `payment.ErrOutcomeUnknown`. For cancellation, use
-`ReplyCanceledSubscription(payment.ErrOutcomeUnknown)` explicitly. Queue a
-separate retrieval reply for the later reconciliation step.
+## Testing Uncertainty
 
-Assert that your application preserves the original operation key and reconciles
-instead of starting another charge with a new key. An entry in `Accepted()`
-models provider acceptance, not successful settlement.
+To model accepted creation with a lost reply, queue an observed checkout ID with
+`ErrOutcomeUnknown`, then separately queue a later retrieval:
 
-Also test an uncertain creation with no returned ID. With `fake` from the
-previous section, queue the failure before invoking your application's checkout
-operation:
+```go
+fake.ReplyCreateCheckout(payment.Checkout{
+    ID: "checkout-test",
+}, payment.ErrOutcomeUnknown)
+fake.ReplyGetCheckout(payment.Checkout{
+    ID:     "checkout-test",
+    Status: payment.CheckoutStatusOpen,
+}, nil)
+```
+
+Invoke your real creation/reconciliation helpers and assert they save the
+original request/key, merchant/environment, and returned ID. `Accepted()` records
+the modeled effect even with the uncertain error. For accepted cancellation
+whose reply was lost, use `ReplyCanceledSubscription(payment.ErrOutcomeUnknown)`;
+ordinary `ReplyCancelSubscription(err)` does not declare acceptance with an error.
+
+Also test creation with no returned ID, followed by a known rejection on a later
+same-key call:
 
 ```go
 fake.ReplyCreateCheckout(payment.Checkout{}, payment.ErrOutcomeUnknown)
+fake.ReplyCreateCheckout(payment.Checkout{}, payment.ErrUnauthorized)
 ```
 
-The application must retain its saved operation key even though it cannot call
-`GetCheckout` without an ID. The contract has no search by reference or key;
-assert that your recovery path respects the provider's replay window or asks for
-investigation rather than making a fresh charge. A missing `Accepted()` entry
-reflects the script, not evidence that a real provider had no effect.
+After your application consumes these replies, assert that durable uncertainty
+remains, the original request/key stays unchanged, and neither fresh-key dispatch
+nor fulfillment is authorized. The later error does not establish the earlier
+provider effect. A missing fake `Accepted()` entry reflects the script, not
+proof that a real provider did nothing.
 
-Also script a later call with the same saved key that returns a known rejection,
-such as `payment.ErrUnauthorized` or `payment.ErrRateLimited`, after an earlier
-`ErrOutcomeUnknown`. Assert that your application's operation record stays
-unresolved, preserves the original request/key and merchant/environment binding,
-and permits neither a new-key charge nor fulfillment without reconciliation.
-The fake's latest reply does not establish what the earlier provider attempt did;
-this scenario tests your recovery policy, not a provider-wide replay guarantee.
+With no resource ID, portable lookup by key/Reference is unavailable. Test that
+your [recovery policy](recovery.md) respects provider replay scope/retention or
+requires investigation instead of manufacturing an ID or another charge.
 
-`FailNext(err)` overrides the next valid operation before consuming its script;
-`FailWith(err)` does so until cleared. A one-shot failure takes precedence.
-Invalid requests do not consume failures. `Reset()` clears scripts and history.
-These are test controls, not a financial ledger or provider replay simulator.
+## Testing Handoffs
 
-## Testing the native backend journey
-
-The [Go backend lesson](mobile-payments.md) coordinates application persistence,
-authorization, completion, and fulfillment. This complete test exercises its
-provider boundary: preparation, approved completion, pending/succeeded reads,
-and a refund's later progress. `example.native` is a fictitious typed action.
-Local variables model authorized saved values, not durable storage/authentication:
+For [Mobile Payments](mobile-payments.md), use a fictitious protocol to isolate
+backend handling from a native SDK:
 
 ```go
-package paymentexample_test
-
-import (
-    "errors"
-    "testing"
-
-    "arkoren.dev/core/service/payment"
-    "arkoren.dev/core/service/payment/paymenttest"
-)
-
-func TestNativePaymentJourney(t *testing.T) {
-    t.Parallel()
-    amount, err := payment.NewMoney("USD", 2500)
-    if err != nil {
-        t.Fatal(err)
-    }
-    fake := paymenttest.New()
-    fake.ReplyPreparePayment(payment.Preparation{
-        CheckoutID: "checkout-test",
-        Action: payment.NewClientOrder("example.native", "client-order-test"),
-    }, nil)
-    fake.ReplyGetCheckout(payment.Checkout{
-        ID: "checkout-test", Status: payment.CheckoutStatusApproved,
-        Amount: &amount, NeedsCompletion: true,
-    }, nil)
-    fake.ReplyCompleteCheckout(payment.Checkout{
-        ID: "checkout-test", Status: payment.CheckoutStatusComplete,
-        PaymentID: "payment-test", Amount: &amount,
-    }, nil)
-    fake.ReplyGetPayment(payment.Payment{
-        ID: "payment-test", Status: payment.StatusPending, Amount: amount,
-    }, nil)
-    fake.ReplyGetPayment(payment.Payment{
-        ID: "payment-test", Status: payment.StatusSucceeded, Amount: amount,
-    }, nil)
-    payments := payment.New(fake)
-    prepared, err := payments.PreparePayment(t.Context(),
-        payment.NewPreparePaymentRequest(amount, "order-42-native"))
-    if err != nil {
-        t.Fatal(err)
-    }
-    checkout, err := payments.GetCheckout(t.Context(), prepared.CheckoutID)
-    if err != nil {
-        t.Fatal(err)
-    }
-    if checkout.NeedsCompletion {
-        checkout, err = payments.CompleteCheckout(t.Context(),
-            payment.NewCompleteCheckoutRequest(checkout.ID, "order-42-complete"))
-        if err != nil {
-            t.Fatal(err)
-        }
-    }
-    pending, err := payments.GetPayment(t.Context(), checkout.PaymentID)
-    if err != nil {
-        t.Fatal(err)
-    }
-    if pending.Status != payment.StatusPending {
-        t.Fatal("pending payment must not authorize fulfillment")
-    }
-    paid := readCollectedPayment(t, payments, checkout.PaymentID, amount)
-    assertRefundProgress(t, payments, fake, paid)
-}
-
-// readCollectedPayment checks authoritative ID, price, and settlement after
-// the caller has established application ownership and merchant binding.
-func readCollectedPayment(t *testing.T, payments *payment.Client, id payment.ID, amount payment.Money) payment.Payment {
-    t.Helper()
-    paid, err := payments.GetPayment(t.Context(), id)
-    if err != nil {
-        t.Fatal(err)
-    }
-    if paid.ID != id || paid.Amount != amount {
-        t.Fatal("payment does not match the saved order")
-    }
-    if paid.Status != payment.StatusSucceeded {
-        t.Fatal("payment is not collected")
-    }
-    return paid
-}
-
-// assertRefundProgress exercises a full explicit refund and its later read.
-// Acceptance alone remains pending; only the scripted later observation succeeds.
-func assertRefundProgress(t *testing.T, payments *payment.Client, fake *paymenttest.Fake, paid payment.Payment) {
-    t.Helper()
-    refundAmount := paid.Amount
-    fake.ReplyRefundPayment(payment.Refund{
-        ID: "refund-test", PaymentID: paid.ID,
-        Amount: refundAmount, Status: payment.RefundStatusPending,
-    }, nil)
-    refund, err := payments.RefundPayment(t.Context(),
-        payment.NewRefundRequest(paid.ID, refundAmount, "order-42-refund-1"))
-    if err != nil {
-        t.Fatal(err)
-    }
-    if refund.Status != payment.RefundStatusPending {
-        t.Fatal("refund acceptance is not completion")
-    }
-    fake.ReplyGetRefund(payment.Refund{
-        ID: refund.ID, PaymentID: paid.ID,
-        Amount: refundAmount, Status: payment.RefundStatusSucceeded,
-    }, nil)
-    returned, err := payments.GetRefund(t.Context(), refund.ID)
-    if err != nil {
-        t.Fatal(err)
-    }
-    if returned.Status != payment.RefundStatusSucceeded {
-        t.Fatal("refund is not complete")
-    }
-}
-
-func TestPreparationOutcomeUnknown(t *testing.T) {
-    t.Parallel()
-    amount, err := payment.NewMoney("USD", 2500)
-    if err != nil {
-        t.Fatal(err)
-    }
-    request := payment.NewPreparePaymentRequest(amount, "order-42-native")
-    fake := paymenttest.New()
-    fake.ReplyPreparePayment(payment.Preparation{}, payment.ErrOutcomeUnknown)
-    _, err = payment.New(fake).PreparePayment(t.Context(), request)
-    if !errors.Is(err, payment.ErrOutcomeUnknown) {
-        t.Fatal("missing uncertain-outcome classification")
-    }
-    attempts := fake.Attempted().PreparedPayments
-    if len(attempts) != 1 {
-        t.Fatal("unexpected preparation dispatch count")
-    }
-    if attempts[0].IdempotencyKey() != request.IdempotencyKey() {
-        t.Fatal("original operation key was not preserved")
-    }
-}
+fake.ReplyPreparePayment(payment.Preparation{
+    CheckoutID: "checkout-test",
+    Action:    payment.NewClientOrder("example.native", "client-order-test"),
+}, nil)
 ```
 
-Scripts are independent, not an implicit ledger. Invoke your real helpers in
-application tests and assert durable claims, ownership, no-store/protected resume,
-one fulfillment commit, missing/mismatched references, unapproved checkout, and
-recording crashes. An uncertain reply must preserve the saved key and block fresh
-dispatch. These tests establish no native UI, real approval, durability, or money
-movement; [sandbox coverage](#verifying-provider-behavior) is separate.
+Script `ReplyGetCheckout` with an approved checkout, expected amount, and
+`NeedsCompletion: true`; then script `ReplyCompleteCheckout` with a financial
+PaymentID. Queue pending and succeeded `ReplyGetPayment` replies independently.
+Call the application's actual helpers and assert that approval is checked,
+completion uses its saved key, and only the matching succeeded payment permits
+one fulfillment commit.
 
-## Checking driver conformance
+For refund progress, submit a pending reply independently of the later read.
+With saved `paymentID` and explicit `refundAmount`:
 
-When implementing a driver for your application, run `paymenttest.Run` with a
-fresh `Harness` per scenario. The harness supplies the complete Driver and
-test-only approval/settlement hooks. Full runs also need an existing
-`PlanReference` and `ActivateSubscription` hook. These controls update a fixture
-or simulator, not production Driver methods, and must not wait for a real buyer.
+```go
+fake.ReplyRefundPayment(payment.Refund{
+    ID:        "refund-test",
+    PaymentID: paymentID,
+    Amount:    refundAmount,
+    Status:    payment.RefundStatusPending,
+}, nil)
+fake.ReplyGetRefund(payment.Refund{
+    ID:        "refund-test",
+    PaymentID: paymentID,
+    Amount:    refundAmount,
+    Status:    payment.RefundStatusSucceeded,
+}, nil)
+```
 
-`Harness.Amount` chooses the one-off request's positive minor-unit amount and
-currency; zero selects 1200 USD. Refunds use the observed payment currency.
-If the approved/completed checkout does not yet expose a payment ID, supply
-`ResolvePaymentID(ctx, checkoutID) (payment.ID, error)` to observe it with one
-bounded fixture step. Omit that hook when the checkout already includes the ID.
-The suite does not poll or manufacture a relationship.
+Assert that your application reports the first outcome as pending and only the
+second as confirmed refund success. Also test mismatched/missing references,
+unapproved checkout, protected/no-store JSON, owner-only resume, secret-log
+exclusions, recording crashes, and concurrent requests. Fake success does not
+prove native approval, persistence, or HTTP security.
 
-Select limitations only when they describe the actual driver or test fixture:
+## Checking Conformance
 
-| Option | Meaning and remaining coverage |
+If you implement a driver for your application, use `paymenttest.Run` with a
+fresh `Harness` per scenario. Its complete Driver and bounded fixture hooks
+supply approval, settlement, and subscription activation without waiting for
+a real buyer. The factory owns cleanup through `t`.
+
+Full journeys need `PlanReference` and `ActivateSubscription`. `Harness.Amount`
+selects a positive supported one-off amount; zero selects 1200 USD, and refunds
+use the observed payment currency. If completion exposes no PaymentID, provide
+`ResolvePaymentID` for one bounded fixture observation. The suite neither polls
+nor invents the relationship.
+
+| Option | Declared limitation |
 | --- | --- |
-| `WithoutApproval()` | Omits lifecycle journeys, retaining validation and declared unsupported subscription/refund-lookup checks. Completion/refund-creation checks are skipped with their journey. It does not declare approval unsupported. |
-| `WithoutCompletion()` | Requires valid completion to return `ErrUnsupported`; the approved checkout must not require completion and must remain unchanged. |
-| `WithoutRefunds()` | Requires valid refund creation to return `ErrUnsupported` without changing the payment. |
-| `WithoutRefundLookup()` | Requires valid refund reads to return `ErrUnsupported`; refund creation still runs unless separately disabled. |
-| `WithoutSubscriptions()` | Requires subscription creation, lookup, and cancellation to return `ErrUnsupported`; no plan or activation hook is needed, and one-off journeys still run. |
-| `WithoutPreparation()` | Requires a valid preparation to return `ErrUnsupported` with no handoff. Preparation is checked independently of hosted approval journeys, including with `WithoutApproval()`. |
+| `WithoutApproval()` | Omits lifecycle journeys, retaining validation and standalone unsupported subscription/refund-lookup checks. Completion/refund-creation checks are omitted with their journey; it does not declare approval unsupported. |
+| `WithoutCompletion()` | Requires `ErrUnsupported` and an unchanged approved checkout that does not need completion. |
+| `WithoutRefunds()` | Requires unsupported refund creation without changing the original payment. |
+| `WithoutRefundLookup()` | Requires unsupported refund reads; creation still runs unless separately disabled. |
+| `WithoutSubscriptions()` | Requires unsupported enrollment, lookup, and cancellation; no plan/activation hook is needed. |
+| `WithoutPreparation()` | Requires unsupported valid preparation with no handoff; preparation checks remain independent of hosted approval. |
 
-For a controlled Mollie fixture, import `paymenttest` and use its actual
-unsupported-operation declarations. With `factory func(*testing.T)
-paymenttest.Harness` supplying fresh fixtures, including a supported EUR amount:
+With `factory func(*testing.T) paymenttest.Harness` supplying fresh controlled
+Mollie fixtures, supported EUR amounts, and approval/settlement hooks, declare
+only the operations actually unsupported:
 
 ```go
 paymenttest.Run(t, factory,
@@ -311,54 +221,33 @@ paymenttest.Run(t, factory,
 )
 ```
 
-This still checks one-off payment/refund journeys. Do not add
-`WithoutApproval()` merely to make missing hooks pass: that would omit those
-journeys instead of proving them.
+This still exercises one-off payments and refunds. Do not add WithoutApproval
+to hide absent hooks: doing so omits the journey rather than proving it.
 
-## Verifying provider behavior
+## Sandbox Boundaries
 
-Vendor wire fixtures prove serialization, mapping, and attempts—not live
-settlement. Actual sandbox buyer approval and signed delivery require separate,
-dedicated test configuration. Never substitute production credentials or assume
-an HTTP fixture establishes a provider retention guarantee.
+Wire fixtures prove serialization, mapping, and attempt counts—not live settlement.
+The existing opt-in provider checks also have narrower scopes than a buyer journey:
 
-Opt-in provider tests have narrower scopes than a complete buyer journey:
-
-| Provider | Sandbox coverage when explicitly enabled | Not established |
+| Provider | Opt-in coverage | Not established |
 | --- | --- | --- |
-| Stripe | Native intent preparation/read, plus synthetic test-card confirmation and refund/read. Confirmation belongs to test-only SDK code, not `PreparePayment`. | Native device wallets, PaymentSheet UI, 3DS, or signed delivery. |
-| PayPal | Unapproved sandbox hosted Order creation and read. | Native preparation against the remote provider, SDK/device approval, capture, subscription collections, or signed delivery. |
-| Mollie | Read-only profile authentication and an optional existing test payment read. | Hosted creation/approval, refunds, or callbacks. |
+| Stripe | Intent preparation/read and synthetic test-card confirmation with refund/read. | Native devices, PaymentSheet, wallets, 3DS, or signed delivery. |
+| PayPal | Unapproved hosted sandbox Order creation/read. | Native preparation, SDK approval, capture, subscription collections, or signed delivery. |
+| Mollie | Read-only profile authentication and optional existing test payment read. | Hosted creation/approval, refunds, or callbacks. |
 
-These are coverage descriptions, not a claim that those remote tests were run
-or that any live-money flow was verified. Local fixture success does not expand
-that coverage.
+These describe coverage, not tests run for this guide. Never substitute production
+credentials or infer provider retention from a local fixture. With a dedicated
+test merchant and your own opt-in configuration, separately exercise hosted
+buyer approval, explicit reads/completion, partial refund progress, and supported
+subscription approval/cancellation. Stripe/PayPal notification verification needs
+real signed deliveries, not just synthetic JSON; Mollie needs the unsigned-hint
+route plus authoritative API read.
 
-The opt-in checks require explicit test configuration; short mode skips them.
-For the toolkit's sandbox tests, Stripe uses build tag `sandbox` and
-`ARKOREN_STRIPE_TEST_KEY` (an `sk_test_` key). PayPal uses `paypal_sandbox`,
-`PAYPAL_SANDBOX_TEST=1`, `PAYPAL_CLIENT_ID`, and `PAYPAL_CLIENT_SECRET`. Mollie
-uses `integration`, `MOLLIE_INTEGRATION=1`, a test-mode `MOLLIE_API_KEY`, and
-optionally `MOLLIE_TEST_PAYMENT_ID` for its existing-payment read. These are not
-native device tests, and none of them establishes a complete buyer journey.
+Test native UI separately with the provider's test-mode SDK/device setup,
+including cancellation and additional authentication. PayPal SDK approval still
+needs explicit server capture. Client UI success must never bypass backend
+ownership and collection checks.
 
-For an opt-in sandbox check, use a dedicated merchant account, test credentials,
-and a real provider-hosted buyer flow. Save the checkout and payment IDs, confirm
-their status with explicit reads, request an explicit partial refund, and read
-the refund's own progress. Exercise subscription approval and immediate
-cancellation separately on drivers that support them. Verify Stripe/PayPal
-notifications through real signed deliveries, not only synthetic JSON. For
-Mollie, exercise the unsigned hint route and authoritative API read instead of
-expecting a signature. These checks require your own configuration; the examples here
-do not claim live provider verification.
-
-For native mobile flows, test your authenticated endpoint's ownership checks,
-`no-store` response, and secret-log exclusions independently from SDK UI. Use
-Stripe test-mode devices/SDK setup for card, wallet readiness, cancellation,
-and additional-authentication paths, and PayPal sandbox SDK approval followed by
-explicit server capture. `paymenttest.Fake` scripts the common preparation,
-reads, completion, and refunds; it does not simulate either native SDK.
-Native UI success must never bypass your backend's fulfillment checks.
-
-For the complete helper surface, see
-[the paymenttest API](https://pkg.go.dev/arkoren.dev/core/service/payment/paymenttest).
+For controls, histories, and harness options, see the
+[paymenttest API](https://pkg.go.dev/arkoren.dev/core/service/payment/paymenttest)
+and [memorypayment API](https://pkg.go.dev/arkoren.dev/core/service/payment/memorypayment).

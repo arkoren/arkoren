@@ -1,62 +1,76 @@
 ---
 title: Arks
-description: What an ark is, how it differs from core packages and drivers, and the availability of built-in arks.
+description: Distinguish reusable domain features from service mechanisms, backend drivers, and application policy.
 order: 25
+summary:
+  - Understand arks as optional domain features, with no built-in arks currently available.
+  - Separate reusable domain rules from service operations and backend communication.
+  - Keep deployment choices and explicit feature integration under application ownership.
 ---
 
 # Arks
 
-## Introduction
+Sending an email is a service operation. Deciding that a completed report needs
+an email, who receives it, and what the message means is domain behavior. An
+**ark** is an optional, reusable domain feature that combines Arkoren services
+with those concepts and rules.
 
-A signup feature needs more than a database connection and a way to send mail.
-It also needs to define a user, decide when registration succeeds, and choose
-what a welcome message says. An **ark** is an optional, reusable domain feature
-that combines Arkoren packages with those application-level concepts and rules.
+## Current Availability
 
-An ark is an ordinary Go module, not an automatically discovered plugin. You
-choose whether to add it and explicitly connect it to your application. Arkoren
-has no built-in arks yet. The signup example below
-illustrates the concept; it is not a module you can install today.
+Arkoren has no built-in arks yet. The feature below illustrates the boundary;
+it is not an installable integration or a promised API.
 
-## Distinguishing arks from core and drivers
+An ark is an ordinary Go module that an application explicitly chooses and
+connects. It is not an automatically discovered plugin. You can use Arkoren's
+services directly in application-owned features without introducing an ark.
 
-Core packages provide mechanisms without deciding your application's domain.
-A database facade executes queries, and a mail facade sends messages. Neither
-decides what a user is or when that user should receive a welcome email. A
-[driver](facades-and-drivers.md) implements a service contract for a backend,
-such as PostgreSQL or an email provider.
+## Domain Boundaries
 
-An ark supplies a domain feature built from those mechanisms. It can define
-domain entities and rules, coordinate a workflow, and provide its own tables,
-routes, jobs, or message content when the feature needs them.
+A [facade](facades-and-drivers.md) exposes a service operation, such as storing
+a file or submitting mail. Its driver performs the backend work. Neither needs
+to decide whether a report is ready for delivery or which recipients are
+entitled to receive it.
 
-| Part | Responsibility | Example |
+An ark adds that domain meaning. A reusable report-delivery feature might
+define a delivery request, track its status, and prepare notification content.
+It could use storage, queues, and mail without making those services aware of
+reports.
+
+| Responsibility | Owner | Report Example |
 | --- | --- | --- |
-| Core | Reusable mechanisms and service contracts | Database access, mail delivery, HTTP routing. |
-| Driver | Backend implementation of a contract, or a provider-specific adapter | PostgreSQL database access or provider webhook verification. |
-| Ark | Reusable domain concepts, rules, and flows | A hypothetical signup feature that creates users and sends welcome mail. |
-| Application | Composition, configuration, and application-specific policy | Choosing backends and deciding who can invoke signup. |
+| Portable service behavior | Facade and contract | Submit a message through the mail service. |
+| Backend communication | Driver | Submit that message to a particular mail provider. |
+| Reusable domain rules | Ark | Notify recipients when a report becomes ready. |
+| Deployment and application policy | Application | Choose the provider and authorize delivery requests. |
 
-Domain assumptions are the distinction, not package size or the number of
-dependencies. A core service can combine other services without becoming an ark.
-It becomes domain-specific when it defines concepts such as users, teams, plans,
-or an application's signup and checkout rules.
+The distinction is the meaning of the behavior, not its size. A component does
+not become an ark merely because it uses several services. Conversely, a small
+feature can be domain-specific if it defines what a report, membership, or
+subscription means.
 
-## Following a feature through the layers
+## Feature Composition
 
-Consider a hypothetical signup ark. Your application supplies database and mail
-facades. The ark uses them to implement registration; their drivers provide the
-backend operations:
+In the hypothetical report feature, your application supplies configured
+services and connects the feature to its entry points:
 
 ```text
-Application: chooses backends, wires dependencies, and authorizes requests
-  -> Signup ark: applies registration rules and prepares welcome mail
-       -> Database facade -> Database driver
-       -> Mail facade     -> Mail driver
+Application: authorizes delivery and supplies configured services
+  -> Report feature: tracks readiness and prepares notification content
+       -> Storage facade -> Selected storage driver
+       -> Mail facade    -> Selected mail driver
 ```
 
-The ark owns the meaning of registration. The drivers know how to store data
-or submit mail, not why a user is registering. Keeping those responsibilities
-separate lets the domain feature use the selected backends through their
-[contracts](contracts.md). Provider-specific capabilities and limits still need
-explicit handling; a domain feature does not remove them.
+The feature owns its domain rules. The application still chooses backends,
+credentials, exposure, and resource ownership. When a feature needs tables,
+routes, or background work, those are explicit integration responsibilities,
+not a reason to hide construction or startup inside ordinary service calls.
+
+Using portable [contracts](contracts.md) lets a domain feature work through
+selected service implementations. It does not remove provider constraints:
+an in-memory backend still loses state on restart, and unsupported operations
+still need an explicit decision.
+
+For your own features, use typed dependencies and explicit registration as
+described in [Application Composition](../application/composition.md). That
+composition pattern applies whether the feature lives in your application or
+is eventually shared as a separate module.

@@ -1,101 +1,124 @@
 ---
-title: Body Size Limit
-nav: Body Limit
-description: Cap the size of request bodies for a router or a group, before the handler reads them, and allow larger uploads only where you need them.
+title: Body Limits
+description: Set request-body ceilings before parsing and scope larger inputs without weakening ordinary endpoints.
 order: 60
+summary:
+  - Cap declared and streamed body bytes before request parsing.
+  - Give larger endpoints separate scopes rather than trying to override an outer ceiling.
+  - Distinguish middleware defaults, per-call limits, and raw-reader failure handling.
 ---
 
-# Body Size Limit
+# Body Limits
 
-## Introduction
+A body cap bounds how many input bytes a request can make your application
+read. Choose a ceiling for the endpoint before decoding: a small invoice JSON
+request should not inherit the space allowance needed by an upload route.
+The `bodylimit` middleware applies that ceiling before handlers and other
+body-reading middleware.
 
-A request body can be as large as a client wants to make it. Without a limit,
-one request could fill the server's memory or disk. The `request` body helpers
-already stop reading after 10 MiB, but a single limit for every route is rarely
-right: an API that accepts small JSON documents should refuse a 9 MiB body,
-while an upload route may need much more.
+## Set a Ceiling
 
-The `bodylimit` middleware sets the limit for a whole router or group.
-
-## Setting a limit
-
-Import `arkoren.dev/core/http/middleware/bodylimit`. With your existing
-[router](../http-fundamentals/routing.md) `r`, add the middleware before routes,
-with the limit in bytes:
+With a fresh [router](routing.md) named `routes`, import
+`arkoren.dev/core/http/middleware/bodylimit` and allow at most 64 KiB:
 
 ```go
-r.Use(bodylimit.Middleware(func(limit *bodylimit.Builder) {
-	limit.Limit(1 << 20)
-})) // 1 MiB
+routes.Use(bodylimit.Middleware(func(limit *bodylimit.Builder) {
+	limit.Limit(64 << 10)
+}))
 ```
 
-Without `Builder.Limit`, it uses the same 10 MiB default as the body helpers.
-Zero or negative limits also select that default; they do not disable the cap.
+Register routes afterward. Without a configured limit, the middleware uses
+10 MiB, matching the request body helpers' default. Zero and negative
+middleware limits also select 10 MiB; they do not disable the cap or require
+an empty body.
 
-## How the limit is enforced
+The limit bounds input bytes, not decoded memory, temporary-file usage from
+later processing, or application work. Use validation and processing limits
+where decoded input can expand or trigger expensive operations.
 
-The middleware checks the limit in two places. When a request declares its
-size with `Content-Length` and that size is over the limit, the request is
-rejected with `413 Content Too Large` before the handler runs. Otherwise, the
-middleware wraps the body so that reading past the limit fails. This also
-covers requests without a declared size, such as chunked uploads. The body
-helpers turn that read failure into the same `413` problem; code that reads
-`r.Body` directly must handle the native `*http.MaxBytesError` itself. Returning
-that raw error does not give it the helper's HTTP problem identity. The streaming
-limit is discovered only if downstream code reads far enough; the middleware
-does not pre-read the body. This bounds input bytes, not decoded memory, disk
-usage from later processing, or application work.
+## Handle Rejections
 
-The limit is also stored in the request context, where every body helper finds
-it and uses it instead of its default.
+If `Content-Length` exceeds the ceiling, the middleware returns
+`request.ErrBodyTooLarge` (`413`) before calling the next layer. Otherwise it
+wraps the body with `http.MaxBytesReader`: unknown-length or understated bodies
+fail only when downstream code reads far enough. The middleware does not
+pre-read or verify an unread remainder.
 
-### Empty bodies and request ownership
-
-A nil `r.Body` is empty input, not a panic, including when composed with the
-[request helpers](requests.md#xml-and-raw-bodies). `Bytes` and `String` return no
-data; JSON and XML decoding return their existing 400 malformed-body problems.
-The declared-length check still runs first: even a nil body with a
-`Content-Length` above the limit is rejected with 413 before the handler runs.
-
-The middleware installs its context and body wrapper on a shallow request copy;
-it does not replace the caller's body or context. It neither reads nor closes
-the body itself. A non-nil body stream is still shared: downstream reads consume
-it, and closing the wrapped body closes the original stream.
-
-Return input problems before committing a response. If the handler has already
-written a final status or body, a later body-read failure cannot replace it with
-a 413 or 400 problem. Existing HTTP problem identities and operational failures
-keep the [request helpers' error boundaries](requests.md#json-bodies).
-
-## Larger limits for some routes
-
-The limit is a ceiling. Inside it, `request.MaxSize` can lower the limit for a
-call, but neither `MaxSize`, `request.Unlimited()`, nor a second `bodylimit`
-middleware can raise it. This is deliberate: a limit set for the whole router
-cannot be bypassed by one careless handler.
-
-To accept larger bodies on some routes, use a fresh router without the global
-limit above and apply limits per group. Import `arkoren.dev/core/http/router`;
-`createPost` and `upload` are your existing `router.Handler` functions:
+The [request helpers](requests.md#decode-json) convert a native limit-read error
+to the same `413` problem. If your code reads `r.Body` directly, handle
+`*http.MaxBytesError` yourself. In a raw-reader fragment using `io`, `errors`,
+`net/http`, and `arkoren.dev/core/http/request`:
 
 ```go
-r.Group("/api", func(api *router.Router) {
-	api.Use(bodylimit.Middleware(func(limit *bodylimit.Builder) {
-		limit.Limit(1 << 20)
-	}))
-	api.Post("/posts", createPost)
-})
+data, err := io.ReadAll(r.Body)
+var tooLarge *http.MaxBytesError
+if errors.As(err, &tooLarge) {
+	return request.ErrBodyTooLarge
+}
+```
 
-r.Group("/uploads", func(uploads *router.Router) {
-	uploads.Use(bodylimit.Middleware(func(limit *bodylimit.Builder) {
-		limit.Limit(100 << 20)
+Other read failures remain errors to handle before using `data`. Returning the
+raw `MaxBytesError` alone does not give it the helper's HTTP problem identity.
+Return parsing and size errors before committing a response; after output
+starts, neither a `413` nor a malformed-input problem can replace it.
+
+A nil body is empty input, including with request helpers: raw reads return
+no data, while JSON and XML return their malformed-body problems. The
+declared-length check still runs first, even for a nil body.
+
+Middleware puts the cap in context and replaces the body only on a shallow
+request copy. It does not replace the caller's context/body fields, read the
+body, or close it. The underlying non-nil stream remains shared: downstream
+reads consume it, and closing the wrapper closes that stream.
+
+## Scope Larger Inputs
+
+An outer ceiling cannot be raised by another `bodylimit` middleware,
+`request.MaxSize`, or `request.Unlimited`. Put larger routes outside the
+smaller scope from the start. On a fresh router without the global cap above,
+with existing `createInvoice` and `uploadAttachment` handlers:
+
+```go
+routes.Group("/invoices", func(invoices *router.Router) {
+	invoices.Use(bodylimit.Middleware(func(limit *bodylimit.Builder) {
+		limit.Limit(64 << 10)
 	}))
-	uploads.Post("/", upload)
+	invoices.Post("/", createInvoice)
 })
 ```
 
-Register the middleware before any middleware that reads the body.
+The ordinary endpoint now has its own cap. Add the upload as a separate scope,
+not a child of that group:
 
-A [webhook receiver](../http-capabilities/webhooks.md#limiting-the-body-size) has its own size limit; this middleware stays a ceiling above it.
+```go
+routes.With(bodylimit.Middleware(func(limit *bodylimit.Builder) {
+	limit.Limit(12 << 20)
+})).Post("/attachments", uploadAttachment)
+```
 
-For every option, see the [`bodylimit` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/bodylimit).
+That route allows 12 MiB, subject to any additional parser limit. Apply the
+middleware before anything that reads the body. A webhook receiver also has
+its own [body policy](../webhooks/delivery-policies.md#body-limits); any surrounding
+middleware remains a ceiling above it.
+
+## Tighten One Read
+
+Inside a cap, a handler can ask its decoder to accept less. With an existing
+`CreateInvoice` input struct:
+
+```go
+input, err := request.JSON[CreateInvoice](r, request.MaxSize(16<<10))
+```
+
+`MaxSize(0)` permits only empty input, unlike middleware `Limit(0)`.
+A negative per-call size selects the 10 MiB default. Options apply in order;
+a later size option replaces an earlier per-call setting, but no option
+removes the upstream reader's cap.
+
+`Unlimited()` removes the helper's own cap and ignores a stored context limit,
+not a ceiling already installed on the body. Use it only when memory use is
+bounded another way; uncapped raw reads let a hostile client exhaust memory.
+
+For configuration and per-call options, see the
+[`bodylimit`](https://pkg.go.dev/arkoren.dev/core/http/middleware/bodylimit) and
+[`request`](https://pkg.go.dev/arkoren.dev/core/http/request) API references.

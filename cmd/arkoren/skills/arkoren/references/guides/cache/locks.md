@@ -1,74 +1,103 @@
 ---
 title: Cache Locks
 nav: Locks
-description: Take a named lease in the cache so one process at a time does a piece of work, extend it, and choose between cache and database locks.
-order: 25
+description: Acquire, release, and renew expiring leases without mistaking them for resource-level write protection.
+order: 50
+summary:
+  - Acquire leases by skipping or waiting without treating expiry as guaranteed exclusivity.
+  - Release and extend token-owned leases with explicit cleanup and failure policies.
+  - Protect harmful writes at the destination rather than relying on cache coordination.
 ---
 
 # Cache Locks
 
-## Introduction
+When several callers want to refresh the same catalog snapshot, a cache lock
+lets one caller begin while others skip or wait. It is a **lease**: permission
+that expires after a chosen duration even if its holder is still working.
+Expiry recovers coordination after a crash, but also permits overlapping work.
 
-When several callers would rebuild the same report or send the same digest,
-a cache lock lets one caller acquire permission to work while the others skip
-or wait. Replicas coordinate only if they use the same shared cache backend;
-memory locks coordinate callers sharing one driver instance, not separate
-processes.
+Examples assume an existing `*cache.Cache` named `store`, an operation context
+`ctx`, and `cache` from `arkoren.dev/core/service/cache`. Import standard-library
+`context`, `errors`, and `time` where used. Replicas coordinate only through a
+[shared backend](drivers.md); memory leases coordinate callers sharing one driver
+instance, not independent drivers or processes.
 
-A cache lock is a **lease**: it expires after the duration you give it, whether
-or not its holder is still working. That is what frees it when a process
-crashes, and it is also the main difference from a [database lock](../database/raw-sql-and-locks.md#named-locks).
-[Cache lock or database lock](#cache-lock-or-database-lock) helps you choose.
-
-## Taking a lock
-
-Use the `store` facade from [Cache Overview](overview.md#creating-a-cache) and
-your operation context `ctx`. Import `context`, `errors`, and `time` from the
-standard library for the examples below.
-
-Lock names remain literal strings, not typed cache keys. Key and namespace TTL
-policies do not apply to leases; pass the lease duration explicitly.
+## Lease Safety
 
 > [!WARNING]
-> A paused holder can keep working after its lease expires, while another caller
-> owns the lock. Cache loss can also release a lock. Protect harmful writes with
-> a transaction, version check, or resource-level fencing; use a lease only to
-> reduce duplicate work, not to guarantee correctness.
+> A paused holder can continue working after its lease expires and another caller
+> acquires it. Backend data loss can release a lease too. Use leases to reduce
+> duplicate work; protect harmful writes with a transaction, version check, or
+> fencing enforced by the destination resource.
 
-`TryLock` invokes the driver once; the native client can still have its own
-transport retries. It returns a `*cache.Lease` and `true` when the
-lock is now held, and `nil`, `false`, and a nil error when another holder has
-it:
+Arkoren does not issue fencing tokens: the protected database or external service
+cannot identify stale writers from a cache lease. Extending or successfully
+releasing a lease does not prove the work never overlapped another holder.
+For work where duplication matters, make the action idempotent or protect it at
+the resource itself.
+
+Lease names are literal strings, not typed keys; key and namespace TTL policies
+do not apply. The facade stores a lease named `catalog-refresh` at physical key
+`lock:catalog-refresh`. An ordinary entry named `catalog-refresh` is separate,
+but writing an ordinary entry named `lock:catalog-refresh` can overwrite the
+lease. Reserve physical `lock:` keys and logical lease names starting with
+`remember:` for the facade, including after namespace joins. These conventions
+do not create an isolated namespace or access-control boundary.
+
+## Taking Leases
+
+If another refresh is already in progress, this caller can skip rather than wait.
+Attempt acquisition once with `TryLock`:
 
 ```go
-lease, held, err := store.TryLock(ctx, "nightly-report", time.Minute)
+lease, held, err := store.TryLock(ctx, "catalog-refresh", time.Minute)
 if err != nil {
 	return err
 }
 if !held {
-	return nil // another instance is running the report
+	return nil // Another caller holds the lease; skip this refresh.
 }
 defer lease.Unlock(ctx)
-
-return buildReport(ctx)
 ```
 
-The duration is the lease: if you never unlock, for example because the process
-dies, the lock frees itself after a minute. It must be positive, otherwise the
-call fails with `cache.ErrInvalidTTL`, and the name must not be empty, otherwise
-it fails with `cache.ErrEmptyLockName`.
+`lease, true, nil` means acquisition succeeded. `nil, false, nil` means another
+holder owns it. The deferred release is best effort using the work context;
+use the [separate cleanup context](#releasing-leases) below when cancellation
+must not prevent release. The application can now run its rebuildable refresh.
 
-`Lock` waits instead. It polls the cache, with a jittered backoff that grows
-from 10ms to 250ms, until it holds the lock or `ctx` ends, in which case it
-returns the context's error. Bound the wait with a deadline:
+The duration must be positive or acquisition fails with `cache.ErrInvalidTTL`.
+An empty name fails with `cache.ErrEmptyLockName`. If you never unlock, the lease
+expires after one minute. Acquisitions are not reentrant: another acquisition
+with the same name contends even in the same goroutine.
+
+`TryLock` calls the driver once, but the native client's transport policy can
+still retry. A network error can leave acquisition uncertain; do not interpret
+it as proof that the backend stored no lease. Expiry remains the fallback for
+an acquisition whose response was lost.
+
+## Waiting Briefly
+
+If this request needs the refreshed result, `Lock` waits for ownership instead.
+Give the wait its own deadline without replacing the context used for later
+work:
 
 ```go
-ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+waiting, cancel := context.WithTimeout(ctx, 2*time.Second)
 defer cancel()
 
-lease, err := store.Lock(ctx, "nightly-report", time.Minute)
+lease, err := store.Lock(waiting, "catalog-refresh", time.Minute)
+```
+
+`Lock` polls with jittered backoff growing from 10ms to a 250ms cap. The
+two-second wait budget and one-minute lease are independent: the lease lifetime
+begins at acquisition, not when waiting starts. Context deadlines require the
+backend to honor its context.
+
+Handle a failed wait before using the returned lease:
+
+```go
 if errors.Is(err, context.DeadlineExceeded) {
-	return nil // the report is still being built elsewhere
+	return nil // Choose the application's timeout fallback.
 }
 if err != nil {
 	return err
@@ -76,43 +105,20 @@ if err != nil {
 defer lease.Unlock(ctx)
 ```
 
-A deadline error means this caller did not acquire the lease before its wait
-ended; it does not prove that another holder is still building the report.
-The deferred releases above are best effort and use the operation context. If
-cancellation must not prevent release, use a
-[separate cleanup context](#releasing-and-extending) instead.
+A deadline error is not proof that another caller is still refreshing, nor that
+an acquisition command could not have reached the server. Only start work after
+successful acquisition. Use the original `ctx` for work; a canceled wait context
+would also prevent a later release through that context.
 
-Locks are exclusive and not reentrant: a second `Lock` with the same name waits
-even in the same goroutine. Lock names use a `lock:` key prefix, so a cache key
-called `nightly-report` does not touch the lock of the same name. Reserve
-`lock:` for Arkoren: an ordinary entry named `lock:nightly-report` would
-overwrite that lock.
-Also reserve lock names starting with `remember:` for `Remember`; taking one
-yourself can block or interfere with its cache-miss coordination.
-These prefixes are naming conventions in the same backend key space, not an
-isolated namespace or an access-control boundary. `Remember` uses the physical
-name `lock:remember:<completed-key>`. Keep ordinary entry names outside `lock:`
-and application lease names outside `remember:`, including after namespace joins.
+## Releasing Leases
 
-## Releasing and extending
+`Unlock` removes the lease only if its random ownership token still matches.
+It cannot remove a newer holder's token after yours expires. The `Lease` value
+is safe for concurrent use.
 
-To release a lease before it expires, call `Unlock`. It releases the lock only
-while the lease still owns it. Each lease
-carries a random token, and the cache removes the lock only if it still holds
-that token, so a holder whose lease expired can never release the lock of
-whoever took it next. `Unlock` is safe to call more than once; after the first
-successful release or confirmation that the lock is lost, later calls do
-nothing and return nil. A cache failure is returned and leaves `Unlock`
-retryable. If the operation context is already canceled, use a separate,
-bounded cleanup context to attempt release; otherwise expiry is the fallback.
-
-A backend error can leave release uncertain: the server might have removed the
-lease before the reply was lost. A retry can therefore report `cache.ErrLockLost`
-even if the earlier call released it. Neither that error nor a successful release
-proves the protected work did not overlap another holder.
-
-For cleanup that retains request values but ignores request cancellation, choose
-an application cleanup budget explicitly; this example allows one second:
+If request cancellation must not prevent cleanup, use a bounded context that
+retains request values but ignores its cancellation and deadline. After work
+finishes, this example allows a separate one-second release budget:
 
 ```go
 cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
@@ -120,88 +126,76 @@ defer cancel()
 err := lease.Unlock(cleanup)
 ```
 
-Inspect `err` if cleanup failures need reporting. The deadline requires the
-backend to honor its context; it cannot interrupt a noncooperative driver.
-Expiry remains the fallback when release fails.
+Use this release policy instead of the work-context defer above, arranging it on
+every exit path after successful acquisition. Inspect `err` when cleanup failures
+need reporting. A cooperative backend honors the timeout; an arbitrary driver
+cannot be forcibly interrupted. If release fails, expiry is the fallback.
 
-Work that may outlast the lease must renew it before expiry. `Extend` sets the
-lock to expire the given positive duration from now; a non-positive duration
-returns `cache.ErrInvalidTTL`. Here `batches` and `process` are application-owned
-work, and `lease` is the acquired lease:
+If ownership is already lost, `Unlock` returns `cache.ErrLockLost` once and
+leaves another holder untouched. After confirmed release or confirmed loss,
+later calls do nothing and return nil. A backend failure is returned and leaves
+the call retryable with a fresh context.
+
+A lost reply can mean the server released the lease even though `Unlock`
+returned an error. A retry can then report `cache.ErrLockLost`. Neither that
+error nor successful cleanup establishes whether protected work overlapped.
+
+## Extending Leases
+
+Longer work must renew before expiry. `Extend` sets the expiry to a positive
+duration from now; it does not add that duration to the previous deadline.
+For application-owned `batches` and `refresh`, check renewal before each batch:
 
 ```go
 for _, batch := range batches {
 	if err := lease.Extend(ctx, time.Minute); err != nil {
-		return err // the lock is gone: stop
+		return err // Stop: ownership is lost or cannot be confirmed.
 	}
-	process(batch)
+	if err := refresh(ctx, batch); err != nil {
+		return err
+	}
 }
 ```
 
-Both `Unlock` and `Extend` return `cache.ErrLockLost` when the lease no longer
-holds the lock because it expired first (`Unlock` reports it once). Treat it as
-"another process may be working on this too" and stop or make the work
-idempotent. Arkoren does not renew leases in the background for you: a renewal
-that keeps running while the work is stuck would hold the lock forever.
+Each batch must still finish within the available lease time; a renewal before a
+long pause cannot prevent expiry during that pause. `cache.ErrLockLost` means
+the token no longer owns the lease, including after release. Treat it as
+"another caller may also be working". Other backend errors also prevent you
+from confirming renewal. A nonpositive extension returns `cache.ErrInvalidTTL`.
 
-## Cache lock or database lock
+Arkoren does not renew in the background. An independent renewal loop that
+continues while work is stuck could keep coordination occupied indefinitely,
+and no renewal strategy makes lease ownership a resource-level correctness
+guarantee.
 
-| | Cache lock | Database lock |
-| --- | --- | --- |
-| Held by | A key in the cache with an expiry | A database connection or session |
-| Freed when the holder crashes | After the lease expires | When the database detects the connection has closed |
-| Time limit | Yes: the lease, extended with `Extend` | None |
-| Survives a cache or database restart | No: a cache that loses data frees the lock | No: connections drop |
-| Needs | The cache you already run | A supported database driver |
+## Protecting Writes
 
-Use a cache lock to avoid duplicate work where an overlap is harmless or
-detectable: refreshing a cache entry, sending a digest, running a scheduled job
-on one replica. Use a [database lock](../database/raw-sql-and-locks.md#named-locks)
-when two holders at once would corrupt data and you want the lock to last
-exactly as long as the work.
+For a cache destination, an atomic
+[`CompareAndPut`](overview.md#guarded-writes) can reject a write whose observed
+guard has changed. A lease reduces conflicts; the guard protects the write.
+That comparison does not fence a database update or an external API call, and
+restoring identical guard bytes can allow an old update to match again.
 
-> [!WARNING]
-> A cache lock is not a correctness guarantee on its own. A holder that pauses
-> longer than its lease, for example during a long garbage collection or a
-> network stall, can keep working after the lock has passed to someone else, and
-> Arkoren issues no fencing tokens for the protected resource to reject the
-> stale writer. If an overlap would be harmful, protect the resource itself
-> (a database lock, a transaction, or a version check) rather than relying on the
-> lease.
+For database work that needs connection-scoped coordination, consider a
+[database lock](../database/locking.md). Unlike a lease, it has no application
+TTL and releases when its owning connection/session ends or the database detects
+its loss. Choose locking or transaction semantics appropriate to the protected
+resource; a connection lock still does not make arbitrary external effects
+exactly once.
 
-If the protected resource is another cache entry, use
-[`CompareAndPut`](overview.md#writing-only-while-an-observed-value-still-matches)
-to make the observed guard comparison and destination write atomic. The lease
-can reduce conflicts, but it is the guarded write that rejects stale updates.
-It does not fence writes to a database or another external resource.
+`Remember` uses a ten-second lease named `remember:<completed-key>`, stored at
+`lock:remember:<completed-key>`. It neither renews nor guards its final write;
+see [loader and cleanup limits](overview.md#remembering-values).
+[Sessions](../http-capabilities/sessions.md) also use ten-second leases to reduce
+save conflicts, but additionally use guarded writes so an expired lease cannot
+authorize a pending save past successful retirement. Cache loss or restoration
+can still affect that state.
 
-## Where Arkoren uses them
+Locks publish no events; ownership loss is returned to the holder as
+`cache.ErrLockLost`. Acquisition spans include waiting, but `Unlock` and `Extend`
+have no facade spans. [Monitoring](monitoring.md) explains these measurement
+boundaries. For expiry tests, the [memory driver](drivers.md#memory) works with
+[`testing/synctest`](../testing/time.md); custom drivers can run `cachetest.Run`
+through the [conformance suite](../testing/conformance-suites.md).
 
-[`Remember`](overview.md#remembering-a-computed-value) takes a cache lock named
-`remember:<key>` to coordinate concurrent misses, and
-[sessions](../http-capabilities/sessions.md) take one per session ID while saving
-to reduce conflicts between late saves and logout. Both use a ten-second lease.
-`Remember` uses a separate ten-second, cancellation-independent cleanup context
-for release; that is distinct from the lease's own expiry. Its
-[cleanup budget and loader limits](overview.md#remembering-a-computed-value)
-remain subject to backend context cooperation and the overlap limits above.
-Sessions additionally use atomic guarded writes, so an expired lease cannot let
-a pending save bypass successful retirement. Cache loss and restoration still
-affect stored state.
-
-## Events and telemetry
-
-Locks publish no events: losing a lock is reported to its holder as
-`cache.ErrLockLost`. `Lock` and `TryLock` each record one client span, `cache
-lock` and `cache try_lock`, with the usual cache counter and histogram; the span
-of `Lock` includes the time spent waiting. Releasing and extending are not
-traced, and lock names are never recorded.
-
-## Testing
-
-The memory driver implements locks, and `testing/synctest` makes expiry instant,
-so a test can take a lock, advance time past the lease, and check that another
-holder gets in. A driver of your own passes the same behavior by running
-`cachetest.Run`.
-
-For every function and option, see [the `cache` API reference](https://pkg.go.dev/arkoren.dev/core/service/cache).
+For every lease operation and error, see the [`cache` API reference](https://pkg.go.dev/arkoren.dev/core/service/cache).

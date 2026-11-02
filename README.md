@@ -89,7 +89,7 @@ they are not interchangeable backend drivers.
 | [Events](cmd/arkoren/skills/arkoren/references/guides/events/overview.md) | In-process application events; separate from cross-process broadcasting |
 | [Secure links](cmd/arkoren/skills/arkoren/references/guides/http-capabilities/secure-links.md) | Signed links, with storage only when single-use enforcement needs it |
 | [CAPTCHA](cmd/arkoren/skills/arkoren/references/guides/abuse-prevention/captcha.md) | Cloudflare Turnstile and Google reCAPTCHA; application-owned acceptance policy |
-| [Webhooks](cmd/arkoren/skills/arkoren/references/guides/http-capabilities/webhooks.md#provider-adapters) | Receivers for Stripe, PayPal, Resend, Mailgun, Postmark, and OpenAI; explicitly registered handlers |
+| [Webhooks](cmd/arkoren/skills/arkoren/references/guides/webhooks/provider-adapters.md) | Receivers for Stripe, PayPal, Resend, Mailgun, Postmark, and OpenAI; explicitly registered handlers |
 | [MCP](cmd/arkoren/skills/arkoren/references/guides/mcp/tools.md) | Typed application tools, served through the optional official-SDK protocol adapter |
 | [Application lifecycle](cmd/arkoren/skills/arkoren/references/guides/application/lifecycle-and-ownership.md) | Optional startup, supervised work, and cleanup coordination |
 | [Foundation libraries](https://arkoren.dev/docs/api) | Independent, stdlib-only modules for collections, SQL queries, validation, Problem Details, cryptographic keys, and TLS certificates |

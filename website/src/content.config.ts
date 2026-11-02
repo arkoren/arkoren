@@ -26,6 +26,8 @@ const guides = defineCollection({
   schema: z.object({
     title: z.string().trim().min(1),
     description: z.string().trim().min(1),
+    /** Reader outcomes displayed below the lead; omitted while a guide is unreviewed. */
+    summary: z.array(z.string().trim().min(1)).default([]),
     order: z.number(),
     nav: z.string().optional(),
     section: z.string().optional(),

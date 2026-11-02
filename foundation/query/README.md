@@ -365,7 +365,7 @@ go get arkoren.dev/foundation/query
 ## Requirements
 
 Go 1.27 or later. Start with the
-[query guide](../../cmd/arkoren/skills/arkoren/references/guides/database/query-builder.md)
+[query guide](../../cmd/arkoren/skills/arkoren/references/guides/queries/query-builder.md)
 or use the [API reference](https://pkg.go.dev/arkoren.dev/foundation/query)
 for exact declarations.
 

@@ -1,108 +1,81 @@
 ---
 title: Cache Drivers
 nav: Drivers
-description: Compare cache driver capabilities, multi-instance coordination, persistence, and operational requirements.
-order: 30
+description: Choose process-local or shared caching and configure driver connections, ownership, and native access.
+order: 20
+summary:
+  - Compare memory and Redis sharing, atomic operations, expiry, and restart behavior.
+  - Construct a memory store and choose inline or background expiry cleanup.
+  - Configure Redis connections, lifecycle ownership, native clients, and local verification.
 ---
 
 # Cache Drivers
 
-## Introduction
+Choose memory when independent process-local copies are acceptable. Choose Redis
+when replicas must read the same entries, share request allowances, or coordinate
+work. A separate memory driver has separate state even inside the same process;
+it does not become shared by giving its facade the same name.
 
-Choose a driver based on whether cached state must be shared between application
-instances and whether it must survive an application restart. Memory suits
-process-local state; Redis provides a shared backend. See [Cache
-Overview](overview.md) for using the cache, and [Choosing a
-Driver](../drivers/choosing-a-driver.md) for every service's drivers side by
-side.
+Both drivers expose the same [typed cache operations](overview.md). Differences
+in state sharing, capacity, network failures, and persistence still affect your
+application. Install modules from your application's Go module directory. If
+core is not installed yet, run `go get arkoren.dev/core`.
+Examples use `cache` from `arkoren.dev/core/service/cache`, standard-library
+`time`, and an operation context `ctx`. Focused snippets keep error results
+visible but omit routine propagation; handle those errors in your application.
 
-## Compatibility matrix
+## Compatibility Matrix
 
-Compare cache operations, shared state, and restart behavior. An **instance** is a
-running application process; **shared state** means replicas can use the same
-entries, counters, and leases rather than keeping independent copies.
+Atomicity below applies to one operation on the active backend, not exactly-once
+effects across retries. Shared state means callers use the same entries,
+counters, and leases. Restart columns describe state retention, not guaranteed
+availability or durability.
 
-| Driver | Shared state | Expiry | Counters | `Pull` | Guarded writes | [Locks](locks.md) | App restart | Backend restart |
+| Driver | Shared State | Expiry | Counters | Atomic Pull | Guarded Writes | Leases | App Restart | Backend Restart |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| [Memory](#memory) | No | Yes — Typed key and namespace write TTLs apply through the facade. | Yes — Atomic checked int64 arithmetic within one driver instance. | Yes — Atomic within one driver instance, not across replicas. | Yes — Same-key and different-key comparison and write share one mutex. | Yes — Leases coordinate callers sharing one driver instance, not separate processes. | No | No |
-| [Redis](#redis) | Yes | Yes — Positive guarded-write TTLs round up to milliseconds. | Yes — Atomic checked int64 arithmetic; positive counter TTLs round up to milliseconds. | Yes | Yes — One Lua execution checks the guard and writes the destination. | Yes | Yes | Partial — Depends on Redis persistence settings; the driver does not guarantee survival. |
+| [Memory](#memory) | No — Only callers sharing one driver instance coordinate. | Yes | Yes — Checked int64 arithmetic under one mutex. | Yes | Yes — Guard and destination share one mutex. | Yes — Within one driver instance. | No | No |
+| [Redis](#redis) | Yes — Same server, database, and physical names. | Yes | Yes — Exact int64 results; counter TTLs round up to milliseconds. | Yes — Requires Redis 6.2 or later. | Yes — One Lua execution; positive TTLs round up to milliseconds. | Yes — Expiring token-owned entries. | Yes — Application restart does not clear Redis. | Partial — Depends on server persistence and recovery settings. |
 
-Counters, `Pull`, and `CompareAndPut` are atomic operations. Restart columns indicate whether
-cached state survives the restart.
+Typed keys and namespaces are facade definitions, not native storage partitions.
+Their [literal names and expiry policies](keys.md) work with both drivers.
+Neither provider promises retention for entries without expiry. Redis can evict
+or lose data; memory loses all data when its process exits.
 
-All three [counter operations](counters.md) reject mathematical results outside
-`int64` without changing the target value or TTL or creating an absent target.
-This includes `Decrement` with a `math.MinInt64` delta; valid subtraction must
-not fail because negating the delta would overflow. Error identities remain
-backend-native, not a portable overflow sentinel. Atomicity is the operation's
-backend guarantee, not a read-check-write sequence in the facade or a promise
-of exactly-once effects across transport retries.
-
-Typed keys, optional namespaces, literal name joining (default separator `":"`),
-and inherited write TTLs belong to the facade and work with both providers. They
-do not add native namespace support or backend isolation. Preserve deployed
-dot-joined names with `NamespaceBuilder.Separator(".")`; see
-[namespace migration](overview.md#choosing-names-and-separators). The
-raw `cache.Driver` uses opaque string names, raw bytes, and explicit TTLs,
-including `Match` and `Entry` for guarded writes.
-
-- **Memory:** atomic operations and leases apply only within one driver instance.
-  No external infrastructure is required; restarting the process loses its state.
-- **Redis:** shared state assumes the same Redis server, logical database, and
-  keys. Redis 6.2+ and network access are required. An application restart does
-  not clear Redis; entries can still expire, be evicted, or be deleted. Survival
-  across a Redis restart depends on its persistence settings, not the driver.
-
-Choose memory even with several replicas if independent caches are acceptable.
-Choose Redis if those replicas must share entries, enforce a common
-[rate limit](../abuse-prevention/rate-limiting.md), or coordinate through leases.
-A memory-backed rate limit gives each independent cache its own allowance.
-
-Shared state does not guarantee unlimited backend capacity, high availability,
-or Redis Cluster support. The driver wraps a `*redis.Client`; adding application
-replicas does not scale the Redis backend. Leases expire and do not guarantee
-exactly-once work; review the [lock limits](locks.md) before using them to
-coordinate side effects.
-
-## Example setup
-
-Run installation commands from your application's Go module. Examples use
-`cache` from `arkoren.dev/core/service/cache`, `application` from
-`arkoren.dev/core/application`, standard-library `time`, and an operation context
-`ctx`. Composer callbacks use the [application lifecycle](../application/lifecycle-and-ownership.md).
-Focused snippets omit routine error checks, as described in [Cache Overview](overview.md#storing-and-reading-values).
+Both providers reject counter arithmetic outside `int64` without changing the
+target or TTL or creating an absent target. Error identities are backend-native.
+Both support atomic `Pull`, `IncrementWithTTL`, and same-key or different-key
+`CompareAndPut`. A [lease](locks.md) can expire while its holder still works;
+none of these capabilities makes later application side effects exactly once.
 
 ## Memory
 
-The memory driver keeps entries in the process. It is part of `arkoren.dev/core`,
-so there is nothing to install. Choose it for tests, local development, and a
-single process whose cached data does not need to survive a restart or be shared.
+Memory is included in `arkoren.dev/core`; no additional driver module is required.
+Use it for tests, local development, or replaceable data that each process can
+keep independently.
 
-### Connecting
+### Creating Stores
 
-`New` never fails and starts nothing:
+Import the bundled driver and wrap it with the facade:
 
 ```go
 import "arkoren.dev/core/service/cache/memorycache"
 
-store := cache.New(memorycache.New())
+driver := memorycache.New()
+store := cache.New(driver)
 ```
 
-Register `Start` and `Stop` if you want a background janitor, described next:
+Construction cannot fail and starts no goroutines. The store is immediately
+usable; follow the [report write and read](overview.md#reading-values) with it.
+Expired entries are never returned, regardless of whether cleanup has run.
+Raw driver byte inputs and outputs are copied, so callers can mutate their own
+slices without changing stored bytes.
 
-```go
-func Compose(composer *application.Composer) {
-	driver := memorycache.New()
-	composer.Cleanup(driver.Stop)
-	composer.Startup(driver.Start)
-	store := cache.New(driver)
-	_ = store // Pass store to your handlers and services.
-}
-```
+### Expiry Cleanup
 
-### Configuration
-
-The one setting is how often expired entries are swept away:
+The driver has no size limit or capacity-based eviction. Give replaceable values
+a TTL and account for live entries when sizing the process. By default, writes
+sweep abandoned expired entries at most once per minute. To change that interval,
+use an alternative construction:
 
 ```go
 driver := memorycache.New(func(store *memorycache.Builder) {
@@ -110,176 +83,202 @@ driver := memorycache.New(func(store *memorycache.Builder) {
 })
 ```
 
-An expired entry is never returned, whether or not a sweep has run. The sweep
-only frees memory held by entries nobody reads again. Writes sweep inline when
-the last sweep is older than the interval, so abandoned expired entries are
-reclaimed even if you never call `Start`; `Start` adds a goroutine that sweeps on the same interval
-and `Stop` ends it. The default is one minute, zero selects that default, and a negative value turns
-sweeping off, which leaves expired entries in memory until their key is accessed.
+Zero selects the one-minute default. A negative interval disables both inline
+and background sweeping; expired entries are then removed only when accessed.
+Cleanup reclaims memory but does not change expiry correctness.
 
-### Storing values
+If an idle cache must reclaim expired entries without subsequent writes, register
+the optional janitor. With an existing `composer` of type
+`*application.Composer` from `arkoren.dev/core/application`, register ownership
+before startup:
 
-Use the shared [typed write and read example](overview.md#storing-and-reading-values)
-with `store`. A successful write is available immediately within this driver;
-another memory driver has independent state.
+```go
+composer.Cleanup(driver.Stop)
+composer.Startup(driver.Start)
+```
 
-### Behavior and limits
+`Start` runs the janitor at the cleanup interval; `Stop` ends it. Without `Start`,
+there is no janitor to stop. See [Lifecycle and Ownership](../application/lifecycle-and-ownership.md)
+for registration and shutdown ordering.
 
-Values are copied in and out, so mutating a slice you stored or read cannot
-change the cache. There is no size limit and no eviction: the cache grows until
-entries expire, so give everything a TTL. Counters, `Pull`, `CompareAndPut`, and
-[locks](locks.md) are atomic within one driver instance. Nothing is shared between
-processes, so with several replicas each has its own entries, a rate limit
-allows its full count on every replica, and a lock excludes only callers in the
-same driver instance. Two separately constructed memory drivers do not
-coordinate even inside one process.
+### Atomic Updates
 
-Counter lookup, checked arithmetic, and mutation hold the same mutex. Overflow
-wraps `strconv.ErrRange` and leaves the target unchanged, including whether it
-has an expiry. Subtracting `math.MinInt64` is checked directly without negating
-it. This error identity is specific to memory; portable code must not assume it
-for another driver.
+Use the shared [counter](counters.md), [guarded-write](overview.md#guarded-writes),
+and [lease](locks.md) examples with this store. Their atomicity applies only to
+callers sharing this driver instance. Two replicas with independent memory caches
+each receive their own rate-limit allowance and can each acquire the same named
+lease.
+
+Counter overflow wraps `strconv.ErrRange` and leaves the value and expiry
+unchanged. Subtraction supports `math.MinInt64` directly without overflowing
+negation; do not assume memory's overflow error identity for other drivers.
 
 For every function and option, see the [`memorycache` API reference](https://pkg.go.dev/arkoren.dev/core/service/cache/memorycache).
 
 ## Redis
 
-The Redis driver stores entries in a Redis server using `go-redis`. Choose it
-when several processes must share cached entries, session state, or rate-limit
-counters, or when the cache should outlive an application deploy.
-It requires Redis 6.2 or later.
+Redis keeps entries outside the application process. Use it for shared sessions,
+counters, and cached results that should outlive an application deploy. You need
+network access to a Redis 6.2+ server; `Pull` uses `GETDEL`, which requires that
+version. The driver wraps a standalone `*redis.Client`, not a Redis Cluster client.
+Adding application replicas does not increase Redis capacity or configure high
+availability.
 
-### Installation
+### Installing Redis
+
+Install the driver module:
 
 ```sh
 go get arkoren.dev/driver/redis
 ```
 
-### Connecting
+This installs the Go adapter, not the Redis server. For a disposable development
+server, use [Running Locally](#running-locally).
 
-`New` takes construction callbacks, never fails, and does not connect until the first command.
-Set the address of your existing Redis service and wrap the driver:
+### Connecting Stores
+
+Point the driver at your existing service, then construct the facade:
 
 ```go
 import "arkoren.dev/driver/redis/rediscache"
 
 driver := rediscache.New(func(store *rediscache.Builder) {
-	store.Addr("cache:6379")
+	store.Addr("cache.internal:6379")
 })
 store := cache.New(driver)
 ```
 
-Register `Stop` as cleanup, `Start` as startup, and `Ping` as the cache health
-check using [Lifecycle and ownership](../application/lifecycle-and-ownership.md).
-`Start` checks the connection so a misconfigured Redis fails startup; `Stop`
-closes the client. For a server on your host, use `127.0.0.1:6379` instead.
+`New` returns a driver without error or network I/O. Defaults are TCP,
+`localhost:6379`, database `0`, empty ACL credentials, and no TLS. `Network("unix")`
+instead treats `Addr` as a socket path. An empty network or address restores
+its default after callbacks.
 
-### Configuration
+With an existing `*application.Composer` named `composer`, register cleanup and
+startup:
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `Builder.Network` | `tcp` | `tcp` or `unix` |
-| `Builder.Addr` | `localhost:6379` | Server address, or socket path for `unix` |
-| `Builder.Username` | none | ACL user |
-| `Builder.Password` | none | ACL password |
-| `Builder.DB` | `0` | Logical database number |
-| `Builder.TLS` | none | A `*tls.Config`; enables TLS |
+```go
+composer.Cleanup(driver.Stop)
+composer.Startup(driver.Start)
+```
 
-Read the password from your configuration, never from source. The driver's
-diagnostic `Config` redacts its password through `String`, `GoString`, and
-`slog.LogValuer`; its public `Password` field is still the secret. Do not assume
-this record has the owned cache key's protection for every unsupported format
-verb. For settings these builder methods do not
-cover, build and configure a `*redis.Client` yourself and pass it to
-`rediscache.NewFrom`. This conversion has no construction callbacks. Stop closes
-the supplied client too, so arrange one shutdown owner when sharing it. Its native
-TLS settings apply. `driver.Client()` returns the underlying client for commands the
-cache does not offer.
+`Start` pings Redis so connection and authentication failures reject startup.
+Use `driver.Ping` for a later [readiness check](../application/health-and-readiness.md).
+`Stop` closes the client pool, even with a canceled cleanup context; it does not
+wait for application work. Finish cache users before closing their driver.
+The same server, logical database, and physical names let other processes read
+your [typed writes](overview.md#reading-values).
 
-`New` uses go-redis's transport timeout and retry defaults. If you need a
-different budget, configure the native client before `NewFrom`; use bounded
-operation contexts as well. Neither facade construction nor `Builder.Name`
-adds key isolation or a request timeout.
+### Securing Connections
 
-`New` enables the native `ContextTimeoutEnabled` setting so operation deadlines
-apply during socket I/O. `NewFrom` preserves the supplied client's settings:
-enable that option before transfer if request deadlines must bound its socket
-I/O. This is cooperative timeout behavior, not forced interruption of arbitrary
-application callbacks.
-An already-canceled operation context takes precedence over invalid TTL
-validation, including for raw driver calls.
+For an authenticated TLS service, take credentials from application configuration,
+not source code. This alternative constructor assumes an existing password
+named `password` and standard-library `crypto/tls`:
 
-### Storing values
+```go
+driver := rediscache.New(func(store *rediscache.Builder) {
+	store.Addr("cache.internal:6379")
+	store.Username("reports")
+	store.Password(password)
+	store.DB(1)
+	store.TLS(&tls.Config{MinVersion: tls.VersionTLS12})
+})
+```
 
-Use the shared [typed write and read example](overview.md#storing-and-reading-values).
-Processes using the same server and logical database can read the stored value.
-Use [counters](counters.md) for atomic increments and [leases](locks.md) to reduce duplicate work.
-Use [guarded writes](overview.md#writing-only-while-an-observed-value-still-matches)
-when an entry must still match its observed bytes before you replace it or write
-another key. Missing or changed guards reject the write without altering its
-destination. This applies to callers sharing the same backend, not independent
-memory drivers.
+Configure certificate trust for your service; do not disable verification to
+make a connection succeed. Native TLS values remain shared, not deep-cloned.
+The diagnostic `rediscache.Config` is not constructor input. Its `String`,
+`GoString`, and structured logging methods redact the password, but reading its
+`Password` field exposes the secret. Unlike owned cache keys, it does not promise
+redaction for every unsupported format verb.
 
-### Behavior and limits
+### Native Clients
 
-Entries live in Redis, so they are shared by every process that uses the same
-server and database, and they survive an application restart. Whether they
-survive a Redis restart depends on your Redis persistence settings; assume they
-do not. Expiry is measured by Redis. Counters are atomic on the server, and
-`IncrementWithTTL` increments and ensures an expiry in one step, preserving an
-existing expiry. Positive counter TTLs round up to whole milliseconds.
-The returned count remains exact across the full `int64` range; the script
-reads decimal text rather than returning a rounded Lua number. `TTL` reads
-Redis's millisecond `PTTL` reply directly, preserving subsecond lifetimes rather
-than rounding to whole seconds. Zero means no expiry, and a missing or expired
-entry returns `cache.ErrNotFound`. Both `TTL` and counter lifetime reporting
-saturate at the maximum `time.Duration` instead of overflowing. Native Redis
-overflow errors leave the target and its TTL unchanged. For a `math.MinInt64`
-decrement, the driver uses one atomic exact-decimal script because native
-`DECRBY` rejects that argument even for representable results; it does not
-negate the delta in Go or perform a client-side read-check-write sequence.
-This atomic operation lets replicas share rate-limit counters;
-it does not preserve counts if Redis loses or evicts them. `Pull` uses `GETDEL`, the reason for
-the Redis 6.2 minimum. Locks use `SET NX PX` to take a lock and small Lua scripts
-to release or extend it only while it still holds the caller's token, so one
-replica can never release another's lock.
+If you need native timeouts, retry settings, or pool configuration beyond the
+builder, construct the client first. Import `redis` from
+`github.com/redis/go-redis/v9`:
 
-`CompareAndPut` uses one Lua execution for both keys. Positive destination TTLs
-round up to milliseconds without overflowing, and a successful write replaces
-the old TTL. A distinct guard keeps its expiry; a mismatch changes neither
-entry. The adapter disables replay of possibly executed guarded writes even
-when the native client enables retries: a lost response returns an error with
-an uncertain outcome, not a second comparison reported as a mismatch. This is
-atomicity on the active Redis server, not durability across eviction, restart,
-failover, or restoration of earlier data. It does not add Redis Cluster support.
+```go
+client := redis.NewClient(&redis.Options{
+	Addr:                  "cache.internal:6379",
+	ContextTimeoutEnabled: true,
+	ReadTimeout:           2 * time.Second,
+	WriteTimeout:          2 * time.Second,
+	MaxRetries:            -1,
+})
+driver := rediscache.NewFrom(client)
+```
 
-Because Redis is a network service, calls can fail or be slow for reasons that
-do not apply to memory. Memory operations can still fail, for example on a
-canceled context or an invalid TTL. Give Redis operation contexts a deadline. A cache that is
-down needs an explicit fallback policy. `Remember` returns a computed value
-alongside an error only if computation succeeded and storing that value failed.
-A read or lock failure returns before computation, so do not assume every error
-comes with a usable value.
+This variant disables native command retries and transfers ownership of the
+initialized, non-nil client. `NewFrom` has no construction callbacks, makes no
+connection, and preserves client settings. `Stop` closes that exact client;
+do not share it with code that must outlive the driver, and arrange one shutdown
+owner.
 
-### Using native Redis commands
+`New` uses native transport timeout/retry defaults and enables
+`ContextTimeoutEnabled` so operation deadlines apply during socket I/O.
+`NewFrom` does not enable that option for you. Use bounded operation contexts;
+context cooperation does not interrupt arbitrary application loaders or force
+noncooperative drivers to stop. Neither facade construction nor its telemetry
+name adds a request timeout.
 
-For a Redis operation outside the portable cache contract, use the driver's
-`*redis.Client`. This example verifies server connectivity without changing data:
+Ordinary native retry policies can repeat effects after uncertain network
+failures. `CompareAndPut` specifically disables replay of possibly executed
+guarded writes, even if native retries are enabled. A lost reply is an error
+with an unknown outcome, not proof that no write occurred or permission to
+fall back to an unconditional write.
+
+### Native Access
+
+For connectivity diagnostics outside the portable contract, use the underlying
+client without changing stored data:
 
 ```go
 status, err := driver.Client().Ping(ctx).Result()
 ```
 
-On success `status` is `"PONG"`. Native commands bypass facade telemetry and JSON
-encoding. Do not overwrite cache entries or `lock:` keys with incompatible data.
-`NewFrom` accepts an already configured client, including its timeout and retry
-settings; the driver closes that client in `Stop` too.
+On success, `status` is `"PONG"`. The native client shares the driver's owned
+pool. If you only have the facade, `store.DriverAs[*rediscache.Driver]()` returns
+the first matching driver through wrappers that expose `Unwrap() cache.Driver`;
+check its boolean result before use. `store.Driver()` exposes raw portable
+operations with literal names, bytes, and explicit TTLs.
 
-### Running locally
+Native and raw calls bypass facade telemetry, typed-key validation, and JSON
+encoding. Do not overwrite entries with incompatible encodings or write into
+the reserved `lock:` key space. Configure native options before ownership
+transfer, not by mutating a running client's options.
+
+### Storage Limits
+
+An application restart does not clear Redis. Backend restart survival depends
+on Redis persistence and recovery settings; do not assume survival. Expiry,
+eviction, deletion, failover, and restoration can affect both cached values and
+coordination records. Atomicity on the active server is not durable retirement
+of a security record across restored earlier data.
+
+Counter scripts return decimal text to preserve the entire `int64` range.
+`Decrement` with `math.MinInt64` uses one exact-decimal script because native
+`DECRBY` rejects that delta even for representable results. Native overflow errors
+leave the target value and expiry untouched. The adapter does not emulate
+arithmetic with client-side read/check/write calls.
+
+`TTL` reads millisecond `PTTL` directly, retaining subsecond lifetimes. Zero
+means no expiry; missing or expired entries return `cache.ErrNotFound`. Remaining
+lifetimes beyond `time.Duration` saturate at its maximum. Positive
+`IncrementWithTTL` and guarded-write TTLs round up to whole milliseconds without
+overflowing; counter lifetime reporting also saturates.
+
+Guarded writes compare and replace with one Lua execution, including distinct
+guard and destination keys. Leases acquire with `SET NX` and release or extend
+with token-checking scripts. These protect individual cache operations, not
+external side effects. Review [counter retry limits](counters.md#handling-failures)
+and [lease safety](locks.md) before relying on coordination.
+
+### Running Locally
 
 With Docker and Compose installed, save this as `compose.yaml` in a new empty
-development directory, not over an existing application configuration. The unauthenticated service binds only to loopback;
-do not expose it to an untrusted network:
+development directory. Do not overwrite an existing application configuration.
+The unauthenticated service binds only to loopback; never expose it to an
+untrusted network:
 
 ```yaml
 services:
@@ -289,17 +288,17 @@ services:
       - "127.0.0.1:6379:6379"
 ```
 
+Start it and verify connectivity:
+
 ```sh
 docker compose up -d
 docker compose exec cache redis-cli ping
 ```
 
-The check prints `PONG`. Use `rediscache.New()` for `localhost:6379`, or change
-the earlier `Addr` to `"127.0.0.1:6379"`. Start the driver, then write and read
-a value using the shared task above. If the service is still starting, retry
-the check before starting your application. Run `docker compose down` when
-finished; this disposable configuration does not preserve cache data.
+The check prints `PONG`; retry it if Redis is still starting. Use
+`rediscache.New()` for the default local address, start the driver, and follow
+the [write and read example](overview.md#reading-values). When finished, run
+`docker compose down`. This disposable configuration does not preserve cache
+data.
 
-For every function and builder setting, see [the `cache` API reference](https://pkg.go.dev/arkoren.dev/core/service/cache),
-[`memorycache`](https://pkg.go.dev/arkoren.dev/core/service/cache/memorycache), and
-[`rediscache`](https://pkg.go.dev/arkoren.dev/driver/redis/rediscache).
+For every function and setting, see the [`rediscache` API reference](https://pkg.go.dev/arkoren.dev/driver/redis/rediscache).

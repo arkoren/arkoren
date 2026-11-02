@@ -1,132 +1,107 @@
 ---
-title: Application Lifecycle and Ownership
-nav: Lifecycle and Ownership
-description: Order startup, supervise background work, and release each owned resource on failure or shutdown.
-order: 20
+title: Lifecycle and Ownership
+description: Start dependencies in order, supervise running work, and release resources after failures or shutdown.
+order: 30
+summary:
+  - Register releases immediately and preserve reverse-registration rollback regardless of startup progress.
+  - Supervise cooperative runners and register resources acquired during startup safely.
+  - Budget runner waiting, resource cleanup, and telemetry finalization as separate shutdown phases.
+  - Separate host-controlled lifecycle calls from outcome observers that cannot change success.
 ---
 
-# Application Lifecycle and Ownership
+# Lifecycle and Ownership
 
-Start the database before binding the HTTP listener, then stop the server before
-closing the database. That order keeps requests from using a dependency that is
-not ready or has already closed. Use application `Run` for an ordinary service:
-it composes, starts, waits, and shuts down as shown in the
-[overview](overview.md#start-dependencies-before-serving-requests).
+Your HTTP server must not accept requests before its database is usable or keep
+using that database after it closes. The application coordinates this order, but
+your composition code chooses the owner of every resource. Start from the
+[typed dependencies](composition.md) you have constructed; register each release
+where ownership begins, not where startup happens to succeed.
 
-## Register releases when ownership begins
+## Register Resource Ownership
 
-The overview establishes startup and reverse cleanup order. The important failure
-boundary is when cleanup becomes active: register it immediately after acquiring
-each resource, before later construction can fail.
+Assume `connection` is an unstarted root `*postgresdatabase.Driver` from
+`arkoren.dev/driver/postgres/postgresdatabase`, and `listener` is an unstarted
+`*server.Server` from `arkoren.dev/core/http/server` whose handlers use that
+database. This application is their only lifecycle owner. In composition,
+register the database first and the server second:
 
-Cleanup is active immediately, independent of startup progress. If construction
-of the server fails after the database's cleanup was registered, the database
-is still released even though its startup never ran. Every registered release
-runs once in reverse order on failure or shutdown. A release must tolerate a
-never-started or partially started component; cleanup is not paired with
-successful startup hooks.
+```go
+composer.Cleanup(connection.Stop)
+composer.Startup(connection.Start)
 
-Use `Cleanup` for a context-aware release that can fail, or `Defer` for an
-infallible `func()` such as unsubscribing or canceling. `MustDefer` also handles
-registration returning `(func(), error)` during composition. All three register
-on this same stack; see [subscription ownership](composition.md#own-subscriptions-and-infallible-releases).
+composer.Cleanup(listener.Stop)
+composer.Startup(listener.Start)
+composer.Run(listener.Serve)
+```
 
-Keep one acquiring owner per resource. Consumers borrow the driver or facade;
-receiving a value does not transfer ownership or require another cleanup.
-If a dependency-injection container also manages lifecycle, choose it or the
-application as owner, not both. Follow each
-[driver's ownership contract](../drivers/choosing-a-driver.md): some constructors
-connect immediately, and a wrapper around a native connection does not always
-borrow it.
+All composition finishes before startup. The database verifies connectivity,
+then the server binds its listener; serving launches only after both startup
+callbacks succeed. Cleanup reverses its own registration order: the server
+stops before the database. Consumers borrow the facade or driver and register
+no second cleanup. A facade constructor does not register driver lifecycle.
 
-## Supervise running work
+Cleanup becomes active immediately, independently of startup progress. If a later
+constructor fails, both registered releases still run even though neither startup
+ran. If database startup fails, server cleanup still runs before database cleanup.
+Every release must therefore tolerate a never-started or partially started
+component. Cleanup is not paired positionally with startup hooks.
 
-Register a server's `Serve` or a consumer's `Run` with `composer.Run` rather than
-launching an unmanaged goroutine. Each runner starts on its own goroutine after
-startup and must return when its supplied context ends. Handle transient failures
-inside the runner if they should not stop the service.
+Use `Cleanup` for `func(context.Context) error` and `Defer` for an infallible
+`func()`. Both share the same once-only cleanup stack. Composition's
+[`MustDefer`](composition.md#own-subscriptions) combines acquisition with owning
+an infallible release. Unlike Go's `defer`, these registrations survive the
+composition function's return.
 
-Composition and startup receive the startup context's values, deadline, and
-cancellation. Runner contexts retain those values but detach the startup
-deadline and cancellation; shutdown or a runner failure cancels them. Do not
-capture `composer.Context()` for running work.
+Follow the resource's [driver ownership contract](../drivers/choosing-a-driver.md),
+especially when wrapping a native client: a wrapper does not necessarily borrow
+it. If a container also manages lifecycle, choose it or the application as owner,
+not both. Configured application telemetry already has an owner; do not register
+another start or stop for its handle.
 
-Composition and startup callbacks execute synchronously. Their context deadlines
-request cancellation; they cannot interrupt construction or startup code that
-ignores its context.
+## Supervise Running Work
 
-An unexpected non-nil runner error or panic records the first failure and cancels
-sibling runners. Results returned after cancellation count as normal stops.
-A nil return does not cancel siblings: application `Run` still waits for the
-whole group, including the background health loop when checks exist. With no
-runners or checks, the application waits for caller cancellation or shutdown.
+Use application `Run` for an ordinary service. With your service-lifetime context
+`ctx` and existing composition callback `compose`, import
+`arkoren.dev/core/application`:
 
-## Handle failures and allow time for shutdown
+```go
+app := application.New()
+err := app.Run(ctx, compose)
+```
 
-Application `Run` returns startup failures after rollback, or joins runner and
-shutdown failures after a successful start. Classify returned errors with
-`errors.Is` or `errors.As` so added cleanup errors do not hide the original cause.
-Caller cancellation alone after successful startup is a normal stop.
+`Run` composes, starts, waits for the runner group or caller cancellation, then
+shuts down. Handle `err` at the executable boundary. Caller cancellation alone
+after successful startup is a normal stop; startup, runner, and shutdown failures
+are returned.
 
-The application logs composition, startup, runner, and shutdown failures itself.
-Rollback includes cleanup failures in its failure record; normal shutdown reports
-cleanup failures and runner-wait timeouts before telemetry finalization. Use the
-returned error for exit status or recovery rather than logging it again after
-`Run`: telemetry has already stopped. Failures before telemetry starts reach the
-configured log handler only. Telemetry finalization failures also go directly to
-that handler because the failed exporter cannot reliably report its own failure.
+Each `composer.Run` callback launches on its own goroutine after startup. Use it
+for serving or a consumer loop instead of launching unmanaged goroutines. The
+runner must return when its supplied context ends. Handle transient errors inside
+the runner when they should not stop the service.
 
-If composition fails through `Must`, `MustDefer`, or `Require`, later composition and all
-startup work are skipped. If startup returns an error or detects cancellation,
-later startup callbacks are skipped and no runners launch. Both paths release
-all registered resources. Return ordinary errors from startup, runners, and
-cleanup; the composition-only error helpers are explained in
-[Composition](composition.md).
+An unexpected nonnil runner error or panic records the first failure and cancels
+siblings. Results returned after cancellation count as normal stops. A nil return
+does not cancel siblings: application `Run` waits for the entire group, including
+the background health loop when checks exist. With no runners or checks, it waits
+for caller cancellation or shutdown.
 
-Startup, runner, and cleanup panics become errors with stack traces. An unrelated
-composition panic remains a programmer failure: the application attempts cleanup
-and telemetry finalization, then re-panics with the exact original value.
-Secondary cleanup errors do not replace that panic.
+Composition and startup share the startup context's values, deadline, and
+cancellation. Runner contexts preserve values but detach that deadline and
+cancellation; shutdown or runner failure cancels them. Do not capture
+`composer.Context()` for running work. Synchronous composition and startup must
+also cooperate with cancellation: a deadline cannot interrupt their code.
 
-On shutdown, liveness and readiness become unavailable immediately. The
-application cancels runners and waits for them within the supplied shutdown
-budget, then runs cleanup even if waiting timed out. Every release is attempted
-even after another fails, panics, or exhausts the shared cleanup context. Errors
-are joined, and configured telemetry finalizes last, after the final lifecycle
-log and event.
+## Acquire During Startup
 
-> [!WARNING]
-> Cancellation cannot forcibly stop callback code. If a runner ignores its
-> context, cleanup can overlap that runner after the waiting timeout. Make
-> runners cooperate and release methods safe for this possibility. A cleanup
-> callback that ignores its context can also block shutdown.
+Some resources cannot be acquired until earlier dependencies have started.
+`Cleanup` and `Defer` may register releases synchronously inside an executing
+startup callback. Register the release immediately after successful acquisition,
+before further initialization can fail.
 
-Application `Run` uses a 30-second shutdown budget by default.
-[`Builder.ShutdownTimeout`](https://pkg.go.dev/arkoren.dev/core/application#Builder.ShutdownTimeout)
-changes it; zero or negative selects the default. Cleanup receives a context
-detached from caller cancellation, preserving values, with the remaining caller
-budget but **at least ten seconds**. If runner waiting exhausts the budget,
-cleanup still gets a fresh ten seconds. Telemetry finalization independently
-gets the remaining caller budget but at least a fresh ten seconds. Rollback uses
-the same minimum budgets. These are cooperative budgets, not hard wall-clock
-limits; allow for the extra time in your platform's
-[shutdown grace period](../first-steps/deploying.md#graceful-shutdown).
-
-## Acquire during startup only when required
-
-If a resource can only be acquired during startup, register its release
-immediately after successful acquisition, before any further initialization.
-This also works with ordinary application `Run`: cleanup registration through
-`Cleanup` or `Defer` is allowed inside an executing startup callback and remains active
-if that callback later fails. Return acquisition errors normally rather than
-through `Must`, `MustDefer`, or `Require`. Keep registration synchronous and do not retain the
-composer after the callback returns. See
-[`Composer.Cleanup`](https://pkg.go.dev/arkoren.dev/core/application#Composer.Cleanup)
-for the registration contract.
-
-For example, assume your application-owned `subscribe(ctx)` uses the context for
-acquisition and returns a nonnil `func()` release on success. `initialize(ctx)`
-performs the remaining startup work. Register the release before that later step:
+For example, your application-owned
+`subscribe func(context.Context) (func(), error)` acquires a subscription and
+returns a nonnil release on success. Its implementation cleans up partial results
+on failure. `initialize func(context.Context) error` performs the remaining setup:
 
 ```go
 composer.Startup(func(ctx context.Context) error {
@@ -140,74 +115,142 @@ composer.Startup(func(ctx context.Context) error {
 })
 ```
 
-If initialization fails, rollback still releases the subscription. Use `Cleanup`
-instead when the release takes a context or can fail. An executing startup
-callback cannot add `Startup`, `Run`, or `Check` registrations; register those
-during composition, before startup begins.
+If initialization fails, rollback still releases the subscription. The new release
+joins the stack at the time of acquisition: it runs before releases registered
+earlier during composition, regardless of startup-hook position. Use `Cleanup`
+instead if release takes a context or can fail.
 
-## Separate phases only when another owner needs control
+Return ordinary startup errors. `Must`, `MustDefer`, `Require`, and child
+composition remain composition-only. A startup callback cannot add startup hooks,
+runners, checks, or diagnostic tools. Do not retain the composer or register from
+spawned goroutines; permission lasts only for the executing callback.
 
-Use [`Start`, `Wait`, and `Shutdown`](https://pkg.go.dev/arkoren.dev/core/application#Application.Start)
-separately when startup needs its own deadline or a host controls service
-lifetime. Each application starts only once. A failed `Start` already rolls
-back; a successful `Start` requires eventual `Shutdown`, even after runner
-failure. Canceling the successful startup context does not stop runners.
+## Handle Failed Startup
 
-`Wait` reports the first runner failure, not its waiting context's error. It can
-return nil when its context ends while runners remain active. Give `Shutdown` a
-live, bounded context rather than the context that just ended. Do not call it
-synchronously from composition, startup, a runner, or cleanup: it can wait on its
-own caller. The
+A construction failure through `Must`, `MustDefer`, or `Require` skips all later
+composition and startup. A startup error or detected cancellation skips later
+startup callbacks and launches no runners. Both paths release every registered
+resource and finalize telemetry before returning. A failed application cannot
+start again; create a new application for another attempt.
+
+Startup, runner, and cleanup panics become errors with stack traces. An unrelated
+composition panic remains a programmer failure: cleanup and telemetry finalization
+are attempted, then the exact original value is re-panicked. Secondary cleanup
+errors do not replace it.
+
+Use `errors.Is` and `errors.As` on returned errors because cleanup and telemetry
+failures can be joined with the original cause. The application already logs
+lifecycle failures before telemetry finalization. Rollback logs the original cause
+with cleanup errors; normal shutdown logs cleanup errors and runner-wait timeouts.
+Use the returned error for exit status or recovery rather than duplicate logging
+after `Run`, when telemetry has stopped. Failures before telemetry starts reach
+the configured log handler only; telemetry-finalization failures go directly to
+that handler rather than through the failed exporter.
+
+## Budget Shutdown
+
+Shutdown immediately makes liveness and readiness unavailable. It emits `Stopping`,
+cancels runners, and waits within the shutdown context's budget before cleanup.
+Every release is attempted even after another fails, panics, or exhausts the shared
+cleanup context. Errors are joined; telemetry finalizes last, after the final
+lifecycle log and event.
+
+> [!WARNING]
+> Cancellation does not forcibly stop callback code. If a runner ignores its
+> context, cleanup can overlap that runner after the wait times out. Make runners
+> cooperate and releases safe for that possibility. Cleanup or telemetry callbacks
+> that ignore cancellation can also prevent shutdown from returning.
+
+Application `Run` uses a 30-second shutdown budget by default. If your drain needs
+more time, configure it when constructing the application (`time` is the standard
+library package):
+
+```go
+app := application.New(func(app *application.Builder) {
+	app.ShutdownTimeout(45 * time.Second)
+})
+```
+
+Zero or negative selects the default. This is not a hard total-duration limit.
+Cleanup receives a context detached from caller cancellation but preserving
+values, with the remaining caller budget and a minimum of ten seconds. If runner
+waiting exhausts the budget, cleanup still gets a fresh ten seconds. Telemetry
+finalization independently receives the remaining caller budget with at least
+a fresh ten seconds. Rollback uses the same minimum budgets. Account for these
+extra phases in your platform's
+[shutdown budget](../first-steps/deploying.md#shutdown-budgets).
+
+## Separate Host Control
+
+Use `Start`, `Wait`, and `Shutdown` separately only when another host owns service
+lifetime or startup needs a separate deadline. `Start` runs once. A failed `Start`
+already rolls back; successful startup always requires eventual `Shutdown`, even
+after runner failure. Canceling the successful startup context does not stop
+runners.
+
+`Wait` returns the first runner failure, not its waiting context's error. It can
+return nil when that context ends while runners remain active. Give `Shutdown`
+a live, bounded context, not the context that just ended. Concurrent shutdown
+callers wait for the single cleanup pass and receive its result unless their own
+waiting context ends. During startup, shutdown cancels startup and waits for its
+owner to roll back; timing out that wait does not take rollback ownership away.
+Shutdown after failed startup returns nil because rollback is already complete.
+
+Do not call `Shutdown` synchronously from composition, startup, a runner, or
+cleanup: it can wait on its own caller. See the
 [`Shutdown` contract](https://pkg.go.dev/arkoren.dev/core/application#Application.Shutdown)
-details concurrent calls and rollback ownership when shutdown interrupts startup.
+for exact concurrent-call behavior.
 
-## Observe outcomes without controlling them
+## Observe Outcomes
 
-Use lifecycle callbacks when a failure must affect startup or shutdown. For
-optional observation, bind `events := composer.App().Events()` at the top of
-composition and listen on that handle for `Starting`,
-`Started`, `Stopping`, `Stopped`, or `Failed`. Listener errors are logged without
-changing the lifecycle result. `Starting` runs after composition and telemetry
-startup, before user startup callbacks. Register listeners during composition;
-their application logger records reach configured telemetry or local capture. If
-composition or telemetry initialization fails, `Failed` can occur without
-`Starting`. The application emits no built-in `app starting` log.
-`Started` means startup completed, not that the
-first health pass succeeded; see [health-transition behavior](health-and-readiness.md#inspect-readiness-before-running-fresh-checks)
-and the [event bus guide](../events/overview.md).
+Use lifecycle callbacks when failure must affect startup or shutdown. Use event
+listeners for observation: listener errors and panics are logged without changing
+the lifecycle result. Obtain `events := composer.App().Events()` at the top of
+composition when registering observers there, and pass the specific handle to
+other components rather than passing the application.
 
-`Stopping` runs before runner cancellation and cleanup. `Stopped` runs after
-runner waiting and cleanup, but before telemetry finalization: its listeners see
-`StateStopping` and can still write final telemetry. Only after finalization does
-the application publish `StateStopped`. A `Stopped` notification does not imply
-that cleanup succeeded; inspect the returned shutdown error.
+`Starting` follows successful composition and telemetry startup, before user
+startup hooks. Listeners registered during composition can log through active
+telemetry then. Composition or telemetry startup failures can emit `Failed`
+without `Starting`; there is no built-in `app starting` log. `Started` means
+runners have launched, not that the first health pass succeeded.
+
+`Stopping` precedes runner cancellation and cleanup. `Stopped` follows waiting
+and cleanup but precedes telemetry finalization; its listeners see `StateStopping`
+and can write final telemetry. Only after finalization is `StateStopped` published.
+`Stopped` does not mean cleanup succeeded: inspect the returned error.
+`Failed` carries the original startup or runner cause, not added cleanup or
+telemetry errors.
 
 Keep a subscription needed for `Stopped` or rollback `Failed` outside the
-application's cleanup stack, since cleanup runs before those events. For example,
-in the function that calls `Run`, with `ctx`, `app`, and your composition callback
-`compose` already available (`event` is `arkoren.dev/core/event`):
+application cleanup stack. In the function calling `Run`, assume `app`, `ctx`,
+and `compose` already exist. Import `event` from `arkoren.dev/core/event`:
 
 ```go
 logger := app.Logger()
 
 unsubscribe, err := app.Events().Listen(application.Stopped, func(ctx context.Context, _ event.Void) error {
-	logger.InfoContext(ctx, "shutdown cleanup finished")
+	logger.InfoContext(ctx, "inventory cleanup completed")
 
 	return nil
 })
+if err != nil {
+	return err
+}
 defer unsubscribe()
+```
 
+Now run the application in that same function:
+
+```go
 err = app.Run(ctx, compose)
 ```
 
-The enclosing function handles or returns `err`; its deferred unsubscribe runs
-after `Run`, not during application cleanup. Listener callbacks are synchronous
-and must return; error isolation does not let the application interrupt a blocked
-listener.
+Handle or return `err`; the deferred unsubscribe runs after `Run`, not during
+application cleanup. Listeners are synchronous and must return: error isolation
+cannot interrupt a blocked observer. Health events have a separate
+[background-transition contract](health-and-readiness.md#observe-transitions);
+see the [event bus guide](../events/overview.md) for listener behavior.
 
-For lifecycle settings and exact runtime contracts, see the
+For lifecycle settings and runtime methods, see the
 [`application` API reference](https://pkg.go.dev/arkoren.dev/core/application).
-
-As wiring grows, keep each resource's construction and cleanup registration
-together. [Composition](composition.md) shows how to extract that code into
-typed factories and pass their results to consumers without splitting ownership.

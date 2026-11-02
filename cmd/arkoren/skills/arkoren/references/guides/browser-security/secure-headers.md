@@ -1,113 +1,126 @@
 ---
 title: Secure Headers
-description: Set response headers that block framing and content sniffing, then deliberately enable persistent HTTPS policy for your deployment.
+description: Set browser response policies for framing, content handling, resource loading, and deliberate HTTPS persistence.
 order: 20
+summary:
+  - Apply framing, content-sniffing, and referrer defaults before registering routes.
+  - Tailor resource and capability restrictions to the pages you serve.
+  - Enable persistent HTTPS policy only after checking host coverage and proxy behavior.
+  - Omit proxy-owned headers without assuming omission removes existing values.
 ---
 
 # Secure Headers
 
-## Introduction
+An account page should not become an invisible control inside another site's
+frame. Security response headers tell browsers whether they may embed your
+pages, how to interpret content, and which resources a page may load. The
+`secureheaders` middleware supplies a shared baseline; it does not authenticate
+requests or reject forged actions.
 
-To control whether another site can frame your pages and how browsers handle
-your responses, set HTTP security response headers. The `secureheaders`
-middleware supplies defaults for framing, content-type guessing, and referrer
-disclosure. Persistent HTTPS policy is opt-in.
+## Set Defaults
 
-Start with those defaults on your router. If you serve HTML, also tailor the
-Content Security Policy to your scripts, styles, and other resources: the
-default policy forbids framing but does not restrict resource loading.
-
-## Usage
-
-Import `arkoren.dev/core/http/middleware/secureheaders`. On an existing
-[router](../http-fundamentals/routing.md) `r`, install the defaults before routes:
+On a fresh [router](../http-fundamentals/routing.md) named `routes`, import
+`arkoren.dev/core/http/middleware/secureheaders` and register the policy before
+routes:
 
 ```go
-r.Use(secureheaders.Middleware())
+routes.Use(secureheaders.Middleware())
 ```
 
-The defaults are:
+At router scope, requests that reach this layer receive the configured headers,
+including unmatched requests. A policy outside this layer can reject requests
+before the headers are set; choose [middleware order](../http-fundamentals/middleware.md#order-policies)
+accordingly.
 
-- `X-Content-Type-Options: nosniff`, so browsers trust your `Content-Type`
-  instead of guessing;
-- `X-Frame-Options: DENY` and a `Content-Security-Policy` of
-  `frame-ancestors 'none'`, so no site can frame your pages;
-- `Referrer-Policy: strict-origin-when-cross-origin`, so full URLs are not
-  leaked to other sites;
-- `X-XSS-Protection: 0`, which turns off an outdated browser filter that
-  caused more problems than it solved.
+The baseline sets:
 
-`Strict-Transport-Security` (HSTS) is omitted by default, even on HTTPS.
-Applications must deliberately enable it after establishing their deployment's
-HTTPS policy.
+- `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`,
+  forbidding other pages, including your own, from framing the response;
+- `X-Content-Type-Options: nosniff`, disabling content-type guessing rather than
+  fixing an incorrect [response content type](../http-fundamentals/responses.md);
+- `Referrer-Policy: strict-origin-when-cross-origin`, retaining the full referrer
+  for same-origin requests, sending only the origin across origins, and omitting
+  it on HTTPS-to-HTTP downgrades;
+- `X-XSS-Protection: 0`, disabling the legacy browser XSS auditor.
 
-## Enabling persistent HTTPS policy
+HSTS and Permissions Policy are omitted. In particular, HTTPS alone does not
+enable HSTS. The default Content Security Policy forbids framing but does not
+restrict scripts, styles, or images.
 
-HSTS tells browsers to use HTTPS for subsequent requests to your host for the
-configured `max-age` in seconds. Enable it only when the host can remain
-available over HTTPS for that period. For an existing router `r`, replace the
-default middleware registration with a deliberately chosen policy:
+## Restrict Resources
+
+If your portal serves scripts, styles, and images from its own origin, restrict
+resource loading explicitly. Replace the baseline registration with this
+application-specific policy:
 
 ```go
-r.Use(secureheaders.Middleware(func(headers *secureheaders.Builder) {
+routes.Use(secureheaders.Middleware(func(headers *secureheaders.Builder) {
+	headers.ContentSecurityPolicy("default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+	headers.PermissionsPolicy("camera=(), microphone=(), geolocation=()")
+}))
+```
+
+The browser limits resources to the page's origin, disables object embeds, and
+restricts base URLs. Inline scripts/styles and third-party resources need their
+own deliberate policy; test your actual pages before deploying this example.
+Permissions Policy separately disables the named browser capabilities.
+
+`ContentSecurityPolicy` replaces the whole default string. Keep
+`frame-ancestors 'none'` if framing must remain forbidden. If your own pages
+must frame one another, use `frame-ancestors 'self'` and set
+`headers.FrameOptions("SAMEORIGIN")` in the same construction callback so the
+two framing policies agree. A resource policy reduces exposure; it does not
+replace safe HTML rendering or output escaping.
+
+## Enable HSTS
+
+HTTP Strict Transport Security (**HSTS**) tells a browser to remember that a host
+must use HTTPS for subsequent requests. Before enabling it, establish
+[HTTPS service](../http-networking/server.md) and ensure the host can remain
+available over HTTPS for the entire selected duration. HSTS neither configures
+TLS nor redirects an initial HTTP visit.
+
+For a host ready to commit to one day, use this alternative registration. If you
+also need the resource policy above, keep those settings in the same callback:
+
+```go
+routes.Use(secureheaders.Middleware(func(headers *secureheaders.Builder) {
 	headers.StrictTransportSecurity("max-age=86400")
 }))
 ```
 
-This policy tells browsers to use HTTPS for one day. It does not redirect HTTP
-requests or configure TLS.
+The middleware sends this value when `request.TLS` is nonnil or
+`X-Forwarded-Proto` is exactly `https`; otherwise it omits HSTS. Forwarded
+protocol detection has no proxy allowlist. A TLS-terminating proxy must overwrite
+client-supplied forwarding headers with the real external protocol. Browsers
+ignore HSTS received over plain HTTP; the forwarding header does not turn an
+HTTP connection into HTTPS.
 
 > [!WARNING]
-> Add `includeSubDomains` only when every subdomain serves HTTPS; otherwise,
-> those subdomains become unreachable to browsers that remember the policy.
-> Add `preload` only after reviewing the [browser preload requirements and
-> removal process](https://hstspreload.org/). Preloading is a separate commitment,
-> not a routine middleware default.
+> Add `includeSubDomains` only if every subdomain can serve HTTPS for the policy
+> lifetime, or remembered policy can make those subdomains unreachable. Add
+> `preload` only after reviewing the [preload requirements and removal process](https://hstspreload.org/);
+> it is a separate deployment commitment.
 
-`Strict-Transport-Security` is only sent on HTTPS requests, including requests
-that reached a proxy over HTTPS, when `X-Forwarded-Proto` is exactly `https`.
-The middleware trusts that header without a proxy allowlist. Configure your
-TLS-terminating proxy to overwrite it with the actual client protocol; do not
-trust arbitrary client-supplied forwarding headers.
+If you relied on the previous automatic two-year policy, preserve it explicitly
+with `headers.StrictTransportSecurity("max-age=63072000")`. The current default
+omits it. Omitting HSTS, or configuring an empty string, does not clear a policy
+already remembered by browsers.
 
-### Migrating from the previous default
+## Delegate Headers
 
-Previously, `Middleware()` sent `max-age=63072000` on HTTPS without configuration.
-It now omits HSTS. If your deployment intentionally relies on that two-year
-policy, preserve it explicitly with
-`headers.StrictTransportSecurity("max-age=63072000")` in the construction
-callback. Existing explicit policies are unchanged. Omitting the header or
-setting it to `""` does not clear policy already cached by browsers.
-
-## A content security policy
-
-The default policy only forbids framing. An application that serves HTML
-should extend it to say where scripts, styles, and images may come from, which
-helps reduce cross-site scripting risk. Replace the earlier middleware with a
-policy that matches your resources:
+If your ingress owns a particular response header, omit that header from this
+middleware rather than maintaining two policies. For an ingress-owned referrer
+policy, use this alternative configuration:
 
 ```go
-r.Use(secureheaders.Middleware(func(headers *secureheaders.Builder) {
-	headers.ContentSecurityPolicy("default-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
+routes.Use(secureheaders.Middleware(func(headers *secureheaders.Builder) {
+	headers.ReferrerPolicy("")
 }))
 ```
 
-Keep `frame-ancestors` in the policy consistent with `X-Frame-Options`: to
-allow framing by your own pages, set both, to `'self'` and `SAMEORIGIN`.
+An explicit empty setting stays omitted; other settings retain their defaults.
+Omission does not remove a header another handler or proxy sets. Review the
+final response at the browser-facing edge, not only the application response.
 
-If the page must also disable browser capabilities, add
-`headers.PermissionsPolicy("camera=(), microphone=(), geolocation=()")` to that
-callback. Permissions Policy controls those capabilities separately from resource
-loading.
-
-## Leaving a header out
-
-Pass an empty string to a builder setting to omit that header, for example when a
-proxy in front of the service already sets it.
-
-> [!NOTE]
-> Construction starts with the recommended defaults. Setting a header to `""`
-> omits it from this middleware; settings you do not change retain their defaults.
-> This does not remove a header set by another handler or proxy.
-
-For every setting, see the [`secureheaders` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/secureheaders).
+For all header settings, see the [`secureheaders` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/secureheaders).

@@ -1,89 +1,108 @@
 ---
 title: Choosing a Driver
-description: Which driver to pick for each service, from the in-process drivers for development to the vendor drivers for production.
+description: Compare backend requirements, find available providers, and follow the setup guide for your service.
 order: 10
+summary:
+  - Choose a backend from state scope, operational requirements, and portable capability limits.
+  - Find available service drivers and follow their canonical provider setup guides.
+  - Distinguish protocol adapters and driver-free features from service backends.
 ---
 
 # Choosing a Driver
 
-## Introduction
+A driver connects a service facade to its backend. Choose it from the behavior
+your application needs, not only from whether it implements the interface.
+[Facades and Drivers](../core-concepts/facades-and-drivers.md) explains which
+responsibilities stay portable and which belong to the backend.
 
-When you deploy to several replicas or need state to survive a restart, the
-backend matters even though your application calls stay the same. Arkoren's
-service contracts let you replace a driver without rewriting those calls.
-Many services provide an in-process driver for development; others, such as
-the database and language-model services, need a vendor driver from the start.
-[Facades and drivers](../core-concepts/facades-and-drivers.md) explains that
-separation.
+## State Scope
 
-When you choose, consider three things. First, **what you already run**: if
-your team operates PostgreSQL and Redis, their drivers reuse those backends.
-Second, **whether the data must persist or be shared**: in-process drivers keep
-state in one process and lose it on restart. A durable backend can preserve it;
-local SQLite or filesystem storage can serve one host, while multiple replicas
-need a backend they can all reach. Third, **delivery and capability limits**:
-memory and Redis both support atomic counters, but only Redis shares them
-across processes; engine-backed schedulers persist timers across restarts.
-Some operations return `ErrUnsupported` on particular drivers, so check the
-linked driver guide before relying on one.
+Start with where state must live. A memory cache is useful for isolated tests or
+disposable data in one process. It cannot share a receipt between two API
+replicas: each replica has its own cache. A shared Redis cache gives both replicas
+access to the same keys, but persistence and failover durability still depend on
+Redis configuration. Sharing state is not the same as preserving it indefinitely.
 
-## Drivers by service
+Local SQLite and filesystem storage can suit a single-host deployment. They do
+not become shared services merely because several application replicas use the
+same driver type. Choose a backend all relevant replicas can reach when they
+must observe the same records, objects, counters, or work.
 
-Hatchet is pending and unpublished, not an installable driver. Its
-[workflow notes](../workflows/drivers.md#hatchet) and
-[scheduler notes](../scheduled-tasks/drivers.md#hatchet) remain as development
-context; the catalog below lists available choices.
+## Backend Requirements
+
+Reuse a service your team can operate when it meets the contract you need. Then
+check the linked provider guide for credentials, permissions, supported server
+versions, resource provisioning, and startup requirements. A driver constructor
+is not proof of connectivity or permission to perform an operation.
+
+Compare the service's compatibility matrix before committing to a provider.
+An interface method can return `ErrUnsupported`; vendor-native capabilities do
+not automatically become portable operations. For example, a durable scheduler
+can preserve timers and coordinate their delivery without guaranteeing
+exactly-once application side effects. Keep handlers idempotent where repeated
+delivery or an uncertain external result could duplicate work.
+
+## Service Drivers
+
+These are the available choices and their main prerequisites. Each Docs link
+opens the canonical provider setup, including its compatibility evidence and
+limits; this catalog does not duplicate those matrices. In-process drivers are
+included with core. Vendor modules are installed from your application's module
+directory as shown in the linked guide.
+
+Hatchet is pending and unpublished. It is not an installable choice; its
+development material belongs to the contributor archive, not application setup.
 
 | Service | Driver | Pick when | Guide |
 | --- | --- | --- | --- |
 | Cache | Memory | Development and tests; a single process. | [Docs](../cache/drivers.md#memory) |
-| | Redis | A cache shared by every replica, with atomic counters for rate limiting. | [Docs](../cache/drivers.md#redis) |
+| | Redis | Shared entries, counters, and locks; requires Redis 6.2 or later. | [Docs](../cache/drivers.md#redis) |
 | Feature flags | Memory | Development and tests; flags set in code. | [Docs](../feature-flags/drivers.md#memory) |
 | | OpenFeature | Flags in flagd, GO Feature Flag, ConfigCat, Flagsmith, or any service with an OpenFeature Go provider. | [Docs](../feature-flags/drivers.md#openfeature) |
 | | LaunchDarkly | Flags in LaunchDarkly, evaluated with its official Go SDK. | [Docs](../feature-flags/drivers.md#launchdarkly) |
 | Search | Memory | Development and tests; a single process. | [Docs](../search/drivers.md#memory) |
-| | Postgres | Search inside the database you already run, for small and medium indexes. | [Docs](../search/drivers.md#postgres) |
-| | Meilisearch | A dedicated search engine, quick to run, built for search-as-you-type. | [Docs](../search/drivers.md#meilisearch) |
+| | PostgreSQL | Full-text search in an existing database; application-owned table migrations. | [Docs](../search/drivers.md#postgres) |
+| | Meilisearch | Dedicated prefix search; requires Meilisearch 1.15 or later. | [Docs](../search/drivers.md#meilisearch) |
 | | OpenSearch | Large indexes on an OpenSearch cluster. | [Docs](../search/drivers.md#opensearch) |
-| Database | PostgreSQL | Most production services. | [Docs](../database/drivers.md#postgresql) |
-| | MySQL | MySQL or MariaDB. | [Docs](../database/drivers.md#mysql) |
+| Database | PostgreSQL | A PostgreSQL server and pgx connection pool. | [Docs](../database/drivers.md#postgresql) |
+| | MySQL | An existing MySQL deployment. | [Docs](../database/drivers.md#mysql) |
 | | SQLite | An embedded database, tests, or an in-memory database. | [Docs](../database/drivers.md#sqlite) |
 | File storage | Memory | Development and tests; a single process. | [Docs](../file-storage/drivers.md#memory) |
 | | Filesystem | Files on a local disk, on a single host. | [Docs](../file-storage/drivers.md#filesystem) |
 | | Amazon S3 | S3 and S3-compatible object stores. | [Docs](../file-storage/drivers.md#amazon-s3) |
 | Queues | Memory | Development and tests; a single process. | [Docs](../queues/drivers.md#memory) |
-| | RabbitMQ | AMQP, with retries and a failure queue. | [Docs](../queues/drivers.md#rabbitmq) |
-| | NATS | NATS JetStream. | [Docs](../queues/drivers.md#nats) |
-| | Amazon SQS | Queues on AWS. | [Docs](../queues/drivers.md#amazon-sqs) |
-| | Cloudflare | Cloudflare Queues, consumed over HTTP. | [Docs](../queues/drivers.md#cloudflare) |
+| | RabbitMQ | Durable AMQP work queues, publisher confirms, and manual acknowledgements. | [Docs](../queues/drivers.md#rabbitmq) |
+| | NATS | JetStream streams and durable pull consumers, not Core NATS alone. | [Docs](../queues/drivers.md#nats) |
+| | Amazon SQS | AWS queues, credentials, and a logical-name-to-URL mapping. | [Docs](../queues/drivers.md#amazon-sqs) |
+| | Cloudflare | Cloudflare Queues with HTTP pull consumers and an API token. | [Docs](../queues/drivers.md#cloudflare) |
 | Broadcasting | Memory | Development and tests; a single process. | [Docs](../broadcasting/drivers.md#memory) |
 | | Redis | Redis pub/sub. | [Docs](../broadcasting/drivers.md#redis) |
 | | NATS | NATS subjects. | [Docs](../broadcasting/drivers.md#nats) |
 | | RabbitMQ | An AMQP topic exchange. | [Docs](../broadcasting/drivers.md#rabbitmq) |
-| | MQTT | MQTT brokers. Experimental. | [Docs](../broadcasting/drivers.md#mqtt) |
+| | MQTT | An MQTT 5 broker; check session and delivery limits. | [Docs](../broadcasting/drivers.md#mqtt) |
 | | Amazon SNS | Publishing to SNS and consuming from SQS. | [Docs](../broadcasting/drivers.md#sns) |
 | Mail | Log | Development: writes messages to the log instead of sending them. | [Docs](../mail/drivers.md#log) |
-| | SMTP | Any SMTP server. | [Docs](../mail/drivers.md#smtp) |
-| | Resend | The Resend API. | [Docs](../mail/drivers.md#resend) |
-| | Mailgun | The Mailgun API. | [Docs](../mail/drivers.md#mailgun) |
-| | Postmark | The Postmark API. | [Docs](../mail/drivers.md#postmark) |
-| | Amazon SES | Mail on AWS. | [Docs](../mail/drivers.md#amazon-ses) |
+| | SMTP | An SMTP server; encrypted delivery is the default. | [Docs](../mail/drivers.md#smtp) |
+| | Resend | A Resend API key and an authorized sender. | [Docs](../mail/drivers.md#resend) |
+| | Mailgun | A sending domain and private API key. | [Docs](../mail/drivers.md#mailgun) |
+| | Postmark | A server token and an authorized sender. | [Docs](../mail/drivers.md#postmark) |
+| | Amazon SES | AWS credentials and SES sending permissions. | [Docs](../mail/drivers.md#amazon-ses) |
 | Push notifications | Web Push | Visible browser notifications through standard encrypted Web Push, with application-owned subscriptions and service workers. | [Docs](../push/drivers.md#web-push) |
 | Payments | Memory | Local simulation without financial effects. | [Docs](../payments/drivers.md#memory) |
-| | Stripe | Hosted checkout, existing recurring Prices, and card-backed SDK preparation through the payment facade. | [Docs](../payments/drivers.md#stripe) |
-| | PayPal | Hosted or native SDK Orders, explicit capture, and existing subscription Plans. | [Docs](../payments/drivers.md#paypal) |
-| | Mollie | Automatic one-off hosted card payments and explicit partial refunds. | [Docs](../payments/drivers.md#mollie) |
+| | Stripe | Stripe credentials; hosted checkout, existing recurring Prices, and card SDK preparation. | [Docs](../payments/drivers.md#stripe) |
+| | PayPal | Client credentials; Orders, explicit capture, and existing subscription Plans. | [Docs](../payments/drivers.md#paypal) |
+| | Mollie | An API key and enabled creditcard profile; one-off hosted card payments and explicit refunds. | [Docs](../payments/drivers.md#mollie) |
 | Scheduled tasks | Memory | Development and tests; a single process. | [Docs](../scheduled-tasks/drivers.md#memory) |
-| | Temporal | Tasks that run once across replicas, and durable one-off runs. | [Docs](../scheduled-tasks/drivers.md#temporal) |
-| | Restate | Durable schedules with at-least-once execution. | [Docs](../scheduled-tasks/drivers.md#restate) |
+| | Temporal | A Temporal service and worker host; persisted schedules and deferred workflows. | [Docs](../scheduled-tasks/drivers.md#temporal) |
+| | Restate | A Restate deployment and registered endpoint; persisted tick chains and deferred jobs. | [Docs](../scheduled-tasks/drivers.md#restate) |
 | Workflows | Memory | Development and tests; a single process. | [Docs](../workflows/drivers.md#memory) |
 | | Temporal | Temporal workflows and activities, with signals and timers. | [Docs](../workflows/drivers.md#temporal) |
 | | Restate | Restate workflow services, with signals and timers. | [Docs](../workflows/drivers.md#restate) |
 | Secrets | Memory | Development and tests. | [Docs](../secrets/drivers.md#memory) |
-| | Vault | HashiCorp Vault (KV version 2). | [Docs](../secrets/drivers.md#hashicorp-vault) |
-| | AWS | AWS Secrets Manager. | [Docs](../secrets/drivers.md#aws-secrets-manager) |
-| | Google Cloud | Google Secret Manager. | [Docs](../secrets/drivers.md#google-cloud-secret-manager) |
-| | Azure | Azure Key Vault. | [Docs](../secrets/drivers.md#azure-key-vault) |
+| | Vault | A Vault KV v2 mount and token or login method with access to it. | [Docs](../secrets/drivers.md#hashicorp-vault) |
+| | AWS | AWS Secrets Manager and credentials with secret access. | [Docs](../secrets/drivers.md#aws-secrets-manager) |
+| | Google Cloud | Secret Manager resources and Google credentials with secret access. | [Docs](../secrets/drivers.md#google-cloud-secret-manager) |
+| | Azure | A Key Vault URL and an identity with secret access. | [Docs](../secrets/drivers.md#azure-key-vault) |
 | Encryption | AES | AES-GCM, the usual choice on hardware with AES support. | [Docs](../encryption/drivers.md#aes-gcm) |
 | | ChaCha20 | ChaCha20-Poly1305, for hardware without AES support. | [Docs](../encryption/drivers.md#chacha20-poly1305) |
 | Hashing | Argon2 | Passwords. The recommended choice. | [Docs](../hashing/drivers.md#argon2id) |
@@ -91,10 +110,9 @@ context; the catalog below lists available choices.
 | Telemetry | Memory | Trace IDs in logs and in-process inspection, without a backend. | [Docs](../observability/telemetry-drivers.md#memory) |
 | | OpenTelemetry | Exporting traces, metrics, and logs over OTLP. | [Docs](../observability/telemetry-drivers.md#opentelemetry) |
 | | Prometheus | Metrics scraped by Prometheus. | [Docs](../observability/telemetry-drivers.md#prometheus) |
-| Authentication | OAuth | Login with an OAuth 2 or OpenID Connect provider, and bearer tokens. | [Docs](../authentication/oauth.md) |
-| Language models | OpenAI | OpenAI models, or any server with an OpenAI-compatible API such as Ollama or vLLM. | [Docs](../llm/drivers.md#openai) |
+| Language models | OpenAI | OpenAI credentials, or a compatible Responses/Chat Completions endpoint; capabilities vary by server and model. | [Docs](../llm/drivers.md#openai) |
 
-## Protocol adapters
+## Protocol Adapters
 
 Some driver modules adapt a protocol rather than implement a service's `Driver`
 interface. The MCP adapter serves application-owned `mcp.Tool` definitions from
@@ -104,9 +122,17 @@ model driver. [Your First MCP Server](../mcp/first-server.md) shows registration
 and HTTP serving; [Securing MCP](../mcp/securing-mcp.md) explains the authentication
 and authorization boundaries.
 
-Webhook adapters provide optional authenticated sources and typed event definitions. They are
-independent of outbound service drivers and require explicit application
-registration and acceptance policy:
+The [`mcpserver` API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver)
+provides the adapter's constructor and transport settings.
+
+For browser login or OIDC bearer verification, use the
+[OAuth adapter](../authentication/oauth.md). It integrates with HTTP
+authentication rather than implementing a service `Driver` interface. Provider
+registration, callback URLs, and accepted token audiences remain explicit setup.
+
+Webhook adapters authenticate provider requests and expose typed event definitions.
+They do not start receivers when you construct an outbound mail, payment, or LLM
+driver. Bind the events you accept and mount the endpoint yourself:
 
 | Adapter | Notifications | |
 | --- | --- | --- |
@@ -114,11 +140,12 @@ registration and acceptance policy:
 | Resend | Email lifecycle and inbound email. | [Docs](../mail/drivers.md#resend) |
 | Mailgun | Email delivery and engagement. | [Docs](../mail/drivers.md#mailgun) |
 | Postmark | Email delivery, engagement, and inbound email. | [Docs](../mail/drivers.md#postmark) |
-| OpenAI | Background response lifecycle. | [Docs](../llm/drivers.md#receiving-background-notifications) |
+| OpenAI | Background response lifecycle. | [Docs](../llm/drivers.md#response-notifications) |
 
-The [webhook guide](../http-capabilities/webhooks.md) covers
-shared receiving policy; the driver guides above cover provider setup and authentication. Sending mail, making payments,
-and calling a language model do not require a webhook endpoint.
+Follow [Receiving Webhooks](../webhooks/receiving-webhooks.md) for acceptance,
+retries, and deduplication, and [Provider Adapters](../webhooks/provider-adapters.md)
+for authentication boundaries. The provider guides above own credential setup.
+Outbound calls do not require a webhook endpoint.
 
 CAPTCHA adapters also live in vendor modules without a shared service contract.
 Choose the provider before its browser integration; tokens and acceptance
@@ -131,8 +158,11 @@ policies differ:
 
 Both include optional route middleware. The [CAPTCHA guide](../abuse-prevention/captcha.md)
 shows decode-once handler verification and header-based middleware separately.
+For adapter options, see the
+[`cloudflarecaptcha` API](https://pkg.go.dev/arkoren.dev/driver/cloudflare/cloudflarecaptcha)
+and [`gcpcaptcha` API](https://pkg.go.dev/arkoren.dev/driver/gcp/gcpcaptcha).
 
-## Services without drivers
+## Driver-Free Features
 
 A few features need no driver of their own. [Sessions](../http-capabilities/sessions.md)
 store their data in any cache, so they use whichever cache driver you configured.
@@ -140,6 +170,6 @@ store their data in any cache, so they use whichever cache driver you configured
 event bus. [Secure links](../http-capabilities/secure-links.md) are computed from
 a secret and need no storage unless they are single-use.
 
-After choosing a backend, follow its linked driver guide for installation,
-configuration, lifecycle ownership, and a first operation. See
-[Configuration](../first-steps/configuration.md) for the shared construction pattern.
+After choosing a backend, follow its Docs link for construction, lifecycle
+ownership, and a first operation. If no available driver meets the contract you
+need, [write an application-owned driver](writing-a-driver.md).

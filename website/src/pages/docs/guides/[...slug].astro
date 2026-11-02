@@ -37,6 +37,26 @@ const pagerLink = "grid gap-1 rounded-sm border border-line p-4 no-underline hov
 >
   <DocsPageHeader slot="header" title={entry.data.title}>
     {entry.data.description}
+    {entry.data.summary.length > 0 && (
+      <section
+        slot="actions"
+        class="mt-2 grid w-full gap-3 border-t border-line pt-4"
+        aria-label="What's on this page"
+        data-pagefind-ignore
+      >
+        <span class="text-xs font-medium text-muted">What's on this page</span>
+        <ol class="grid gap-3">
+          {entry.data.summary.map((description, index) => (
+            <li class="flex items-baseline gap-3 text-base">
+              <span class="font-mono text-sm text-accent-text" aria-hidden="true">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <span>{description}</span>
+            </li>
+          ))}
+        </ol>
+      </section>
+    )}
     <Tag slot="meta" href={`${guideRoute(entry)}.md`}>
       Markdown
     </Tag>

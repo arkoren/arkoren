@@ -277,5 +277,5 @@ until the outermost transaction ends. Close cursors before further SQL.
 Use each callback synchronously from one goroutine. After return, session contexts
 fail with `database.ErrSessionDone`, and transaction contexts with `sql.ErrTxDone`.
 `Driver()` and native accessors bypass both scopes and facade telemetry.
-See the [session and lock guide](../../../cmd/arkoren/skills/arkoren/references/guides/database/raw-sql-and-locks.md#keeping-protected-sql-on-the-lock-owning-session)
+See the [session and lock guide](../../../cmd/arkoren/skills/arkoren/references/guides/database/locking.md#retained-sessions)
 and [API reference](https://pkg.go.dev/arkoren.dev/core/service/database).

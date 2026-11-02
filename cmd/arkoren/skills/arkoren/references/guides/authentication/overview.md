@@ -1,103 +1,73 @@
 ---
 title: Authentication Overview
 nav: Overview
-description: "How Arkoren finds out who sent a request: your own user type, authenticators tried in order, the auth middleware, and required-user routes."
+description: Resolve credentials into your application's identity and choose which routes require it.
 order: 10
+summary:
+  - Use one application-owned identity type and reject invalid accounts before publishing it.
+  - Combine authenticators deliberately and distinguish optional identity from required access.
+  - Read the request identity and customize anonymous rejections without exposing sensitive diagnostics.
 ---
 
 # Authentication Overview
 
-## Introduction
+Authentication establishes who sent a request. Arkoren resolves a session or
+bearer credential into a Go value that your application owns; it supplies no
+user table, registration flow, or login screen. [Authorization](../authorization/overview.md)
+then decides what that identity may do.
 
-Most services need to know who sent a request before they decide what to do
-with it. A browser carries a session cookie, a script sends an API key, and a
-mobile app presents a token issued by an identity provider. **Authentication**
-is the step that turns any of these into a user your code can work with.
+Use [Session Login](session-login.md) for passwords and browser sessions,
+[API Tokens](api-tokens.md) for application-issued keys, [OAuth Login](oauth.md)
+for external browser sign-in, or [OIDC Tokens](oidc-bearer.md) for provider-issued
+JWTs. All four use the same request identity model.
 
-Arkoren keeps this step small. It has no user model, no user table, and no
-built-in login screens. You define the user type, and you write the one
-function that looks a user up or verifies a token. Authentication has two
-separate steps: `auth.Middleware` tries your authenticators in the order you
-choose and stores the first resolved user on the request; `auth.Require`
-rejects anonymous requests on protected routes with `401` by default. Middleware
-alone leaves public routes open to anonymous requests.
+Focused snippets keep error results visible but omit routine propagation.
+Checks remain where failure changes authentication or access. Handle all errors
+in your application.
 
-Deciding what a signed-in user may do is a separate step,
-[authorization](../authorization/overview.md). This page covers the shared model. The
-other pages of this topic cover each way of signing in:
-[session login](session-login.md) for browsers, [API tokens](api-tokens.md) for
-programs, [OAuth browser login](oauth.md) for external sign-in, and
-[OIDC bearer verification](oidc-bearer.md) for provider-issued API access tokens.
-For an MCP endpoint, reuse these mechanisms and follow
-[Securing MCP](../mcp/securing-mcp.md) for protocol setup and tool availability.
+## Define Identity
 
-The focused snippets below assume the ordinary success path and leave error
-results visible. Handle those errors in your application; checks remain in
-examples where they determine whether access is granted.
-
-Examples import `auth` from `arkoren.dev/core/http/auth`, `request`, `response`,
-`router`, and `session` from the corresponding `arkoren.dev/core/http/` packages,
-and `csrf` and `ratelimit` from `arkoren.dev/core/http/middleware/`. `context`
-and `net/http` are standard-library imports. The router and session store are
-your existing [HTTP setup](../http-capabilities/sessions.md).
-
-## Your user type
-
-The user is a type from your application, usually a small struct with the
-fields that handlers and authorization rules need:
+Choose one identity type for handlers and policies. An invoice application might
+use this local account value:
 
 ```go
 type User struct {
-	ID   int
-	Name string
-	Role string
+	ID       int
+	Name     string
+	Disabled bool
 }
 ```
 
-Nothing in Arkoren requires a particular field or interface. The `auth`
-package is generic over the user type. Use that exact type in authenticators,
-handlers, and rules: context lookup does not convert between types, and a
-mismatch is treated as a missing user.
+No field or interface is required by Arkoren. Your verifier or loader must
+reject unknown and disabled accounts before returning success. Returning
+`User{}, nil` still authenticates a request; `auth.Require` checks presence,
+not whether fields are nonzero. The same applies to a typed nil pointer returned
+without an error.
 
-## Authenticators
+Identity lookup uses the exact Go type. `User`, `*User`, and a separately defined
+type with identical fields are different identities; Arkoren does not convert
+between them.
 
-An **authenticator** is a function that receives a request and returns its
-user. It has three possible outcomes, and the difference between them is what
-lets several kinds of credential live side by side:
+## Resolve Credentials
 
-- It finds credentials it understands and they are valid: it returns the user.
-- It finds no credentials it understands: it returns `auth.ErrNoCredentials`,
-  which means "not mine, ask the next one".
-- It finds credentials but they are wrong, expired, or malformed: it returns
-  an error, and the request stops there.
+An **authenticator** is a `func(*http.Request) (User, error)` that verifies
+credentials and returns your identity. Import `auth` from
+`arkoren.dev/core/http/auth`. Its result controls whether another authenticator
+can try:
 
-Arkoren ships two authenticators. A shared `auth.NewSessionIdentity(loadUser)`
-definition supplies an `Authenticator()` that reads the identifier stored in the
-session by a [login](session-login.md), and `auth.Bearer` reads an
-`Authorization: Bearer` header for [API tokens](api-tokens.md). Both take a
-function you write that turns the stored identifier or the token into your user.
-When neither fits, an authenticator is just a function, so you can write your
-own. In this example, `users.ByCertificate` is your application's lookup of a
-certificate identity, not an Arkoren helper. Configure the TLS server to verify
-client certificates before trusting that identity:
+| Result | Middleware behavior |
+| --- | --- |
+| User and nil error | Store that user and stop trying authenticators. |
+| `auth.ErrNoCredentials`, including wrapped errors | Try the next authenticator. |
+| Any other error | Stop the request without calling its handler. |
 
-```go
-func byClientCert(r *http.Request) (User, error) {
-	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
-		return User{}, auth.ErrNoCredentials
-	}
+Return `ErrNoCredentials` only when the request has no credentials that this
+authenticator handles. A presented invalid bearer token must return a different
+error. Do not trust a client-supplied user ID or header as proof of identity.
 
-	return users.ByCertificate(r.Context(), r.TLS.VerifiedChains[0][0])
-}
-```
-
-## The auth middleware
-
-To accept more than one kind of credential on the same routes, give
-`auth.Middleware` the authenticators in priority order. Here `loadUser` is your
-[session lookup](session-login.md#loading-the-user), and `verifyToken` is your
-[token verifier](api-tokens.md#accepting-bearer-tokens). The first one
-that returns a user wins, and the user is stored in the request's context:
+For routes accepting both browser sessions and API keys, use your existing
+`loadUser` (`func(context.Context, int) (User, error)`) and `verifyToken`
+(`func(context.Context, string) (User, error)`):
 
 ```go
 identity := auth.NewSessionIdentity(loadUser)
@@ -107,154 +77,84 @@ r.Use(auth.Middleware(
 ))
 ```
 
-When every authenticator returns `auth.ErrNoCredentials`, none has resolved a
-user. The request is not rejected: it continues as an **anonymous**
-request, so public pages keep working. When an authenticator returns any other
-error, the middleware returns that error and the handler never runs. If the
-bearer authenticator is reached, a bad token produces `401` rather than falling
-through, provided your verifier does not return `auth.ErrNoCredentials` for it.
+Here `r` is your existing router. This browser group already needs
+[session and CSRF middleware](session-login.md#enable-login) before authentication.
+The first success wins: a valid session in this order prevents inspection of a
+simultaneously supplied bearer header. An error stops the chain; it does not
+trigger fallback. Prefer separate browser and API groups when they need different
+credential policies.
 
-The order of the authenticators matters only when a request carries several
-kinds of credential. A browser that also sends a bearer header is
-authenticated by whichever authenticator comes first.
+## Choose Route Access
 
-### Middleware order
-
-Authentication reads the session, and much of what follows reads the user, so
-the middleware is registered in this order. Here `byUser` is your
-`func(*http.Request) string` rate-limit key function; it reads the authenticated
-user and uses a separate anonymous key when none is present:
-
-```go
-identity := auth.NewSessionIdentity(loadUser)
-r.Use(session.Middleware(store))
-r.Use(csrf.Middleware())
-r.Use(auth.Middleware(identity.Authenticator()))
-r.Use(ratelimit.Middleware(store, func(limiter *ratelimit.Builder) {
-	limiter.KeyFunc(byUser)
-}))
-```
-
-The session comes first because `identity.Authenticator()` reads from it. CSRF protection
-comes before authentication, because a cookie that browsers send on their own
-must never authenticate a forged cross-site request, as explained in
-[CSRF protection](../browser-security/csrf-protection.md). Rate limiting by user comes after,
-because it needs the user. Routes come last.
-
-## Requiring a signed-in user
-
-`auth.Require` rejects anonymous requests. Apply it to the routes, or the
-group of routes, that need a user:
+Authentication middleware permits anonymous requests when every authenticator
+returns `ErrNoCredentials`. This lets public pages optionally personalize their
+response. To require a user for private routes, add `auth.Require` after the
+authentication middleware:
 
 ```go
 private := r.With(auth.Require[User]())
-private.Get("/me", showProfile)
-private.Put("/me", updateProfile)
+private.Get("/invoices", listInvoices)
 ```
 
-By default, an anonymous request receives a `401 Unauthorized` Problem Details
-response with these shared members:
+`listInvoices` is your existing handler. An anonymous request receives a `401`
+Problem Details response with `WWW-Authenticate: Bearer`; an authenticated
+request reaches the handler. This proves identity presence, not permission to
+read every invoice. Apply your [authorization rules](../authorization/overview.md)
+separately.
 
-```json
-{
-  "type": "tag:arkoren.dev,2026-09:core:http/auth:unauthenticated",
-  "title": "Unauthenticated",
-  "status": 401,
-  "detail": "Authentication is required to access this resource."
-}
-```
+For browser pages, a `401` does not display a login form. If you want a login
+redirect, write middleware that checks `auth.FromContext[User]` and redirects to
+a fixed local login path. Validate any return target rather than redirecting to
+an arbitrary request parameter. See [middleware scope](../http-fundamentals/middleware.md)
+for applying different behavior to different route groups.
 
-HTTP requires a `401` to say how to authenticate, in a `WWW-Authenticate`
-header. The default is `Bearer`, which suits APIs. If your service uses
-another scheme, pass your own response with `auth.Builder.ErrorResponse` and
-`problem.Unauthorized`, which sets the header for you. `ErrorResponse` replaces
-the problem and its headers, so it can also select a different status; its zero
-value restores the default. HTTP rendering can add `instance` from the request
-path. That member is not a sanitized diagnostic identifier.
+## Read Identity
 
-To count or log anonymous requests that reach protected routes, pass the event
-bus with `auth.Builder.Events`:
+Handlers retrieve the exact type stored by authentication. With `request` and
+`response` from their `arkoren.dev/core/http/` packages and standard-library
+`net/http`, read the local user before returning a profile:
 
 ```go
-private := r.With(auth.Require[User](func(authenticator *auth.Builder) {
-	authenticator.Events(app.Events())
+user, err := request.User[User](r)
+if err != nil {
+	return err
+}
+
+return response.JSON(w, http.StatusOK, user)
+```
+
+`w` and `r` are the handler's response writer and request. Missing identities
+return `auth.ErrUnauthenticated`, including when a different identity type is
+present. In context-only code, `auth.FromContext[User](ctx)` returns the value
+and a presence boolean instead.
+
+Tests can use `auth.NewContext(ctx, User{ID: 42})` without performing a login.
+That helper trusts the supplied value; keep it in trusted code, not in a path
+that copies unverified request input. [Auth Tests](../testing/auth-tests.md)
+also covers testing the actual authenticators.
+
+## Handle Rejections
+
+To change the anonymous response, configure `auth.Builder.ErrorResponse` in
+`auth.Require[User](...)`. It replaces the whole problem and its headers, so
+include the appropriate authentication challenge if you keep status `401`.
+A zero response restores the default. This setting does not change the error
+returned by `request.User` or failures returned by an authenticator.
+
+If you need anonymous-rejection events, supply your existing event bus:
+
+```go
+private := r.With(auth.Require[User](func(required *auth.Builder) {
+	required.Events(app.Events())
 }))
 ```
 
-Each anonymous rejection then publishes `http.auth.rejected` with `Method`,
-including when `ErrorResponse` selects a status other than `401`.
-`auth.RejectedEvent.Path` has been removed because paths can contain identifiers
-or credentials. Remove `Path` reads from existing listeners; the payload carries
-no user, query, or raw cause, and no replacement request path is populated.
+Every rejection publishes `http.auth.rejected`, even with a custom status.
+Its payload contains `Method`, not a request path, identity, query, or cause.
+HTTP methods and event context values can still be untrusted or sensitive;
+normal Problem Details rendering can include the request path as `instance`.
+Keep listeners cheap and apply [rate limiting](../abuse-prevention/rate-limiting.md)
+before the required-user middleware when needed. No event bus means no event.
 
-The event context still retains request context values. Custom HTTP methods are
-client-controlled too; classify or filter them before logging when needed. Do
-not treat context values or HTTP problem instances as generally sanitized just
-because the event payload omits paths. There is no deduplication, so a client
-decides how many events you receive: keep the listener cheap and
-put the [rate limiting middleware](../abuse-prevention/rate-limiting.md) in front of
-`auth.Require`. [Built-in Events](../events/built-in-events.md#authentication-and-authorization)
-describes the payload.
-
-> [!NOTE]
-> A browser receiving a `401` shows the JSON body, not a login form. For pages
-> that people open directly, redirect anonymous visitors to your login page in
-> a small middleware of your own instead of `auth.Require`.
-
-## Reading the user
-
-In a handler, `request.User` returns the user of the request:
-
-```go
-func showProfile(w http.ResponseWriter, r *http.Request) error {
-	user, err := request.User[User](r)
-	if err != nil {
-		return err
-	}
-
-	return response.JSON(w, http.StatusOK, user)
-}
-```
-
-On an anonymous request, `request.User` returns `auth.ErrUnauthenticated` (`401`),
-the problem behind `auth.Require`'s default response. A custom `ErrorResponse`
-does not change this lookup error. On a route behind `auth.Require` using the
-same exact user type, the user is always there.
-
-Outside a handler, in code that only receives a context,
-`auth.FromContext` returns the user and whether one was found.
-
-### Use one user type everywhere
-
-The user is stored under its exact type. If the middleware stores a `User` and
-a handler asks for a `*User`, the lookup finds nothing, and the request is
-treated as anonymous. This fails closed rather than granting access to the
-wrong person, but it is confusing to debug. Define one helper in your
-application and call it everywhere:
-
-```go
-func CurrentUser(r *http.Request) (User, error) {
-	return request.User[User](r)
-}
-```
-
-## Choosing what to store
-
-Store an identifier in the session, rather than a snapshot of the user's roles
-or permissions. When your session loader or token verifier looks up the current
-user on each request, a new role or a deactivated account takes effect on the
-next request, at the cost of one lookup per request. If that lookup becomes
-expensive, cache it, and delete the cached entry when the user changes.
-
-[API tokens](api-tokens.md#self-contained-tokens) describe the other choice,
-tokens that carry the user's details themselves, and the trade-off it makes.
-
-## Testing
-
-Tests do not need to log in. Put a user directly in the request's context with
-`auth.NewContext`, or build the router with an authenticator that accepts a
-fixed test token. [Auth tests](../testing/auth-tests.md) shows both, and how
-to check your own authenticators with the shared conformance suite.
-
-For every function and option, see the
+For all functions and options, see the
 [`auth` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth).

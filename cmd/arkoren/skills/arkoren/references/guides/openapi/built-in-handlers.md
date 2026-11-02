@@ -1,27 +1,39 @@
 ---
-title: Documenting Built-in Handlers
-nav: Built-in Handlers
-description: Annotate application probes and information endpoints, and describe integrations explicitly where no contract can be inferred.
+title: Built-in Handlers
+description: Attach shipped application annotations and identify integrations that need an explicit, application-specific contract.
 order: 40
+summary:
+  - Attach matching application callbacks to probes, information endpoints, and welcome pages.
+  - Distinguish static readiness and information schemas from live diagnostic values and disclosure risks.
+  - Extend annotations for enforced policies and identify integrations that require manual contracts.
 ---
 
-# Documenting Built-in Handlers
+# Built-in Handlers
 
-## Introduction
+Some shipped handlers have matching operation callbacks, so you can describe
+their responses without repeating their schemas. Pass the callback when
+registering the handler; the exporter does not infer a contract from its type or
+package. The callback describes behavior, but neither registers the route nor
+changes its access policy.
 
-To include health probes and application information in your HTTP contract, pass
-their reusable operation callbacks when you register the handlers. These callbacks
-describe shipped behavior without sampling a running application; they do not
-register routes or protect operator endpoints.
+Use this page to find application annotations and recognize common manual
+integration boundaries. It is not a guarantee that every built-in handler or
+domain integration has a complete reusable contract.
 
-Other integrations, such as webhooks and downloads, need declarations that match
-your actual provider and handler configuration; the exporter does not infer those
-contracts.
+## Application Annotations
 
-## Annotating application probes
+With your existing `app` and `routes`, import `arkoren.dev/core/application`.
+Choose the callback that matches the handler you are registering:
 
-With your existing `app` and `routes`, import `arkoren.dev/core/application` and
-pass the matching operation callback directly to each probe registration:
+| Handler | Callback | Declared Output |
+| --- | --- | --- |
+| `LiveHandler()` | `LiveOperation` | Plain-text `200` or `503`. |
+| `StartupHandler()` | `StartupOperation` | Plain-text `200` or `503`. |
+| `ReadyHandler()` | `ReadyOperation` | Plain text or verbose JSON at `200` or `503`. |
+| `InfoHandler()` | `InfoOperation` | Application and build information as `200` JSON. |
+| `WelcomeHandler()` | `WelcomeOperation` | A welcome page as `200` HTML. |
+
+For probes, pass the callbacks directly to their registrations:
 
 ```go
 routes.Get(application.LivePath, app.LiveHandler(), application.LiveOperation)
@@ -29,68 +41,78 @@ routes.Get(application.StartupPath, app.StartupHandler(), application.StartupOpe
 routes.Get(application.ReadyPath, app.ReadyHandler(), application.ReadyOperation)
 ```
 
-These callbacks describe the handler on the path you choose. The constants use
-`/livez`, `/startupz`, and `/readyz`, but a custom path or group prefix works too.
-They do not register routes, run probes, capture current health values, or change
-access policy. Omit a callback if you do not want that route in OpenAPI; the
-handler continues to work.
+The path constants are `/livez`, `/startupz`, and `/readyz`. Custom paths and group
+prefixes work too: descriptions follow the registered path, not a hard-coded
+endpoint. Omit a callback to leave that handler out of OpenAPI without disabling
+the route.
 
-All three describe plain-text `200` (`ok\n`) and `503` (`unavailable\n`) responses,
-with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` headers.
-Liveness succeeds while the application is live. Startup succeeds once startup
-completed, including while stopping and after stop; it is not a substitute for
-readiness. Follow the [health and readiness guide](../application/health-and-readiness.md) to
-configure the underlying lifecycle and checks.
+All three callbacks describe plain-text `ok\n` at `200` and `unavailable\n` at
+`503`, with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+Liveness succeeds while the application is live. Startup records completed
+startup, including while stopping and after stop; it is not a readiness check.
+Configure the lifecycle and dependency checks through
+[health and readiness](../application/health-and-readiness.md).
 
-### Describing verbose readiness
+For the public welcome page, choose your own path:
 
-Readiness succeeds when the application is live and its cached health pass is
-fresh and passing. Without registered checks, readiness equals liveness. Requests
-never run checks themselves. With checks, readiness waits for the first passing
-pass, and a result older than three readiness intervals counts as failed.
+```go
+routes.Get("/", app.WelcomeHandler(), application.WelcomeOperation)
+```
 
-`application.ReadyOperation` also describes the optional `verbose` query parameter and
-JSON responses at both `200` and `503`. This is a presence-based parameter:
-`?verbose`, `?verbose=`, `?verbose=false`, and any other value all select JSON
-instead of plain text. It is described as a string, not a boolean switch.
+`WelcomeOperation` describes HTML and the shared no-store/nosniff headers, without
+capturing the configured application name. The page displays that name and
+Arkoren resource links, not runtime, configuration, or build diagnostics. Choose
+an application name suitable for public display.
 
-The static output schema includes `status` and optional `reason`, `checked_at`,
-and `checks`. Each check can contain a status and an error string. It does not
-embed actual dependency names or failure messages into the OpenAPI document.
-Enabling documentation does not enable detailed failures: failed checks report
-`reason withheld` unless `HealthDetails(true)` was configured on the application.
+## Readiness Details
+
+Readiness reports whether the application is live and its cached health pass is
+fresh and passing. Without checks it equals liveness. With checks, it waits for
+the first passing pass; a result older than three readiness intervals is stale
+and fails readiness. Requests do not run checks themselves.
+
+`ReadyOperation` describes an optional string query parameter named `verbose`.
+Its presence selects JSON: `?verbose`, `?verbose=`, and `?verbose=false` all have
+the same effect. It is not a boolean opt-out. The callback includes JSON schemas
+at both `200` and `503`, alongside the plain-text representations.
+
+The static schema has a required `status` and optional `reason`, `checked_at`,
+and `checks`. Each check can report its status and an error string. Export does
+not insert current dependency names, check results, or failure messages into the
+document.
 
 > [!WARNING]
-> Verbose readiness reveals dependency names even when failure details are
-> withheld. Enabling `HealthDetails` can also expose connection information from
-> errors. Restrict the live probe endpoint to operators and the platform; hiding
-> its OpenAPI annotation is not access control.
+> The live verbose response reveals dependency names. Failed checks normally
+> report `reason withheld`, but `HealthDetails(true)` can also reveal connection
+> information in error messages. Restrict the endpoint to operators and the
+> platform; omitting its annotation does not restrict access.
 
-## Annotating application information
+## Application Information
 
-If operators use the information endpoint, describe it with its shipped
-callback on your existing protected `admin` router:
+If operators need application identity and build details, register the information
+handler on an already protected `admin` router:
 
 ```go
 admin.Get(application.InfoPath, app.InfoHandler(), application.InfoOperation)
 ```
 
-`application.InfoPath` is `/infoz`. `InfoOperation` describes the `200` JSON response and
-the same no-store and nosniff headers as the probes. Its static schema describes
-application identity, environment, state, log level, build metadata, and optional
-startup and uptime fields without embedding current application or binary values.
-Omitted runtime fields remain optional in the schema.
+`InfoPath` is `/infoz`. The callback describes its `200` JSON response and
+no-store/nosniff headers. Its schema includes identity, environment, state, log
+level, build metadata, and optional startup and uptime fields. Runtime fields
+that can be omitted remain optional; current application and binary values are
+not embedded in the contract.
 
-This is an operator-only endpoint: version, revision, and build information can
-reveal deployment details. Neither `InfoHandler` nor its annotation installs or
-infers authentication. Use a protected router or a
-[restricted listener](../application/health-and-readiness.md), and
-protect any document that includes private endpoint names and schemas separately.
+The live response can reveal versions and revisions, so expose it only to
+operators. Neither the handler nor callback supplies authentication. Use your
+existing protected router or a
+[restricted listener](../application/health-and-readiness.md), and separately
+protect documentation that includes private endpoint names and schemas.
 
-## Extending a built-in description
+## Extend Annotations
 
-If a protected probe has additional middleware failures or a security
-requirement, keep the shipped callback and add your own trailing callback:
+If your protected information route requires bearer authentication, keep the
+shipped callback and add your policy description afterward. This fragment also
+uses `arkoren.dev/core/http/router`:
 
 ```go
 admin.Get(application.InfoPath, app.InfoHandler(), application.InfoOperation, func(operation *router.OperationBuilder) {
@@ -99,40 +121,43 @@ admin.Get(application.InfoPath, app.InfoHandler(), application.InfoOperation, fu
 })
 ```
 
-This fragment also uses `arkoren.dev/core/http/router`. Declare `operatorBearer`
-on the document as explained in [Describing Operations](operations.md#describing-authentication),
-and configure the actual authentication separately. Callbacks run in order on
-the same draft, so later scalar settings replace earlier ones. No operation ID
-is supplied by the shipped callbacks; add unique IDs yourself if needed.
+Declare `operatorBearer` in the document's
+[security configuration](operations.md#declare-security). This fragment assumes
+the `admin` router already enforces authentication; `Security` only describes it.
+Add middleware failure responses explicitly when they apply.
 
-## Describing integrations manually
+Callbacks run in order on the same draft, so later scalar settings replace
+earlier ones. Shipped application callbacks do not set operation IDs; add unique
+IDs if your clients need them. They do not infer middleware errors or security
+requirements.
 
-A handler's package or return type does not establish its full wire contract.
-For these integrations, annotate only the behavior your application actually
-serves:
+## Manual Contracts
 
-- [OAuth login](../authentication/oauth.md) uses redirects and provider
-  callbacks. Describe the real statuses and `Location` response header with
-  `Response` and `ResponseHeader`, not a guessed JSON response. Document-level
-  security schemes do not support OAuth flows or OpenID Connect.
-- [Webhooks](../http-capabilities/webhooks.md) use provider-specific payloads and signature
-  headers. Declare body schemas and header parameters explicitly. An annotation
-  does not verify a signature or discover provider-specific failures.
+Other handlers depend on provider configuration or implement a protocol that a
+single operation cannot describe. Annotate only the behavior you actually serve:
+
+- [OAuth login](../authentication/oauth.md) uses redirects and provider callbacks.
+  Describe actual statuses and the `Location` header with `Response` and
+  `ResponseHeader`, rather than assuming JSON. The document API does not support
+  OAuth-flow or OpenID Connect security schemes.
+- [Webhook receivers](../webhooks/receiving-webhooks.md) need provider-specific
+  bodies and signature headers. Declare them explicitly; annotations neither
+  verify signatures nor discover provider-specific failure responses.
 - [Downloads](../file-storage/uploads-and-downloads.md) and
-  [metrics](../observability/telemetry-drivers.md#prometheus) need their actual
-  media types, such as `application/octet-stream` or the configured text
-  representation, rather than `JSONResponse`. Describe response headers
-  separately; [response declarations](operations.md#describing-response-bodies-and-headers)
+  [Prometheus metrics](../observability/telemetry-drivers.md#prometheus) need their
+  actual media types and headers. Use `MediaResponse`, not `JSONResponse`, for
+  binary or text output. The [response declarations](operations.md#describe-responses)
   show the pattern.
-- A mounted [MCP endpoint](../mcp/first-server.md) remains a separate protocol.
-  The exporter does not traverse mounted handlers or infer their internal
-  operations. Leave mounts and catch-all routes unannotated or hidden; visible
-  annotated opaque paths fail export.
+- Mounted [MCP endpoints](../mcp/first-server.md) remain a separate protocol.
+  Export does not traverse their handlers or infer internal operations. Leave
+  mounts and catch-all routes unannotated or hidden; visible annotated opaque
+  paths fail export.
 
-Global middleware and authentication do not automatically become error responses
-or security requirements for any of these handlers. Add declarations only when
-they match the policy and response format actually enforced at that route.
+For every integration, match the body, headers, statuses, and security policy to
+the configured handler and middleware. A static annotation or diagnostic route
+listing does not discover or maintain that domain contract for you.
 
-For the probe and information callbacks, see the
-[`application` API reference](https://pkg.go.dev/arkoren.dev/core/application). For manual declarations, see the
+For shipped callbacks, see the
+[`application` API reference](https://pkg.go.dev/arkoren.dev/core/application).
+For manual declarations, see the
 [`router` API reference](https://pkg.go.dev/arkoren.dev/core/http/router).

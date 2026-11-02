@@ -1,121 +1,132 @@
 ---
-title: Content Type Checks
-nav: Content Type
-description: Reject request bodies whose media type an endpoint does not accept, which also blocks cross-site form posts to JSON APIs.
+title: Content Types
+description: Reject request media types an endpoint does not accept before decoding its body.
 order: 70
+summary:
+  - Require JSON media types and understand checks for empty and unknown-length requests.
+  - Scope form and multipart allowances without weakening unrelated JSON endpoints.
+  - Customize rejection problems and observe events without trusting client metadata.
 ---
 
-# Content Type Checks
+# Content Types
 
-## Introduction
+A JSON decoder accepts JSON-looking bytes without checking the request's
+`Content-Type`. That allows a mislabeled `text/plain` request to reach the same
+decoder. A hostile page can send some form or plain-text browser requests
+without a CORS preflight, sometimes with your cookies depending on their scope
+and `SameSite` policy. Reject formats your endpoint does not accept before
+reading the body.
 
-A JSON API expects JSON. The `request` body helpers decode whatever bytes
-arrive, without looking at the `Content-Type` header, so a request that claims
-to be a form or plain text but contains JSON would still be accepted. That
-matters for security: a web page on another site can make a browser send a
-`text/plain` or form-encoded `POST` to your API without a CORS preflight,
-and the browser may attach your site's cookies when their scope and `SameSite`
-rules allow it.
+The `contenttype` middleware checks the declared media type, not the contents
+or the caller's identity. It complements decoding, [body limits](body-limit.md),
+and [CSRF protection](../browser-security/csrf-protection.md); it replaces none
+of them.
 
-The `contenttype` middleware rejects requests whose body has a media type the
-endpoint does not accept.
+## Require JSON
 
-## Usage
-
-Import `arkoren.dev/core/http/middleware/contenttype`. With an existing
-[router](../http-fundamentals/routing.md) `r`, add the middleware before the
-routes that accept JSON:
+On a fresh [router](routing.md) named `routes`, import
+`arkoren.dev/core/http/middleware/contenttype`:
 
 ```go
-r.Use(contenttype.Middleware())
+routes.Use(contenttype.Middleware())
 ```
 
-By default, it allows `application/json` and any type with the `+json`
-suffix, such as `application/merge-patch+json`. If a request carries a body,
-the middleware rejects it with `415 Unsupported Media Type` when its
-`Content-Type` is disallowed, malformed, or missing. Bodyless requests follow
-the rules below; a bodyless `GET` does not need this header.
+Register JSON routes after the policy. By default it allows `application/json`
+and any media type ending in `+json`, such as `application/merge-patch+json`.
+Missing, malformed, or disallowed headers on requests carrying data return
+`contenttype.ErrUnsupportedMediaType` (`415`) without calling the next layer.
+The router renders that problem if output has not started.
 
-## What is checked
+Matching ignores case and valid media parameters such as `charset=utf-8`.
+Malformed parameters are rejected. An allowed header does not prove valid JSON;
+the [request decoder](requests.md#decode-json) still checks bytes and structure.
 
-Only requests that could carry data are checked. A request with a body must
-declare an allowed type. A request without a body passes, unless it uses a
-method in the checked set (`POST`, `PUT`, `PATCH`, `DELETE`, `QUERY`) and declares a type
-that is not allowed: an empty cross-site form post still says `text/plain`,
-and is rejected. `GET` and `HEAD` requests without a body always pass.
+## Check Empty Requests
 
-Matching ignores case and valid parameters such as `charset=utf-8`. Malformed
-parameters are still rejected.
+The decision uses `ContentLength`, not a speculative read from the body:
 
-## Accepting other types
+- A nonzero length, including unknown length `-1`, requires an allowed header
+  regardless of method.
+- At length zero, POST, PUT, PATCH, DELETE, and QUERY reject a supplied header
+  when it is malformed or disallowed. A missing header passes.
+- Other methods at length zero pass without this media-type check.
 
-For a router without the global JSON policy above, restrict a login route to
-form posts instead. `login` is your existing `router.Handler`:
+A bodyless GET therefore does not require `Content-Type`, while an empty POST
+declaring `text/plain` is rejected. This prevents a disallowed form format from
+bypassing the policy merely because its body is empty. Do not use method or
+media type as a substitute for authorization.
+
+## Allow Other Formats
+
+If one endpoint receives multipart uploads, give it a separate policy rather
+than adding multipart to every JSON route. On a router without the global JSON
+policy above, with an existing `uploadAttachment` handler:
 
 ```go
-r.With(contenttype.Middleware(func(content *contenttype.Builder) {
-	content.Allowed("application/x-www-form-urlencoded")
-})).Post("/login", login)
+routes.With(contenttype.Middleware(func(content *contenttype.Builder) {
+	content.Allowed("multipart/form-data")
+})).Post("/attachments", uploadAttachment)
 ```
 
-`Allowed` replaces the default list; add `application/json` and `+json` too if
-the route should accept both forms and JSON. An entry that starts with `+`, such as `+xml`, allows every type with that
-suffix. File uploads use `multipart/form-data`, which you must allow on the
-upload routes.
+`Allowed` replaces the default list. Use `application/x-www-form-urlencoded`
+for a form endpoint, or list both it and `application/json` when both formats
+are intentional. An entry starting with `+`, such as `+xml`, matches every
+media type with that suffix. An empty allowed list restores the JSON defaults;
+it does not create a deny-all policy. Narrow defaults to only `application/json`
+when the endpoint should not accept other JSON-based media types.
 
-> [!NOTE]
-> A JSON-only policy blocks cross-site form posts with disallowed media types.
-> Allowing form media types also allows those bodies through this check. It does
-> not replace [CSRF protection](../browser-security/csrf-protection.md) for routes
-> that browsers call with cookies; use both.
+Allowing form media types allows cross-site form requests through this check.
+Keep CSRF protection on cookie-authorized browser routes. The multipart parser
+still validates boundaries and input separately; see
+[Parse Uploads](requests.md#parse-uploads).
 
-## Choosing the rejection response
+## Customize Failures
 
-If clients need a different explanation, replace the rejection problem with
-`Builder.ErrorResponse`. To keep the default 415 status and problem identity,
-derive from `contenttype.ErrUnsupportedMediaType`. Import
-`arkoren.dev/foundation/problem` for the derivation callback. In place of the
-earlier middleware registration, before adding routes:
+For a more useful client explanation without changing status or identity,
+derive the default problem. Import `arkoren.dev/foundation/problem`:
 
 ```go
 failure := contenttype.ErrUnsupportedMediaType.Derive(func(details *problem.Builder) {
-	details.Detail("Send JSON for this endpoint.")
+	details.Detail("Send application/json for invoice drafts.")
 })
-r.Use(contenttype.Middleware(func(content *contenttype.Builder) {
+```
+
+Pass it in place of the earlier middleware registration, before routes:
+
+```go
+routes.Use(contenttype.Middleware(func(content *contenttype.Builder) {
 	content.ErrorResponse(failure)
 }))
 ```
 
-Rejected requests now carry that explanation. Only a complete zero
-`problem.Details{}` selects the middleware's default 415 problem. A nonzero
-custom problem decoded without a status keeps its supplied members; the problem
-renderer completes the absent status as 500 instead of replacing it with 415.
-Choose an explicit status when you intend a different HTTP outcome. See
-[error responses](error-handling.md) for problem rendering and customization.
+Only the complete zero `problem.Details{}` selects the default problem. A
+nonzero custom problem with an absent status retains its members and receives
+the renderer's default `500`, not `415`. Choose an explicit status if changing
+the HTTP outcome. [Error Handling](error-handling.md#negotiate-error-output)
+owns negotiation and rendering defaults.
 
-## Observing rejections
+## Observe Rejections
 
-To log or count rejected requests, pass the event bus from your existing
-`*application.Application` named `app`. Use a fresh router, or configure the
-earlier middleware call this way before registering routes:
+With an existing application `app`, add its bus to the same policy construction
+callback. Do not stack another policy merely to enable events:
 
 ```go
-r.Use(contenttype.Middleware(func(content *contenttype.Builder) {
+routes.Use(contenttype.Middleware(func(content *contenttype.Builder) {
 	content.Events(app.Events())
 }))
 ```
 
-If you already selected a custom rejection problem, add `Events` to that same
-construction callback rather than placing another content-type middleware around it.
+The default nil bus publishes nothing. When configured, every rejection emits
+`contenttype.Rejected` (`http.contenttype.rejected`), regardless of a custom
+problem's status. Its payload contains method, path, and the lower-case parsed
+base media type without parameters. Missing or unparseable base types produce
+an empty value; malformed parameters can still leave a parsed base type.
 
-Each content-type rejection then publishes `http.contenttype.rejected`, regardless
-of the status selected by `Builder.ErrorResponse`. Its payload contains the method,
-path, and lower-case base media type, without parameters. The media type is empty
-when the header is missing or its base type cannot be parsed. Malformed parameters
-can still leave a parsed base type in the event even though the request is rejected.
-The client chooses that value, so treat it as untrusted text. Every rejected
-request publishes, so keep the listener cheap and put the
-[rate limiting middleware](../abuse-prevention/rate-limiting.md) in front.
-[HTTP Events](../events/http-events.md#request-rejections) describes the payload.
+The client controls this metadata, and paths can contain personal identifiers.
+Review it before forwarding to external systems. Treat it as untrusted text,
+keep listeners cheap, and put [rate limiting](../abuse-prevention/rate-limiting.md) before this
+policy when rejection traffic needs a bound. For event payloads, see
+[HTTP Events](../events/http-events.md#request-rejections).
 
-For every option, see the [`contenttype` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/contenttype).
+For all policy options, see the
+[`contenttype` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/contenttype).

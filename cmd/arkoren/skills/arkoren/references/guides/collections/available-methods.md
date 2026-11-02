@@ -1,893 +1,808 @@
 ---
-title: Available Collection Methods
-nav: Available Methods
-description: A short entry for every function and method of the collection package, with the types it works on and a tiny example.
+title: Collection Methods
+description: Look up collection operations by task, including receiver forms, small examples, and consequential differences.
 order: 40
+summary:
+  - Find constructors and operations by the selection, transformation, or lookup you need.
+  - Compare eager, lazy, and fallible forms without losing timing, ownership, or error behavior.
+  - Look up native-container conversions and JSON methods, including their interface variants.
 ---
 
-# Available Collection Methods
+# Collection Methods
 
-This page lists every function and method of the
-[`collection` package](overview.md), one entry per name. Most names exist
-on several collection types and behave the same way, so an entry says where it
-is available and only notes what differs.
+Use this reference to choose an operation for an existing collection. Start
+with the [overview](overview.md) for eager usage, [Lazy Collections](lazy-collections.md)
+for evaluation timing, or [Fallible Collections](fallible-collections.md) for
+error policy.
 
-Each entry starts with an availability line: the family it belongs to, `Slice`
-or `Map`, then which forms have it.
+Availability labels use **E** for eager `Slice` or `Map`, **L** for `LazySlice`
+or `LazyMap`, and **T** for `TryLazySlice` or `TryLazyMap`. Streaming L and T
+operations defer work until traversal. Terminal calls consume immediately;
+buffering exceptions are stated beside the method. T callbacks that can fail
+return an additional `error`, and terminal methods return an additional error.
+Unless named `All`, terminals stop at the first error. Failed yielded values
+must be ignored; callbacks do not receive source errors.
 
-- **E** is the eager form: `Slice` or `Map`. It runs immediately.
-- **L** is the lazy form: `LazySlice` or `LazyMap`. Streaming transformations
-  run as you consume the result. Terminal operations and methods such as
-  `Partition` and `GroupBy` consume the source when called; their entries
-  identify these exceptions.
-- **T** is the error-aware lazy form: `TryLazySlice` or `TryLazyMap`. Its
-  callbacks return an extra `error`, its methods that end a chain return an
-  extra `error`. Ordinary terminal methods stop at the first error; the `All`
-  variants collect successes and join errors. See
-  [Collections that can fail](fallible-collections.md).
-
-Slice callbacks receive `(index, item)`; map callbacks receive `(key, value)`.
-On `TryLazySlice`, streaming callback indices advance only when the callback
-succeeds; source and callback errors leave the next callback at the same index.
-`EachAll` instead counts every successful source value, even when its callback
-fails. See [Callback indexes after errors](fallible-collections.md#callback-indexes-after-errors).
-
-The examples use these values, and show results as comments. Grouping examples
-also use the `users` and `User` from the [overview](overview.md#creating-collections):
+Import `arkoren.dev/foundation/collection`. Entries use these independent
+application values and predicates:
 
 ```go
-nums := collection.NewSlice([]int{1, 2, 3, 4, 5, 6})
-words := collection.NewSlice([]string{"apple", "fig", "banana", "fig", "kiwi"})
-stock := collection.NewMap(map[string]int{"apple": 3, "pear": 0, "fig": 12})
-even := func(_ int, n int) bool {
-	return n%2 == 0
+type Order struct {
+	ID    string
+	Zone  string
+	Units int
+	Ready bool
+}
+
+orders := collection.NewSlice([]Order{
+	{ID: "ord-41", Zone: "north", Units: 3, Ready: true},
+	{ID: "ord-42", Zone: "south", Units: 1, Ready: false},
+	{ID: "ord-43", Zone: "north", Units: 2, Ready: true},
+})
+capacity := collection.NewMap(map[string]int{"north": 8, "south": 0})
+ready := func(_ int, order Order) bool {
+	return order.Ready
+}
+zone := func(_ int, order Order) string {
+	return order.Zone
 }
 ```
 
-## Creating and converting
+Examples are focused fragments, not consecutive declarations in one scope.
+Map result comments describe entries, not a guaranteed display order. A slice
+callback receives `(index, item)`; a map callback receives `(key, value)`.
+Fallible callback indexes follow the [success rules](fallible-collections.md#limits-and-indexes),
+not stable source identities.
+
+## Creating Collections
+
+- [`NewSlice`](#newslice), [`NewMap`](#newmap): wrap in-memory containers.
+- [`NewSliceAs`](#newsliceas), [`NewMapAs`](#newmapas): accept named containers.
+- [`NewLazySlice`](#newlazyslice), [`NewLazyMap`](#newlazymap): wrap infallible iterators.
+- [`NewTryLazySlice`](#newtrylazyslice), [`NewTryLazyMap`](#newtrylazymap), [`NewMapEntry`](#newmapentry): expose fallible sources.
 
 ### `NewSlice`
 
-Wraps an existing `[]T` as a `Slice[T]` without copying. `NewMap` does the
-same for a `map[K]V`.
-
-```go
-nums := collection.NewSlice([]int{1, 2, 3}) // Slice[int]
-```
+`NewSlice` wraps a `[]T` without copying: `collection.NewSlice([]Order{{ID: "ord-44"}})`.
+The wrapper, original slice, and [`Items`](#items) result share storage.
 
 ### `NewMap`
 
-Wraps an existing `map[K]V` as a `Map[K, V]` without copying. See [`NewSlice`](#newslice).
+`NewMap` wraps a `map[K]V` without copying:
+`collection.NewMap(map[string]int{"north": 8})`. Keys must be comparable.
+Nil eager maps support reads but still panic on indexed writes.
 
 ### `NewSliceAs`
 
-*Slice · E*
-
-Like `NewSlice`, for a slice with its own named type such as `type IDs []int`.
-`ItemsAs` converts back to that type. `NewMapAs` is the map counterpart.
+`NewSliceAs` accepts a named slice type. With `type Orders []Order`, use
+`collection.NewSliceAs(Orders{{ID: "ord-44"}})`. It returns `Slice[Order]`
+without copying; [`ItemsAs`](#itemsas) converts back to a named type.
 
 ### `NewMapAs`
 
-Like [`NewMap`](#newmap), for a map with its own named type. See [`NewSliceAs`](#newsliceas).
+`NewMapAs` is the named-map counterpart of [`NewMap`](#newmap). With
+`type Capacity map[string]int`, use `collection.NewMapAs(Capacity{"north": 8})`.
 
 ### `NewLazySlice`
 
-Builds a `LazySlice` from an iterator function that yields an index and an
-item. You supply the index yourself. The function and its captures are retained,
-not invoked or copied. A nil function is not an empty iterator and panics on
-traversal. The same prerequisite applies to the other three iterator constructors;
-see [Supplying an iterator](lazy-collections.md#supplying-an-iterator) for empty
-sequences, cleanup, and cancellation responsibilities.
+`NewLazySlice` retains an `(index, item)` iterator. For a standard-library
+`slices` import, `collection.NewLazySlice(slices.All(orders.Items()))` wraps
+the same source data without consuming it.
 
-```go
-letters := collection.NewLazySlice(func(yield func(int, string) bool) {
-	for i, s := range []string{"a", "b"} {
-		if !yield(i, s) {
-			return
-		}
-	}
-})
-letters.Items() // [a b]
-```
+Supply a non-nil function for all four iterator constructors. Nil is not an
+empty iterator and panics on traversal. Sources must honor false yields and
+own their [cleanup and cancellation](lazy-collections.md#source-ownership).
 
 ### `NewLazyMap`
 
-Builds a `LazyMap` from an `iter.Seq2[K, V]`, so `maps.All(m)` and any library
-iterator plugs in directly.
+`NewLazyMap` retains an `iter.Seq2[K, V]`. With the standard-library `maps`
+package, `collection.NewLazyMap(maps.All(capacity.Items()))` wraps a Go map
+with unspecified order. It does not copy or traverse it.
 
 ### `NewTryLazySlice`
 
-Builds a `TryLazySlice` from a function that yields `(item, error)`. A
-`yield(item, err)` with a non-nil error reports a failure; the item is then
-ignored.
+`NewTryLazySlice` retains an `(item, error)` iterator. A one-record source is:
+
+```go
+source := collection.NewTryLazySlice(func(yield func(Order, error) bool) {
+	yield(Order{ID: "ord-44"}, nil)
+})
+```
+
+No work runs yet. `source.Items()` returns that order and nil error. A source
+that yields more records must stop after a false yield.
 
 ### `NewTryLazyMap`
 
-Builds a `TryLazyMap` from a function that yields `(MapEntry, error)`.
+`NewTryLazyMap` retains an iterator over `(MapEntry, error)` pairs:
+
+```go
+source := collection.NewTryLazyMap(func(yield func(collection.MapEntry[string, int], error) bool) {
+	yield(collection.NewMapEntry("north", 8), nil)
+})
+```
+
+`source.Items()` returns `north: 8` and nil error. Ignore entries paired with
+non-nil errors.
 
 ### `NewMapEntry`
 
-Builds the `MapEntry[K, V]` that a `TryLazyMap` yields: `NewMapEntry("a", 1)`,
-or the literal `MapEntry[string, int]{Key: "a", Value: 1}`.
+`NewMapEntry` constructs a typed pair: `collection.NewMapEntry("north", 8)`
+has `Key == "north"` and `Value == 8`. The equivalent struct is
+`collection.MapEntry[string, int]{Key: "north", Value: 8}`.
+
+## Changing Evaluation
+
+- [`Lazy`](#lazy), [`Try`](#try): defer later work or permit errors.
+- [`Eager`](#eager), [`EagerAll`](#eagerall): collect reusable eager results.
 
 ### `Lazy`
 
 *Slice, Map · E*
 
-Returns the lazy form of an eager collection. Streaming steps after it defer
-work until the result is read; operations that materialize the source still
-consume it, as described in their entries.
-
-```go
-nums.Lazy().Filter(even).Take(1).Items() // [2]
-```
+`Lazy` returns an iterator over shared source data. For example,
+`orders.Lazy().Take(1).Items()` collects only `ord-41`. Conversion does not
+copy elements, run callbacks, or cache a result.
 
 ### `Try`
 
 *Slice, Map · E L*
 
-Returns the error-aware lazy form, so the following steps can return errors.
-It is how you feed an in-memory collection into a chain that can fail.
+`Try` exposes successful values through the fallible lazy form. For example,
+`orders.Try().Items()` returns the orders and nil error. Later transformation
+callbacks can return errors; conversion itself consumes nothing.
 
 ### `Eager`
 
 *Slice, Map · L T*
 
-Reads a lazy collection to the end and returns an eager `Slice` or `Map` you
-can keep chaining on. On `T` it returns `(collection, error)` and stops at the
-first error, handing back what it had read.
-
-```go
-nums.Lazy().Take(2).Eager() // [1 2]
-```
+`Eager` collects into an eager wrapper: `orders.Lazy().Take(1).Eager()` returns
+a `Slice[Order]` containing `ord-41`. T returns `(collection, error)` and keeps
+only the successful prefix before the first error. Outer result storage is new;
+element copies remain shallow.
 
 ### `EagerAll`
 
 *Slice, Map · T*
 
-Like `Eager`, but reads to the end, keeps every item that succeeded, and joins
-all errors with `errors.Join`.
+`EagerAll` is the continuing counterpart of [`Eager`](#eager):
+`snapshot, err := orders.Try().EagerAll()`. It retains successes and joins
+errors with `errors.Join`; it cannot retry or resume a terminal source.
 
-## Transforming
+## Selecting Records
 
-### `Map`
-
-*Slice · E L T*
-
-Transforms each item and returns a collection of the new type, which is how a
-chain changes types.
-
-```go
-nums.Map(func(_ int, n int) string {
-	return strconv.Itoa(n * n)
-}) // [1 4 9 16 25 36]
-```
-
-### `FlatMap`
-
-*Slice · E L T*
-
-Maps each item to a slice and flattens the results into one collection.
-
-```go
-nums.Take(3).FlatMap(func(_ int, n int) []int {
-	return []int{n, n * 10}
-}) // [1 10 2 20 3 30]
-```
-
-### `MapValues`
-
-*Map · E L T*
-
-Rewrites every value and keeps the keys. The value type may change.
-
-```go
-stock.MapValues(func(_ string, n int) bool {
-	return n > 0
-}) // map[apple:true fig:true pear:false]
-```
-
-### `MapKeys`
-
-*Map · E L T*
-
-Rewrites every key and keeps the values. When materialized entries share a key,
-the last yielded value wins. For eager maps or a lazy source backed by an ordinary
-Go map, traversal order is unspecified, so you cannot predict that winner. A
-lazy pipeline can yield repeated keys before materialization; use `Unique()`
-on that lazy map when you want the first yielded value instead.
-
-```go
-stock.MapKeys(func(k string, _ int) string {
-	return strings.ToUpper(k)
-}) // map[APPLE:3 FIG:12 PEAR:0]
-```
-
-### `TapEach`
-
-*Slice, Map · E L T*
-
-Calls a function on each item and passes the item through unchanged. Use it
-for logging or counting. On `L` and `T` it runs as items are read, not when
-the chain is built. The eager form returns the original collection, not a copy.
-
-```go
-nums.Take(2).TapEach(func(_ int, n int) {
-	fmt.Println(n)
-}) // prints 1 and 2, returns [1 2]
-```
-
-### `Sort`
-
-*Slice · E L T*
-
-Returns a sorted copy using a comparison function like `slices.SortFunc`. The
-original keeps its order. Lazy forms read and sort the whole source on each
-traversal; they do not cache the sorted result.
-
-```go
-words.Sort(strings.Compare) // [apple banana fig fig kiwi]
-```
-
-### `Reverse`
-
-*Slice · E L T*
-
-Returns the items in reverse order. Lazy forms read the whole source first.
-
-```go
-nums.Take(3).Reverse() // [3 2 1]
-```
-
-### `Concat`
-
-*Slice · E L T; Map · L T*
-
-Returns this collection followed by another of the same type. On a lazy map,
-a key present in both takes the later value once materialized. An eager `Map`
-has `Merge` instead.
-
-```go
-nums.Take(2).Concat(collection.NewSlice([]int{9})) // [1 2 9]
-```
-
-### `Merge`
-
-*Map · E*
-
-`Merge` combines two maps into a new one; the argument's value wins on a shared
-key, regardless of map iteration order. Neither input is changed.
-
-```go
-merged := stock.Merge(collection.NewMap(map[string]int{"fig": 1, "plum": 4}))
-// merged is map[apple:3 fig:1 pear:0 plum:4]; stock["fig"] is still 12.
-```
-
-The result has independent outer map storage, even when just one input has
-entries. Values are copied shallowly: nested pointers, maps, and slices remain
-shared. A nil receiver or argument is treated as empty, so a zero `Map` and
-`NewMap(nil)` can receive entries through the returned result. If the receiver
-is nil and the argument has no entries, the result remains nil; an allocated
-empty receiver stays allocated. See [Merging map overrides](overview.md#merging-map-overrides).
-
-## Filtering
+- [`Filter`](#filter), [`Reject`](#reject), [`Unique`](#unique): select by values.
+- [`Only`](#only), [`Except`](#except): select by map keys.
 
 ### `Filter`
 
 *Slice, Map · E L T*
 
-Keeps the items for which the function returns true.
-
-```go
-nums.Filter(even) // [2 4 6]
-```
+`Filter` retains matching values in source order: `orders.Filter(ready)` keeps
+`ord-41` and `ord-43`. E allocates independent shallow result storage. On T,
+source and predicate errors are forwarded, not filtered out.
 
 ### `Reject`
 
 *Slice, Map · E L T*
 
-The inverse of `Filter`: drops the items for which the function returns true.
-
-```go
-nums.Reject(even) // [1 3 5]
-```
+`Reject` retains values for which the predicate is false:
+`orders.Reject(ready)` keeps `ord-42`. It is the inverse selection of
+[`Filter`](#filter), not an alias; T still forwards errors unchanged.
 
 ### `Unique`
 
 *Slice · E L T; Map · L T*
 
-On a slice, keeps the first item for each key the function returns. The lazy
-forms of a map deduplicate by key, which only matters for sources that can
-repeat a key.
-
-```go
-words.Unique(func(_ int, s string) string {
-	return s
-}) // [apple fig banana kiwi]
-```
+`Unique` keeps the first slice item for each comparable callback key:
+`orders.Unique(zone)` keeps `ord-41` and `ord-42`. Lazy forms retain a seen-key
+set per traversal. On lazy maps, `capacity.Lazy().Unique()` takes no callback
+and keeps the first entry per key. Materialization without `Unique` keeps the
+last duplicate instead.
 
 ### `Only`
 
 *Map · E L T*
 
-Keeps only the listed keys.
-
-```go
-stock.Only("apple", "fig") // map[apple:3 fig:12]
-```
+`Only` retains listed keys: `capacity.Only("north")` contains `north: 8`.
+T forwards all source errors, even if the associated key would be excluded.
 
 ### `Except`
 
 *Map · E L T*
 
-Drops the listed keys.
+`Except` excludes listed keys: `capacity.Except("south")` contains `north: 8`.
+Like [`Only`](#only), it does not hide source errors on T.
+
+## Reshaping Values
+
+- [`Map`](#map), [`FlatMap`](#flatmap), [`MapValues`](#mapvalues), [`MapKeys`](#mapkeys): change value or key types.
+- [`Sort`](#sort), [`Reverse`](#reverse), [`Concat`](#concat), [`Merge`](#merge): order or combine collections.
+
+### `Map`
+
+*Slice · E L T*
+
+`Map` transforms each item and can change its type:
 
 ```go
-stock.Except("pear") // map[apple:3 fig:12]
+ids := orders.Map(func(_ int, order Order) string {
+	return order.ID
+})
 ```
 
-## Slicing and windowing
+`ids` contains `ord-41`, `ord-42`, and `ord-43`, in order. T callbacks return
+`(value, error)` instead; a failed conversion yields an error rather than a value.
 
-Out-of-range counts never panic: `Take` and `Skip` clamp, and a page past the
-end is empty. `Take` and `Skip` on an eager `Slice` return a window onto the
-same array; see [Aliasing and allocation](overview.md#aliasing-and-allocation).
+### `FlatMap`
+
+*Slice · E L T*
+
+`FlatMap` expands each item into zero or more values, preserving source and
+expansion order:
+
+```go
+labels := orders.Take(1).FlatMap(func(_ int, order Order) []string {
+	return []string{order.ID, order.Zone}
+})
+```
+
+`labels` contains `ord-41` and `north`. A nil or empty expansion contributes
+no values. T callbacks return an additional error.
+
+### `MapValues`
+
+*Map · E L T*
+
+`MapValues` retains keys and transforms values, possibly to a new type:
+
+```go
+available := capacity.MapValues(func(_ string, slots int) bool {
+	return slots > 0
+})
+```
+
+`available` contains `north: true` and `south: false`.
+
+### `MapKeys`
+
+*Map · E L T*
+
+`MapKeys` retains values and transforms keys. With `strings` imported:
+
+```go
+labels := capacity.MapKeys(func(name string, _ int) string {
+	return strings.ToUpper(name)
+})
+```
+
+`labels` contains `NORTH: 8` and `SOUTH: 0`. Colliding keys keep the last
+materialized value. A Go map's unspecified order makes that winner unspecified;
+lazy sources can retain duplicates until materialization.
+
+### `Sort`
+
+*Slice · E L T*
+
+`Sort` sorts a shallow copy using a comparison function. With `cmp` imported:
+
+```go
+sorted := orders.Sort(func(left, right Order) int {
+	return cmp.Compare(left.Units, right.Units)
+})
+```
+
+`sorted` contains `ord-42`, `ord-43`, then `ord-41`; `orders` keeps its order.
+The comparator must define a strict weak ordering. Sorting is not stable.
+L and T read the whole source on each traversal before yielding; T yields only
+the error if materialization fails, discarding the prefix.
+
+### `Reverse`
+
+*Slice · E L T*
+
+`Reverse` reverses a shallow copy: `orders.Reverse()` begins with `ord-43`.
+L and T buffer the whole source on each traversal; T discards partial results
+if source materialization fails, as with [`Sort`](#sort).
+
+### `Concat`
+
+*Slice · E L T; Map · L T*
+
+`Concat` appends another collection of the same form:
+`orders.Take(1).Concat(orders.Skip(2))` contains `ord-41`, then `ord-43`.
+E copies outer storage. Lazy forms traverse the first source before the second;
+early stop can avoid the second source entirely. Lazy-map duplicate keys remain
+until materialization, where later entries win. Eager maps use [`Merge`](#merge).
+
+### `Merge`
+
+*Map · E*
+
+`Merge` gives the argument precedence in independent outer storage:
+`capacity.Merge(collection.NewMap(map[string]int{"south": 4}))` contains
+`north: 8` and `south: 4`, without changing either input. Nested references
+remain shared. Nil inputs count as empty; a nil receiver merged with no entries
+stays nil. Keep the return value rather than expecting receiver mutation.
+
+## Windowing Records
+
+- [`Take`](#take), [`Skip`](#skip), [`TakeWhile`](#takewhile), [`TakeUntil`](#takeuntil), [`SkipWhile`](#skipwhile), [`SkipUntil`](#skipuntil): select prefixes or suffixes.
+- [`Nth`](#nth), [`ForPage`](#forpage), [`Chunk`](#chunk), [`Sliding`](#sliding), [`Partition`](#partition): select positions or groups.
 
 ### `Take`
 
-*Slice, Map · E L T (map: L T)*
+*Slice · E L T; Map · L T*
 
-Keeps the first `n` items. Zero or negative `n` produces an empty result without
-consuming a lazy source, including no errors on the fallible form. Positive
-fallible limits count only successful values or entries, not forwarded errors.
-Lazy map entries with duplicate keys count separately. Consumption stops at the
-last requested success or when you stop iterating, whichever comes first.
-
-```go
-nums.Take(2) // [1 2]
-```
+`Take` keeps at most a count: `orders.Take(2)` contains the first two orders.
+E shares the source array and clamps to bounds. Nonpositive limits produce no
+items and do not invoke lazy sources, including no source errors on T.
+Positive T limits count successes, not errors; duplicate map entries count
+separately. Reaching the last requested success stops upstream immediately.
 
 ### `Skip`
 
-*Slice, Map · E L T (map: L T)*
+*Slice · E L T; Map · L T*
 
-Drops the first `n` items. Zero or negative `n` drops nothing. On the fallible
-form, only successful values or entries consume skipped positions; errors are
-forwarded even within that skipped prefix. Duplicate map keys count as separate
-entries. Continuing after an error preserves the remaining skipped count.
-
-```go
-nums.Skip(4) // [5 6]
-```
+`Skip` discards a prefix: `orders.Skip(2)` contains `ord-43`. Nonpositive
+counts skip nothing; E clamps counts and shares the source array. T counts
+successes while forwarding errors even inside skipped positions.
 
 ### `TakeWhile`
 
 *Slice · E L T*
 
-Keeps items from the start until the function first returns false.
-
-```go
-nums.TakeWhile(func(_ int, n int) bool {
-	return n < 4
-}) // [1 2 3]
-```
+`TakeWhile` retains a prefix until the predicate is false:
+`orders.TakeWhile(ready)` contains `ord-41`. It consumes but excludes the
+first false item. E copies the selected prefix; T errors do not end selection
+if the consumer continues.
 
 ### `TakeUntil`
 
 *Slice · E L T*
 
-Keeps items from the start until the function first returns true.
-
-```go
-nums.TakeUntil(func(_ int, n int) bool {
-	return n > 3
-}) // [1 2 3]
-```
+`TakeUntil` retains a prefix until the predicate is true:
+`orders.TakeUntil(ready)` is empty because the first order matches. The matching
+item is excluded. It uses [`TakeWhile`](#takewhile) with the predicate inverted;
+errors are forwarded, not inverted.
 
 ### `SkipWhile`
 
 *Slice · E L T*
 
-Drops items from the start until the function first returns false, then keeps
-the rest.
-
-```go
-nums.SkipWhile(func(_ int, n int) bool {
-	return n < 4
-}) // [4 5 6]
-```
+`SkipWhile` drops the leading matches: `orders.SkipWhile(ready)` contains
+`ord-42` and `ord-43`. It includes the first false item and does not evaluate
+the predicate on the rest. E shares the source array; T errors leave the
+skipping phase unchanged.
 
 ### `SkipUntil`
 
 *Slice · E L T*
 
-Drops items from the start until the function first returns true, then keeps
-the rest.
-
-```go
-nums.SkipUntil(func(_ int, n int) bool {
-	return n > 3
-}) // [4 5 6]
-```
+`SkipUntil` drops items until the predicate is true:
+`orders.SkipUntil(ready)` contains all three orders. It includes the matching
+item and uses [`SkipWhile`](#skipwhile) with the predicate inverted. E shares
+the source array.
 
 ### `Nth`
 
 *Slice · E L T*
 
-`Nth` keeps every `n`th item, starting at an optional zero-based offset. The
-offset defaults to zero, and negative offsets are clamped to zero on all three
-forms. An offset at or beyond the source length selects no items. It panics if
-`n` is zero or less.
+`Nth` samples every nth position: `orders.Nth(2)` contains `ord-41` and
+`ord-43`; `orders.Nth(2, 1)` contains `ord-42`. The optional zero-based offset
+defaults to zero; negative offsets clamp to zero. Offsets beyond the source
+select nothing. The step must be positive or the call panics.
 
-```go
-nums.Nth(2)     // [1 3 5]
-nums.Nth(2, 1)  // [2 4 6]
-nums.Nth(2, -1) // [1 3 5]
-```
-
-Every positive `int` step is valid, including `math.MaxInt` from the standard
-library's `math` package. For example, `nums.Nth(math.MaxInt, 1)` selects only
-`[2]`; the next position does not wrap into the source. An empty eager result
-is nil, and a nonempty eager result has independent slice storage with shallow
-element copies.
-
-Lazy forms defer source consumption until iteration and stop immediately when
-you stop iterating. Selection counts source positions, not supplied iterator
-indices; `LazySlice` yields dense output indices from zero. On `TryLazySlice`,
-only successful items count toward the offset and step. Errors are forwarded
-in order, even while skipping items. If the source can continue, continuing
-after an error resumes the same selection. An error's accompanying value must
-be ignored.
+Every positive `int` step, including `math.MaxInt`, is valid without wrapping.
+E allocates shallow result storage and returns nil for no selections. L counts
+positions rather than source-supplied indexes and yields dense indexes. T
+counts only successes and forwards errors even within skipped positions.
+Continued traversal resumes selection progress; stopping avoids the next gap.
 
 ### `ForPage`
 
 *Slice · E L T*
 
-Returns one page for a one-based page number and page size.
-It composes `Skip((page-1)*perPage)` with `Take(perPage)`; it does not normalize
-request parameters or detect integer overflow. Validate untrusted page inputs
-before calling it. A nonpositive page size produces no items.
-
-```go
-nums.ForPage(2, 4) // [5 6]
-```
+`ForPage` selects a one-based page: `orders.ForPage(2, 2)` contains `ord-43`.
+It composes `Skip((page-1)*perPage)` and `Take(perPage)` without validating
+arguments or overflow. Validate positive inputs and a representable product
+before use. E shares storage; T forwards errors in skipped positions. This
+selects collection positions, not [database result pages](../queries/pagination.md).
 
 ### `Chunk`
 
 *Slice · E L T*
 
-Splits the items into consecutive groups of a size. The eager form returns
-`[]Slice[T]`, sharing the input's backing array. `LazySlice` returns
-`iter.Seq2[int, []T]`; `TryLazySlice` returns `iter.Seq2[[]T, error]`.
-The final group may be shorter. It panics if the size is zero or less.
-
-```go
-nums.Chunk(4) // [[1 2 3 4] [5 6]]
-```
+`Chunk` forms consecutive groups: `orders.Chunk(2)` returns groups of two and
+one orders. The size must be positive or the call panics. E returns
+`[]Slice[T]` whose windows share the source array. L returns
+`iter.Seq2[int, []T]`; T returns `iter.Seq2[[]T, error]`. Lazy chunks own
+independent shallow storage and include the final short chunk. T errors leave
+the partial chunk unchanged if traversal continues; stopping on an error does
+not flush that prefix as a chunk.
 
 ### `Sliding`
 
 *Slice · E L T*
 
-`Sliding` returns complete windows of a size, advancing their starts by an
-optional step (default one). A step larger than the size skips items between
-windows.
-Incomplete windows at the end are dropped. It panics if the size or step
-is zero or less. The eager form returns `[]Slice[T]`, the lazy forms an
-`iter.Seq2` with the same index/error distinction as [`Chunk`](#chunk).
+`Sliding` forms complete windows: `orders.Sliding(2)` returns windows
+`[ord-41, ord-42]` and `[ord-42, ord-43]`. An optional step defaults to one;
+`orders.Sliding(2, 3)` returns only the first window. Incomplete final windows
+are omitted. Nonpositive sizes or steps panic; positive steps through
+`math.MaxInt` do not wrap the next start.
 
-```go
-nums.Sliding(3)    // [[1 2 3] [2 3 4] [3 4 5] [4 5 6]]
-nums.Sliding(3, 2) // [[1 2 3] [3 4 5]]
-nums.Sliding(2, 3) // [[1 2] [4 5]]
-```
-
-Positive steps through `math.MaxInt` are valid without wrapping the next window
-start. For example, `nums.Sliding(1, math.MaxInt)` returns only `[[1]]`.
-If no complete window fits, the eager result is nil and the lazy forms yield
-no windows.
-
-Eager windows share the input's backing array, including overlapping items.
-Lazy windows copy elements into independent slice storage, but pointers, maps,
-and slices inside elements still refer to the source's underlying objects.
-The lazy forms consume nothing until iteration. On the fallible form, only
-successful items count toward the size and step. Errors are forwarded
-in order, including in skipped gaps, without changing a partial window or the
-remaining gap. Continuing after an error resumes windowing; ignore the window
-yielded with that error. Continuation still depends on the source having more
-results. Stopping iteration on a window or an error stops
-source consumption immediately, without reading the next gap.
+Return types match [`Chunk`](#chunk). E windows alias the source and each other
+where they overlap; lazy windows own independent shallow storage. T counts
+only successes, forwarding errors even in gaps without changing window or gap
+progress. Stopping on a window or error stops consumption before the next gap.
 
 ### `Partition`
 
 *Slice · E L T*
 
-Splits a slice in two: the items that satisfy the function, then the rest. On
-lazy forms it reads the whole source when called, not when the results are read.
-On `T`, a source or predicate error makes both returned collections yield that
-error; they do not expose a partial partition.
+`Partition` splits matching and remaining items:
+`selected, rest := orders.Partition(ready)` gives two ready orders and one
+other order. E owns both shallow result slices. L and T consume at the call,
+not on later traversal, and buffer replayable results. T returns two fallible
+iterators: on a source or predicate error, both yield that error and no partial
+partition values.
 
-```go
-evens, odds := nums.Partition(even) // [2 4 6] [1 3 5]
-```
+## Grouping Records
 
-## Grouping
+- [`GroupBy`](#groupby), [`KeyBy`](#keyby), [`CountBy`](#countby): retain groups, one item per key, or counts.
 
 ### `GroupBy`
 
 *Slice · E L T*
 
-Groups items by a key into a `Map[K, Slice[T]]`, keeping the original order
-within each group. Lazy forms read the whole source when called.
-
-```go
-teams := users.GroupBy(func(_ int, u User) string {
-	return u.Team
-})
-teams["core"].Len() // 2
-```
+`GroupBy` retains ordered groups: `orders.GroupBy(zone)["north"]` contains
+`ord-41` and `ord-43`. Group slices and the outer map own shallow storage;
+outer-map order is unspecified. L and T consume immediately. T returns
+`(groups, error)` and preserves successful prefix groups on failure.
 
 ### `KeyBy`
 
 *Slice · E L T*
 
-Builds a `Map` from a key you choose per item. If two items give the same key,
-the later one wins.
-
-```go
-names := users.KeyBy(func(_ int, u User) string {
-	return u.Name
-})
-names["Bob"].Age // 17
-```
+`KeyBy` retains the last item for each key: `orders.KeyBy(zone)["north"]`
+is `ord-43`. It allocates a new outer map. L and T consume immediately;
+T returns its prefix map and the first error.
 
 ### `CountBy`
 
 *Slice · E L T*
 
-Counts items per key into a `Map[K, int]`.
+`CountBy` counts observed keys: `orders.CountBy(zone)` contains `north: 2`
+and `south: 1`. Absent map keys read as zero. L and T consume immediately;
+T returns prefix counts with the first error.
 
-```go
-users.CountBy(func(_ int, u User) string {
-	return u.Team
-}) // map[core:2 web:1]
-```
+## Finding Answers
 
-## Retrieving and searching
+- [`First`](#first), [`FirstWhere`](#firstwhere), [`Last`](#last), [`Get`](#get): retrieve a value and an absence flag.
+- [`Has`](#has), [`HasAny`](#hasany), [`Contains`](#contains), [`Every`](#every): test membership or conditions.
+- [`Reduce`](#reduce), [`Len`](#len), [`IsEmpty`](#isempty), [`IsNotEmpty`](#isnotempty): summarize values or presence.
 
 ### `First`
 
 *Slice · E L T*
 
-Returns the first item and whether there was one, so an empty collection never
-panics. On `T` it returns `(item, ok, err)`.
-
-```go
-n, ok := nums.First() // 1 true
-```
+`First` retrieves the initial item: `order, found := orders.First()` gives
+`ord-41` and true. Empty input returns zero and false without panic. L consumes
+at most one item; T returns `(item, found, error)` and stops even if the first
+result is an error.
 
 ### `FirstWhere`
 
 *Slice · E L T*
 
-Returns the first item that satisfies the function, and whether one did.
-
-```go
-n, ok := nums.FirstWhere(func(_ int, n int) bool {
-	return n > 3
-}) // 4 true
-```
+`FirstWhere` retrieves the first match:
+`order, found := orders.FirstWhere(ready)` gives `ord-41` and true.
+No match returns zero and false. Lazy traversal stops at the first match;
+T also stops at the first source or predicate error.
 
 ### `Last`
 
 *Slice · E L T*
 
-Returns the last item and whether there was one. Lazy forms read the whole
-source.
-
-```go
-n, ok := nums.Last() // 6 true
-```
+`Last` retrieves the final item: `order, found := orders.Last()` gives
+`ord-43` and true. Empty input returns zero and false. L reads the whole
+source; T stops at an error and returns the last successful prefix item,
+its flag, and that error.
 
 ### `Get`
 
 *Map · E*
 
-Returns the value for a key and whether the key exists.
-
-```go
-n, ok := stock.Get("fig") // 12 true
-```
+`Get` checks a key: `slots, found := capacity.Get("south")` gives zero and
+true. An absent key gives zero and false, distinguishing absence from a stored zero.
 
 ### `Has`
 
 *Map · E*
 
-Reports whether the key exists.
-
-```go
-stock.Has("kiwi") // false
-```
+`Has` tests key presence: `capacity.Has("south")` is true even though its
+stored value is zero. Lazy maps use [`HasAny`](#hasany) for key searches.
 
 ### `HasAny`
 
 *Map · E L T*
 
-Reports whether at least one of the keys exists.
-
-```go
-stock.HasAny("kiwi", "pear") // true
-```
+`HasAny` tests whether any requested key exists:
+`capacity.HasAny("west", "south")` is true. Lazy forms stop at a match;
+T also stops at a source error. No requested keys returns false without
+traversing the source or observing its errors.
 
 ### `Contains`
 
 *Slice, Map · E L T*
 
-Reports whether any item satisfies a function. It takes a condition, not a
-value; for a plain value use `slices.Contains` on `Items()`. Lazy forms stop
-at the first match.
-
-```go
-nums.Contains(func(_ int, n int) bool {
-	return n == 4
-}) // true
-```
+`Contains` tests a predicate: `orders.Contains(ready)` is true. It stops at
+the first match, or the first source/predicate error on T. Empty input is false.
+It does not accept a plain value; use standard-library `slices.Contains` on
+`Items()` for direct comparable-value membership.
 
 ### `Every`
 
 *Slice, Map · E L T*
 
-Reports whether every item satisfies the function. It is true for an empty
-collection.
-
-```go
-stock.Every(func(_ string, n int) bool {
-	return n > 0
-}) // false
-```
-
-## Aggregating and counting
+`Every` tests all items: `orders.Every(ready)` is false. It stops at the first
+false result or, on T, error. Empty input returns true without invoking the predicate.
 
 ### `Reduce`
 
 *Slice · E L T*
 
-Folds the items into one value of any type, starting from an initial value.
+`Reduce` folds items into a value of any type, starting with the initial value:
 
 ```go
-nums.Reduce(func(sum, _ int, n int) int {
-	return sum + n
-}, 0) // 21
+units := orders.Reduce(func(total, _ int, order Order) int {
+	return total + order.Units
+}, 0)
 ```
+
+`units` is 6; empty input returns the initial zero. L and T consume at the
+call. On T, source errors return the preceding accumulator; callback errors
+return the accumulator supplied by that failing callback, with its error.
 
 ### `Len`
 
 *Slice, Map · E L T*
 
-Returns the number of items. Lazy forms read the whole source to count it.
-
-```go
-nums.Len() // 6
-```
+`Len` counts items: `orders.Len()` is 3. Lazy forms traverse the entire source;
+T returns the successful prefix count and first error. Lazy-map duplicate
+entries count separately, even if materializing would collapse their keys.
 
 ### `IsEmpty`
 
 *Slice, Map · E L T*
 
-Reports whether there are no items. Lazy forms read at most one item.
-
-```go
-nums.IsEmpty() // false
-```
+`IsEmpty` tests absence: `orders.IsEmpty()` is false. Lazy forms read at most
+one result, not the whole source. An initial T error returns false and that
+error; check the error before interpreting the boolean.
 
 ### `IsNotEmpty`
 
 *Slice, Map · E L T*
 
-The inverse of [`IsEmpty`](#isempty).
+`IsNotEmpty` negates [`IsEmpty`](#isempty): `orders.IsNotEmpty()` is true.
+On T, an initial error returns true with that error, not proof of a successful
+item. Always check its error first.
 
-```go
-nums.IsNotEmpty() // true
-```
+## Reading Map Parts
 
-## Map keys and values
-
-Getting the keys or values of an eager map uses package functions, `Keys` and
-`Values`. Map iteration order is not
-defined, so sort the result when order matters.
+- [`Keys`](#keys), [`Values`](#values), [`LazyKeys`](#lazykeys), [`LazyValues`](#lazyvalues), [`Invert`](#invert): extract or reverse key/value roles.
 
 ### `Keys`
 
-*Map · E*
+*Map · E · Package Function*
 
-Returns the keys as a `Slice`.
-
-```go
-collection.Keys(stock).Sort(strings.Compare) // [apple fig pear]
-```
+`Keys` collects keys into a `Slice`: `collection.Keys(capacity)` contains
+`north` and `south`, in unspecified order. With `strings` imported,
+`collection.Keys(capacity).Sort(strings.Compare)` gives repeatable order.
 
 ### `Values`
 
-*Map · E*
+*Map · E · Package Function*
 
-Returns the values as a `Slice`.
-
-```go
-collection.Values(stock).Sort(cmp.Compare[int]) // [0 3 12]
-```
+`Values` collects values into a `Slice`: `collection.Values(capacity)`
+contains 8 and 0 in unspecified order. It does not establish an ordering
+relationship with a separate [`Keys`](#keys) traversal.
 
 ### `LazyKeys`
 
 *Map · L T*
 
-Returns the keys of a lazy map. On `L` it is the function
-`collection.LazyKeys(m)` and returns a `LazySlice`; on `T` it is the method
-`m.LazyKeys()` and returns an `iter.Seq2[K, error]`.
-
-```go
-collection.LazyKeys(stock.Lazy()).Len() // 3
-```
+`LazyKeys` projects keys without consuming now. On L,
+`collection.LazyKeys(capacity.Lazy())` returns `LazySlice[string]`. On T,
+`capacity.Try().LazyKeys()` is a method returning `iter.Seq2[string, error]`,
+not a collection wrapper. Both preserve duplicates and source order.
 
 ### `LazyValues`
 
 *Map · L T*
 
-The values counterpart of `LazyKeys`: `collection.LazyValues(m)` on `L`,
-`m.LazyValues()` on `T`.
+`LazyValues` is the value projection corresponding to [`LazyKeys`](#lazykeys):
+`collection.LazyValues(capacity.Lazy())` returns `LazySlice[int]`;
+`capacity.Try().LazyValues()` returns `iter.Seq2[int, error]`.
+Ignore any key or value paired with a non-nil error.
 
 ### `Invert`
 
-*Map · E*
+*Map · E · Package Function*
 
-Swaps keys and values. When several keys share a value, one of them wins and
-which one is not defined.
+`Invert` swaps comparable keys and values: `collection.Invert(capacity)`
+contains `8: north` and `0: south`. If values collide, the retained original
+key is unspecified because Go-map iteration order is unspecified.
 
-```go
-collection.Invert(collection.NewMap(map[string]int{"a": 1, "b": 2})) // map[1:a 2:b]
-```
+## Consuming Results
 
-## Iterating and materializing
+- [`Items`](#items), [`ItemsAs`](#itemsas), [`ItemsAll`](#itemsall), [`ItemsAsAll`](#itemsasall): extract or materialize containers.
+- [`Iter`](#iter), [`Each`](#each), [`EachAll`](#eachall), [`TapEach`](#tapeach): consume or observe items.
 
 ### `Items`
 
 *Slice, Map · E L T*
 
-Returns the plain Go slice or map. On `L` and `T` it reads the lazy collection
-to the end; on `T` it returns `(items, error)` and stops at the first error.
-Eager forms share storage and preserve nil versus allocated-empty inputs.
-Lazy slice materialization returns nil if no values succeed; lazy map
-materialization returns an allocated map even when empty. Materialized values
-have newly owned outer storage, with shallow element copies.
-
-```go
-nums.Lazy().Take(2).Items() // []int{1, 2}
-```
+`Items` returns the native container: `orders.Items()` is a `[]Order` sharing
+the eager source's storage. E preserves nil versus allocated-empty storage.
+L and T materialize new shallow outer storage; T returns a prefix with the first
+error. Slice materialization with no successes is nil; map materialization is
+allocated even when empty. Repeated lazy calls repeat traversal, not cached data.
 
 ### `ItemsAs`
 
 *Slice, Map · E L T*
 
-Like `Items`, returning your own named slice or map type.
-
-```go
-ids := nums.ItemsAs[IDs]() // IDs
-```
-
-Here `IDs` is a named slice type declared as `type IDs []int`.
+`ItemsAs` is [`Items`](#items) with a named container result. With
+`type Orders []Order`, use `orders.ItemsAs[Orders]()`. It has the same eager
+aliasing, lazy allocation, and T first-error rules.
 
 ### `ItemsAll`
 
 *Slice, Map · T*
 
-Like `Items`, but reads to the end, keeps every item that succeeded, and
-joins the errors. The slice result is nil when no successful values are
-collected, even if errors were yielded; the map result is allocated.
+`ItemsAll` retains successes and joins errors:
+`items, err := orders.Try().ItemsAll()`. It reads the full finite source while
+continuation is possible. It does not retry failed reads. Empty successful
+slice output is nil; map output is allocated.
 
 ### `ItemsAsAll`
 
 *Slice, Map · T*
 
-`ItemsAll` into your own named type.
+`ItemsAsAll` is [`ItemsAll`](#itemsall) returning a named container. With
+`type Orders []Order`, use `items, err := orders.Try().ItemsAsAll[Orders]()`.
+Errors still accompany any collected successes.
 
 ### `Iter`
 
 *Slice, Map · E L T*
 
-Returns an `iter.Seq2` for `for range` and the `iter` package: `(index, item)`
-or `(key, value)`. On `T`, slices yield `(item, error)` and maps yield
-`(MapEntry, error)`. Map order is undefined.
-
-```go
-for i, n := range nums.Take(2).Iter() {
-	fmt.Println(i, n)
-}
-// 0 1, then 1 2
-```
+`Iter` returns a standard `iter.Seq2` without consuming now:
+`orders.Iter()` yields `(index, Order)`. Maps yield `(key, value)`.
+T slices yield `(item, error)` and T maps `(MapEntry, error)`. Lazy collections
+can also be ranged over directly. Iterator conversion changes no replay or
+ownership guarantees.
 
 ### `Each`
 
 *Slice, Map · E L T*
 
-Calls a function for every item. On `T` the function returns an `error`, and
-`Each` stops at the first error, whether the source or your function returned
-it.
+`Each` consumes items for side effects. With `fmt` imported:
 
 ```go
-nums.Take(2).Each(func(i int, n int) {
-	fmt.Println(i, n)
-}) // 0 1, then 1 2
+orders.Take(1).Each(func(_ int, order Order) {
+	fmt.Println(order.ID)
+})
 ```
+
+This prints `ord-41`. T callbacks return an error; `Each` returns the first
+source or callback error. Earlier side effects are not rolled back.
 
 ### `EachAll`
 
 *Slice, Map · T*
 
-Like `Each`, but keeps going after an error and returns all errors joined.
-On `TryLazySlice`, callback indices count successful source values, including
-ones whose callback fails. Source errors do not advance that index or invoke
-the callback; this differs from streaming callback index reuse after an error.
+`EachAll` continues after source or callback errors and joins them:
 
-## JSON
+```go
+err := orders.Try().EachAll(func(_ int, order Order) error {
+	fmt.Println(order.ID)
+	return nil
+})
+```
+
+It prints all three IDs and returns nil. On fallible slices its callback index
+advances for every successful source value, even if that callback fails.
+Source errors bypass the callback and do not advance its index. Continuation
+cannot make a terminal source recover.
+
+### `TapEach`
+
+*Slice, Map · E L T*
+
+`TapEach` observes items while passing them along unchanged:
+
+```go
+observed := orders.Lazy().TapEach(func(_ int, order Order) {
+	fmt.Println(order.ID)
+})
+```
+
+Nothing prints until traversal. E instead calls the observer immediately and
+returns the original collection, not a copy. On T, callback failures replace
+their value with an error and do not advance that streaming callback's index.
+
+## Encoding JSON
+
+- [`JSONSchemaType`](#jsonschematype): declare eager wire shapes.
+- [`MarshalJSON`](#marshaljson), [`MarshalJSONTo`](#marshaljsonto): encode containers.
+- [`UnmarshalJSON`](#unmarshaljson), [`UnmarshalJSONFrom`](#unmarshaljsonfrom): decode containers.
 
 Use `encoding/json/v2` for ordinary `json.Marshal` and `json.Unmarshal` calls.
-All collection JSON methods use that package, including methods named for
-compatibility with the legacy interfaces; their names do not select legacy
-encoding or decoding defaults.
+The compatibility method names below still use JSON v2 behavior, not legacy
+encoding defaults.
 
 ### `JSONSchemaType`
 
 *Slice, Map · E*
 
-Declares the identical native slice or map type used for default JSON encoding.
-Schema tools can inspect this metadata without reading values or importing the
-collection module. Import the standard-library `fmt` and `reflect` packages to
-compare the type directly:
-
-```go
-fmt.Println(nums.JSONSchemaType() == reflect.TypeFor[[]int]()) // true
-```
-
-You normally let [`validate.Infer`](../validation/advanced.md#describing-types-without-rules)
-read the declaration. It preserves nested element/value schemas rather than
-treating eager collections as opaque custom marshalers. Byte slices retain
-their base64 string shape. Lazy collections do not declare this protocol;
-describing a source does not materialize or validate it. To attach runtime rules
-to an eager collection field, use the
-[named-container adapter](../validation/collections.md#checking-named-containers).
+`JSONSchemaType` declares the identical native container type as a
+`reflect.Type`: `orders.JSONSchemaType()` is `reflect.TypeFor[[]Order]()`.
+Schema tools use that declaration for [output descriptions](../validation/json-schema.md#describe-output),
+including nested element metadata and byte slices' base64 shape. It adds no
+runtime rules; use the [named-container adapter](../validation/collections.md#named-containers)
+for logical validation. Lazy types do not declare this protocol.
 
 ### `MarshalJSON`
 
 *Slice, Map · E L T*
 
-Every collection encodes as the slice or map it wraps; lazy forms read their
-source to the end. A nil non-byte eager slice encodes as `[]` and a nil eager map
-as `{}` with default settings, including through their compatibility `MarshalJSON`
-methods. Byte-slice collections encode base64 strings, including an empty string
-for nil or empty storage. `MarshalJSONTo` implements the JSON v2 streaming
-interface and returns
-encoding or writer errors. Fallible forms return the first source error instead
-of encoding a partial collection.
+`MarshalJSON` is the compatibility encoding method. Prefer ordinary encoding,
+for example `data, err := json.Marshal(capacity.Only("north"))`, whose successful
+result is `{"north":8}`. Default nil non-byte slices encode as `[]`, maps as
+`{}`, and byte slices as base64 strings, with `""` for empty storage.
 
-```go
-data, err := json.Marshal(nums.Take(2)) // On success, data contains [1,2].
-```
+Lazy forms materialize the whole finite source; encoding is not progressive
+item delivery. T returns the first source error instead of encoding a partial
+collection. Encoding errors also remain visible.
 
-### `UnmarshalJSON`
+### `MarshalJSONTo`
 
 *Slice, Map · E L T*
 
-All six collection types provide pointer-receiver `UnmarshalJSON` and its
-`encoding/json/v2` counterpart, `UnmarshalJSONFrom`. Lazy forms decode the whole
-array or object, then wrap the decoded data as a replayable iterator; decoding
-is not streaming. Fallible forms contain successful items after decoding.
-Lazy receivers replace their iterator only after successful decoding; eager
-receivers follow JSON v2 decoding and merging rules, and errors can leave partial
-updates. Both compatibility and streaming methods return decoding errors.
+`MarshalJSONTo` implements the JSON v2 streaming interface. With a configured
+`*jsontext.Encoder` named `encoder`, call `err := orders.MarshalJSONTo(encoder)`.
+Encoder options control formatting; encoding and writer errors are returned.
+Lazy forms still materialize first, and T writes no collection data if source
+materialization fails. For ordinary use, prefer [`MarshalJSON`](#marshaljson)'s
+`json.Marshal` example.
+
+### `UnmarshalJSON`
+
+*Slice, Map · E L T · Pointer Receiver*
+
+`UnmarshalJSON` is the compatibility decoding method. Prefer `json.Unmarshal`:
 
 ```go
-var items collection.Map[string, int]
-err := items.UnmarshalJSON([]byte(`{"fig":3}`))
-// On success, items is map[fig:3].
+var decoded collection.Map[string, int]
+err := json.Unmarshal([]byte(`{"north":8}`), &decoded)
 ```
 
-For exact signatures, see the
-[`collection` API reference](https://pkg.go.dev/arkoren.dev/foundation/collection).
+On success, `decoded["north"]` is 8. E follows JSON v2 merging rules, and a
+decoding error can leave partial receiver updates. Lazy receivers replace their
+iterator only after successful decoding, installing a replayable source over
+the entire decoded container. T decoded values carry nil source errors. Lazy
+decoding is not streaming input traversal.
+
+### `UnmarshalJSONFrom`
+
+*Slice, Map · E L T · Pointer Receiver*
+
+`UnmarshalJSONFrom` implements JSON v2 decoding from a `*jsontext.Decoder`.
+Given a decoder named `decoder` and the eager map `decoded` above, call
+`err := decoded.UnmarshalJSONFrom(decoder)`. Receiver updates and failure rules
+match [`UnmarshalJSON`](#unmarshaljson). Both streaming interface types come
+from `encoding/json/jsontext`.
+
+For exact declarations, see the [`collection` API reference](https://pkg.go.dev/arkoren.dev/foundation/collection).

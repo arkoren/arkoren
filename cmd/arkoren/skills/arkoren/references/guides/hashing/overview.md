@@ -1,169 +1,129 @@
 ---
 title: Hashing Overview
 nav: Overview
-description: Store passwords so they cannot be recovered, check them at login, tell a wrong password from a broken hash, and know what needs one.
+description: Store password hashes and distinguish a successful password check from a mismatch or a storage failure.
 order: 10
+summary:
+  - Separate accepted-password rules from the work policy used to store passwords.
+  - Store complete salted records and distinguish successful checks, mismatches, and failures.
+  - Keep input encoding consistent and account for login timing and resource limits.
 ---
 
 # Hashing Overview
 
-## Introduction
+Password hashing lets you check a password without storing a readable copy.
+Arkoren's `hash.Hasher` produces an encoded record containing the algorithm,
+work settings, random salt, and digest. Store that entire record; there is no
+decryption operation. A leaked record can still be attacked by guessing passwords.
 
-A service that signs people in with a password must be able to check the
-password without storing a readable copy. If the database leaks, an attacker
-should have to guess each password rather than read it directly. **Password
-hashing** turns a password into an encoded value that lets you check a later
-attempt without decrypting the original. Weak passwords can still be guessed.
+Unlike fast general-purpose hashes such as SHA-256, password-hashing algorithms
+deliberately spend time, and Argon2 also spends memory, on each guess.
 
-Ordinary hash functions such as SHA-256 are the wrong tool for this. They are
-designed to be fast, and an attacker with a leaked database can try billions of
-guesses per second against them. Password hashing functions are deliberately
-slow, and Argon2id also uses substantial memory, so each guess costs time and
-resources. Every hash also gets a random **salt**, so identical passwords produce different
-hashes and each one must be attacked on its own.
+The examples assume a configured `*hash.Hasher` named `hasher`; choose and wire
+one on [Drivers](drivers.md). Argon2id is the recommended choice for new passwords;
+bcrypt serves existing bcrypt databases and compatibility requirements.
+Focused fragments leave routine errors visible rather than showing application
+error propagation. Handle those errors before using their results.
 
-Arkoren's hash service wraps two such functions behind a `Hasher` facade:
-**Argon2id**, the current recommendation, and **bcrypt**, the long-standing
-standard. The driver manages salts and algorithm parameters; the facade also
-encodes typed inputs. Your application stores the resulting hash and checks it
-at login. How slow a hash should be is covered in
-[Choosing the Cost](cost.md), keeping stored hashes current in
-[Upgrading Hashes](upgrading.md), and the two algorithms in
-[Hashing Drivers](drivers.md).
+## Password Policy
 
-## Creating a hasher
+Your password policy decides which new passwords the application accepts. The
+hash policy decides how much work storing and checking them costs. Hashing does
+not enforce minimum length, reject common passwords, or authorize a password
+change: even an empty value is valid input to the hashing contract.
 
-After [installing the Argon2id driver](drivers.md#argon2id), create a hasher at
-startup and share it:
+Validate new passwords before hashing, and apply request-size and password-byte
+limits before any expensive check. bcrypt requires a limit of **72 bytes** on
+both creation and checking. Its native verifier can accept a longer attempt
+sharing a valid 72-byte prefix; never truncate the attempt. Argon2 has no such
+bcrypt-specific limit, but still needs [bounded input and work](cost.md#bound-request-work).
 
-```go
-import (
-	"arkoren.dev/core/service/hash"
-	"arkoren.dev/driver/argon2/argon2hash"
-)
+Do not apply a newly tightened minimum-length rule to existing login attempts;
+an older valid password might no longer satisfy your registration policy.
+Keep applicable resource limits and scheme-specific input limits on that path.
 
-hasher := hash.New(argon2hash.New())
-```
+## Store Passwords
 
-Neither driver has a lifecycle or can fail to start, so there is nothing to
-register on the application. A hasher never changes after it is created and is
-safe to use from many requests at once.
-
-To observe hashing cost and check outcomes, set `Builder.Telemetry` in a trailing
-`hash.New` callback using your [telemetry service](../observability/telemetry.md).
-If you omit it or set nil, each call follows `telemetry.Default()`; pass
-`telemetry.New(nil)` to disable reporting explicitly. This emits aggregate counts
-and durations, not traces or events. Encoding failures count as errors; a wrong
-password with no error counts as a mismatch. Rehash metrics report policy
-observations, not stored password updates. Metrics never contain passwords,
-stored hashes or native error text. The [hash API reference](https://pkg.go.dev/arkoren.dev/core/service/hash)
-lists metric names and bounded label values.
-
-Focused examples keep error results visible but omit routine error handling.
-Handle those errors in your application before using the results.
-
-## Hashing a password
-
-At sign-up, or when a person changes their password, hash it and store the
-result. If you use bcrypt, validate the password's 72-byte limit first; `Hash`
-returns an error for longer inputs. Argon2 does not have that bcrypt-specific
-limit; bound accepted input and concurrent work as described in
-[Choosing the Cost](cost.md).
+At registration, hash only the validated password field, not the whole request.
+For example, your decoded registration input can have this shape:
 
 ```go
-encoded, err := hasher.Hash(password)
+type RegistrationInput struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
 ```
 
-The result is a byte slice containing a self-describing encoded hash. It records the algorithm, the
-parameters, and the salt next to the hash itself, so it is all you need to
-check a password later. Store it as is, in a text or binary column:
-
-```text
-$argon2id$v=19$m=65536,t=3,p=4$Pq0Rq7yXH0aZ0V3hQyZ2Jg$hY1KxJf3...
-```
-
-Leave room in the column: an Argon2id hash with the default settings is about
-100 characters, and longer salts or hashes make it longer. A `TEXT` column
-avoids a fixed length limit. If you use `VARCHAR(255)`, check that your chosen
-salt and hash lengths still fit when you change the settings.
-
-## Checking a password
-
-At login, check the password the person typed against the stored hash.
-
-If you use bcrypt, your application must reject attempts longer than 72 bytes
-before calling `Check`. Native comparison can accept a longer attempt sharing
-a valid 72-byte prefix; the driver does not change that policy. Never truncate
-the attempt. Keep the same bound when [upgrading hashes](upgrading.md), so an
-unverified suffix cannot become a new password under another algorithm.
-
-Import `auth` from `arkoren.dev/core/http/auth` for the rejection below.
+With `input` already validated, create the stored record:
 
 ```go
-ok, err := hasher.Check(attempt, user.PasswordHash)
+stored, err := hasher.Hash(input.Password)
+```
+
+On success, persist `stored` unchanged in the account's password-hash column.
+Each call generates a fresh salt, so hashing the same password twice produces
+different records that both verify. You do not generate or store a separate salt.
+
+Use a column large enough for the chosen format and future policy changes.
+A text column avoids a fixed format-length assumption; if you choose a bounded
+column, test that complete records fit after changing salt or digest lengths.
+Never store or log the plaintext password alongside the record.
+
+## Check Passwords
+
+At login, load the hash from application-owned account storage. Do not let a
+request supply the stored hash or its work settings: verification uses the
+record's settings, not the current new-hash policy.
+
+Assume a decoded `LoginInput` with a `Password string` field, an account named
+`account`, and `auth` imported from `arkoren.dev/core/http/auth`. After enforcing
+the input limits above, check the attempt:
+
+```go
+matched, err := hasher.Check(input.Password, account.PasswordHash)
 if err != nil {
 	return err
 }
-if !ok {
+if !matched {
 	return auth.ErrUnauthenticated
 }
 ```
 
-The two results mean different things. `false` with no error is a wrong
-password. An error wrapping `hash.ErrInvalidHash` means the stored value is not
-a hash this driver understands, for example a truncated column or a hash from
-another algorithm, which is a bug or data problem worth logging, not a failed
-login.
+Only `true, nil` passes this credential check. A well-formed hash with a wrong
+password returns `false, nil`. An error matching
+`errors.Is(err, hash.ErrInvalidHash)` means malformed or unsupported stored data,
+not an ordinary mismatch. Import `errors` from the standard library and `hash`
+from `arkoren.dev/core/service/hash` when classifying it. Other encoding or
+driver errors are failures too; none authorizes login.
 
-The final hash comparison is constant-time; verification as a whole is not a
-guarantee of identical request duration. A login form still needs care so that
-it does not reveal which accounts exist;
-[Session Login](../authentication/session-login.md#hiding-which-accounts-exist)
-shows how.
+Keep failures distinguishable internally without exposing storage details,
+passwords, or hashes to the client. The final digest comparison does not make
+the whole login request constant-time. Account lookup, unknown-account paths,
+different stored costs, and errors can change duration. Follow the
+[account-hiding login flow](../authentication/session-login.md#check-passwords)
+for dummy checks and uniform public rejection; it is not a guarantee of identical
+request timing.
 
-`Check` never modifies the password it is given, so you can use the same value
-again right after it, for example to
-[rehash it with stronger settings](upgrading.md).
+`Check` does not update the account or consume the password. After success,
+[check for a hash upgrade](upgrading.md) before discarding the attempt from your
+request handling.
 
-## Hashing other values
+## Input Encoding
 
-`Hash` and `Check` accept any value. Exact `string` and `[]byte` values are
-hashed as their bytes; other types, including named string or slice types, are
-encoded as JSON first. Check with the same type you hashed, or explicitly
-convert a named type to `string` or `[]byte` when you want raw-byte behavior.
-`HashRaw` and `CheckRaw` work on bytes directly.
-`Hash` zeroes its own encoded copy of the value once it is done, but never the
-value you passed.
+Exact `string` and `[]byte` values use their raw bytes. Other values, including
+defined string or slice types, are JSON-encoded before hashing or checking.
+Use the same encoding on both paths; explicitly convert a defined password type
+to `string` if raw password bytes are intended. `HashRaw` and `CheckRaw` accept
+bytes directly.
 
-Password hashing is meant for secrets that people choose. Values your service
-generates with enough randomness, such as [API keys](../authentication/api-tokens.md#issuing-a-key)
-or reset tokens, make guessing infeasible when generated securely with sufficient
-entropy, so a fast SHA-256 hash is enough for them.
-Using a slow hash there only makes every request slower.
+The typed methods clear their own encoded copy after use, not your input.
+The raw methods also leave the caller's input unchanged. This is not a promise
+that all copies of a credential are erased from application memory.
 
-| Value | Store it as |
-| --- | --- |
-| A password or passphrase a person chose | A password hash from this service |
-| A random token your service generated (API key, reset token) | A SHA-256 hash |
-| A value you must read back (an OAuth refresh token) | An [encrypted](../encryption/overview.md) value |
+Slow password hashing is for guessable, human-chosen secrets. For securely
+generated, high-entropy [API keys](../authentication/api-tokens.md#issue-keys),
+a fast SHA-256 digest is appropriate instead. If you must recover a secret's
+original value, such as an OAuth refresh token, use
+[encryption](../encryption/overview.md), not password hashing.
 
-## Testing
-
-Real password hashing makes test suites slow. In tests, build the hasher with
-the cheapest settings, which keep the behavior and drop the cost:
-
-Import `bcrypthash` from `arkoren.dev/driver/bcrypt/bcrypthash` for this
-alternative to the Argon2id driver above.
-
-```go
-hasher := hash.New(bcrypthash.New(func(hasher *bcrypthash.Builder) {
-	hasher.Cost(4) // The lowest cost bcrypt allows.
-}))
-```
-
-Never use such settings outside tests. Let the function that builds your
-services take the hasher as an argument, so production passes the real one and
-tests pass the cheap one. To check a driver of your own, run the `hashtest`
-suite, as described in [Conformance Suites](../testing/conformance-suites.md).
-
-For every function, see the [`hash` API reference](https://pkg.go.dev/arkoren.dev/core/service/hash).
+For all operations, see the [`hash` API reference](https://pkg.go.dev/arkoren.dev/core/service/hash).
