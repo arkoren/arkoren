@@ -16,11 +16,11 @@ func retryAfter(resp *http.Response) (wait time.Duration, ok bool) {
 	if value != "" && strings.Trim(value, "0123456789") == "" {
 		seconds, err := strconv.ParseUint(value, 10, 64)
 
-		if err != nil {
+		if err != nil || seconds > uint64(math.MaxInt64/int64(time.Second)) {
 			return time.Duration(math.MaxInt64), true
 		}
 
-		return time.Duration(min(seconds, uint64(math.MaxInt64/int64(time.Second)))) * time.Second, true
+		return time.Duration(seconds) * time.Second, true
 	}
 
 	if date, err := http.ParseTime(value); err == nil {

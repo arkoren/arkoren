@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { Window } from "happy-dom";
 import sharp from "sharp";
 import { breadcrumbData, canonicalURL, serializeStructuredData } from "../src/lib/site/seo.ts";
 import { required } from "./dom.ts";
@@ -274,23 +275,24 @@ test("robots permits public crawlers and advertises the generated sitemap", () =
   assert.ok(existsSync(resolve(dist, new URL(sitemap).pathname.slice(1))));
 });
 
-test("documentation breadcrumbs match the visible navigation and resolve to real anchors", () => {
+test("documentation breadcrumbs match the visible navigation and resolve to real anchors", (t) => {
+  const window = new Window();
+  t.after(() => window.close());
   for (const { file, html } of contentPages().filter(
     ({ file }) => file === "docs.html" || file.startsWith("docs/"),
   )) {
     const items = required(
       graph(html).find((node) => node["@type"] === "BreadcrumbList"),
     ).itemListElement;
-    const nav = required(html.match(/<nav\b[^>]*aria-label="Breadcrumb"[\s\S]*?<\/nav>/))[0];
-    const labels = [...nav.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)].map((match) =>
-      decode(match[1].replace(/<[^>]+>/g, "")),
-    );
+    window.document.body.innerHTML = html;
+    const nav = required(window.document.querySelector('nav[aria-label="Breadcrumb"]'));
+    const labels = [...nav.querySelectorAll("li")].map((item) => required(item.textContent));
     assert.deepEqual(
       labels,
       items.map((item) => item.name),
       file,
     );
-    assert.equal([...nav.matchAll(/aria-current="page"/g)].length, 1, file);
+    assert.equal(nav.querySelectorAll('[aria-current="page"]').length, 1, file);
     for (const item of items) {
       const url = new URL(item.item);
       const target = readFileSync(htmlFile(url), "utf8");

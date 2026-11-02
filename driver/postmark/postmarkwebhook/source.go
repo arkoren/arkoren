@@ -1,6 +1,8 @@
 package postmarkwebhook
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json/jsontext"
@@ -72,8 +74,10 @@ func NewInbound(username, password string) (webhook.Source[Envelope], error) {
 	return newSource(username, password, parseInbound)
 }
 
-// newSource validates endpoint credentials and captures fixed-size hashes so
-// comparisons do not reveal matching prefixes or credential lengths.
+// newSource validates endpoint credentials and captures fixed-size keyed tags
+// so comparisons do not reveal matching prefixes or credential lengths. The
+// ephemeral key prevents retained tags from being unkeyed password verifiers;
+// these tags are not a password-storage format or a webhook body signature.
 func newSource(username, password string, parse func([]byte) (webhook.Delivery[Envelope], error)) (webhook.Source[Envelope], error) {
 	if username == "" || strings.ContainsAny(username, ":\r\n") || password == "" {
 		return webhook.Source[Envelope]{}, fmt.Errorf("%w: postmark Basic Auth credentials", webhook.ErrInvalid)
@@ -83,11 +87,14 @@ func newSource(username, password string, parse func([]byte) (webhook.Delivery[E
 		return webhook.Source[Envelope]{}, fmt.Errorf("%w: postmark Basic Auth credentials", webhook.ErrInvalid)
 	}
 
-	wantUsername, wantPassword := sha256.Sum256([]byte(username)), sha256.Sum256([]byte(password))
+	key := make([]byte, sha256.Size)
+	// crypto/rand.Read fills the key or terminates on entropy failure.
+	_, _ = rand.Read(key)
+	wantUsername, wantPassword := credentialTag(key, username), credentialTag(key, password)
 
 	return webhook.NewSource(func(request *http.Request, body []byte) (webhook.Delivery[Envelope], error) {
 		providedUsername, providedPassword, ok := request.BasicAuth()
-		gotUsername, gotPassword := sha256.Sum256([]byte(providedUsername)), sha256.Sum256([]byte(providedPassword))
+		gotUsername, gotPassword := credentialTag(key, providedUsername), credentialTag(key, providedPassword)
 		matched := subtle.ConstantTimeCompare(gotUsername[:], wantUsername[:]) & subtle.ConstantTimeCompare(gotPassword[:], wantPassword[:])
 
 		if !ok || matched != 1 || len(request.Header.Values("Authorization")) != 1 {
@@ -102,6 +109,16 @@ func newSource(username, password string, parse func([]byte) (webhook.Delivery[E
 
 		return delivery, err
 	}), nil
+}
+
+// credentialTag creates a fixed-size comparison value using the source's
+// private random key. Each call owns its HMAC state for concurrent requests.
+func credentialTag(key []byte, value string) []byte {
+	mac := hmac.New(sha256.New, key)
+	// hash.Hash.Write always consumes the entire input and never returns an error.
+	_, _ = mac.Write([]byte(value))
+
+	return mac.Sum(nil)
 }
 
 // parseOutbound checks only routing structure, leaving unknown native events
