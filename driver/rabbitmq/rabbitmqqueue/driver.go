@@ -973,11 +973,11 @@ func attempts(headers amqp091.Table, redelivered bool) int {
 	attempt := max(headerAttempt(headers), 1)
 
 	if count := deliveryCount(headers); count > 0 {
-		return attempt + count
+		return attempt + min(count, math.MaxInt-attempt)
 	}
 
 	if redelivered {
-		attempt++
+		attempt = min(attempt, math.MaxInt-1) + 1
 	}
 
 	return attempt
@@ -1050,7 +1050,7 @@ func publishing(id string, body []byte, attempt int) amqp091.Publishing {
 		DeliveryMode: amqp091.Persistent,
 		MessageId:    id,
 		Headers: amqp091.Table{
-			attemptHeader: int32(attempt),
+			attemptHeader: int64(attempt),
 		},
 		Body: slices.Clone(body),
 	}
@@ -1229,7 +1229,7 @@ func (driver *Driver) publishDelayed(ctx context.Context, consumer Queue, messag
 		return err
 	}
 
-	return driver.publish(ctx, "", retry.name, delayedPublishing(message.ID, body, message.Attempts+1, delay))
+	return driver.publish(ctx, "", retry.name, delayedPublishing(message.ID, body, min(message.Attempts, math.MaxInt-1)+1, delay))
 }
 
 // declareRetry serializes retry topology RPCs with the publishing channel's
