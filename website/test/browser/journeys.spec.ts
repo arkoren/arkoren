@@ -910,13 +910,17 @@ test("onboarding is reachable from the homepage and docs at narrow and wide widt
     await expect(page).toHaveURL(`${origin}/docs/guides/agent-skills/working-with-agents`);
     await expect(page.locator("main h1")).toBeVisible();
     await page.goto(origin);
-    const start = page.locator('main a[href="/docs/guides/first-steps/existing-project"]').first();
+    const start = page
+      .locator('main a[href="/docs/guides/first-steps/installation#existing-applications"]')
+      .first();
     await expect(start).toBeVisible();
     await start.click();
-    await expect(page).toHaveURL(`${origin}/docs/guides/first-steps/existing-project`);
+    await expect(page).toHaveURL(
+      `${origin}/docs/guides/first-steps/installation#existing-applications`,
+    );
     await expect(page.locator("main h1")).toBeVisible();
-    await expect(page.locator(".prose pre").first()).toBeVisible();
-    for (const route of ["quickstart", "existing-project"]) {
+    await expect(page.locator("main #existing-applications")).toBeVisible();
+    for (const route of ["quickstart", "installation#existing-applications"]) {
       await page.goto(`${origin}/docs`);
       const next = page.locator(`#first-steps a[href="/docs/guides/first-steps/${route}"]`);
       await expect(next).toBeVisible();
@@ -939,7 +943,7 @@ test("layouts contain overflow and respect reduced motion in both color schemes"
         "/",
         "/blog",
         "/docs/guides/first-steps/quickstart",
-        "/docs/guides/first-steps/existing-project",
+        "/docs/guides/first-steps/installation",
       ]) {
         await page.goto(`${origin}${route}`);
         await page.evaluate(() => document.fonts.ready);

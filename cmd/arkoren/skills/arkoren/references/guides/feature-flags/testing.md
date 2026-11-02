@@ -1,175 +1,220 @@
 ---
 title: Feature Flag Testing
 nav: Testing
-description: Set flags in application tests with the memory driver, and check a flag driver against the contract with the featuretest suite.
-order: 20
+description: Arrange deterministic flag states, exercise evaluation failures, and check custom drivers with a disposable conformance harness.
+order: 30
+summary:
+  - Arrange independent memory fixtures and explicit subject-key overrides.
+  - Distinguish disabled flags, missing keys, and failed evaluations in application tests.
+  - Use a small failure fake without depending on a live flag provider.
+  - Check custom drivers with disposable conformance fixtures and bounded propagation waits.
 ---
 
 # Feature Flag Testing
 
-## Introduction
+Test a rollout by controlling its inputs, not by waiting for a provider's rules
+to change. The memory driver gives each test independent state while retaining
+the real facade's type checks and fallback behavior. Pass that facade into your
+application code to assert the selected behavior; use an error-returning fake
+when the test needs a failure memory cannot produce.
 
-To test both sides of a feature flag, set its value in the memory driver and
-run your application through the real facade. The driver implements the same
-contract as every other driver and needs no external service. If you are
-writing a driver, use the `featuretest` conformance suite to check it against
-the contract.
+## Memory Fixtures
 
-## Testing your application
+Share the application's flag definition with its tests. Here `expressCheckout`
+is the `feature.Flag[bool]` declared by the checkout package with key
+`checkout-express` and fallback `false`. In your `_test.go` file, import `feature`
+from `arkoren.dev/core/service/feature` and `memoryfeature` from its
+`memoryfeature` subpackage.
 
-Import `testing`, `feature` from `arkoren.dev/core/service/feature`, and
-`memoryfeature` from `arkoren.dev/core/service/feature/memoryfeature` in your
-application's `_test.go` file. The conformance example below also imports
-`arkoren.dev/core/service/feature/featuretest`.
-
-Share the application's flag definition with its test. `Set` and `SetFor` take
-that same definition and a value of its Go type, so test setup cannot
-accidentally assign an integer to a boolean flag. This complete test checks a
-per-user override through the facade; in your application, pass `flags` to the
-checkout code under test instead:
+With an existing `*testing.T` named `t`, create a fresh driver and install the
+enabled value:
 
 ```go
-package checkout_test
-
-import (
-	"testing"
-
-	"arkoren.dev/core/service/feature"
-	"arkoren.dev/core/service/feature/memoryfeature"
-)
-
-var checkoutFlag = feature.NewFlag("new-checkout", false)
-
-func TestCheckoutUsesNewFlow(t *testing.T) {
-	driver := memoryfeature.New()
-	if err := driver.Set(checkoutFlag, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := driver.SetFor(checkoutFlag, "user-42", true); err != nil {
-		t.Fatal(err)
-	}
-
-	flags := feature.New(driver)
-	on, err := flags.Value(t.Context(), checkoutFlag, feature.Subject{Key: "user-42"})
-	if err != nil || !on {
-		t.Fatalf("checkout = %v, %v; want true, nil", on, err)
-	}
-}
-```
-
-`Set` creates a flag or replaces its default value, and keeps any overrides.
-`SetFor` gives one subject key its own value, and creates the flag with no
-default value when it does not exist. A subject without an override gets the
-default value; a flag that has only overrides returns the definition's fallback
-to everyone else. The fallback is never installed as a provider default by
-`SetFor`. Unsupported value types and mismatched setup values fail to compile.
-Named primitive types work too. Invalid definitions return `ErrInvalidFlag`
-without changing stored state; handle setup errors before running the test.
-
-If application code uses a [namespace-derived flag](overview.md#sharing-a-flag-prefix-and-fallback),
-share that definition with the test too. For example, with an existing memory
-`driver` and facade `flags`:
-
-```go
-checkoutFlags := feature.NewNamespace("checkout", false)
-express := checkoutFlags.Flag("express")
-if err := driver.SetFor(express, "user-42", true); err != nil {
+driver := memoryfeature.New()
+if err := driver.Set(expressCheckout, true); err != nil {
 	t.Fatal(err)
 }
-on, err := flags.Value(t.Context(), express, feature.Subject{Key: "user-42"})
-if err != nil || !on {
-	t.Fatalf("express = %v, %v; want true, nil", on, err)
+flags := feature.New(driver)
+```
+
+Pass `flags` to the checkout service under test. Every subject initially receives
+`true`; assert that the service selects the express flow. A second test can
+install `false` and assert the standard flow. Keep fixtures local to each test
+so parallel tests do not change one another's decisions.
+
+`Set` creates the stored entry or replaces its default value, retaining existing
+overrides and disabled state. Its value must have the definition's exact Go type,
+including named types. Invalid definitions return `ErrInvalidFlag` without
+mutation. The application's fallback is not installed as a provider default.
+
+## Subject Overrides
+
+If a rollout targets one account, arrange that identity explicitly rather than
+trying to reproduce percentage bucketing. Using the memory `driver` and `flags`
+above, override one stable account key:
+
+```go
+if err := driver.SetFor(expressCheckout, "account-river", false); err != nil {
+	t.Fatal(err)
+}
+subject := feature.Subject{Key: "account-river"}
+detail, err := flags.ValueDetail(t.Context(), expressCheckout, subject)
+if err != nil || detail.Value || detail.Reason != feature.ReasonTargetingMatch {
+	t.Fatalf("override = %+v, %v; want false, targeting match, nil", detail, err)
 }
 ```
 
-This installs the exact key `checkout:express` for the subject; it does not
-install the namespace fallback as a stored value. `Set(express, true)` sets
-the default for that same definition. No namespace-specific driver setup exists.
+This account receives `false`; other accounts still receive the stored `true`.
+`SetFor` creates an override-only flag if the key is absent. In that case an
+unmatched subject receives the definition's fallback with `ReasonDefault` and
+no error. An empty subject key never matches an override, even one stored under
+the empty string.
 
-To test the "flag is off" path, use `Disable`, which keeps the flag known so
-that evaluation returns your default instead of `feature.ErrNotFound`. `Enable`
-undoes it and `Delete` removes the flag:
+Use the same [namespace-derived definition](overview.md#flag-namespaces) in
+evaluation and fixture setup when the application uses one. `Set` and `SetFor`
+address its assembled provider key without special namespace configuration.
+
+Memory ignores subject attributes: these tests prove application behavior for
+chosen identities, not provider attribute rules, segment membership, or rollout
+distribution. Use the [local SDK fixtures](drivers.md#local-provider) to test
+adapter wiring, and a disposable provider integration environment when the
+provider's actual rules are the subject of the test.
+
+## Disabled Flags
+
+A disabled flag and a missing flag both select the fallback, but only the missing
+flag is an error. To test that distinction, first install the shared checkout
+definition in memory, then disable it:
 
 ```go
-driver.Disable(checkoutFlag.Name())
-// Value returns the caller's default and a nil error
-driver.Delete(checkoutFlag.Name())
-// Value returns the caller's default and feature.ErrNotFound
+driver.Disable(expressCheckout.Name())
+detail, err := flags.ValueDetail(t.Context(), expressCheckout, feature.Subject{})
+if err != nil || detail.Value || detail.Reason != feature.ReasonDisabled {
+	t.Fatalf("disabled = %+v, %v; want false, disabled, nil", detail, err)
+}
 ```
 
-The driver ignores subject attributes, so it cannot test targeting rules based
-on them; give each subject you care about an override with `SetFor`. It is safe
-for concurrent use, and changes apply to the next evaluation. For asserting on
-the spans and metrics an evaluation records, use `telemetrytest`, as described
-in [Fakes](../testing/fakes.md).
+Disabling retains the entry's default and overrides; `Enable` makes them visible
+again. Disabling or enabling a missing key does nothing.
 
-## Checking a driver against the contract
+To exercise a missing definition in the provider instead, delete the entry.
+Import standard-library `errors` for identity checks:
 
-If you [write a driver](../drivers/writing-a-driver.md), `featuretest.Run`
-checks portable evaluation behavior against the contract. Feature flags are
-read-only, so the suite cannot create flags through the driver. You supply a
-**harness**: a small type that gives the suite a ready driver and installs and
-removes flags in the backend.
+```go
+driver.Delete(expressCheckout.Name())
+enabled, err := flags.Value(t.Context(), expressCheckout, feature.Subject{})
+if enabled || !errors.Is(err, feature.ErrNotFound) {
+	t.Fatalf("missing = %v, %v; want false, ErrNotFound", enabled, err)
+}
+```
+
+Deletion removes both the stored value and overrides and is harmless if repeated.
+Use these distinct fixtures to verify whether your application tolerates a
+missing flag or treats it as configuration failure.
+
+## Failed Evaluations
+
+The fallback is available even when evaluation fails; continuing the request is
+an application policy, not an automatic retry or permission grant. For checkout,
+a safe policy can keep the standard flow available while observing the failure.
+Assert both the chosen flow and the error reporting your application requires.
+Account permissions must remain enforced on both paths.
+
+To force readiness or backend errors without a network dependency, implement a
+small test-only driver. Import standard-library `context` as well as `errors`:
+
+```go
+type unavailableFlags struct{}
+
+func (unavailableFlags) Evaluate(ctx context.Context, _ feature.Request) (feature.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return feature.Result{}, err
+	}
+	return feature.Result{}, feature.ErrNotReady
+}
+```
+
+This fake deliberately models one failure path; it is not a production driver
+or a conforming implementation for arbitrary requests. Wrap it with the real
+facade to check that your shared definition supplies the fallback:
+
+```go
+flags := feature.New(unavailableFlags{})
+detail, err := flags.ValueDetail(t.Context(), expressCheckout, feature.Subject{})
+if detail.Value || detail.Reason != feature.ReasonError ||
+	!errors.Is(err, feature.ErrNotReady) {
+	t.Fatalf("unavailable = %+v, %v; want false, error reason, ErrNotReady", detail, err)
+}
+```
+
+Pass this facade into your application test to verify the standard flow and its
+failure policy. Also test canceled contexts if your policy distinguishes request
+cancellation from provider unavailability. Do not add sleeps to create failures.
+
+For observability assertions, driver errors publish
+[evaluation-failed events](overview.md#events) when a bus is configured. Invalid
+definitions, invalid attributes, and facade conversion errors do not publish
+that event. [Telemetry test helpers](../testing/fakes.md) can inspect spans and
+metrics, which cover those facade failures too. Prefer an explicit test telemetry
+handle over changing the process default in parallel tests.
+
+## Driver Conformance
+
+If you [write a custom driver](../drivers/writing-a-driver.md), use
+`featuretest` from `arkoren.dev/core/service/feature/featuretest` to exercise the
+portable contract. Its harness owns a ready driver and a way to install and
+remove disposable backend fixtures; production `feature.Driver` stays read-only.
+Never point a fixture harness at production flags.
 
 Implement `featuretest.Harness` with `Driver() feature.Driver`,
-`Set(*testing.T, featuretest.Flag)`, and `Delete(*testing.T, string)`.
-Unlike an application `feature.Flag[T]`, the suite's `featuretest.Flag` is a raw
-provider fixture: it deliberately separates stored type from requested type to
-test mismatches. Its `Key`, `Value`, `Overrides`, and `Disabled` fields describe
-the backend state to install. If you adapt the typed memory driver, switch on
-the canonical fixture value type and construct the corresponding typed
-definition before calling `Set` or `SetFor`.
-
-With your factory `newHarness func(*testing.T) featuretest.Harness`, pass a
-fresh harness to the conformance suite for each test:
+`Set(*testing.T, featuretest.Flag)`, and `Delete(*testing.T, string)`. With an
+existing factory `newHarness func(*testing.T) featuretest.Harness`, invoke it
+from your test:
 
 ```go
-func TestConformance(t *testing.T) {
-	featuretest.Run(t, newHarness)
-}
+featuretest.Run(t, newHarness)
 ```
 
-A real backend's harness calls its admin API, writes a test data source, or
-writes a file. The rules for a harness follow from how the suite works:
+Each subtest gets a fresh harness and unique keys, and subtests run in parallel.
+The factory must register cleanup for any acquired resources. A harness returns
+the same ready driver throughout its lifetime. Its fixture operations must:
 
-- `Set` replaces the whole flag and never merges. It may run after the driver
-  has already served evaluations. Install the value first, then disable the
-  flag when `Flag.Disabled` is true.
-- `Delete` must accept keys that do not exist, because cleanup deletes each
-  key again.
-- Fixture values are bool, string, `int64`, and `float64`. A flag may have only
-  overrides, but never neither a value nor an override.
-- A value that matches no override must read back with the reason static,
-  default, or unknown. An override for subject `u1` must match whatever the
-  subject's attributes are.
+- Replace the whole flag on `Set`, not merge with previous state. Install the
+  value and overrides before applying `Disabled`.
+- Accept `bool`, `string`, `int64`, and `float64` fixtures. A fixture has a default
+  value or at least one override; it never has neither.
+- Allow changes after evaluation and make `Delete` tolerate absent keys,
+  including repeated cleanup deletion.
+- Match an override independently of the subject's attributes. An unmatched
+  default value reports static, default, or unknown; a matching override reports
+  `ReasonTargetingMatch`, and a disabled flag reports `ReasonDisabled`.
 
-Each subtest gets its own harness and unique flag keys, so a shared backend
-works, and subtests run in parallel. If your backend picks up changes
-asynchronously, for example by polling, pass `featuretest.WithPropagation(timeout)`:
-fixture-state reads are then retried every 100 ms until they show the expected
-state or the timeout passes. If a change after the first evaluation cannot be
-observed at all, pass `featuretest.WithoutUpdates()` to skip the update and delete
-cases. Options describe what a backend can do, never a different meaning of
-the contract.
+`featuretest.Flag` is a raw backend fixture, not the application's typed
+`feature.Flag[T]`. It separates stored and requested types so the suite can test
+mismatches. A harness adapting typed memory setup must switch on fixture types
+and construct corresponding typed definitions.
 
-The raw-driver cases reject empty and unknown kinds with `ErrTypeMismatch` for
-missing flags, stored defaults, disabled flags, and matching or unmatched
-overrides. An already-canceled context must win over kind rejection. These
-checks run immediately without propagation retries: kind validity cannot depend
-on backend state. Known kinds retain the normal disabled/fallback behavior, and
-typed invalid definitions still fail with `ErrInvalidFlag` before driver access.
+For asynchronously refreshed fixtures, give the suite an observation budget.
+With standard-library `time` imported:
 
-Because the harness supplies a ready driver, also test your adapter before
-startup and with a provider-call recorder. Invalid kinds must fail before
-readiness checks, lookup, or provider I/O, as specified for
-[raw driver requests](overview.md#raw-driver-requests). Passing the ready-driver
-suite alone does not establish those lifecycle and no-I/O properties.
+```go
+featuretest.Run(t, newHarness, featuretest.WithPropagation(2*time.Second))
+```
 
-The suite checks the reason only where the contract fixes it: an override must
-report `ReasonTargetingMatch` and a disabled flag `ReasonDisabled`. Variants
-are never checked. Run a vendor driver's suite as an
-[integration test](../testing/integration-tests.md), skipped with `-short`;
-[Driver Conformance Suites](../testing/conformance-suites.md) explains the
-pattern.
+Reads after fixture installation or deletion retry every 100 milliseconds until
+the expected state appears or that budget expires. This does not configure
+provider retries. `WithoutUpdates()` skips cases that update or delete a served
+flag when the backend cannot expose those changes in the test; report that
+coverage limit rather than treating it as verified refresh behavior.
 
-For every function and option, see [the `feature` API reference](https://pkg.go.dev/arkoren.dev/core/service/feature).
+Raw invalid-kind checks run immediately without propagation retries. They cover
+missing, default-only, disabled, matched, and unmatched fixtures, and require
+cancellation to win over kind rejection. Because the harness supplies a ready
+driver, separately test invalid kinds before startup and before provider calls
+with a call recorder. Variants are not checked by the suite. Run remote-backed
+conformance as an isolated [integration test](../testing/integration-tests.md),
+not as a prerequisite for deterministic application tests.
+
+See the [`feature` API](https://pkg.go.dev/arkoren.dev/core/service/feature),
+[`memoryfeature` API](https://pkg.go.dev/arkoren.dev/core/service/feature/memoryfeature),
+and [`featuretest` API](https://pkg.go.dev/arkoren.dev/core/service/feature/featuretest).

@@ -1,126 +1,110 @@
 ---
 title: Controlling Time
-description: Test expiry, timeouts, retries, and schedules in zero real time with testing/synctest, and pin the clock used by validation.
+description: Test process-local expiry and timers deterministically, synchronize background work, and pin validation time.
 order: 50
+summary:
+  - Advance process-local time to assert cache expiry without real delays.
+  - Synchronize timer-driven work and assert its effect before leaving a synctest bubble.
+  - Pin validation time while keeping server-owned clocks in real-backend tests.
 ---
 
 # Controlling Time
 
-## Introduction
+An expiry test should verify a lifetime, not spend that lifetime waiting. Go's `testing/synctest` runs a test inside a **bubble**, a group of goroutines that share a fake clock. Construct time-dependent drivers inside the bubble so their timestamps and background work use that clock.
 
-A lot of behavior depends on time: cache entries expire, sessions time out,
-jobs retry after a backoff, scheduled tasks run every hour. Testing it by
-actually waiting makes tests slow and flaky. Testing it with a mocked clock
-means threading a clock through code that should not care.
+Time advances when all goroutines in the bubble are durably blocked: they are waiting on work that can only be unblocked from within the bubble, such as its timers or bubble-local channels. A long `time.Sleep` can therefore finish without that much real time passing. Network I/O and mutex waits do not provide that same durable-blocking guarantee.
 
-Go's `testing/synctest` package solves this without changes to your code. Code
-running inside a synctest **bubble** sees a fake clock. It advances when every
-goroutine in the bubble is *durably blocked*: waiting on work that can be
-unblocked only within that bubble, such as a bubble-local channel or timer.
-A one-hour sleep can therefore finish without a real hour passing. Arkoren's
-memory drivers and fakes work inside bubbles; network I/O and mutex waits do
-not count as durable blocking.
+## Test Expiry
 
-## Testing expiry
-
-Wrap the test body in `synctest.Test`, and use `time.Sleep` to move time
-forward:
-
-In a `_test.go` file, import `errors`, `testing`, `testing/synctest`, `time`,
-`arkoren.dev/core/service/cache`, and `arkoren.dev/core/service/cache/memorycache`:
+For a temporary cache entry, assert that the value is available first, then advance time and check absence. Import `errors`, `testing`, `testing/synctest`, `time`, `arkoren.dev/core/service/cache`, and `arkoren.dev/core/service/cache/memorycache`:
 
 ```go
-func TestEntryExpires(t *testing.T) {
+func TestPreviewExpires(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := cache.New(memorycache.New())
-		key := cache.NewKey[string]("codes.v1.login", func(entry *cache.KeyBuilder) {
+		key := cache.NewKey[string]("preview:report", func(entry *cache.KeyBuilder) {
 			entry.TTL(time.Minute)
 		})
-		if err := store.Put(t.Context(), key, "1234"); err != nil {
+		if err := store.Put(t.Context(), key, "draft"); err != nil {
 			t.Fatal(err)
 		}
+		if value, err := store.Get(t.Context(), key); err != nil || value != "draft" {
+			t.Fatalf("value = %q, error = %v; want draft and nil", value, err)
+		}
 
-		time.Sleep(time.Minute + time.Second)
+		time.Sleep(time.Minute)
 
 		if _, err := store.Get(t.Context(), key); !errors.Is(err, cache.ErrNotFound) {
-			t.Fatalf("err = %v, want cache.ErrNotFound", err)
+			t.Fatalf("error = %v, want cache.ErrNotFound", err)
 		}
 	})
 }
 ```
 
-No real minute elapses. This example does not call the memory cache's `Start`,
-so it has no janitor goroutine; reads still reject expired entries. If you start
-a driver's background work in a bubble, stop it before the bubble ends.
+The memory cache treats the entry as expired at its expiry instant. This test does not start a janitor: reads check expiry independently of background cleanup. It verifies this process-local driver, not a server's expiry precision. [Cache Keys](../cache/keys.md) owns TTL configuration and key definitions.
 
-## Waiting for background work
+If you start driver background work inside a bubble, register its shutdown inside that bubble too. The bubble must not finish with a worker left waiting indefinitely.
 
-When code under test starts goroutines, such as a consumer processing a job,
-`synctest.Wait` blocks until all other goroutines in the bubble are durably blocked. Call it
-before your assertions to let runnable work finish. It proves the goroutines
-are blocked, not that a job succeeded; assert the job's observable effect too.
-Inside a bubble, use your configured `consumer`, `dispatcher`, and `SendInvoice`
-job, and cancel the consumer before the bubble exits:
+## Wait for Work
 
-Also import `context`. Here `payload` has an integer `InvoiceID` field and the
-type expected by `SendInvoice`. Before this fragment, register a handler that
-sends the processed invoice ID to a buffered `completed` channel
-(`make(chan int, 1)`) only after its work succeeds:
+Advancing time and finishing work are separate events. `synctest.Wait` waits until the other goroutines in the bubble are durably blocked; it does not assert that an application operation succeeded.
+
+This complete test demonstrates the distinction using a timer-driven notification. A buffered channel captures the observable result without blocking the producer:
 
 ```go
-ctx, cancel := context.WithCancel(t.Context())
-t.Cleanup(cancel)
-go func() {
-	if err := consumer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		t.Error(err)
-	}
-}()
-if err := dispatcher.Dispatch(ctx, SendInvoice, payload); err != nil {
+func TestTimerNotification(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		completed := make(chan string, 1)
+		go func() {
+			time.Sleep(time.Hour)
+			completed <- "ready"
+		}()
+		synctest.Wait()
+		time.Sleep(time.Hour)
+		synctest.Wait()
+
+		select {
+		case value := <-completed:
+			if value != "ready" {
+				t.Fatalf("notification = %q, want ready", value)
+			}
+		default:
+			t.Fatal("timer produced no notification")
+		}
+	})
+}
+```
+
+The first wait lets the worker reach its timer; the second lets work made runnable by the elapsed hour settle before the assertion. The nonblocking receive fails rather than waiting for an absent effect.
+
+For a long-running consumer, cancel its context, wait for it to return, and check unexpected runner errors before leaving the bubble. Assert successful handler effects separately from runner shutdown. Use the [workflow testing guide](../workflows/testing.md) for executing workflows and the [scheduler guide](../scheduled-tasks/overview.md) for scheduled execution rather than substituting recording fakes for engines.
+
+## Pin Validation
+
+When the test concerns a `Future` or `Past` rule rather than timers, set validation's context clock. Inside a test, import `arkoren.dev/foundation/validate` and construct a scalar rule with an explicit reference instant:
+
+```go
+now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+ctx := validate.NewClockContext(t.Context(), func() time.Time {
+	return now
+})
+rule := validate.Time(func(moment *validate.TimeBuilder) {
+	moment.Future()
+})
+if err := rule.Validate(ctx, now.Add(time.Minute)); err != nil {
 	t.Fatal(err)
 }
-
-synctest.Wait()
-
-select {
-case id := <-completed:
-	if id != payload.InvoiceID {
-		t.Fatalf("processed invoice = %d, want %d", id, payload.InvoiceID)
-	}
-default:
-	t.Fatal("invoice handler did not finish")
+if err := rule.Validate(ctx, now.Add(-time.Minute)); err == nil {
+	t.Fatal("past time passed a Future rule")
 }
 ```
 
-The same applies to retries with backoff and to scheduled tasks: advance time
-with `time.Sleep`, then `synctest.Wait`, then assert.
+Both assertions use the same instant regardless of the date on the machine. This context controls validation rules, not the process clock or another service's timers. For structured input, pass it to your existing [validation schema](../validation/overview.md).
 
-## Time in validation
+## Respect Server Time
 
-Rules such as `Future` and `Past` compare a value with the current time. To
-make them deterministic, set the clock on the context. Here `booking` is your
-[validation schema](../validation/overview.md) and `input` is the booking value:
+A synctest bubble cannot advance Redis, a database server, or a remote workflow engine. Use ordinary time in [integration tests](integration-tests.md) for server-owned expiry and deadlines. Allow for the backend's documented precision and bound how long the test waits; repeatedly sleeping does not establish that a write or delivery succeeded.
 
-Import `arkoren.dev/foundation/validate` and `time` for this fragment:
+Keep most policy and timer tests in process, and retain real-backend cases for behavior that depends on that backend. The [conformance clock options](conformance-suites.md#declare-capabilities) make the same distinction.
 
-```go
-ctx := validate.NewClockContext(t.Context(), func() time.Time {
-	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-})
-
-err := booking.Validate(ctx, input)
-```
-
-The schema now evaluates `Future` and `Past` against midnight UTC on January 1,
-2026, regardless of when the test runs. Assert `err` according to the timestamp
-and rules in your booking fixture; this context does not change the process clock.
-
-## Real infrastructure
-
-Bubbles only control time inside the process. A driver whose expiry is measured
-by a server, such as Redis, still follows the server's clock, so integration
-tests against it have to wait in real time. Keep those few and short, and test
-time-dependent logic with the memory drivers. The conformance suites follow
-the same split, as described in [Conformance suites](conformance-suites.md).
-
-For the clock context helper, see the
-[`validate` API reference](https://pkg.go.dev/arkoren.dev/foundation/validate).
+See Go's [`testing/synctest` reference](https://pkg.go.dev/testing/synctest) and the [`validate` API reference](https://pkg.go.dev/arkoren.dev/foundation/validate).

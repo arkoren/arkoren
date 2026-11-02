@@ -1,7 +1,7 @@
 ---
 /**
- * Shared documentation title and lead, with commands, actions, and metadata
- * slots kept in their existing order. The default slot contains inline lead
+ * Shared documentation title and lead, with secondary metadata beside the
+ * title and commands and actions below the lead. The default slot contains inline lead
  * content. Pass this component in Docs' header slot to retain title anchoring.
  * @example <DocsPageHeader slot="header" title="Cache">Store values.</DocsPageHeader>
  */
@@ -19,15 +19,17 @@ const { title, eyebrow, titleClass = "text-xl" } = Astro.props;
 
 <header class="mb-8 grid justify-items-start gap-4 border-b border-line pb-8" data-docs-head>
   {eyebrow && <span class="eyebrow">{eyebrow}</span>}
-  <h1 class:list={["font-medium wrap-anywhere", titleClass]}>{title}</h1>
+  <div class="flex w-full items-start justify-between gap-4">
+    <h1 class:list={["min-w-0 font-medium wrap-anywhere", titleClass]}>{title}</h1>
+    {Astro.slots.has("meta") && (
+      <div class="flex shrink-0 flex-wrap justify-end gap-2">
+        <slot name="meta" />
+      </div>
+    )}
+  </div>
   <p class="text-base text-muted md:text-lg">
     <slot />
   </p>
   <slot name="commands" />
   <slot name="actions" />
-  {Astro.slots.has("meta") && (
-    <div class="flex flex-wrap gap-2">
-      <slot name="meta" />
-    </div>
-  )}
 </header>

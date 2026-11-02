@@ -1,52 +1,55 @@
 ---
 title: Writing a Driver
-description: Implement a service contract for a new vendor, follow the constructor and lifecycle conventions, map errors, and pass the conformance suite.
+description: Implement an application-owned service driver or wrapper with explicit behavior, resource ownership, and contract tests.
 order: 20
+summary:
+  - Implement an application-owned driver or wrapper against a public service contract.
+  - Preserve atomic operations, error identities, native access, and resource ownership.
+  - Publish construction settings and application-owned migrations without runtime schema changes.
+  - Test portable behavior with conformance suites and add backend-specific coverage.
 ---
 
 # Writing a Driver
 
-## Introduction
+If your backend is not among the [available drivers](choosing-a-driver.md), you
+can implement its service contract in your own Go module. A driver translates
+that contract into backend operations; the facade continues to handle typed
+application calls and its ordinary events and telemetry.
 
-Arkoren ships drivers for the vendors most services use, but not for every
-one. When yours is missing, you can write the driver yourself: a Go type that
-implements a service's contract, the `Driver` interface described in
-[Contracts](../core-concepts/contracts.md). Once it does, the facade, the
-middleware, and every piece of your application that uses the service work
-with it unchanged.
+A wrapper is a driver too. It forwards to another implementation while changing
+one responsibility, such as key naming. Neither kind requires an Arkoren
+checkout or a contribution to the toolkit.
 
-There are two kinds of driver. A **vendor driver** talks to a backend, such as
-Memcached for the cache or a mail provider's API for mail. A **wrapping
-driver** sits in front of another driver and adds behavior, such as a key
-prefix, encryption, or a circuit breaker, without knowing which driver it
-wraps. Both use the same portable-behavior check, the contract's
-**conformance suite**.
+## Contract First
 
-This page walks through both kinds, using the cache contract as the example,
-and links to the separate contributor instructions if you want to submit it
-to Arkoren. Application-owned drivers need no repository checkout.
+Start with the public interface and its method comments. For the cache example,
+inspect [`cache.Driver`](https://pkg.go.dev/arkoren.dev/core/service/cache#Driver):
 
-## Before you start
+```sh
+go doc arkoren.dev/core/service/cache.Driver
+```
 
-Read the contract first. Its doc comments are the specification: they say what
-each method must do with a missing key, an expired entry, a zero duration, or a
-canceled context. The conformance suite in the `<service>test` package checks
-the implementation against those rules. Its subtest names help you find tested
-cases, but the interface documentation remains the specification even when a
-rule has no test yet.
+The contract describes missing values, expiry, cancellation, byte ownership,
+and atomic operations. Its test package checks many of those rules, but tests
+are evidence of covered behavior, not a replacement for the contract.
 
-Check also whether you need a driver at all. A vendor feature that the
-contract does not cover is usually better reached through an existing
-driver's client, as described in
-[Reaching the vendor client](../core-concepts/facades-and-drivers.md#reaching-the-vendor-client).
+Decide whether you need a whole driver before implementing one. If an existing
+driver already handles ordinary calls and you only need a provider-specific
+operation, use its [native client access](../core-concepts/facades-and-drivers.md#native-client-access).
+For cache naming alone, [typed keys and namespaces](../cache/keys.md) can avoid a
+wrapper. A wrapper is useful when an existing raw-driver integration needs the
+same naming rule applied to every operation.
 
-## Wrapping a driver
+## Wrap Existing Behavior
 
-A wrapping driver can keep application calls unchanged while adding a key
-namespace. For example, put a tenant-specific prefix in front of every cache
-key before forwarding it. Add the driver to a package in your own module, such
-as `internal/prefixcache`. Import `context`, `time`, and
-`arkoren.dev/core/service/cache`. Start with the wrapper and its `Get` method:
+Suppose your application needs a fixed prefix on a raw cache connection. Create
+an `internal/prefixcache` package in your application module. The following
+fragments use `context` and `arkoren.dev/core/service/cache`; they illustrate
+selected methods, not a complete `cache.Driver` implementation.
+
+Keep the underlying driver private rather than embedding it. Embedding would
+silently forward methods you forgot to adapt, potentially writing unprefixed
+keys. A constructor with no optional settings needs no construction builder:
 
 ```go
 type Driver struct {
@@ -57,32 +60,52 @@ type Driver struct {
 func New(next cache.Driver, prefix string) *Driver {
 	return &Driver{next: next, prefix: prefix}
 }
+```
 
+This wrapper borrows `next`: its caller owns that driver's startup and shutdown.
+Choose a complete, unambiguous prefix such as `reports:tenant-42:` and encode
+variable identities consistently. Prefixing is not authorization or isolation
+from code that can access the underlying driver.
+
+For reads, change the key and leave the returned value and error semantics to
+the underlying implementation:
+
+```go
 func (driver *Driver) Get(ctx context.Context, key string) ([]byte, error) {
 	return driver.next.Get(ctx, driver.prefix+key)
 }
 ```
 
-Every other method of the contract follows the same pattern: change every key
-the operation uses, then call the wrapped driver. The wrapper passes errors
-through unchanged, so a
-missing entry still wraps `cache.ErrNotFound`, as the contract requires.
+Forward every interface method, applying the same prefix to every key or lock
+name. Keep values, lock tokens, durations, and counter deltas unchanged. In
+particular, `IncrementWithTTL` must use the prefixed identity too, or counter
+windows would disagree with ordinary reads.
 
-Choose unambiguous prefixes, such as `tenant:42:`, and encode variable parts
-consistently. Namespacing is not authorization: code with access to the underlying
-driver can still read other tenants' keys.
+### Guarded Writes
 
-These are focused fragments, not a complete driver: `Get` alone does not
-implement `cache.Driver`. After forwarding the remaining methods, add this
-compile-time check next to the type:
+A guarded write can compare one key and replace another. Transform both keys
+before forwarding the *single atomic operation*:
 
 ```go
-var _ cache.Driver = (*Driver)(nil)
+func (driver *Driver) CompareAndPut(ctx context.Context, match cache.Match, entry cache.Entry) (bool, error) {
+	match.Key = driver.prefix + match.Key
+	entry.Key = driver.prefix + entry.Key
+	return driver.next.CompareAndPut(ctx, match, entry)
+}
 ```
 
-### Exposing the wrapped driver
+The records are passed by value, so changing their key fields does not change
+the caller's records. A mismatch returns `false, nil` without changing either
+entry or its TTL. Do not replace the call with a read followed by a write:
+another writer could change the guard between them. Preserve `ErrUnsupported`
+when the underlying driver cannot provide the required atomicity, and preserve
+uncertain transport errors rather than falling back to an unconditional write.
+[Guarded Writes](../cache/overview.md#guarded-writes) shows the application use.
 
-Give the wrapper an `Unwrap` method that returns the driver it wraps:
+### Native Access
+
+Expose the wrapped contract through `Unwrap` so the facade's `DriverAs` helper
+can search through your wrapper:
 
 ```go
 func (driver *Driver) Unwrap() cache.Driver {
@@ -90,211 +113,163 @@ func (driver *Driver) Unwrap() cache.Driver {
 }
 ```
 
-Facades use it in `DriverAs`, which follows the chain of `Unwrap` methods until
-it finds the type it was asked for. Without it, code that needs the Redis
-client behind your wrapper could not reach it.
+Native calls bypass your prefix transformation and the facade's operation
+instrumentation. Give callers that escape hatch deliberately, not as a promise
+that native operations obey wrapper policy.
 
-### Forwarding every method
-
-Every operation of the contract is a method of the driver interface, so a
-wrapper must implement or forward all of them, including ones you do not care
-about. A wrapper that embeds the wrapped driver forwards anything it does not
-override, which is also how a method gets past your key changes: override every
-method that takes a key, such as `IncrementWithTTL`, or the rate limiter on a
-prefixed Redis cache would count under the unprefixed key:
+After implementing all methods, add a compile-time interface check:
 
 ```go
-func (driver *Driver) IncrementWithTTL(ctx context.Context, key string, delta int64, ttl time.Duration) (int64, time.Duration, error) {
-	return driver.next.IncrementWithTTL(ctx, driver.prefix+key, delta, ttl)
+var _ cache.Driver = (*Driver)(nil)
+```
+
+This catches missing methods and incorrect signatures. It cannot detect a
+forgotten prefix or a non-atomic implementation; those need behavioral tests.
+
+Your application can then pass the completed wrapper to the ordinary facade.
+With an existing backend named `backend` whose lifecycle you already own:
+
+```go
+store := cache.New(prefixcache.New(backend, "reports:tenant-42:"))
+```
+
+Facade calls now use the wrapper's naming rule without changing application
+key definitions. Keep the wrapper chain acyclic so `DriverAs` can finish its
+search.
+
+## Adapt a Backend
+
+A backend driver performs the same contract operations through a vendor client.
+Preserve distinctions that affect recovery: missing data is not an outage, a
+rejected comparison is not a failed request, and a request error does not always
+prove the backend performed no write.
+
+For example, a Redis-backed `Get` can map native absence to `cache.ErrNotFound`
+without hiding other failures. With a private `client *redis.Client` field,
+import `errors` and `github.com/redis/go-redis/v9` in addition to the cache and
+context packages:
+
+```go
+func (driver *Driver) Get(ctx context.Context, key string) ([]byte, error) {
+	value, err := driver.client.Get(ctx, key).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, cache.ErrNotFound
+	}
+	return value, err
 }
 ```
 
-`CompareAndPut` uses two keys: the guard and the destination. Prefix both before
-forwarding the operation, even when they have the same original name:
+Callers can distinguish absence with `errors.Is`. A connection failure remains
+a connection failure. If you wrap errors for context, preserve their identity
+with `%w`; never include credentials or cached contents in the message.
+
+The remaining implementation must satisfy the whole interface. For cache, that
+includes independent byte copies, concurrent calls, cancellation before
+mutation, nonmutating integer overflow, and atomic counters, pulls, and lock
+ownership checks. Backend transactions, scripts, or native atomic commands may
+be necessary. An unsupported result is valid only where the contract permits
+it; do not advertise a capability your backend cannot implement safely.
+
+## Construction and Ownership
+
+Keep configuration separate from runtime operations. Put required values with
+no safe default in constructor arguments. For optional settings, expose a
+construction draft named `Builder` and its matching alias:
 
 ```go
-func (driver *Driver) CompareAndPut(ctx context.Context, match cache.Match, entry cache.Entry) (bool, error) {
-	match.Key = driver.prefix + match.Key
-	entry.Key = driver.prefix + entry.Key
-
-	return driver.next.CompareAndPut(ctx, match, entry)
-}
+type BuilderFunc = func(*Builder)
 ```
 
-The records are passed by value, so these edits do not change the caller's
-records. Forward the expected bytes, replacement bytes, and TTL unchanged.
-Do not replace the atomic operation with `Get` followed by `Put`: another writer
-can change the guard between those calls. A mismatch returns `false, nil` and
-must leave both values and their TTLs unchanged; see
-[guarded writes](../cache/overview.md#writing-only-while-an-observed-value-still-matches).
+Use `New(required..., configure ...BuilderFunc)`. Invoke supplied callbacks
+directly, synchronously, once in order on one fresh draft before ordinary
+validation. A supplied nil callback panics; an expanded nil or empty slice adds
+no edits. Draft methods return that draft. Publish detached private settings so
+a retained draft or input container cannot reconfigure the driver. Native
+clients, functions, and their captures need explicit ownership rules rather
+than a claim of recursive copying.
 
-A wrapper never needs to check what the wrapped driver supports: if the vendor
-cannot do the operation, its method returns `ErrUnsupported` and the wrapper
-passes that error on.
-
-## Writing a vendor driver
-
-A vendor driver does the same job as a wrapper, but against a vendor's client
-library. Its package exports the driver type, a construction builder, a constructor,
-and any lifecycle methods its backend needs. Arkoren's Redis cache driver,
-[`rediscache`](https://pkg.go.dev/arkoren.dev/driver/redis/rediscache), illustrates the caller-facing API.
-
-### Configuration and constructors
-
-Use [construction callbacks](../first-steps/configuration.md) on a builder with
-private settings. Invoke callbacks directly once, synchronously in order on one
-fresh draft before ordinary validation. Nil entries panic; expanded nil/empty
-slices omit edits. Methods return the same draft. Publish completed private
-settings and detach owned containers, so a retained draft cannot change the
-driver. For a caller using the shipped Redis driver, install it with
-`go get arkoren.dev/driver/redis` and import
-`arkoren.dev/driver/redis/rediscache`. Its address is configured like this:
+The shipped Redis cache driver demonstrates this public shape. Import
+`arkoren.dev/driver/redis/rediscache`, installed as described in
+[Cache Drivers](../cache/drivers.md#redis):
 
 ```go
-driver := rediscache.New(func(store *rediscache.Builder) {
-	store.Addr("cache:6379")
-})
+var connection rediscache.BuilderFunc = func(store *rediscache.Builder) {
+	store.Addr("cache.internal:6379")
+}
+backend := rediscache.New(connection)
 ```
 
-Settings without a safe default, such as an API key or a bucket name, are
-arguments of `New` rather than builder settings, and `New` returns an error when
-they are invalid. Constructors do not start workers or listeners. Cloud SDK
-constructors retain their documented context and credential/configuration
-loading. Application callback panics and supplied nil callbacks propagate;
-ordinary configuration errors follow the constructor's error contract.
-[Lifecycle and ownership](../application/lifecycle-and-ownership.md) explains the
-separation between construction and startup.
+This constructs a driver without contacting Redis. `Start(ctx)` checks
+connectivity, `Ping(ctx)` provides a readiness check, and `Stop(ctx)` closes its
+client. Your application registers lifecycle work; the driver does not register
+itself. [Lifecycle and Ownership](../application/lifecycle-and-ownership.md)
+explains the wiring.
 
-`NewFrom` wraps a vendor client that the caller built, for applications that
-already have one. Document which settings apply, since the client carries its
-own connection settings, and who closes the client; some conversions take
-ownership. Settings-free conversions take no callback. If one constructor
-delegates to another, pass completed private settings rather than replaying
-the caller's callbacks. Native SDK options configure the native client; they
-are not Arkoren builder callbacks.
+### Native Resources
 
-### Lifecycle
+If you offer `NewFrom(client)`, document whether it borrows or takes ownership
+and which optional settings still apply. Settings-free conversions need no
+callback. Do not infer lifetime from the constructor name: Redis cache
+`NewFrom` transfers ownership and `Stop` closes the supplied client, whereas
+Redis broadcasting borrows its supplied client.
 
-To detect an unreachable backend before serving traffic and release its resources
-on shutdown, expose lifecycle methods for the application to register. For a
-driver whose private `client` field is a `*redis.Client`, the methods are below.
-Install `github.com/redis/go-redis/v9` in your module and import it as `redis`
-when constructing that client; these methods also use `context`:
+Configure native connection policy before sharing or transferring a client.
+An accessor such as `Client()`, or `DB()`/`SQL()` for database drivers, exposes
+native operations without transferring ownership. Explain when that accessor
+is usable and whether native calls bypass facade or transaction behavior.
 
-```go
-func (driver *Driver) Start(ctx context.Context) error {
-	return driver.Ping(ctx)
-}
+Acquire connections and start background loops at the documented lifecycle
+boundary, not incidentally in ordinary configuration callbacks. Cloud SDK
+configuration and credential loading can still require a constructor context.
+Release owned resources even if the stop context has expired; document whether
+shutdown waits for active work and how long the caller controls that wait.
+Borrowing a shared resource must not let one driver close it behind another.
 
-func (driver *Driver) Stop(context.Context) error {
-	return driver.client.Close()
-}
+Keep credentials out of diagnostic output. Redact any exported settings record
+in its `String`, `GoString`, and `slog.LogValuer` implementations, and avoid
+logging native clients, payloads, or raw configuration. Redacting your record
+does not sanitize native errors or caller-owned SDK objects.
 
-func (driver *Driver) Ping(ctx context.Context) error {
-	return driver.client.Ping(ctx).Err()
-}
-```
+### Schema Ownership
 
-`Start` connects, or checks that the backend is reachable, so a wrong address
-fails the deployment rather than the first request. `Stop` releases everything
-the driver holds, even when its context has already expired, and says in its
-documentation what it waits for. `Ping` answers the readiness probe, so keep it
-cheap. A driver never imports the `application` package and never registers itself:
-the composition function wires the methods with `composer.Startup`, `composer.Cleanup`, and
-`composer.Check`. Pass that function to `app.Run(ctx, Compose)`.
+If the driver needs database tables, expose `Migrations()` for the application's
+migrator. Do not run DDL during construction, startup, or the first operation.
+The application applies schema changes through its
+[migration deployment](../migrations/deployment.md) process. Readiness can report
+missing tables without trying to create them.
 
-### Mapping errors
+## Check the Contract
 
-The contract defines what errors mean, and the facade relies on it. Translate
-the vendor's errors into the contract's sentinels, wrapped so the cause is
-kept where it helps. Import `errors` for this fragment inside your driver's
-`Get` implementation:
+Once the prefix wrapper implements the complete interface, run the cache suite
+against it over a fresh memory driver. In your application's wrapper test,
+import `testing`, the cache package and its `cachetest` and `memorycache`
+subpackages, plus your own `internal/prefixcache` package:
 
 ```go
-value, err := driver.client.Get(ctx, key).Bytes()
-if errors.Is(err, redis.Nil) {
-	return nil, cache.ErrNotFound
-}
-```
-
-Return other vendor errors as they are, or wrapped with `%w` and the name of
-the operation. Never turn an outage into a "not found", which would make the
-application believe data is missing when the backend is only unreachable.
-
-### Behavior the contract leaves to you
-
-A few rules hold for every contract, even where its comments do not repeat
-them:
-
-- Every method is safe to call from many goroutines at once, because facades
-  are shared across requests.
-- Methods that take a context stop waiting when it is canceled and return its
-  error.
-- Byte slices passed in or returned are not kept or changed after the call
-  returns. Copy them if the vendor library holds on to them.
-- Leave ordinary operation events and telemetry to the facade, so every
-  backend reports them consistently. Driver workers can still need their own
-  operational logger; never log credentials or payloads.
-
-### Exposing the vendor client
-
-Give the driver an accessor for the vendor client, named `Client()`, or `DB()`
-for SQL drivers, so applications can use vendor features the contract does
-not cover.
-
-### Keeping secrets out of logs
-
-Connection strings, passwords, and API keys must not appear in logs. Avoid
-logging native clients or their configuration structs. If your driver exposes
-a diagnostic settings record, implement redacted `String`, `GoString`, and
-`slog.LogValuer` output for that record. Redacting one record does not sanitize
-caller-owned SDK objects or values captured by callbacks.
-
-## Testing with the conformance suite
-
-Run the contract's suite with a function that builds a fresh driver for each
-subtest. Once `prefixcache` forwards the complete interface, test it over the
-memory driver. In `internal/prefixcache/prefixcache_test.go`, use
-`package prefixcache_test` and import `context`, `testing`,
-`arkoren.dev/core/service/cache`, `arkoren.dev/core/service/cache/cachetest`,
-`arkoren.dev/core/service/cache/memorycache`, and your module's
-`internal/prefixcache` package:
-
-```go
-func TestConformance(t *testing.T) {
+func TestPrefixContract(t *testing.T) {
 	cachetest.Run(t, func(t *testing.T) cache.Driver {
-		inner := memorycache.New()
-		t.Cleanup(func() {
-			if err := inner.Stop(context.Background()); err != nil {
-				t.Error(err)
-			}
-		})
-
-		return prefixcache.New(inner, "tenant:42:")
+		return prefixcache.New(memorycache.New(), "reports:tenant-42:")
 	})
 }
 ```
 
-A wrapper can be tested over a memory driver without starting external
-infrastructure. A vendor driver needs its backend, so run the suite as an
-[integration test](../testing/integration-tests.md), skipped with `-short`,
-against a server started with Docker Compose. Vendor backends measure time
-themselves, so pass the suite's external clock option, such as
-`cachetest.WithExternalClock()`, and the suite waits in real time where it
-otherwise uses a simulated clock.
+The cache suite creates drivers per subtest and runs cases in parallel. This
+memory driver needs no `Start` for reads or expiry, and no janitor is started
+here. Add wrapper-specific tests that inspect underlying keys: a consistently
+unprefixed wrapper could pass the portable suite while failing its own purpose.
 
-Passing the suite provides evidence of portable behavior. When a subtest
-fails, fix the driver. Suite options only describe real differences, such as
-an external clock, and cannot redefine a required operation's semantics.
-[Conformance suites](../testing/conformance-suites.md)
-covers the suites in more detail.
+For a vendor driver, initialize the required backend in the factory and register
+cleanup on its supplied `*testing.T` before returning. Do not defer shutdown
+inside the factory: it would close the driver before the suite uses it. If the
+backend controls expiry, call the suite with `cachetest.WithExternalClock()`.
+Use isolated disposable resources for [integration tests](../testing/integration-tests.md).
 
-## Contributing a driver to Arkoren
+Other suites have different factory shapes, lifecycle needs, and capability
+options. Follow [Driver Conformance](../testing/conformance-suites.md), especially
+its [coverage limits](../testing/conformance-suites.md#interpret-coverage), before
+treating a pass as evidence. Test backend failures and application-specific
+behavior separately; suite options do not relax required semantics.
 
-A driver written for your own service can live in any package of your module.
-If you want to submit it to Arkoren, follow the separate
-[contributor guide](../about/contributing.md) for repository layout, tests,
-and documentation requirements.
-
-For every contract, its suite, and its options, see the
-[testing API reference](../testing/overview.md).
+For the interface and test entry points used here, see the
+[`cache` API](https://pkg.go.dev/arkoren.dev/core/service/cache) and
+[`cachetest` API](https://pkg.go.dev/arkoren.dev/core/service/cache/cachetest).

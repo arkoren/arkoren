@@ -90,8 +90,10 @@ Include everything a reader needs to understand the lesson, but nothing that bel
 Each snippet teaches one operation or decision. Name pre-existing collaborators
 in the lead-in instead of repeating imports, types, constructors, lifecycle
 wiring, routing, and test harnesses. Introduce each new concept before its first
-use, in the order the reader creates and connects the objects. For a service's
-first construction example, show a sample driver and the facade's `New` call.
+use, in the order the reader creates and connects the objects. Include
+construction when it serves the page's agreed scope; a facade-usage overview
+can assume a configured facade and link to Drivers instead. When construction
+is the lesson, show a sample driver and the facade's `New` call.
 Prefer an in-process driver when it supports the lesson; a provider-specific
 page uses that provider. Include only required arguments and settings needed for
 the stated goal. This lets the reader see the package's entry point without
@@ -125,15 +127,23 @@ canonical setup; retain lifecycle code when managing that lifecycle is the
 lesson. For this driver, `Start` optionally runs an expiry janitor and `Stop`
 ends it; expired entries are not returned even without the janitor.
 
-Split a block when the lesson changes, with prose explaining
-each step; remove unrelated setup rather than merely distributing it across
-blocks. Keep code small, concise, and tailored to the operation; there is no
-default line maximum. Remove unrelated setup rather than necessary context or
-consequential checks. Use full implementations or cumulative
+Keep blocks small. If an example needs several actions, split it into meaningful
+steps with prose explaining each step's purpose and result. A request type,
+statement construction, and execution can be separate teaching units within one
+coherent scenario. Split at conceptual boundaries, not an arbitrary line count;
+remove unrelated setup rather than necessary context or consequential checks.
+Use full implementations or cumulative
 walkthroughs only when the request or existing page purpose calls for them;
 authoring a tutorial title does not create that permission. Link to an existing
 runnable package example for full setup. Keep imports and prerequisite types available in prose or a nearby small
 snippet; splitting a large program into arbitrary slices does not simplify it.
+
+For typed application input, prefer a small named struct over an ad hoc
+`map[string]any` literal. Name decoding and validation as prerequisites when the
+input represents an HTTP request; use the actual public conversion helper when
+the consuming API needs one. Keep writable fields and target selection explicit.
+Maps remain appropriate for dynamic-key data or an operation whose map behavior
+is the lesson. See [Focused Examples](page-writing.md#focused-examples).
 
 In focused snippets, omit routine error checks that only return, wrap, log, or
 panic on an error. Keep the error result visible in the assignment; examples

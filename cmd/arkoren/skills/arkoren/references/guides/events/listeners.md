@@ -1,233 +1,160 @@
 ---
 title: Writing Listeners
 nav: Listeners
-description: Register typed and pattern-matching listeners, remove them, and write listeners that stay short, tolerate failure, and are safe concurrently.
+description: Register local observers, own their removal, and keep failure and concurrency behavior explicit.
 order: 20
+summary:
+  - Register typed, exact-name, or pattern listeners for the observations you need.
+  - Control failure propagation and remove registrations with their owning scope.
+  - Keep synchronous callbacks safe around concurrency, contexts, and transactions.
 ---
 
 # Writing Listeners
 
-## Introduction
+A listener lets your application observe an operation without coupling the
+publisher to its logging or monitoring code. It runs inside the publishing call,
+not on a worker. Start with the [shared bus](overview.md#choosing-a-bus), register
+before publication can begin, and keep the callback short.
 
-Deleting an image may also require thumbnail cleanup, without making the storage
-code depend on your thumbnail service. A listener is a function the bus calls
-when a matching event is published, so that cleanup can live separately.
-[Events Overview](overview.md) explains the bus, topics, and delivery; this page
-is about the listener side: the three ways to register one, how to remove it,
-and what to keep in mind so a listener does not become the slowest or most
-fragile part of the operation it observes.
+## Typed Listeners
 
-The rule behind every recommendation here is that listeners run synchronously,
-in the publisher's goroutine, with the publisher's context. A listener is
-therefore part of the publisher's critical path, even though the publisher
-cannot see it.
-
-## Typed listeners
-
-When a stored image is deleted, its thumbnails may need to be removed too.
-Register that cleanup with `Listen` on the deletion topic. The listener receives
-the topic's payload type, so it can use the object's key without a type assertion.
-Here `bus` is your application's event bus and `thumbnails` is your cleanup service:
+To observe uploaded object sizes, listen to `storage.ObjectWritten`. Import
+`context`, `arkoren.dev/core/service/storage`, and use your existing bus and
+`*slog.Logger`:
 
 ```go
-import "arkoren.dev/core/service/storage"
-
-_, err := bus.Listen(storage.ObjectDeleted,
-	func(ctx context.Context, e storage.ObjectDeletedEvent) error {
-		return thumbnails.Delete(ctx, e.Key)
-	})
-```
-
-If the payload published under the topic's name is not of the listener's type,
-the listener is skipped without an error. That only happens when two parts of a
-program disagree about a name, which is why each name should have exactly one
-topic variable.
-
-To react to a signal, listen with `event.Void` as the payload type:
-
-```go
-_, err := bus.Listen(application.Started, func(ctx context.Context, _ event.Void) error {
-	logger.InfoContext(ctx, "application started")
-
-	return nil
-})
-```
-
-Registration fails with `event.ErrInvalidName` when the topic's name is not
-valid, and with `event.ErrNilFunc` when the function is nil. Both are mistakes
-in the program rather than runtime conditions. Check the registration error
-during wiring, before the application starts.
-
-When wiring through an application composer, use
-`composer.MustDefer(bus.Listen(application.Started, onStarted))` with your existing
-typed handler to handle the registration error and own unsubscription together.
-It removes the listener on rollback or shutdown, not when composition returns;
-see [subscription ownership](../application/composition.md#own-subscriptions-and-infallible-releases).
-
-## Listening by name
-
-Sometimes you know an event's name but cannot import its topic variable—for
-example, when the name comes from configuration. `ListenEvent` lets you register
-by that exact string. You give up the typed callback: its payload is `any`, so
-check the type before using it:
-
-```go
-_, err := bus.ListenEvent("invoice.paid", func(ctx context.Context, payload any) error {
-	if e, ok := payload.(invoice.PaidEvent); ok {
-		return receipts.Send(ctx, e.InvoiceID)
-	}
-
-	return nil
-})
-```
-
-Prefer `Listen` whenever you can import the topic. It checks the type at
-compile time and skips mismatched payloads for you.
-
-## Listening by pattern
-
-An audit log may need every storage event, rather than one listener for each
-operation. `ListenRegex` lets one function receive all events whose names match
-a regular expression. It receives the event name as well as the payload, so it
-can tell those operations apart:
-
-```go
-_, err := bus.ListenRegex(regexp.MustCompile(`^storage\.`),
-	func(ctx context.Context, name string, payload any) error {
-		slog.InfoContext(ctx, "storage event", "event", name)
+unsubscribe, err := bus.Listen(storage.ObjectWritten,
+	func(ctx context.Context, notice storage.ObjectWrittenEvent) error {
+		logger.DebugContext(ctx, "object stored", "bytes", notice.Object.Size)
 
 		return nil
 	})
 ```
 
-The pattern is matched against the event name with `MatchString`, so it is not
-anchored: `storage` also matches `app.storage-check`. Anchor it with `^` and,
-where needed, `$`. A nil pattern or function returns `event.ErrNilFunc`.
+The callback receives `storage.ObjectWrittenEvent` without a type assertion.
+`Listen` returns `event.ErrInvalidName` for an invalid topic name and
+`event.ErrNilFunc` for a nil callback. Check registration errors during wiring;
+do not call the returned removal function after failed registration.
 
-Pattern listeners receive their payload as `any` and never see the payload type
-at compile time, so keep them to concerns that do not depend on it: logging,
-counting, forwarding. Logging a payload verbatim is only as safe as the
-publisher makes it. Arkoren's built-in fields omit tokens and request bodies,
-but error values can quote provider responses or application data. Redact those
-errors before forwarding them, and keep your own event payloads free of secrets.
+Topics route by name, so a typed listener skips a nonnil payload with the wrong
+type. Reuse the publisher's topic variable instead of redeclaring its name.
+For a signal such as `application.Started`, the callback's second parameter is
+`event.Void`; import those packages from `arkoren.dev/core/application` and
+`arkoren.dev/core/event`.
 
-## Order and failure
+## Name Matching
 
-A listener is not alone on a name, so its position matters. Exact-name listeners
-run in the order they were registered, and pattern listeners run after all of
-them, also in registration order. If a listener returns an error, the listeners
-after it do not run for that event. With `Emit` the error is logged and the
-publisher continues; with `Dispatch` it is returned to the publisher. A panic
-is logged by `Emit` the same way, and propagates through `Dispatch`.
-
-So a listener that fails hides the event from later ones. Make each listener
-responsible for its own failures: log, retry, or hand the work to a queue, and
-return an error only when stopping delivery is the point. A listener whose job
-is best-effort, such as sending a metric, should swallow its error:
+Use an exact string only when the name comes from configuration or another
+boundary where the typed topic is unavailable. `ListenEvent` receives `any`;
+inspect a payload's type before reading its fields. A name-only observer needs
+no assertion:
 
 ```go
-_, err := bus.Listen(invoice.Paid, func(ctx context.Context, e invoice.PaidEvent) error {
-	if err := metrics.Count(ctx, "invoice.paid", e.Cents); err != nil {
-		slog.WarnContext(ctx, "count payment", "error", err)
-	}
+unsubscribe, err := bus.ListenEvent("storage.object.written",
+	func(ctx context.Context, _ any) error {
+		logger.DebugContext(ctx, "storage write observed")
 
-	return nil
-})
+		return nil
+	})
 ```
 
-Do not depend on the order between your listeners for correctness. The order is
-stable, but a listener added later by another package changes it, and the code
-that relies on it is hard to see. If one step must follow another, put both in
-one listener.
+It has the same name and nil-function validation as typed registration.
+Prefer the typed form when your callback needs payload fields.
 
-## Removing a listener
+### Pattern Listeners
 
-Every registration returns an `Unsubscribe` function. Calling it removes that
-registration, and calling it more than once is safe. A listener tied to the life
-of something shorter than the application, such as one request or one test,
-should always remove itself:
+To count or log several related topics, use `ListenRegex` with `regexp` from the
+standard library. This observer selects storage topics and forwards only names:
 
 ```go
-unsubscribe, err := bus.Listen(invoice.Paid, handler)
+unsubscribe, err := bus.ListenRegex(regexp.MustCompile(`^storage\.`),
+	func(ctx context.Context, name string, _ any) error {
+		logger.DebugContext(ctx, "storage observation", "event", name)
+
+		return nil
+	})
+```
+
+Patterns use `MatchString`, not whole-name matching. Without `^`, `storage` also
+matches `app.storage-check`; add `$` when the end matters. A nil pattern or
+callback returns `event.ErrNilFunc`.
+
+Do not log whole payloads merely because a pattern matches. Some built-in events
+carry raw errors, identifiers, or panic stacks. Select approved fields explicitly;
+payload omissions do not redact the caller's context or returned error chains.
+
+## Failure Ordering
+
+Exact-name callbacks run in registration order before all matching pattern
+callbacks, which also run in registration order. The first error stops delivery.
+With `Emit`, the bus logs it and returns to the publisher; with `Dispatch`, the
+error reaches the publisher. A panic similarly stops delivery: `Emit` recovers
+and logs it, while `Dispatch` lets it propagate.
+
+Returning an error is therefore not an isolated failure report: it prevents later
+observers from receiving that event. If an optional observer can handle its own
+failure, return nil afterward. Avoid retry loops or remote requests in that
+callback, since the publisher waits for them. Keep dependent steps together
+rather than relying on independently registered observers for correctness.
+
+## Removing Listeners
+
+Every successful registration returns an `event.Unsubscribe`. Call it when the
+registration's owning scope ends. For a short-lived test or operation, use your
+existing typed `handler` and topic:
+
+```go
+unsubscribe, err := bus.Listen(storage.ObjectWritten, handler)
 if err != nil {
 	return err
 }
 defer unsubscribe()
 ```
 
-Listeners tied strictly to a process-owned bus can remain for that bus's lifetime.
-Use `MustDefer` for composition-owned subscriptions that must be removed on
-rollback or shutdown, especially on a shared bus. A listener registered in a loop or a handler without a matching
-removal leaks one registration per call, and every event then runs all of them.
+Repeated removal is safe and removes only that registration, even if the same
+function was registered more than once. Delivery uses a snapshot: removal does
+not stop a callback already selected, and new registrations do not join the
+current snapshot.
 
-Removal takes effect for the next event. An event that is being delivered at the
-moment already has its list of listeners, so a listener removed from another
-goroutine, or by an earlier listener, can still receive that one event.
-
-## Keeping listeners short
-
-Because the publisher waits, a listener is a delay in someone else's operation.
-A request that stores a file waits for every `storage.object.written` listener
-before it returns. Three habits keep this cheap:
-
-- Do the minimum in the listener and move the rest to a queue: enqueue a job
-  with the identifiers it needs, and let a worker do the slow call, with
-  retries. The publisher still waits for dispatch, but not for the worker's
-  remote call.
-- Respect the context. The listener receives the context of the publisher, so a
-  listener can observe a canceled request and stop work that respects cancellation.
-  Passing a context does not forcibly stop arbitrary listener code.
-  Work that must outlive the caller needs
-  its own context and, usually, a queue.
-- Never block on something the publisher holds. A listener that waits for a
-  lock or a transaction the publisher is still holding will wait forever.
-
-### Inside a transaction
-
-When the publisher is running inside a database transaction and passes its
-context on, a listener that uses that context joins the transaction. Its writes
-commit or roll back together with the publisher's, which is what you want when
-the listener maintains related data:
+For a composition-owned listener, give removal to the composer rather than
+deferring it until the composition function returns:
 
 ```go
-_, err := bus.Listen(invoice.Paid, func(ctx context.Context, e invoice.PaidEvent) error {
-	return ledger.Record(ctx, e.InvoiceID, e.Cents)
-})
+composer.MustDefer(bus.Listen(storage.ObjectWritten, handler))
 ```
 
-A goroutine started by the listener must not use that context after the
-transaction ends: its queries fail with `sql.ErrTxDone`. For effects that must
-not happen if the transaction rolls back, such as sending an email, register
-them with `db.AfterCommit`, described in
-[Transactions](../database/transactions.md#running-code-after-commit). The
-`database.transaction.committed` event is published after the commit, so its
-listeners run outside the finished transaction.
+This checks registration and removes the listener on rollback or shutdown, as
+described in [subscription ownership](../application/composition.md#own-subscriptions).
+Process-owned registrations can remain for their bus's lifetime. Repeated
+registration in a request handler without removal accumulates callbacks and
+repeats each observation.
 
-## Concurrency
+## Shared Execution
 
-The bus is safe for concurrent use, and the same listener can run on several
-goroutines at once when events are published concurrently, as they are in an
-HTTP server. A listener that updates shared state needs its own
-synchronization:
+The same callback can run concurrently when different goroutines publish. A
+listener that changes shared state must use its own synchronization. Payload
+values are not deeply copied: copy slices, maps, or pointed-to data before
+mutating or retaining them when their publisher's contract requires it.
 
-```go
-type counter struct {
-	mu    sync.Mutex
-	count int
-}
+Callbacks receive the publisher's context, including its deadline, cancellation,
+and any transaction scope. Respect cancellation, but do not assume that passing
+a context forcibly interrupts arbitrary callback code. Do not wait for a lock or
+transaction the publisher is holding; the publisher cannot proceed until you return.
 
-func (counter *counter) onPaid(_ context.Context, _ invoice.PaidEvent) error {
-	counter.mu.Lock()
-	defer counter.mu.Unlock()
-	counter.count++
+A listener using the callback context of a compatible database transaction joins
+that transaction. Its writes commit or roll back with the caller's work, but
+`Emit` cannot enforce rollback if that listener fails. Required records need
+[transactional auditing](auditing.md#required-records). The committed-transaction
+event itself runs after commit, outside the finished transaction.
 
-	return nil
-}
-```
+For an external effect that must wait for commit, use
+[after-commit hooks](../database/transactions.md#after-commit). These hooks are
+not durable. Queueing there still leaves a crash window before enqueueing;
+persist pending work in the transaction if loss is unacceptable. Never retain
+the transaction's callback context for use after it ends.
 
-Listeners may publish further events and register or remove listeners, since
-delivery works from a snapshot and holds no lock while a listener runs. Avoid
-chains where a listener for an event publishes the same event, which recurses
-until the stack is exhausted.
+The bus holds no registration lock while callbacks run, so a listener can publish
+or change registrations. Avoid publishing a topic recursively from its own
+listener: that recurses synchronously rather than scheduling later work.
 
-For every function and option, see [the `event` API reference](https://pkg.go.dev/arkoren.dev/core/event).
+For all functions and options, see the [`event` API reference](https://pkg.go.dev/arkoren.dev/core/event).

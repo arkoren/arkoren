@@ -1,13 +1,14 @@
 ---
-title: Language Model Drivers
-nav: Drivers
-description: Install, connect, and configure the OpenAI driver, which also serves Ollama, vLLM, and other compatible servers.
-order: 80
+title: Drivers
+description: Configure hosted OpenAI or a compatible server and compare the driver's two API modes.
+order: 20
+summary:
+  - Choose an API mode using the driver's media, reasoning, tool, and schema support.
+  - Configure credentials, gateways, retries, and embedding batches without changing facade calls.
+  - Use request hooks, a caller-owned SDK client, or optional verified response notifications.
 ---
 
-# Language Model Drivers
-
-## Introduction
+# Drivers
 
 Use the OpenAI driver for hosted OpenAI models or a server with a compatible
 API. Choose the API mode and model together: a server can accept text requests
@@ -25,7 +26,7 @@ tests use the scripted `llmtest.Fake` ([Testing Language Models](testing.md)).
 [Choosing a Driver](../drivers/choosing-a-driver.md) compares drivers across
 services.
 
-## Compatibility matrix
+## Compatibility Matrix
 
 Compare the two API modes of the shipped OpenAI driver. These are translation
 capabilities exposed by Arkoren, not guarantees that every model or compatible
@@ -64,8 +65,10 @@ go get arkoren.dev/core arkoren.dev/driver/openai
 
 ### Connecting
 
-With an OpenAI account and access to your chosen model, set `OPENAI_API_KEY`
-outside source control. Construct the connection and model in your application:
+For hosted OpenAI, obtain an API key and choose a model your account can access.
+Set `OPENAI_API_KEY` outside source control. Requests can incur provider charges;
+this guide does not require making a live call. With your selected ID in
+`modelID`, construct the connection and facade:
 
 ```go
 import (
@@ -75,13 +78,13 @@ import (
 
 driver, err := openaillm.New() // OPENAI_API_KEY, OPENAI_BASE_URL from the environment
 
-model := llm.New(driver, "gpt-5.2")
+model := llm.New(driver, modelID)
 ```
 
 Handle the construction error before using `driver`. Set `OPENAI_API_KEY`
 before calling the hosted service and choose a model your
 account can access. `New` does no I/O; connection and credential failures appear
-on the first request. Follow the [overview](overview.md#running-an-agent) to get
+on the first request. Follow the [overview](overview.md#generating-replies) to get
 your first answer. Register `Ping` as a
 [health check](../application/health-and-readiness.md) if the server supports listing models.
 
@@ -114,24 +117,24 @@ batch-size settings fail construction.
 Embeddings use batches of at most 2048 inputs by default; zero restores that
 default. Results are ordered by the response index and input-token usage is
 summed across batches. `Purpose` is ignored by this driver. Use
-[request hooks](#setting-provider-specific-request-fields) for native parameters
-or [reuse an SDK client](#reusing-a-native-client) for existing connection policy.
+[request hooks](#request-hooks) for native parameters
+or [reuse an SDK client](#native-clients) for existing connection policy.
 
-### Generating replies and embeddings
+### Generating Replies
 
-With the `model` above, follow [running an agent](overview.md#running-an-agent)
-to receive text or [streaming one turn](streaming.md#streaming-one-turn) to
+With the `model` above, follow [generating replies](overview.md#generating-replies)
+to receive text or [streaming text](streaming.md#streaming-text) to
 display it as it arrives. For vectors, pass the same `driver` to the
-[embedding setup](embeddings.md#embedding-texts); the embedding model is
+[embedding setup](embeddings.md#embedding-text); the embedding model is
 separate from the chat model. No driver `Start` or `Stop` call is required.
 
-### Behavior and limits
+### Mode Limits
 
 Use the default Responses mode when the server supports it. If it only offers
-Chat Completions, select that mode in the
-[local setup](local-development-with-ollama.md#older-ollama-versions); document parts
-and reasoning do not have the same support. Responses requires `/responses`
-(available in [Ollama 0.13.3 and later](https://docs.ollama.com/api/openai-compatibility#responses-api)).
+Chat Completions, add `driver.API(openaillm.ChatCompletions)` to the construction
+callback. Documents and reasoning do not have the same support. The
+[Ollama workflow](local-development-with-ollama.md) shows local setup and
+mode selection.
 `Ping` needs a working `GET /models` endpoint and reads one page. A server without
 that endpoint fails readiness even if generation works.
 
@@ -162,12 +165,12 @@ setting. Input-token usage includes cached tokens; output usage includes
 reasoning tokens. Unreported counts remain zero. Stop reasons remain successful
 single-turn replies: tool calls, exhausted output limits, refusals, and content
 filters have distinct portable reasons. The agent loop interprets those reasons
-as described in [Language Models Overview](overview.md#errors).
+as described in [Reading Outcomes](overview.md#reading-outcomes).
 
 Stopping iteration cancels the HTTP request. A stream missing its terminal event
 fails with `llm.ErrUnavailable` wrapping `io.ErrUnexpectedEOF`.
 
-### Strict schemas
+### Strict Schemas
 
 Strict schema rewriting defaults on for Responses and off for Chat Completions.
 To disable it explicitly, set `StrictSchemas(false)` in the construction
@@ -192,7 +195,7 @@ Completions, with type `json_schema`. Unsupported formats return
 `llm.ErrUnsupported`; there is no prompt-based fallback. Use
 [Structured Output](structured-output.md) to declare and validate the Go result.
 
-### Interpreting provider failures
+### Provider Failures
 
 The SDK's `*openai.Error` stays available through `errors.As`. The driver maps
 429 to `llm.ErrRateLimited`, server failures to `ErrUnavailable`, missing models
@@ -205,7 +208,7 @@ match `ErrUnsupported`, except `invalid_json_schema`, which remains
 unknown body codes also become `ErrInvalidRequest`. Do not treat an invalid
 schema as evidence that the server lacks structured output.
 
-### Receiving background notifications
+### Response Notifications
 
 This setup is optional; ordinary generation, streaming, and embeddings do not
 require a webhook endpoint. When your application creates background work through
@@ -235,7 +238,7 @@ r.Post("/webhooks/openai", handler)
 Here `r` is your application router; check both construction errors before
 registering the handler. Configure its public HTTPS URL and event subscriptions
 in OpenAI. Core acknowledges after acceptance succeeds; the
-[webhook guide](../http-capabilities/webhooks.md) covers queueing and receipt policy.
+[webhook guide](../webhooks/receiving-webhooks.md) covers queueing and receipt policy.
 The adapter also defines failed, canceled, and incomplete events. These are
 response references, not generated output: retrieve the response in your handler
 or worker.
@@ -262,19 +265,21 @@ describes retries for up to 72 hours, but that is provider policy, not an
 exactly-once receiver guarantee. Scope deduplication by project/endpoint and make
 acceptance idempotent.
 
-### Setting provider-specific request fields
+### Request Hooks
 
 If a deployment needs an OpenAI-only setting, use a request hook rather than
 changing portable agent code. Import `responses` from
 `github.com/openai/openai-go/v3/responses` and add this to the driver's existing
-construction callback to request the Flex service tier:
+construction callback to keep response storage explicitly disabled:
 
 ```go
 driver.ResponsesHook(func(params *responses.ResponseNewParams) {
-	params.ServiceTier = responses.ResponseNewParamsServiceTierFlex
+	params.Store = openai.Bool(false)
 })
 ```
 
+This fragment also imports `openai` from `github.com/openai/openai-go/v3`.
+It reinforces a request setting, not a guarantee against provider retention.
 The hook sees the translated history, tools, output schema, and defaults before
 each Responses request, including each agent turn and each streaming request.
 It does not run during construction. Its edits are not reset by the driver:
@@ -287,7 +292,7 @@ Chat Completions boundary, including an explicit `Store` override. For a Chat
 stream, the driver subsequently sets `stream_options.include_usage` to `true`,
 even if the hook disabled it. Neither hook applies to embeddings.
 
-### Reusing a native client
+### Native Clients
 
 If your application already configures the official SDK, import `openai` from
 `github.com/openai/openai-go/v3` and pass your existing `client openai.Client`
@@ -311,12 +316,12 @@ Here `ctx` is your request or command context. On success, `models.Data` contain
 one page of provider model records. Native operations do not inherit the
 facade's validation, events, or telemetry and are not portable contract methods.
 
-### Running locally
+### Local Servers
 
-[Local Development with Ollama](local-development-with-ollama.md) shows how to
+[Local Development](local-development-with-ollama.md) shows how to
 point the driver at a server on your machine.
 
-### API references
+### API References
 
 For every function and option, see [the `openaillm` API
 reference](https://pkg.go.dev/arkoren.dev/driver/openai/openaillm) and the optional

@@ -1,121 +1,151 @@
 ---
-title: Local Development with Ollama
-nav: Local Development
-description: Run models on your own machine with Ollama and point the OpenAI driver at it, including Chat Completions mode.
-order: 70
+title: Local Development
+description: Run downloaded Ollama models through the OpenAI driver and verify local generation separately from application tests.
+order: 90
+summary:
+  - Connect to a loopback Ollama server without inheriting hosted credentials.
+  - Select a supported API mode and use a separate local embedding model.
+  - Check model-specific behavior and clean up the server and downloaded models deliberately.
 ---
 
-# Local Development with Ollama
+# Local Development
 
-## Introduction
+Use a downloaded Ollama model when you want to check model requests on your own
+machine without a hosted API key. Ollama exposes an OpenAI-compatible API, so
+you reuse the [OpenAI driver](drivers.md). A local answer checks connectivity
+and prompt behavior for that model, not parity with your hosted deployment.
 
-With a downloaded model running locally, you can develop against the `llm`
-contract without a vendor API key or an internet connection.
-[Ollama](https://ollama.com) serves an OpenAI-compatible API, so you reuse the
-OpenAI driver without paying a hosted provider per request. Treat local results
-as a check of your wiring; model quality and prompt behavior can differ from
-your hosted deployment.
+This workflow uses local inference, not Ollama's cloud service. Cloud models
+still need authentication and network access. After installation and model
+download, local inference does not require an internet connection.
 
-This page uses a local model, not Ollama's cloud service. Cloud models need
-authentication and network access even when selected through a local server;
-Ollama's [compatibility documentation](https://docs.ollama.com/api/openai-compatibility)
-distinguishes the two setups.
+## Starting Ollama
 
-## Pointing the driver at Ollama
+Install [Ollama](https://ollama.com/download) and start its local server. If
+your installation does not start it automatically, run `ollama serve` in
+another terminal. Keep the unauthenticated plaintext endpoint on loopback;
+do not expose it to an untrusted network.
 
-Install the Go dependencies using the [overview setup](overview.md#creating-a-model).
-The snippets here use `llm` from `arkoren.dev/core/service/llm` and `openaillm`
-from `arkoren.dev/driver/openai/openaillm`.
-
-Install [Ollama](https://ollama.com/download) and ensure its local server is
-running. If your installation does not run it automatically, run `ollama serve`
-in another terminal. It listens on port 11434. Then download a model that supports tools:
+Download the model before sending a request:
 
 ```sh
 ollama pull llama3.2
 ```
 
-Then set the base URL. The local server needs no key; the placeholder below also
-prevents the SDK from reusing a hosted `OPENAI_API_KEY` from your environment:
+The model remains on disk after the server stops. Its identifier is the name
+you pulled, not a hosted OpenAI model name.
+
+## Connecting Locally
+
+Install the Go modules in your application's module directory:
+
+```sh
+go get arkoren.dev/core arkoren.dev/driver/openai
+```
+
+Import `llm` from `arkoren.dev/core/service/llm` and `openaillm` from
+`arkoren.dev/driver/openai/openaillm`. Set both the loopback URL and a nonsecret
+key value so the SDK cannot inherit a hosted `OPENAI_API_KEY`:
 
 ```go
 driver, err := openaillm.New(func(driver *openaillm.Builder) {
 	driver.APIKey("ollama")
 	driver.BaseURL("http://localhost:11434/v1")
 })
+```
 
+Handle the construction error before creating the facade. Construction performs
+no network I/O. With a bounded operation context `ctx`, send a small request:
+
+```go
 model := llm.New(driver, "llama3.2")
-```
-
-Call this `model` using the [first-answer example](overview.md#running-an-agent).
-Success prints a generated answer from the downloaded model, without contacting
-OpenAI. This verifies a basic request; it does not verify support for every tool,
-schema, or input listed in the [driver matrix](drivers.md#compatibility-matrix).
-
-Keep this plaintext endpoint on loopback; do not expose an unauthenticated model
-server to an untrusted network. Stop a manually started server with Ctrl+C when
-you finish. The downloaded model remains on disk; `ollama rm llama3.2` removes
-that local model if you no longer need it.
-
-The driver reads `OPENAI_BASE_URL` too, so you can instead set that variable in
-your development environment. Use a nonsecret local API-key value rather than
-inheriting hosted credentials. Model IDs are the names you
-pulled. Embeddings use an embedding model, for example `ollama pull
-nomic-embed-text`, with `llm.NewEmbedder(driver, "nomic-embed-text")`.
-
-Register `driver.Ping` as a [health check](../application/health-and-readiness.md)
-to see at startup whether the server is running; it lists the server's models.
-
-## Older Ollama versions
-
-By default the driver speaks the Responses API, which
-[Ollama supports from version 0.13.3](https://docs.ollama.com/api/openai-compatibility#responses-api).
-Ollama supports non-stateful Responses requests. Do not infer that hosted OpenAI
-or another compatible server has the same limitation: native hooks can request
-storage, and each provider's policies still apply.
-For an older server, or another server that only offers Chat
-Completions, choose that mode:
-
-```go
-driver, err := openaillm.New(func(driver *openaillm.Builder) {
-	driver.APIKey("ollama")
-	driver.BaseURL("http://localhost:11434/v1")
-	driver.API(openaillm.ChatCompletions)
+reply, err := model.Generate(ctx, llm.Request{
+	Messages: []llm.Message{llm.UserText("Explain planned maintenance in one sentence.")},
 })
 ```
 
-Chat Completions has a few differences. Reasoning output is ignored, `Document`
-parts return `llm.ErrUnsupported`, and strict schemas are off by default, so the
-schema is sent as written. The [driver reference](drivers.md#behavior-and-limits)
-lists the mode constraints.
+On success, inspect `reply.Message` and its [stop reason](overview.md#reading-outcomes).
+The request goes to your local server, not OpenAI. A successful reply verifies
+basic generation, not tools, structured output, or every media input.
+`driver.Ping(ctx)` checks `GET /models`; register it as a
+[health check](../application/health-and-readiness.md) if you want readiness to
+depend on that endpoint.
 
-The driver's [request hooks](drivers.md#setting-provider-specific-request-fields)
-can change native defaults, including `Store`. This is not a provider-retention
-guarantee. Ollama, gateways, and hosted OpenAI have different storage and logging
-policies; changing the base URL does not establish one shared privacy policy.
+You can set `OPENAI_BASE_URL` instead of the callback URL, but still prevent
+hosted credentials from leaking to the local endpoint. The driver needs no
+`Start` or `Stop` calls.
 
-## What to expect from small models
+## Selecting Modes
 
-Local models follow tool schemas and output formats less reliably. If an agent
-returns invalid output or calls a tool with bad arguments, the retries described
-in [Structured Output](structured-output.md#when-the-output-is-invalid) and the
-validation errors sent back to the model make up for some of it. If a server
-rejects the structured output format, the call returns `llm.ErrUnsupported`;
-there is no fallback that rewrites your prompt.
+The default is Responses, supported by
+[Ollama from 0.13.3](https://docs.ollama.com/api/openai-compatibility#responses-api).
+Ollama supports non-stateful Responses: your application still sends the
+[conversation history](conversation-history.md). For an older server, or a
+compatible server offering only Chat Completions, add this to the existing
+driver callback:
 
-Check the selected model and server as well as the driver: Ollama's documented
-Chat Completions support includes inline image bytes but not remote image URLs,
-and does not support `tool_choice`. Use `llm.Image{Data: imageBytes, MediaType:
-"image/png"}` with an appropriate vision model rather than assuming URL input
-or forced tool selection works. Structured schemas remain subject to the
-[driver's schema limits](drivers.md#strict-schemas) and the server's support.
+```go
+driver.API(openaillm.ChatCompletions)
+```
 
-## Testing your application
+Chat mode drops reasoning history/output, rejects `Document` parts with
+`llm.ErrUnsupported`, and disables strict-schema rewriting by default.
+[Mode Limits](drivers.md#mode-limits) describes the translation boundary.
 
-Use the [scripted fake](testing.md#scripting-replies) for repeatable application
-tests without running Ollama. Keep a separate opt-in smoke test against this
-local `model` when you need to verify the server connection; a generated answer
-proves the connection works, not that every prompt or tool policy is correct.
+Responses initializes `store: false`, but [request hooks](drivers.md#request-hooks)
+can override it. That field is not a retention guarantee. Local servers,
+gateways, and hosted providers have separate logging and storage policies.
 
-For every option, see [the `openaillm` API
-reference](https://pkg.go.dev/arkoren.dev/driver/openai/openaillm).
+## Local Embeddings
+
+Generation and embedding use different models. Download an embedding model
+before constructing the separate facade:
+
+```sh
+ollama pull nomic-embed-text
+```
+
+Reuse the local driver and embed one approved text:
+
+```go
+embedder := llm.NewEmbedder(driver, "nomic-embed-text")
+vectors, err := embedder.Embed(ctx, "Search is unavailable during maintenance.")
+```
+
+On success, `vectors[0]` is a `[]float32` for that text. Keep the model and
+dimensions consistent when comparing it with other vectors; [Embeddings](embeddings.md)
+explains storage and comparison responsibilities.
+
+## Checking Behavior
+
+Server compatibility and model capability are separate checks. Smaller models
+can produce invalid arguments or final output; schema validation and
+[output correction](structured-output.md#correcting-replies) handle only the
+documented classes of failure. A rejected output format returns
+`llm.ErrUnsupported`, without a prompt-based fallback.
+
+Ollama's documented Chat Completions support accepts inline image bytes, not
+remote image URLs, and does not support `tool_choice`. With a vision-capable
+model, use `llm.Image{Data: pngBytes, MediaType: "image/png"}` instead of assuming
+URL input works. Schemas also remain subject to both the
+[driver limits](drivers.md#strict-schemas) and the server's support.
+
+Use the [scripted fake](testing.md) for repeatable application tests. Keep
+local-server smoke tests separate and opt-in: a generated answer does not prove
+tool authorization, output accuracy, or semantic search relevance.
+
+## Cleaning Up
+
+Stop a server you started with `ollama serve` using Ctrl+C. Do not stop a server
+owned by another application. Remove downloaded models only when no longer
+needed:
+
+```sh
+ollama rm llama3.2
+ollama rm nomic-embed-text
+```
+
+Removing a model frees its local storage and requires another download before
+you can use that identifier again.
+
+For driver options, see the [openaillm API reference](https://pkg.go.dev/arkoren.dev/driver/openai/openaillm).

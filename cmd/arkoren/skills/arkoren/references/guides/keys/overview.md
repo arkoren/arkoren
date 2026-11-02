@@ -1,160 +1,207 @@
 ---
 title: Application Keys
 nav: Overview
-description: Choose, provision, and load typed shared, signing, and exchange keys for your application.
+description: Choose typed application keys, validate stored material, and separate public output from private exports.
 order: 10
+summary:
+  - Choose independent shared secrets, P-256 signing identities, or X25519 exchange identities for each purpose.
+  - Generate material explicitly and load configured values with strict format and error checks.
+  - Distinguish public exports from private credentials and understand detached ownership and redaction limits.
+  - Keep peer authentication and key rotation with the protocols and consumers that own them.
 ---
 
 # Application Keys
 
-## Introduction
+Your application's encrypted records and signed values must survive restarts.
+Provision a key once, protect it, and load the intended material wherever that
+purpose runs. The `key` package turns stored bytes into immutable, validated key
+values; it does not choose your configuration source or manage rotation.
 
-Encryption and signatures must keep working across restarts and deployments.
-Generate persistent key material once, protect it in your secret store, and load
-the same material on every replica. The `key` package validates material before
-you supply it to encryption drivers, link signers, cursor codecs, or P-256
-identity consumers. It also provides X25519 keys for integration with an existing
-key-agreement protocol. It does not choose configuration sources or rotate keys.
+## Choose Material
 
-## Choosing the type
+Choose the type required by the consumer, not the file extension. A shared
+secret protects data using the same secret on both sides. A signing identity
+instead separates the private key that signs from the public key that verifies.
 
-Run `go get arkoren.dev/foundation/key` in your application's module.
-Choose the immutable value whose role matches your application. Generate separate
-material for encryption, links, cursors, and each independent purpose; sharing a
-type does not make sharing a key safe. Keep signing and exchange identities separate.
+| Type | Material | Use |
+| --- | --- | --- |
+| `key.Shared` | Exactly 32 secret bytes | Symmetric encryption or shared-secret signing, with no public counterpart. |
+| `key.Signing` | ECDSA P-256 private identity | Signatures verified with the matching public key. |
+| `key.Exchange` | X25519 private identity | Key agreement inside an existing authenticated protocol. |
 
-### Shared keys
+Use independent material for each purpose. For example, give encrypted records,
+[signed links](../http-capabilities/secure-links.md), and
+[pagination cursors](../queries/pagination.md) separate `Shared` values.
+AES-256-GCM and ChaCha20-Poly1305 consume `Shared` for encryption; link signers and
+cursor codecs use it for HMAC-based checks, not public-key signatures.
 
-Use `key.Shared` when an operation needs a symmetric secret: the same secret
-protects and checks the data. It privately owns exactly 32 bytes, independently
-of the input buffer. `key.GenerateShared()` creates cryptographically random
-material; importing bytes validates their length, not their entropy. Never use a
-password as a key.
+`Signing` is not an encryption key, and `Exchange` is neither a signer nor an
+encryption protocol. These types do not accept arbitrary algorithms: an RSA or
+Ed25519 key is not a `Signing` identity, and a P-256 ECDH key is not an `Exchange`
+identity. For Web Push, follow [VAPID Keys](../push/vapid-keys.md). For Apple Sign
+In, load the Apple-issued P-256 key; local generation cannot establish provider
+provenance. Provider API tokens, webhook secrets, password-hash salts, session
+identifiers, and [TLS certificates](../http-networking/certificates.md) are
+different inputs, not additional key types.
 
-AES-256-GCM and ChaCha20-Poly1305 use this material for encryption and decryption.
-Link signers and cursor codecs instead derive purpose-bound keys with HKDF-SHA256
-and use HMAC-SHA256 to detect changes. These are shared-secret checks, not
-asymmetric signatures: `Shared` has no public counterpart that you can distribute
-for verification without revealing the secret.
+## Generate Keys
 
-### Signing keys
+Use [Key Commands](../cli/keys.md) to provision protected files, validate them,
+and extract public components. That guide owns command syntax, output permissions,
+and recovery from incomplete writes.
 
-Use `key.Signing` when a private key must sign data that a public key can verify.
-It privately holds a validated ECDSA P-256 scalar, the secret number defining the
-identity. Its native private and matching public key exports are derived from
-that scalar and detached from the immutable value. The public key verifies
-signatures; it does not encrypt data, and the private key is not a decryption key.
-
-`key.GenerateSigning()` creates an independent identity suitable for VAPID, which
-authenticates your application server to a Web Push service. Apple Sign In also
-uses `Signing`, but you must load the key issued by Apple: a locally generated
-identity does not establish the required association with your Apple account.
-
-### Exchange keys
-
-Use `key.Exchange` to supply keys to an existing authenticated key-agreement
-protocol. It privately owns X25519 private bytes and derives its matching public
-key; native exports are detached from the immutable value.
-`key.GenerateExchange()` creates an independent exchange identity.
-
-Within the protocol, each party combines its own private key with the peer's
-public key to obtain shared material. This agreement neither encrypts data nor
-creates signatures, and it does not authenticate the peer. Let the protocol
-authenticate peer keys and derive purpose-separated encryption keys rather than
-reusing raw agreement output as a key. Follow the
-[exchange-key security requirements](#using-exchange-keys); these containers are
-not a reason to design your own encryption protocol.
-
-## Provisioning once
-
-Install the CLI with `go install arkoren.dev/cmd/arkoren@latest`. In a protected provisioning
-directory, choose the type and a separate file for each purpose:
+Add the package from your application's module directory:
 
 ```sh
-arkoren key generate shared --out app-key.key
-arkoren key generate shared --out link-key.key
-arkoren key generate shared --out cursor-key.key
-arkoren key generate signing --out vapid-private.pem
-arkoren key generate exchange --out exchange-private.pem
+go get arkoren.dev/foundation/key
 ```
 
-Files must not exist, including symlinks. Private output uses mode `0600`; the
-CLI does not create parent directories, edit `.env`, or print private contents
-unless you explicitly use `--out -`. Protect the directory and its parents from
-untrusted writers. Move the files into protected deployment storage, mount them
-read-only, and back them up separately from public configuration.
-
-If writing fails after creation, the CLI reports a possibly incomplete file and
-leaves it for inspection. Do not replace an established key to recover from a
-provisioning failure. See [Key Commands](../cli/keys.md) for validation and public
-extraction. Manual alternatives remain in [Encryption Keys](../encryption/keys.md)
-and [VAPID Keys](../push/vapid-keys.md).
-
-## Loading at startup
-
-Import `arkoren.dev/foundation/key`. For mounted files, use explicit paths and
-handle errors before constructing the consumer. In application startup code:
+Import `arkoren.dev/foundation/key`. If you write your own provisioning tool,
+use the package's generators. This disposable in-memory example creates a shared
+key without displaying or persisting its secret:
 
 ```go
-material, err := key.LoadShared("app-key.key")
-if err != nil {
-	return err
-}
-secret, err := key.LoadShared("link-key.key")
-if err != nil {
-	return err
-}
-identity, err := key.LoadSigning("vapid-private.pem")
-if err != nil {
-	return err
+material, err := key.GenerateShared()
+```
+
+Generation uses `crypto/rand` and does not store the result. `GenerateSigning`
+creates an independent P-256 identity; `GenerateExchange` creates an independent
+X25519 identity. Provision production material outside application startup and
+store it in protected deployment storage with a protected backup. Never generate
+a replacement to hide a missing startup key: existing data or identities still
+depend on the original.
+
+## Load Configuration
+
+Your application selects configuration sources and resolves
+[secret-store values](../secrets/managing.md). The package does not read an
+implicit `APP_KEY`, fetch secrets, or search parent directories. For example,
+an application's configuration layer can supply these named inputs:
+
+```go
+type KeyConfig struct {
+	EncryptionBase64 string
+	SigningFile      string
 }
 ```
 
-The resulting values are ready for `aescrypto.New(material)`, `link.New(secret)`,
-and `webpushpush.New(identity, contact)` respectively. Use a separately loaded
-cursor secret with `pagination.NewCursorCodec`. These constructors require typed keys.
+With an existing `config KeyConfig`, parse the encryption secret already read
+from protected storage:
 
-For environment variables or secret-store text, call `key.ParseShared(text)`.
-It expects padded standard base64 encoding exactly 32 bytes and accepts
-surrounding whitespace, but rejects embedded line breaks and malformed encodings.
-For signing PEM bytes, use `key.ParseSigning(contents)`: exactly one unencrypted PKCS #8
-`PRIVATE KEY` block is accepted, with no extra headers, blocks, or non-whitespace
-junk. Reads and encoded inputs are bounded to 64 KiB. Missing or malformed keys
-fail startup rather than generating replacement identities.
+```go
+material, err := key.ParseShared(config.EncryptionBase64)
+```
 
-For an exchange identity, use `key.LoadExchange(path)` or
-`key.ParseExchange(contents)` with an X25519 PKCS #8 private key.
-`PublicPEM()` on either asymmetric type exports its public key as SPKI PEM;
-`Signing.VAPIDPublicKey()` exports the browser-ready base64url public point instead.
-Formatting and structured logging redact key values. Mutable exports are detached
-copies, but explicit private exports still contain secrets.
+Handle `err` before constructing an encryption consumer. On success, `material`
+is a `key.Shared`; continue with [Encryption Keys](../encryption/keys.md) for
+driver wiring and encrypted-data use. `ParseShared` requires padded standard
+base64 decoding to exactly 32 bytes. It accepts surrounding whitespace but
+rejects embedded line breaks, noncanonical padding bits, and malformed encoding.
+Base64 is an encoding, not encryption. `NewShared(raw)` imports exactly 32 raw
+bytes instead; neither operation proves entropy. Do not use a password or a
+predictable 32-byte value as a key.
 
-The package does not load an implicit `APP_KEY`, search parent directories, or
-fetch secrets. Your application chooses the file, environment variable, or
-[secret-store reference](../secrets/managing.md). File loaders follow the explicit path;
-they do not enforce deployment file permissions or sandbox untrusted paths.
+For a mounted signing file, restrict read access to the application and trusted
+operators before loading it. Keep the file and its parent directories under
+trusted control: loaders follow the supplied path, including symlinks, and do
+not check deployment permissions or sandbox untrusted paths.
 
-Rotation remains owned by the relevant consumer. Retain prior encryption keys
-while stored data and backups need them; retain signing secrets while issued
-links/cursors remain valid. VAPID requires subscription migration, not merely
-swapping the server's identity. Provider API tokens, webhook secrets, password
-hash salts, session identifiers, and TLS certificate provisioning are outside
-this package.
+```go
+identity, err := key.LoadSigning(config.SigningFile)
+```
 
-## Using exchange keys
+On success, `identity` is a `key.Signing`. Loading reads without modifying the
+file. `LoadShared(path)` reads base64 text; `LoadExchange(path)` reads X25519
+private PEM. If configuration already contains PEM bytes, use
+`ParseSigning(contents)` or `ParseExchange(contents)` instead.
 
-An `Exchange` value supplies native X25519 keys to an existing protocol through
-`PrivateKey()` and `PublicKey()`. `key.ParseExchangePublic(contents)` reads a peer's
-X25519 SPKI `PUBLIC KEY` PEM. Parsing validates the key's format, not who owns it.
+Both private PEM parsers require exactly one unencrypted PKCS #8 `PRIVATE KEY`
+block with the matching algorithm. They accept surrounding whitespace, but
+reject extra blocks, PEM headers, non-whitespace junk, trailing DER bytes, other
+curves, and alternate forms such as SEC 1 `EC PRIVATE KEY`. Encoded inputs and
+file reads are limited to 64 KiB, including surrounding whitespace.
+
+For existing native keys, `NewSigning(private)` accepts an `*ecdsa.PrivateKey`
+from `crypto/ecdsa`, validates P-256 and public/private consistency, and copies
+the material. `NewExchange(private)` accepts an X25519 `*ecdh.PrivateKey` from
+`crypto/ecdh`. Neither constructor retains the caller's mutable key object.
+
+Malformed, unsupported, and oversized material returns `key.ErrInvalid`; check
+it with `errors.Is` from the standard-library `errors` package. File operations
+preserve OS error causes, so a missing file can match `os.ErrNotExist` instead.
+Validation errors do not include key contents or input-derived parser diagnostics.
+Do not log the source configuration when reporting a failure.
+
+## Export Material
+
+Before exporting a key passed in by another component, check its `Err()` result.
+All three types have invalid zero values; `Err()` returns `key.ErrInvalid` for
+them. An empty export is not a replacement for validation: zero shared values
+export empty bytes or text, and zero asymmetric identities export nil native
+keys or PEM bytes. A zero signing identity's `VAPIDPublicKey()` is empty text.
+
+After successfully loading the signing `identity`, obtain only its public
+component for a verifier:
+
+```go
+public := identity.PublicPEM()
+```
+
+`public` is SPKI `PUBLIC KEY` PEM without private material. `PublicKey()` returns
+a native public key instead. Both asymmetric types support these exports.
+`Signing.VAPIDPublicKey()` is a different representation: the uncompressed P-256
+public point in unpadded base64url, not PEM or DER. Use it only where the
+[Web Push setup](../push/vapid-keys.md#publishing-public-keys) requires it.
 
 > [!WARNING]
-> Key agreement alone does not authenticate a peer. An attacker who substitutes
-> a public key can establish a different shared secret with you. Authenticate peer
-> keys through your protocol, and use its KDF with distinct domain-separation
-> contexts for each purpose. Never use raw ECDH output directly as an encryption key.
+> `Shared.Bytes()` and `Shared.Base64()` expose the shared secret. `PEM()` on
+> either asymmetric type exports unencrypted PKCS #8 private material, and
+> `PrivateKey()` exposes a native private key. Never send these exports to logs,
+> browser responses, or public configuration. Persist them only through your
+> protected provisioning path; an encoding does not protect a secret.
 
-The package does not provide a handshake, transport, or key-derivation API.
-Keep peer authentication and derivation in the protocol that owns them rather
-than assembling a new encryption protocol from these key containers.
+Formatting key values with `fmt` and logging them through `slog` produces fixed
+redaction markers. That is not a persistence format or a general serialization
+guarantee. Do not serialize an identity to publish a public key; explicitly
+export its public component. Strings or native objects obtained through private
+exports do not inherit the key value's redaction behavior.
 
-For all constructors and methods, see the [`key` API reference](https://pkg.go.dev/arkoren.dev/foundation/key).
+Inputs and mutable exports are detached from the immutable value. Modifying an
+exported slice or native key does not change the original or later exports.
+This ownership rule does not promise to erase secret copies from process memory.
+
+## Using Exchange Keys
+
+Use an `Exchange` identity only when integrating a protocol that already defines
+peer authentication and key derivation. `PrivateKey()` and `PublicKey()` supply
+native X25519 keys; `ParseExchangePublic(contents)` imports a peer's X25519
+SPKI `PUBLIC KEY` PEM under the same strict envelope and size rules as private
+PEM. Parsing checks representation, not who owns the key. It also does not reject
+every low-order point; native ECDH rejects those inputs when agreement is attempted.
+
+> [!WARNING]
+> An attacker who substitutes a peer public key can establish a different shared
+> secret with you. Authenticate peer keys through your protocol and apply its
+> key-derivation function with distinct purpose contexts. Never use raw ECDH
+> output directly as an encryption key.
+
+The package supplies no handshake, transport, or key-derivation API. Keep these
+responsibilities in the existing protocol rather than designing a new encryption
+protocol from the key containers.
+
+## Rotate Keys
+
+The application owns persistence, deployment, and rotation. Loading a new file
+does not update an already constructed consumer. Keep the intended material
+consistent across replicas serving the same purpose, and coordinate replacement
+with the consumer's compatibility rules.
+
+Retain previous encryption keys while stored values or backups need them; follow
+[encryption rotation](../encryption/keys.md#rotating-keys) for the rollout and
+re-encryption sequence. Replacing a link or cursor secret can invalidate issued
+values; plan around their lifetime and the consumer's supported key handling.
+VAPID replacement requires [subscription migration](../push/vapid-keys.md#rotating-identity),
+not merely a different private key on the server.
+
+For constructors, formats, and exports, see the
+[`key` API reference](https://pkg.go.dev/arkoren.dev/foundation/key).

@@ -1,167 +1,114 @@
 ---
-title: Conditional Validation
-nav: Conditions
-description: Require, prohibit, exclude, or configure fields with typed conditions and nested Go field paths.
+title: Conditions
+description: Select field requirements and scoped rules from prepared values in the enclosing struct.
 order: 50
+summary:
+  - Require, prohibit, exclude, or further constrain a field conditionally.
+  - Combine observations using Go field paths and exact-type predicates.
+  - Account for missing paths, empty collections, and conditional effect order.
 ---
 
-# Conditional Validation
+# Conditions
 
-## Introduction
+A delivery form needs an address for shipping, but not for pickup. A
+**condition** observes input without changing it or producing a violation.
+The field builder chooses the effect: require, prohibit, exclude, or add rules.
+Conditions read the nearest enclosing struct, so start with a
+[struct schema](structs-and-reuse.md).
 
-A customer form may require a tax identifier for companies but not individuals.
-A **condition** observes the current input without changing it or reporting
-violations. The field's builder decides what to do with that observation:
-require the field, prohibit it, exclude it, or apply extra settings. Build the
-observation with a `ConditionBuilder` callback inside `RequiredIf`,
-`RequiredUnless`, `ProhibitedIf`, `ProhibitedUnless`, `ExcludeIf`, or `When`.
+Examples import `arkoren.dev/foundation/validate`. Construction callbacks run
+once; their recorded observations run for each input.
 
-Conditions read fields from the nearest enclosing struct. Examples are construction fragments rather
-than HTTP-specific logic. See the [overview](overview.md) for running schemas.
+## Require a Field
 
-## Requiring a field conditionally
-
-To require a tax identifier only for a company:
+Define a delivery form whose address requirement depends on its mode:
 
 ```go
-type Customer struct {
-	Kind  string `json:"kind"`
-	TaxID string `json:"tax_id"`
+type Delivery struct {
+	Mode    string `json:"mode"`
+	Address string `json:"address"`
+	Email   string `json:"email"`
+	Phone   string `json:"phone"`
 }
-
-customer := validate.Struct(func(object *validate.StructBuilder[Customer]) {
-	object.Field("TaxID", func(identifier *validate.StringBuilder[string]) {
-		identifier.RequiredIf(func(condition *validate.ConditionBuilder) {
-			condition.Eq("Kind", "company")
+delivery := validate.Struct(func(object *validate.StructBuilder[Delivery]) {
+	object.Field("Address", func(address *validate.StringBuilder[string]) {
+		address.RequiredIf(func(condition *validate.ConditionBuilder) {
+			condition.Eq("Mode", "shipping")
 		})
 	})
 })
 ```
 
-An empty `TaxID` fails when `Kind` is `"company"`. For another kind, the
-field is optional, not prohibited. `RequiredUnless` reverses the condition.
-Both methods accept multiple condition callbacks on one fresh condition draft.
+An empty address fails for shipping. Otherwise it is optional, not prohibited.
+`RequiredUnless` reverses the condition. Multiple condition callbacks configure
+one fresh condition draft, with observations combined using AND.
 
-## Builder operations
+## Presence Dependencies
 
-### Field builder operations
+If contact details need at least one channel, configure the phone field with
+`phone.RequiredWithout("Email")`. Here `phone` is its
+`*validate.StringBuilder[string]` inside the `Delivery` declaration.
 
-These methods belong to the field's concrete builder, not `ConditionBuilder`.
-They need an enclosing struct for their field references.
-
-| Operation | Purpose and scope | Details |
-| --- | --- | --- |
-| `RequiredIf(callbacks...)`, `RequiredUnless(callbacks...)` | Require a value when a condition is true or false | [Conditional presence](#requiring-a-field-conditionally) |
-| `RequiredWith(paths...)`, `RequiredWithAll(paths...)`, `RequiredWithout(paths...)` | Require a field based on other fields' presence; arguments are strings | [Presence dependencies](#checking-presence-dependencies) |
-| `ProhibitedIf(callbacks...)`, `ProhibitedUnless(callbacks...)` | Reject a supplied value under the selected condition | [Prohibition](#prohibiting-and-excluding-fields) |
-| `ExcludeIf(callbacks...)` | Skip and clear a field when the condition matches | [Exclusion](#prohibiting-and-excluding-fields) |
-| `When(condition, callbacks...)` | Apply scoped settings using callbacks of the same builder role | [Conditional settings](#adding-conditional-settings) |
-| `EqField(path)`, `NeField(path)` | Compare with an exact-type field | [Field comparisons](available-methods.md#comparing-fields) |
-| `GtField`, `GteField`, `LtField`, `LteField` | Numeric field comparisons; numeric builders only | [Field comparisons](available-methods.md#comparing-fields) |
-| `AfterField(path)`, `BeforeField(path)` | Time field comparisons; `TimeBuilder` only | [Time rules](available-methods.md#time-rules) |
-
-For example, the `StringBuilder[S].When` parameters are
-`condition ConditionBuilderFunc, configure ...func(*StringBuilder[S])`.
-The condition callback configures an observation; the remaining callbacks
-configure a string branch. Other roles use their own concrete callback type.
-
-### ConditionBuilder operations
-
-| Operation | Purpose and scope | Details |
-| --- | --- | --- |
-| `Eq(path, value)`, `NotEq(path, value)` | Compare a reachable Go field value | [Condition method index](#condition-method-index) |
-| `In(path, values...)`, `NotIn(path, values...)` | Observe membership in a copied value list | [Condition method index](#condition-method-index) |
-| `Present(path)`, `Absent(path)` | Observe typed presence, not JSON key existence | [Paths and presence](#nested-field-paths) |
-| `And(callbacks...)`, `Or(callbacks...)`, `Not(callbacks...)` | Add explicit nonempty logical groups | [Groups](#combining-conditions) |
-| `If(func(T) bool)` | Observe a pure predicate on the nearest exact struct type T | [Object predicates](#typed-object-predicates) |
-| `Has(path, key)`, `HasAny(path, keys...)`, `HasAll(path, keys...)` | Observe map key existence, independent of values | [Collection conditions](#collection-conditions) |
-| `Contains(path, predicate)`, `Every(path, predicate)` | Observe matching entries; slice `(int, E)` or map `(K, V)` predicates | [Collection conditions](#collection-conditions) |
-| `UniqueBy(path, projection)` | Observe comparable projected identities | [Collection conditions](#collection-conditions) |
-| `CountWhere(path, predicate, countCallbacks...)` | Observe pure constraints on the actual matching count | [Collection conditions](#collection-conditions) |
-
-`ConditionBuilder` has no `Required`, `Default`, `Normalize`, or `Check`:
-observations do not rewrite or validate the selected value themselves.
-
-## Checking presence dependencies
-
-Use the string-path shortcuts when only presence matters. Within a struct's
-string field callback:
-
-```go
-phone.RequiredWithout("Email")
-```
-
-Here `phone` is a `*validate.StringBuilder[string]`. Phone is required if
-email is absent. The shortcuts use the same presence rules as other conditions:
-
-| Method | Requires this field when |
+| Setting | Requires this field when |
 | --- | --- |
-| `RequiredWith("City", "PostalCode")` | Any listed field is present |
-| `RequiredWithAll("City", "Street")` | Every listed field is present |
-| `RequiredWithout("Email", "Phone")` | Any listed field is absent |
+| `RequiredWith("Email", "Address")` | Any listed field is present |
+| `RequiredWithAll("Email", "Address")` | Every listed field is present |
+| `RequiredWithout("Email", "Address")` | Any listed field is absent |
 
-These shortcuts still take strings, not condition callbacks.
+These shortcuts take string paths, not condition callbacks. Presence follows
+typed rules: zero scalars and nil pointers/containers are absent; non-nil
+pointers to zero and allocated empty collections are present. Zero time is
+absent regardless of location. This is not JSON-key existence.
 
-## Prohibiting and excluding fields
+## Prohibit or Exclude
 
-For a pickup order, a delivery address may be a mistake you want to report,
-rather than silently accept. `ProhibitedIf` rejects a supplied address when the
-pickup condition matches. Set it inside the shipping form's address callback:
+For pickup, decide whether an entered address is a mistake or stale form state.
+To report it as a mistake, add this setting inside the address callback:
 
 ```go
 address.ProhibitedIf(func(condition *validate.ConditionBuilder) {
-	condition.Eq("Delivery", "pickup")
+	condition.Eq("Mode", "pickup")
 })
 ```
 
-Here `address` is a `*validate.StringBuilder[string]`, and `Delivery` is a
-string field in the same struct. A supplied address fails for pickup orders.
+A supplied address now fails for pickup. `ProhibitedUnless` allows a supplied
+value only when its condition matches.
 
-`ProhibitedUnless` expresses the reverse: the value is allowed only when its
-condition matches.
-
-If the form keeps a previously entered address after the customer switches to
-pickup, you may want to discard that stale value instead of showing an error.
-Use `ExcludeIf` for that behavior:
+If you deliberately want to discard stale state instead, use this alternative:
 
 ```go
 address.ExcludeIf(func(condition *validate.ConditionBuilder) {
-	condition.Eq("Delivery", "pickup")
+	condition.Eq("Mode", "pickup")
 })
 ```
 
-The field is skipped when the condition matches; parsing clears its value.
-Exclusion is an effect, not a predicate assertion. Do not use it for a value
-whose presence must be reported as an error.
+Matching input skips the field's later rules and `Parse` clears the value in
+the result. Exclusion is not rejection and does not modify the caller's input.
+Do not use it when the presence of that data must be reported.
 
-## Adding conditional settings
+## Add Branch Rules
 
-Some fields need stricter rules only in certain circumstances. For example,
-administrator passwords may need a higher minimum length than ordinary
-passwords. `When` adds settings for inputs that match a condition; configure
-the extra minimum inside the password callback:
+Some modes need stronger constraints while retaining ordinary rules. Within
+the same string address callback, add a minimum only for shipping:
 
 ```go
-password.Min(12)
-password.When(func(condition *validate.ConditionBuilder) {
-	condition.Eq("Role", "admin")
-}, func(value *validate.StringBuilder[string]) {
-	value.Min(20)
+address.Max(200)
+address.When(func(condition *validate.ConditionBuilder) {
+	condition.Eq("Mode", "shipping")
+}, func(text *validate.StringBuilder[string]) {
+	text.Min(10)
 })
 ```
 
-Here `password` is a `*validate.StringBuilder[string]`, and `Role` is a string
-field in the same struct. The ordinary minimum remains 12; the admin branch
-adds a minimum of 20. Configure the branch inside `When`, not by passing a
-published schema. `When` settings are scoped to that branch.
+The maximum applies to every supplied address; the minimum applies only in
+the branch. `When` takes one condition callback followed by callbacks for the
+same concrete builder role. Supply settings, not a published schema. Branch
+callbacks configure the schema once and are not rerun per input.
 
-Construction callbacks run once while the schema is built. The resulting
-condition is evaluated for each input; the branch callbacks are not rerun.
+## Combine Observations
 
-## Combining conditions
-
-Conditions added to one draft are combined with AND. For an explicit OR group,
-within a field's builder callback:
+An explicit group expresses alternatives. For an approval field beside string
+fields `Plan` and `Role`, use an OR group:
 
 ```go
 approval.RequiredIf(func(condition *validate.ConditionBuilder) {
@@ -172,111 +119,52 @@ approval.RequiredIf(func(condition *validate.ConditionBuilder) {
 })
 ```
 
-Here `approval` is a `*validate.StringBuilder[string]`; `Plan` and `Role` are
-string fields. Approval is required when either comparison matches.
-`And` creates an explicit AND group. `Not` complements its nested group.
-An empty condition is invalid, including an empty explicit group.
+Here `approval` is its string field builder. Either comparison requires
+approval. Ungrouped observations use AND; `And` makes that grouping explicit,
+and `Not` complements its nested group. Empty conditions and empty explicit
+groups are definition errors.
 
-## Nested field paths
-
-Paths use dot-separated Go names. To require a tax identifier for a particular
-billing country:
+`Eq` and `NotEq` compare a selected field with an assignable value. `In` and
+`NotIn` compare against a captured value list. `Present` and `Absent` observe
+typed presence. For logic clearer in Go, configure a typed predicate. Within
+the delivery address callback, this requires an address for shipping when email
+is absent:
 
 ```go
-type Address struct {
-	Country string `json:"country"`
-}
-
-type Invoice struct {
-	Billing *Address `json:"billing"`
-	TaxID   string   `json:"tax_id"`
-}
-
-invoice := validate.Struct(func(object *validate.StructBuilder[Invoice]) {
-	object.Field("TaxID", func(identifier *validate.StringBuilder[string]) {
-		identifier.RequiredIf(func(condition *validate.ConditionBuilder) {
-			condition.Eq("Billing.Country", "DE")
-		})
+address.RequiredIf(func(condition *validate.ConditionBuilder) {
+	condition.If(func(value Delivery) bool {
+		return value.Mode == "shipping" && value.Email == ""
 	})
 })
 ```
 
-The path walks the `Billing` pointer and then its `Country` field. Invalid
-paths and incompatible comparison types are construction errors. Paths
-cannot index maps or slices, select a parent, or use JSON tag names.
-Within an `Address` child schema, paths start at `Address`, not `Invoice`.
+The predicate argument must exactly match the nearest struct type. It is a pure
+observation: it cannot normalize data or return an operational error.
 
-A nil intermediate pointer makes the path absent; it is not allocated.
-Comparisons with a missing target return false, including `NotEq` and
-`NotIn`. A reachable zero scalar is still compared normally. To complement
-a condition including its missing case, use an
-explicit `Not` group rather than assuming a negative comparison does so.
+## Field Paths
 
-## Condition method index
+Paths use dot-separated Go names, such as `"Billing.Country"` for a field
+`Billing *Address` whose address has a string `Country`. They walk structs and
+pointers, including promoted fields, but cannot index collections, select
+parents, or use JSON tag names. Inside an address child schema, paths begin at
+that address rather than its outer form.
 
-The calls below belong to `*ConditionBuilder`, not package-level functions:
+Bad paths and incompatible comparison types are construction errors. A nil
+intermediate pointer is unreachable and is never allocated. `Eq`, `NotEq`,
+`In`, and `NotIn` all return false for an unreachable target. Use an explicit
+`Not` group if the missing case must count as the complement. Reachable scalar
+zeros are compared normally.
 
-| Method | Meaning |
-| --- | --- |
-| `Eq("Plan", "pro")` | Target equals value |
-| `NotEq("Plan", "free")` | Reachable target differs from value |
-| `In("Plan", "pro", "enterprise")` | Target matches a listed value |
-| `NotIn("Plan", "free", "trial")` | Reachable target matches none |
-| `Present("Email")` | Target is present |
-| `Absent("Email")` | Target is absent |
-| `And(callbacks...)` | All nested conditions |
-| `Or(callbacks...)` | Any nested condition |
-| `Not(callbacks...)` | Complement of nested condition group |
-| `If[T](func(T) bool)` | Typed predicate over the nearest struct |
+`Present` is false for an unreachable path; `Absent` is true. Field assertions
+such as `EqField` use the same resolver but fail when the target is unreachable,
+rather than comparing an invented zero.
 
-Zero scalars and nil pointers or containers are absent. Non-nil pointers
-to zero and non-nil empty collections are present. A zero `time.Time`
-is absent regardless of its location.
+## Observe Collections
 
-## Typed object predicates
-
-Use `If` for an expression that is clearer as Go logic. Within a `Purchase`
-field callback:
+To require approval when any team member is an administrator, assume the
+enclosing form has `Members []Member`, where `Member` contains `Admin bool`:
 
 ```go
-type Purchase struct {
-	Quantity int
-	Price    int
-	Approval string
-}
-
-approval.RequiredIf(func(condition *validate.ConditionBuilder) {
-	condition.If(func(value Purchase) bool {
-		return value.Quantity*value.Price > 1_000
-	})
-})
-```
-
-Here `approval` is a `*validate.StringBuilder[string]` for `Purchase.Approval`.
-The predicate's type must match the enclosing struct. The predicate runs
-for each input; it does not run while configuring the schema.
-
-## Collection conditions
-
-Condition counterparts take a field path before the predicate or keys.
-For an approval field beside `Labels map[string]string`:
-
-```go
-approval.RequiredIf(func(condition *validate.ConditionBuilder) {
-	condition.Has("Labels", "regulated")
-})
-```
-
-Approval is required when the key exists, even if its value is empty.
-`HasAny` and `HasAll` similarly check one or all listed keys.
-
-To require approval when a member is an administrator:
-
-```go
-type Member struct {
-	Admin bool
-}
-
 approval.RequiredIf(func(condition *validate.ConditionBuilder) {
 	condition.Contains("Members", func(_ int, member Member) bool {
 		return member.Admin
@@ -284,42 +172,40 @@ approval.RequiredIf(func(condition *validate.ConditionBuilder) {
 })
 ```
 
-Here `Members` is `[]Member` on the enclosing struct and `approval` is its
-string field builder. The slice predicate must take `int` and the exact
-element type; map predicates take the exact key and value types.
+Slice predicates take the exact `(int, E)` types; maps take `(K, V)`. Their
+results observe the collection, not validate its entries:
 
-| Condition | Test on the selected collection |
+| Observation | Condition is true when |
 | --- | --- |
-| `Has(path, key)` | Map key exists, independent of its value |
-| `HasAny(path, keys...)` | Any listed map key exists |
-| `HasAll(path, keys...)` | Every listed map key exists |
-| `Contains(path, predicate)` | At least one entry matches |
-| `Every(path, predicate)` | Every entry matches |
-| `UniqueBy(path, projection)` | Projected comparable identities are unique |
-| `CountWhere(path, predicate, countCallbacks...)` | Matching count satisfies pure integer constraints |
+| `Has`, `HasAny`, `HasAll` | A map has the selected key, any listed key, or all listed keys |
+| `Contains` | At least one entry matches |
+| `Every` | Every entry matches |
+| `UniqueBy` | Comparable projected identities are unique |
+| `CountWhere` | The actual matching count satisfies pure integer constraints |
 
-Paths and callback signatures are validated at construction. Count callbacks
-cannot normalize or default their count. Collection predicates and conditions
-are runtime-only; JSON Schema does not encode them.
+Each takes the field path first. `CountWhere` uses the same restricted
+[count rules](collections.md#count-matches) as a collection assertion.
 
-Unlike an optional collection's own assertions, a collection condition does
-not skip a reachable nil slice or map. It observes empty iteration: `Contains`
-is false, `Every` and `UniqueBy` are true, and `CountWhere` checks zero.
-`Has` is false for a nil map; `HasAny` with no keys is false and `HasAll`
-with no keys is true. An unreachable path behind a nil intermediate pointer
-returns false for all these observations, including `Every` and `HasAll`.
+A reachable nil collection is observed as empty, unlike an optional
+collection's own assertions: `Contains` is false; `Every` and `UniqueBy` are
+true; count rules check zero. Nil maps lack every key. Empty key lists make
+`HasAny` false and `HasAll` true. An unreachable path instead returns false for
+all collection observations, including `Every` and `HasAll`.
 
-## Preparation and effect order
+## Effect Order
 
-Conditions see unconditional normalization and defaults, including nested
-preparation, before field-condition evaluation. They do not see raw strings
-when a sibling has an unconditional `Trim`.
+Conditions see unconditional normalization and defaults in reachable validated
+children before field rules run, regardless of Go field order. A sibling with
+`Trim` is observed after trimming, not as raw text.
 
-Conditional `When` settings and `ExcludeIf` effects execute in their defined
-declaration and field execution order. Do not design mutually dependent
-branches that assume every conditional effect has already completed. For
-multi-field invariants independent of those conditional effects, use an
-[object-wide check](advanced.md#object-wide-checks).
+Conditional `When` and `ExcludeIf` effects remain sensitive to declaration and
+field execution order. They do not repeatedly evaluate until every dependent
+field settles. Avoid mutually dependent branches that assume later effects have
+already happened. An [object check](custom-rules.md#object-invariants) sees
+unconditional preparation, but is not a final hook after conditional effects.
 
-For exact condition signatures, see the
+Conditions and arbitrary predicates are runtime-only and omitted from JSON
+Schema. Keep predicates read-only and concurrency-safe.
+
+For exact settings and observations, see the
 [`validate` API reference](https://pkg.go.dev/arkoren.dev/foundation/validate).

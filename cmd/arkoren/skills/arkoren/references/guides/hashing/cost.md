@@ -1,133 +1,184 @@
 ---
-title: Choosing the Cost
+title: Choosing Cost
 nav: Cost
-description: Pick password-hashing settings by measuring them on production hardware, bound memory use, and protect login routes from floods.
-order: 20
+description: Measure a known hash policy, tune its work settings, and bound the resources available to password requests.
+order: 30
+summary:
+  - Measure a fixed hash policy with three sequential fixture checks on representative hardware.
+  - Tune resource settings against a deployment budget rather than a universal timing target.
+  - Limit concurrent work, request rates, and input sizes while keeping stored records trusted.
 ---
 
-# Choosing the Cost
+# Choosing Cost
 
-## Introduction
+Password hashing makes guesses expensive, including legitimate login attempts.
+Choose a hash policy that fits your latency, CPU, and memory budgets at expected
+concurrency. A quick check on an idle laptop does not establish that a busy
+production instance can sustain the same policy.
 
-Making a password guess expensive also makes a legitimate login expensive.
-The **cost** settings control that work: CPU time for bcrypt, and time and
-memory for Argon2id. Choose the highest cost your servers can sustain at the
-expected concurrency, not just the highest cost one login can tolerate.
+Start with the [driver defaults](drivers.md): Argon2id uses 64 MiB, three
+iterations, and four lanes; bcrypt uses cost 12. These are starting policies,
+not throughput or security guarantees for your deployment. This page assumes
+you have selected a driver and can run a controlled test on representative
+hardware under the same container resource limits as the service.
 
-There is no single right number, because it depends on your hardware and your
-traffic. This page shows how to pick one: set a target, measure it where the
-service runs, account for concurrent logins, and keep clients from turning
-the cost against you.
+## Set Budgets
 
-## A target to aim for
+Decide how much of a login's latency budget can go to password verification,
+and how much CPU and memory one instance can reserve for password work. Account
+for normal traffic, bursts, account-hiding dummy checks, and verification-time
+rehashes, which add a new hash after a successful check.
 
-A good target is a check that takes around a quarter of a second on your
-production hardware. This adds a modest delay to login while making each
-offline password guess more expensive; an attacker's hardware can differ
-substantially from yours. The defaults of both drivers, Argon2id with 64 MiB and three
-iterations, or bcrypt with cost 12, are safe starting points that follow
-OWASP's guidance; measure them on your servers before raising them.
+An attacker's offline guessing hardware can differ substantially from yours.
+There is no elapsed-time result that proves a password is unguessable. Prefer a
+measured policy your service can sustain over an arbitrarily high setting that
+makes login unavailable.
 
-Raise the cost when your hardware allows it, never below the defaults outside
-tests. Lowering it later is possible, but every stored hash made with the
-higher cost then [needs rehashing](upgrading.md), because `NeedsRehash`
-reports any cost difference from the current settings, not only an increase.
+## Measure Checks
 
-## Measuring on your hardware
-
-Import `hash` from `arkoren.dev/core/service/hash`, `argon2hash` from
-`arkoren.dev/driver/argon2/argon2hash`, and standard-library `testing` and `time`
-in your application's `_test.go` file. The concurrency wrapper below additionally
-uses standard-library `context`.
-
-Measure on the machines the service runs on, not on a laptop, whose processor
-and memory differ. This test times one check with the default Argon2id policy.
-If you plan to change it, add only those
-[driver settings](drivers.md#configuration) to `argon2hash.New`:
+Use a fixed, locally generated fixture, not a real password or imported record.
+Add this bounded measurement test to your application's `_test.go` file. Import `testing`
+and `time`, `hash` from `arkoren.dev/core/service/hash`, and `argon2hash` from
+`arkoren.dev/driver/argon2/argon2hash`.
 
 ```go
 func TestHashCost(t *testing.T) {
 	if testing.Short() {
-		t.Skip("measures real hashing cost")
+		t.Skip("measures password hashing cost")
 	}
-
 	hasher := hash.New(argon2hash.New())
-	stored, err := hasher.Hash("correct horse battery staple")
+	const password = "local measurement fixture"
+	stored, err := hasher.Hash(password)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	start := time.Now()
-	ok, err := hasher.Check("correct horse battery staple", stored)
-	if err != nil || !ok {
-		t.Fatalf("verify benchmark password: %v, %v", ok, err)
+	for range 3 {
+		if err := t.Context().Err(); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		matched, err := hasher.Check(password, stored)
+		if err != nil || !matched {
+			t.Fatalf("fixture verification failed: matched=%t, error=%v", matched, err)
+		}
+		t.Logf("check duration: %s", time.Since(start))
 	}
-	t.Logf("one check took %s", time.Since(start))
 }
 ```
 
-Run it with `go test -run TestHashCost -v` in the same container image and on
-the same instance type as production. Run it a few times and read the slowest
-result, since the first run also pays for warming up.
+This performs one setup hash and three sequential checks with known default
+settings. The reported durations cover each facade check, not fixture creation
+or account lookup. No password or encoded record is logged.
 
-## Memory and concurrent logins
+Run one uncached measurement explicitly:
 
-Argon2id's memory cost is per hash. With the default settings, each hash uses
-64 MiB while it runs, so ten concurrent logins need 640 MiB. That is what makes
-the function expensive to attack on graphics cards, and also what an attacker
-can exploit to exhaust your memory with a flood of login attempts.
+```sh
+go test -run '^TestHashCost$' -count=1 -parallel=1 -timeout=30s -v
+```
 
-Decide how many hashes may run at once on one instance, and enforce it. A
-buffered channel is enough:
+The test timeout stops the test process; it is not a per-hash cancellation API.
+Do not replace the fixed loop with an automatic search that repeatedly raises
+cost, or measure arbitrary stored records supplied by users. Inspect variation
+across the samples, then repeat a bounded run under representative service load.
+Record the policy, hardware, limits, and observed durations so later comparisons
+have meaning. Measure hash creation separately if registration or upgrades are a
+significant part of your load.
+
+## Tune Settings
+
+For Argon2id, increasing `MemoryCost` reserves more memory per operation;
+increasing `TimeCost` performs more iterations. Parallelism changes CPU scheduling
+and does not multiply the configured memory budget by the lane count. Change
+one setting at a time and repeat the bounded measurement before deployment.
+
+For example, to test a measured candidate with four iterations and otherwise
+default settings, replace the test's construction with:
 
 ```go
-type Passwords struct {
-	hasher *hash.Hasher
-	slots  chan struct{}
-}
+hasher := hash.New(argon2hash.New(func(policy *argon2hash.Builder) {
+	policy.TimeCost(4)
+}))
+```
 
-func (passwords *Passwords) Check(ctx context.Context, attempt string, stored []byte) (bool, error) {
-	select {
-	case passwords.slots <- struct{}{}:
-		defer func() {
-			<-passwords.slots
-		}()
-	case <-ctx.Done():
-		return false, ctx.Err()
-	}
+This is a candidate to measure, not a universal recommendation. For bcrypt,
+use `bcrypthash` from `arkoren.dev/driver/bcrypt/bcrypthash` instead:
 
-	return passwords.hasher.Check(attempt, stored)
+```go
+hasher := hash.New(bcrypthash.New(func(policy *bcrypthash.Builder) {
+	policy.Cost(13)
+}))
+```
+
+A bcrypt cost increase of one approximately doubles computation; it is not
+comparable numerically to an Argon2 iteration count. Keep settings controlled by
+deployment configuration, not request fields. Constructor normalization does not
+make extreme costs safe to run.
+
+Changing the policy affects new hashes only. Existing checks use their stored
+parameters; [upgrade them after verification](upgrading.md). `NeedsRehash`
+reports any policy difference, including a lower target cost, rather than only
+stronger settings. Do not automatically weaken stored hashes to handle a burst.
+Use deliberately low work settings only for isolated behavior tests, with a
+separate production construction path.
+
+## Budget Concurrent Work
+
+Argon2's memory cost applies to each in-flight operation. Four default-policy
+operations require roughly 256 MiB of Argon2 working memory, before runtime and
+application overhead. Reserve headroom rather than treating that arithmetic as
+a complete process-memory estimate. bcrypt needs a CPU budget even though its
+working-memory demand is smaller.
+
+Use a shared admission limit across checks, registration hashes, password changes,
+dummy checks, and rehashes on each instance. For a simple no-wait policy,
+initialize a channel once at service construction:
+
+```go
+slots := make(chan struct{}, 4)
+```
+
+The capacity of four is illustrative; derive yours from the deployment budget.
+Every password operation must use the same instance-wide gate. In the operation
+handler, acquire a slot before doing the expensive work; `errors` is the
+standard-library package:
+
+```go
+select {
+case slots <- struct{}{}:
+	defer func() {
+		<-slots
+	}()
+default:
+	return errors.New("password processing capacity exhausted")
 }
 ```
 
-Initialize `slots` with `make(chan struct{}, 8)` when you construct `Passwords`;
-a nil channel never admits a check. With the default settings, eight checks
-need about 512 MiB for Argon2's working memory, in addition to application
-overhead. This bound covers only calls through this wrapper; use the same
-budget for sign-up hashes and rehashes too. Additional requests wait for a slot
-and give up when their context ends. This bounds concurrent
-hash work, not the number of waiting requests; keep the route-level rate limits
-below as well. bcrypt uses little working memory by comparison, so use a
-concurrency limit when its CPU time is the concern.
+The slot stays held until that handler returns. Map the capacity error to your
+application's overload response, not a wrong-password result. Unlike a waiting
+queue, this rejects excess work immediately and does not accumulate waiting
+requests. A nil channel admits no work in this form; initialize it explicitly.
 
-Once admitted, neither driver's hashing operation accepts a context, so
-cancellation cannot interrupt a hash already in progress. A waiting request's
-context only bounds its wait for a slot.
+Neither hashing driver's operations accept a context. Once computation begins,
+request cancellation cannot interrupt it. Check cancellation before admission
+where useful, but do not start a goroutine per request and assume abandoning its
+result stops the computation. A per-instance gate also does not coordinate
+capacity across replicas.
 
-## Protecting login routes
+## Bound Request Work
 
-Every request to a route that hashes costs you the full price of a hash. Always
-put a [rate limit](../abuse-prevention/rate-limiting.md) on login, sign-up, and
-password-change routes, so that no client can make the service hash without
-pause. A stricter limit on those routes than on the rest of the service is
-usual, as [Rate Limiting](../abuse-prevention/rate-limiting.md)
-shows.
+Apply [rate limits](../abuse-prevention/rate-limiting.md) before password work on
+login, registration, password changes, and recovery endpoints that create hashes.
+Concurrency limits cap in-flight work; rate limits control how frequently clients
+can claim that capacity. Neither replaces request-body or password-length limits.
 
-> [!WARNING]
-> Limit the length of passwords you accept, for example to 256 characters with
-> [validation](../validation/overview.md). Hashing a multi-megabyte "password" is
-> an easy way to burn CPU on your servers. For bcrypt the limit is lower, as
-> described in [Hashing Drivers](drivers.md#bcrypt).
+Bound request bodies before decoding, then enforce an application-chosen maximum
+password byte length before hashing. bcrypt requires at most 72 bytes on both
+creation and verification; never silently truncate. Argon2 still needs an input
+limit even without that scheme-specific bound. Keep stored hashes in trusted
+application storage: a valid format can encode work far above your current
+policy, so format validation alone is not a resource limit.
 
-For the settings of each algorithm, see [Hashing Drivers](drivers.md), and for
-the facade, see the [`hash` API reference](https://pkg.go.dev/arkoren.dev/core/service/hash).
+For the settings and operations, see the [`hash` API reference](https://pkg.go.dev/arkoren.dev/core/service/hash),
+[`argon2hash` API reference](https://pkg.go.dev/arkoren.dev/driver/argon2/argon2hash),
+and [`bcrypthash` API reference](https://pkg.go.dev/arkoren.dev/driver/bcrypt/bcrypthash).

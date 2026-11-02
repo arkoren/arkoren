@@ -1,6 +1,6 @@
 ---
 title: Capabilities
-description: Add cache-backed sessions, detect request locales, localize validation messages, create signed links, and receive webhooks.
+description: Keep visitor state in sessions, select request languages and translate messages, and protect application URLs with signatures.
 order: 43
 section: HTTP
 ---

@@ -1,355 +1,252 @@
 ---
 title: Error Handling
-description: How returned errors become Problem Details responses, how to choose the status and fields, map domain errors, and keep details private.
+description: Turn returned errors into client-safe Problem Details and preserve causes for diagnostics.
 order: 40
+summary:
+  - Distinguish router-selected statuses from explicit problems and custom error renderers.
+  - Define stable client problems and map domain failures without exposing diagnostic causes.
+  - Understand negotiated error output, panic recovery, and failures after commitment.
 ---
 
 # Error Handling
 
-## Introduction
+An Arkoren handler returns a failure instead of formatting an error response at
+each call site. While the final response is pending, the router renders the
+error, normally as [Problem Details](https://www.rfc-editor.org/rfc/rfc9457).
+Keep fallible work before the response helper: after commitment, returning an
+error reports the failure but cannot replace output already sent.
 
-An Arkoren router handler can return an error instead of formatting an error
-response at every failure site. If the handler has not started its response,
-the router turns that error into the response. By default, the response is a
-[Problem Details](https://www.rfc-editor.org/rfc/rfc9457) document, the
-standard JSON format for HTTP errors:
+This applies to error-returning handlers, including router-generated `404` and
+`405` problems. Adapted `net/http` handlers write their own errors. Import
+`net/http`, `errors`, and `arkoren.dev/foundation/problem` for the examples below.
 
-```json
-{
-  "type": "about:blank",
-  "title": "Not Found",
-  "status": 404,
-  "detail": "No invoice has this ID.",
-  "instance": "/invoices/7"
-}
-```
+## Plain Errors
 
-This central rendering gives returned errors from your code and Arkoren the
-same default shape, including errors for missing routes. Handlers pass errors
-outward, and middleware can map them before the router writes the response.
-Adapted `net/http` handlers still write their own errors; they have no error
-result for the router to render.
+You can return an ordinary service error unchanged. The router does not send
+its text to the client, since diagnostics can disclose data or implementation
+details. Without an error-owned renderer, status selection follows this order:
 
-The examples use `problem` from `arkoren.dev/foundation/problem`, `router` from
-`arkoren.dev/core/http/router`, `net/http`, and `errors`. In handler fragments,
-`invoice` is your loaded invoice; `store.Find` is your application's invoice
-lookup using the existing `ctx` and `id`.
+1. An error in the chain implementing `HTTPStatus() int` supplies its status.
+2. Otherwise, a finished request context selects `499`, even for its deadline.
+3. Otherwise, an error matching `context.DeadlineExceeded` selects `504`.
+4. All other errors select `500`.
 
-## Returning a problem
+`499` is a nonstandard classification; a disconnected client might receive no
+response. An error implementing both `error` and `http.Handler` instead renders
+itself before commitment. That implementation owns negotiation and client-safe
+output; it is not wrapped in another generated problem. `problem.Details`
+implements both rendering and status interfaces.
 
-The `problem` package provides ready-made problems for the common statuses:
-`NotFound`, `BadRequest`, `Forbidden`, `Conflict`, `UnprocessableContent`,
-`InternalServerError`, and `Unauthorized` (which takes a challenge string).
-Return one from a handler, and add an explanation for the client in a `Derive`
-callback. The detail is sent to the client: use a safe explanation, not raw
-database errors or other internal diagnostics:
+Raw validation errors have no HTTP meaning by themselves. Use
+`request.ValidationProblem` or the mapping below to convert violations to
+`422`; do not map infrastructure failures into field advice. See
+[Classify Failures](../validation/errors.md#classify-failures).
+
+## Return Problems
+
+For a failure the client can act on, return a problem with an explicit safe
+explanation. Inside an invoice handler with a loaded `invoice`:
 
 ```go
 if invoice.Paid {
 	return problem.Conflict().Derive(func(details *problem.Builder) {
-		details.Detail("The invoice is already paid.")
+		details.Detail("A paid invoice cannot be edited.")
 	})
 }
 ```
 
-A problem is a value. `Derive` returns a modified copy and
-never changes the original, so the templates are safe to share.
+The status helper supplies `409 Conflict`. `Derive` produces a modified value
+without changing the template. The response includes `type`, `title`, `status`,
+and your `detail`; rendering fills an absent `instance` from the request path.
+Other status helpers include `BadRequest`, `NotFound`, `Forbidden`, and
+`UnprocessableContent`. `Unauthorized` takes the authentication challenge string.
 
-### Adding fields
-
-Clients sometimes need more than a sentence, such as the ID of the conflicting
-resource. `Builder.Extension` adds an extension member, which appears as a top-level field
-in the JSON:
+If another failure caused this result, retain it as a diagnostic cause, not
+as the client explanation. Here `err` is an existing application error:
 
 ```go
 return problem.Conflict().Derive(func(details *problem.Builder) {
-	details.Detail("The invoice is already paid.")
-	details.Extension("invoice_id", invoice.ID)
+	details.Detail("The invoice changed. Reload it before editing.")
+	details.Error(err)
 })
 ```
 
-`Builder.Header` sets a response header on the problem, such as `Retry-After`.
-It copies the supplied values; passing no values removes the header.
+The cause is excluded from the response but remains reachable through
+`errors.Is` and `errors.As`. `Error(nil)` clears a cause. Problem `Error()` text
+can include that cause, so it belongs in restricted server diagnostics, not in
+another response's detail.
 
-If middleware needs to add metadata to whichever problem a handler returns, use
-the request-local response context. Inside a routed handler or middleware,
-`incoming` is the current `*http.Request` and `requestID` is an application-generated,
-client-safe string:
+## Define Stable Problems
 
-```go
-if metadata, ok := problem.FromContext(incoming.Context()); ok {
-	metadata.SetProperty("request_id", requestID)
-}
-```
-
-Context properties fill missing extensions: explicit problem extensions win,
-and context properties cannot replace standard problem members.
-
-The container's methods synchronize its outer maps and header slices.
-`Properties()` copies only the outer property map; `Headers()` copies its map
-and value slices. HTTP rendering also snapshots these containers, not nested
-property values. Nested maps, slices, and other mutable values remain shared:
-coordinate their mutation with all readers, including encoding. Keep the
-`*problem.ResponseContext` as a pointer; do not copy it after first use because
-it contains a mutex.
-
-### Defining your own problems
-
-For errors that clients should recognize, define a problem with its own `Type`
-once, at package level, and return it wherever that error occurs:
+If clients distinguish an application failure, define its identity once:
 
 ```go
-var ErrInvoicePaid = problem.New(func(details *problem.Builder) {
-	details.Type("https://api.example.com/problems/invoice-paid")
-	details.Title("Invoice already paid")
+var ErrInvoiceClosed = problem.New(func(details *problem.Builder) {
+	details.Type("https://api.example.com/problems/invoice-closed")
+	details.Title("Invoice closed")
 	details.Status(http.StatusConflict)
 })
 ```
 
-A client can then branch on the `type` field rather than parsing messages. The
-type only has to be a unique URI; it does not need to resolve to a page.
+Return `ErrInvoiceClosed` or derive occurrence-specific details from it. Clients
+can branch on `type` rather than parsing a sentence. The type must be a unique
+URI reference; it need not resolve to a page. Arkoren's own failures use stable
+`tag:arkoren.dev,...` identifiers and can be remapped the same way as domain errors.
 
-`New()` defaults to status 500 and type `about:blank`. An empty title uses the
-final status phrase after all callbacks. `Derive` instead inherits stored members:
-changing status does not reset the title. Read members with accessors such as
-`Status()` and `Title()`. `Extension(name)` reports presence separately from its
-value; `Extensions()` returns a copy of the outer map.
+`errors.Is(err, ErrInvoiceClosed)` compares stored type, status, and title.
+Detail, extensions, headers, and cause do not alter this identity; editing an
+identity member does. Cause traversal remains independent. For `errors.As`, a
+value problem matches `problem.Details`, while a pointer matches
+`*problem.Details`, following ordinary Go rules.
 
-Status helpers such as `NotFound()` also use these constructor defaults, with
-their stored type set to `about:blank`. Raw zero values and decoded absent fields
-retain their absence.
+`New` defaults missing status to `500`, type to `about:blank`, and an empty
+title to the final status phrase. `Derive` inherits stored members: changing
+status alone does not reset an existing title. Callbacks run directly in order;
+omitting callbacks makes no edits, but a supplied nil callback panics. Retaining
+a builder cannot alter the published value. Outer extension maps and header
+slices are copied; nested mutable values remain shared.
 
-Callbacks run directly in order on one draft. Omitted callbacks (also expanded
-nil/empty slices) make no edits; a supplied nil callback panics. Retained builders
-cannot change published problems. Outer extension maps and header slices are
-copied, but arbitrary nested extension values remain shared.
+## Map Domain Errors
 
-To recognize a problem without comparing its user-facing explanation, use
-`errors.Is(occurrence, sentinel)`. It compares stored type, status, and title; detail,
-extensions, headers, and cause do not change this match. Editing an identity
-member changes the match. Cause traversal through `errors.Is` and `errors.As`
-continues independently. A value problem matches a `problem.Details` target for
-`errors.As`; a pointer matches `*problem.Details`, as with ordinary Go errors.
-
-## Plain errors
-
-A handler can also return any ordinary error, such as one from a database
-call. The router then renders a problem with a status it chooses as follows:
-
-- If an error in the chain provides an `HTTPStatus() int` method, its status is
-  used.
-- If the request context is done, the status is `499`, including when that
-  context's deadline expired.
-- Otherwise, an error matching `context.DeadlineExceeded` produces
-  `504 Gateway Timeout`.
-- Otherwise, the status is `500 Internal Server Error`.
-
-The text of a plain error is never sent to the client. A failed query might
-contain table names or data, so the client only sees the generic title of the
-status, and the full error stays available to your logs and middleware.
-
-## Keeping the cause
-
-When you return a problem because of another error, attach that error with
-`Builder.Error`:
+Central mapping keeps HTTP choices out of domain services. With an existing
+router `routes` and application sentinel `ErrInvoiceVersion`, import
+`arkoren.dev/core/http/middleware/errormap` and
+`arkoren.dev/core/http/request`:
 
 ```go
-invoice, err := store.Find(ctx, id)
-if errors.Is(err, database.ErrNoRows) {
-	return problem.NotFound().Derive(func(details *problem.Builder) {
-		details.Error(err)
-	})
-}
-```
-
-The cause is not included in the response, but it stays in the error chain, so
-`errors.Is` and `errors.As` still find it and request logging records it.
-Pass nil to `Builder.Error` to clear a previously attached cause.
-
-## Mapping errors to responses
-
-Converting the same domain errors in every handler gets repetitive. Import
-`arkoren.dev/core/http/middleware/errormap`,
-`arkoren.dev/core/http/request`, `arkoren.dev/core/service/database`, and
-`arkoren.dev/core/service/storage`. With an existing router `r`, the
-`errormap` middleware does it once for the whole router: it inspects every
-error a handler returns and replaces the ones it recognizes:
-
-```go
-r.Use(errormap.Middleware(
-	errormap.Map(database.ErrNoRows, problem.NotFound()),
-	errormap.Map(storage.ErrNotFound, problem.NotFound().Derive(func(details *problem.Builder) {
-		details.Detail("No such file.")
-	})),
+routes.Use(errormap.Middleware(
+	errormap.Map(ErrInvoiceVersion, problem.Conflict()),
 	errormap.Func(request.ValidationProblem),
 ))
 ```
 
-`Map` matches an error with `errors.Is` and returns the problem, with the
-original error attached as its cause. `Func` runs a function on the error,
-which is how validation errors from schemas called directly become `422`
-responses. Mappings are tried in order, and the first one that handles an error
-wins; errors no mapping handles pass through unchanged.
+Register this before routes and before middleware whose errors it must see.
+`Map` uses `errors.Is` and attaches the original error as the replacement's
+cause. `Func` performs a custom conversion and owns cause preservation itself;
+`ValidationProblem` already retains the cause and leaves non-validation errors
+unchanged. Request `Parse*` and `Validate*` helpers perform that conversion already.
 
-A custom `Func` can return nil to decline an error, or return its input unchanged.
-Matching the input with `errors.Is` does not make a replacement unchanged: a
-derived problem with different detail, headers, or cause is handled. Do not mutate
-the input. Value-error identity has limits, so return nil to decline reliably,
-and use pointer errors when distinguishing replacements matters; see
-[`Mapping`](https://pkg.go.dev/arkoren.dev/core/http/middleware/errormap#Mapping).
+Mappings try the original error in order; the first replacement wins. Return
+nil to decline reliably. Returning the unchanged input also declines, but
+separately constructed equal value errors can be indistinguishable. Do not
+mutate inputs, and use pointer errors when replacement identity matters.
+Matching through `errors.Is` alone does not make a derived replacement unchanged.
+The ordered slice is copied at construction; functions and captures stay shared.
 
-The middleware copies the ordered mapping slice when you construct it. Later
-changes to that slice do not change the policy; mapping functions and their
-captured values remain shared.
+A mapper cannot rewrite a response already rendered by a
+[native middleware adapter](middleware.md#native-middleware). Put a mapper
+inside that adapter if it must choose the rendered HTTP result; it can then see
+only failures from layers inside it.
 
-With this middleware, a store can return `database.ErrNoRows` and the handler
-can simply pass it on:
+## Add Client Metadata
+
+Use extensions for small, client-safe fields, not arbitrary diagnostic objects:
 
 ```go
-invoice, err := store.Find(ctx, id)
-if err != nil {
-	return err // 404 when no row was found
+return ErrInvoiceClosed.Derive(func(details *problem.Builder) {
+	details.Extension("invoice_id", invoice.ID)
+	details.Header("Cache-Control", "no-store")
+})
+```
+
+Extensions appear at the top level of JSON. `Header` copies the supplied values;
+passing no values removes that header. Accessors such as `Extension(name)`
+report presence separately from its value; `Extensions()` copies the outer map.
+
+For metadata applying to any problem from a request, the router supplies a
+request-local response context. With a client-safe application `requestID`:
+
+```go
+if metadata, ok := problem.FromContext(r.Context()); ok {
+	metadata.SetProperty("request_id", requestID)
 }
 ```
 
-Register `errormap` with `Use` before other middleware, so it also sees the
-errors those return.
+Explicit problem extensions win over context properties; context properties
+cannot replace standard members. Context methods synchronize outer maps and
+header slices, and rendering snapshots them. Nested maps and slices still need
+caller coordination during encoding. Keep the context as a pointer: it contains
+a mutex and must not be copied after use.
 
-An adapted native middleware can render an error before it reaches an outer
-mapper. A mapper that must shape that HTTP response needs to be inside the
-adapter; see [native middleware boundaries](middleware.md#using-nethttp-middleware).
+## Negotiate Error Output
 
-## Errors from Arkoren
+The renderer prefers `application/problem+json`, then `application/json`, then
+`text/plain; charset=utf-8`. Missing or wholly invalid `Accept` uses that order.
+A valid header excluding all supported representations produces `406` without
+the original problem representation.
 
-Arkoren's own errors are problems too, and they carry a `type` that identifies
-them. A malformed JSON body, for example, is reported as:
+For each representation, exact ranges outrank type wildcards, which outrank
+`*/*`; more matching parameters then outrank fewer, followed by quality. A
+selected `q=0` excludes that representation even if a broader range permits it.
+Across representations, higher quality wins, then matching-header order, then
+server preference. Invalid ranges are ignored individually. An omitted `q`
+means `1`; explicit weights must be `0` or `1`, optionally with up to three
+fractional digits, all zeros after `1.`.
 
-```json
-{
-  "type": "tag:arkoren.dev,2026-09:core:http/request:invalid-json",
-  "title": "Invalid JSON request body",
-  "status": 400,
-  "detail": "The request body must contain valid JSON.",
-  "instance": "/posts"
-}
-```
+Parameters must match what is emitted. Text matches UTF-8 charset
+case-insensitively, not another charset; other parameter values match exactly.
+The JSON representations declare no parameters, so a required `charset` or
+`profile` does not match them. For example,
+`text/plain;charset=UTF-8;q=0, text/plain;q=1` still excludes UTF-8 text.
 
-Here the request path is `/posts`; rendering supplies it as `instance`.
-These `tag:` URIs are stable identifiers that do not need to resolve to a page.
-If you would rather publish your own identifiers for them, remap them with
-`errormap.Map`, as for any other error.
+The renderer owns `Content-Type`. Problem headers replace context headers of
+the same name; afterward `Vary` gains `Accept` unless it already contains that
+token case-insensitively or contains `*`. Other surviving tokens remain,
+including on `406` responses.
 
-## Content negotiation
+HTTP rendering completes missing standard members on a copy and changes stored
+statuses outside `100`–`999` to `500` in that copy only. Stored accessors, plain
+JSON, matching identity, and cause remain unchanged. Plain JSON omits an absent
+status; decoding preserves absence as zero, replaces the destination only on
+success, and clears previous causes and headers. `Defaulted` fills missing
+members but does not validate a nonzero status.
 
-A problem is rendered as `application/problem+json` by default. A client can
-request the same document as `application/json`, or a short text representation
-as `text/plain; charset=utf-8`. If no supported representation is acceptable,
-the response is `406 Not Acceptable` without the original problem representation.
-
-Missing or wholly invalid `Accept` uses the server's preference order: problem
-JSON, ordinary JSON, then UTF-8 text. Invalid ranges are ignored individually.
-Only an omitted `q` weight defaults to `1`. An explicit weight takes the form
-`0` or `1`, optionally followed by a decimal point and up to three digits;
-fractional digits after `1.` must be zeros. A malformed weight invalidates its
-range rather than giving it maximum preference.
-
-Media parameters must match the representation actually emitted. Text declares
-`charset=utf-8`, so `charset=UTF-8` matches case-insensitively but
-`charset=iso-8859-1` does not. Other parameter values match exactly. The JSON
-representations declare no media parameters; requiring an unprovided `profile`
-or `charset` does not match them.
-
-For each representation, an exact media range outranks a type wildcard, which
-outranks `*/*`. Within the same media-range specificity, more matching parameters
-take precedence over fewer; higher quality breaks the remaining tie. A selected
-`q=0` excludes the representation even if a broader range permits it. For example,
-`text/plain;charset=UTF-8;q=0, text/plain;q=1` still excludes the UTF-8 text.
-Between acceptable representations, higher selected quality wins; ties follow
-the matching ranges' order in `Accept`, then the server's preference order.
-
-### Response headers
-
-The renderer owns `Content-Type`; problem or response-context headers cannot
-override the negotiated format. Problem header settings replace all context
-values for the same header.
-
-After those replacements, the renderer adds `Accept` to the resulting `Vary`
-unless it already contains an `Accept` token, matched case-insensitively, or `*`.
-Other remaining tokens are preserved, including on a `406` response. This does
-not merge back contextual tokens replaced by an explicit problem header.
-
-### JSON and HTTP status defaults
-
-Plain JSON encoding omits unspecified status. Decoding preserves missing status
-as zero and replaces the destination only on success, clearing previous causes
-and headers. HTTP rendering completes missing standard members on a response
-copy, with missing status defaulting to `500`. A nonzero stored status outside
-`100` through `999` also becomes `500`, but only in that HTTP copy; negotiation
-can still return `406` if no representation is acceptable.
-
-For example, a stored status of `1000` remains `1000` through `Status()`,
-`HTTPStatus()`, plain JSON, and `Defaulted`. `Defaulted` fills missing members;
-it does not validate an existing nonzero status. Rendering does not change the
-stored problem's matching identity or wrapped cause.
-
-Encoding completes before commitment. A JSON encoding failure falls back to
-text only if that text representation is acceptable under the same range and
-parameter rules; otherwise rendering returns `406`. A body-write failure after
-commitment stops rendering rather than trying another representation.
+Encoding finishes before commitment. If JSON encoding fails, text is used only
+when acceptable under the same negotiation rules; otherwise the result is `406`.
+A body-write failure stops rendering, not a second representation attempt.
 
 ## Panics
 
-A handler panic needs recovery before it can follow the returned-error path.
-Before registering routes on your router `r`, add recovery outside the handlers
-and middleware it must protect:
+Install recovery before registering the handlers and middleware it must protect.
+Import `arkoren.dev/core/http/router`:
 
 ```go
-r.Use(router.Recover())
+routes.Use(router.Recover())
 ```
 
-An ordinary panic before the response starts becomes an error for normal
-rendering, usually a generic `500` problem. `RecoverBuilder.Handler` lets you
-choose a different conversion. Setting `Handler(nil)` selects the default
-converter; if a supplied converter returns nil, recovery still returns an error
-matching `router.ErrRecoverUnexpected`, not success.
+Before output starts, an ordinary panic becomes an error for normal rendering,
+usually a generic `500`. `RecoverBuilder.Handler` supplies a custom conversion;
+`Handler(nil)` chooses the default. A converter returning nil still produces
+an error matching `router.ErrRecoverUnexpected`, never success.
 
-If `HTTPMiddleware` renders a recovered error before returning it outward, that
-generated problem is not mistaken for output that preceded the panic: the
-response is not aborted merely because recovery has now written it. Errors can
-be wrapped during this handling; use `errors.Is` and `errors.As` to retain cause
-and diagnostic access.
+`RecoverBuilder.Events` publishes `router.PanicRecovered` through your event
+bus. Its error and stack contain sensitive diagnostics. Restrict listeners and
+sanitize forwarded reports. Recovered errors expose `Stack() []byte` through
+`errors.As`; each call copies the stack, separately from the event's storage.
+Listeners of the same event share its bytes, so copy before mutating. Copying
+does not redact data. `http.ErrAbortHandler` is re-raised without a recovery event.
 
-Set `Events(bus)` in the recovery builder callback to publish
-[`router.PanicRecovered`](../events/http-events.md#recovered-panics). Its `Err`
-and `Stack` intentionally carry sensitive diagnostics, not client-safe data.
-Restrict listener output and sanitize anything forwarded to an error tracker.
-`http.ErrAbortHandler` is re-raised and publishes no recovery event.
+## Committed Failures
 
-Recovered errors expose `Stack() []byte` through `errors.As` with
-`interface{ Stack() []byte }`. Each getter call returns a copy, and the event's
-stack storage is separate from the error's. Listeners of the same event still
-share its payload bytes: copy `Stack` before mutating it so later listeners do
-not see your changes. Copying does not redact either the stack or the error.
+A final status, body write, or flush commits the response. Informational `1xx`
+except `101` does not. A successful hijack also prevents further HTTP rendering;
+a failed hijack does not itself commit. Use the supplied writer to preserve
+[commitment tracking](responses.md#response-commitment).
 
-## After the response has started
+After commitment, ordinary returned errors still reach outer middleware and
+after-response hooks, but no replacement problem is appended. A recovered panic
+after earlier output instead raises `http.ErrAbortHandler` so `net/http` can
+abort the response. This is distinct from a native adapter rendering a recovered
+error before any earlier output: that newly generated problem is not mistaken
+for output preceding the panic. Wrapping such an error retains `errors.Is` and
+`errors.As`; a new panic is not handled merely because its cause contains an
+older rendered recovery.
 
-A response is **committed** when a final status is written, explicitly or through
-a body write or flush. Informational `1xx` responses other than
-`101 Switching Protocols` leave the final response pending; `101` is final for
-this purpose. A successful connection hijack also prevents further HTTP error
-rendering; a failed hijack does not itself commit the response.
+Hijacked connections remain yours to close and drain. Recovery does not return
+ownership to the server. See [Streaming Responses](streaming-responses.md) for
+cooperative producers, write deadlines, and live-output failures.
 
-After commitment, an ordinary returned error still reaches outer middleware and
-after-response hooks, but the router does not append a replacement problem. A
-recovered panic that occurred after commitment instead raises
-`http.ErrAbortHandler` so `net/http` can abort the HTTP response. A new panic is
-not considered handled merely because its cause contains an older, already
-rendered recovery error.
-
-If your handler successfully hijacked the connection, you own and must close
-it; recovery does not transfer that ownership back to the HTTP server. Do the
-work that can fail before writing the response whenever possible.
-
-For every method, see the [`problem` API reference](https://pkg.go.dev/arkoren.dev/foundation/problem),
-the [`router` API reference](https://pkg.go.dev/arkoren.dev/core/http/router), and
-the [`errormap` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/errormap).
+For all constructors and contracts, see the
+[`problem`](https://pkg.go.dev/arkoren.dev/foundation/problem),
+[`router`](https://pkg.go.dev/arkoren.dev/core/http/router), and
+[`errormap`](https://pkg.go.dev/arkoren.dev/core/http/middleware/errormap) API references.

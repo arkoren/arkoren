@@ -1,250 +1,200 @@
 ---
 title: Search Queries
 nav: Queries
-description: Write search queries with text syntax for words, phrases, exclusions, and prefixes, add filters, order results, and page within 1,000 hits.
-order: 20
+description: Combine search text, typed filters, permission boundaries, and ordering within a bounded result window.
+order: 40
+summary:
+  - Match words, phrases, prefixes, and exclusions without native backend syntax.
+  - Build typed catalog filters and group alternatives within trusted permission boundaries.
+  - Order hits and fetch pages within the first 1,000 results.
+  - Validate immutable queries and distinguish local item transformations from server-side filtering.
 ---
 
 # Search Queries
 
-## Introduction
+A search query combines text, field conditions, and result ordering. Start with
+the populated [`Products` index](indexing-documents.md#document-shape) and a
+configured `engine`. Import `search` from `arkoren.dev/core/service/search` and
+`pagination` from `arkoren.dev/core/pagination`; `ctx` is your operation context.
+These queries search indexed JSON documents, not SQL tables.
 
-To turn a search-box value into a product list, combine text matching with
-field filters and an order. Start with the populated `Products` index and
-`engine` from [Search Overview](overview.md).
-Import `search` from `arkoren.dev/core/service/search` and `pagination` from
-`arkoren.dev/core/pagination`. Here `ctx` is your operation context and `since`
-is your application's `time.Time` cutoff. Focused snippets omit routine error
-checks but leave their error results visible.
+## Query Text
 
-A query combines up to three things: text that the matching documents must
-contain, filters on fields, and an order. All three are optional. A query with
-no text and no filters matches every document in the index, which is how you
-list or page a whole index.
-This means a query constructed with `search.NewQuery(Products, "")`, not the
-zero value of `search.Query[Product]`, which has no valid index.
-
-You publish an immutable query with `search.NewQuery(index, text, configure...)`.
-Each `func(query *search.QueryBuilder)` callback edits the same fresh draft.
-Settings append and return that draft. The first problem is kept and reported
-by `query.Err()`. `engine.Search` returns it, wrapping `search.ErrInvalidQuery`,
-before calling the driver.
+For a search box, pass the text to `NewQuery` without translating it to native
+backend syntax:
 
 ```go
-query := search.NewQuery(Products, `red "running shoes" -boots`, func(query *search.QueryBuilder) {
-	query.Where("category", "shoes")
-	query.Where("price", "<=", 100)
-	query.OrderBy("price")
-})
+selection := search.NewQuery(Products, `red "running shoes" -boots`)
 ```
 
-This describes products containing a word starting with `red` and the phrase
-`running shoes`, but not `boots`, in the `shoes` category and costing at most
-100. Price sorts ascending; relevance and ID break ties. Constructing the query does not run
-it: pass it to `engine.Search(ctx, query, pagination.PageParams{})` to get the
-first page. [Pagination](#pagination) explains its defaults and 1,000-hit bound.
+This requires a word starting with `red` and the consecutive phrase `running
+shoes` in one field, while excluding `boots`. Only the last plain, nonexcluded
+word is a prefix, even when a phrase or exclusion follows it.
 
-If several screens share a query but one needs a lower price limit, use
-`Derive` to add local settings without changing the published base:
-
-```go
-cheap := query.Derive(func(query *search.QueryBuilder) {
-	query.Where("price", "<", 50)
-})
-```
-
-The added price condition is ANDed with the inherited conditions; it does not
-replace the limit of 100. The base text, conditions, orders, and first error
-are preserved. No callbacks means no edits. Callbacks run directly once,
-synchronously in order, even for
-an invalid query. Supplied nil functions panic; expanded nil/empty slices omit
-edits. Publication and derivation detach owned containers from retained drafts;
-`Inspect()` also copies text, conditions, orders, nested groups, and membership
-lists. Editing an inspected container cannot change the base or a derived query.
-Deriving a zero query does not repair it: callbacks still run, but the inherited
-missing-index error remains and execution fails before driver I/O.
-
-## Query text
-
-The text is what a person typed into a search box, so it has a small syntax
-and never fails to parse:
-
-| You type | Meaning |
+| Text | Meaning |
 | --- | --- |
-| `red shoes` | Every word is required. |
-| `"running shoes"` | A phrase: the words must be next to each other, in this order, in one field. |
-| `-boots` | Exclude documents that match the word. |
-| `-"wool socks"` | Exclude documents that match the phrase. |
-| `soc` (last plain word) | The last word that is neither a phrase nor an exclusion may match as a prefix, so `soc` finds `socks`. |
+| `red shoes` | Require both words; the last may match a prefix. |
+| `"running shoes"` | Require consecutive words in one field. |
+| `-boots` | Exclude a matching word. |
+| `-"wool socks"` | Exclude a matching phrase. |
+| `wool soc` | Require `wool` and a word beginning with `soc`. |
 
-Words are compared without regard to case. A word that contains punctuation
-splits into several words that must all appear, so `red-shoes` needs `red` and
-`shoes`. A quote that is never closed runs to the end of the text, a minus sign
-that is not directly followed by a word or quote is an ordinary character, and
-any term without a letter or digit is dropped, so `!!!` and `-` cannot break a
-search. Text that ends up with no terms matches every document.
+Matching lowercases words and splits punctuation without stemming. Nonphrase
+words can match different searchable fields, including words split from one
+punctuated term. `soc wool` requires the complete word `soc`; `wool soc` can
+match `wool socks`. A quoted word is not a prefix.
 
-Only the last plain word is a prefix. In `soc wool`, `soc` must be a complete
-word, and nothing matches it; in `wool soc`, the second word is the prefix and
-the query finds `wool socks`. A prefix lets a search-as-you-type box work
-without extra code, but it also means the last word of every query is partly
-guessed.
+Parsing never fails: an unclosed quote runs to the end, a minus not directly
+followed by a word or quote is ordinary text, and terms without letters or
+digits are dropped. Empty text, or text reduced to no terms, matches every
+document unless filters restrict it. Use `NewQuery(Products, "")` for this;
+the zero value of `Query[Product]` is invalid.
 
-> [!NOTE]
-> Nonphrase words can match different searchable fields, including words split
-> from one punctuated term. Meilisearch rejects a nonphrase exclusion that splits
-> into multiple words, such as `-t-shirt`, with `search.ErrUnsupported`; it does
-> not silently turn it into a phrase exclusion. See its
-> [matching limits](drivers.md#behavior-and-limits-3).
+Meilisearch additionally folds diacritics, limits positive words and phrases to
+ten, and rejects multiword nonphrase exclusions such as `-t-shirt` with
+`search.ErrUnsupported`. Review [provider differences](drivers.md#matching-limits-2)
+before relying on identical matches across backends.
 
-## Filters
+## Catalog Filters
 
-`Where` adds a condition on a filterable field. With two arguments the
-condition is equality; with three, the middle one is the operator:
+Keep field names under application control. For a validated catalog request,
+use a typed input rather than accepting arbitrary predicates:
 
 ```go
-filtered := query.Derive(func(query *search.QueryBuilder) {
-	query.Where("category", "shoes") // category = "shoes"
-	query.Where("price", search.OpLessOrEqual, 100) // same as "<="
-	query.Where("in_stock", true)
-	query.Where("created_at", ">=", since) // since is a time.Time
+type CatalogSearch struct {
+	Text     string  `json:"text"`
+	Category string  `json:"category"`
+	MaxPrice float64 `json:"max_price"`
+}
+```
+
+Assume `input` has already been decoded and validated. Restrict matches using
+the index's declared filterable fields:
+
+```go
+selection := search.NewQuery(Products, input.Text, func(criteria *search.QueryBuilder) {
+	criteria.Where("category", input.Category)
+	criteria.Where("price", "<=", input.MaxPrice)
 })
 ```
 
-The operator may be a string (`=`, `!=`, `<`, `<=`, `>`, or `>=`) or its typed
-`search.Operator` constant: `OpEqual`, `OpNotEqual`, `OpLess`, `OpLessOrEqual`,
-`OpGreater`, or `OpGreaterOrEqual`, respectively. `OrWhere` and grouped predicates
-accept the same forms. Use the separate membership methods below rather than
-passing `OpIn` or `OpNotIn` to `Where`.
-
-A value is a string, a boolean, any integer or float type, or a `time.Time`.
-Numbers are compared as floating-point numbers, so integers above 2^53 lose
-precision. A `time.Time`
-is converted to an RFC 3339 string in UTC, so a time in any zone means the same
-instant, and the field in your documents should hold a UTC timestamp for the
-comparison to work as expected. Booleans support only `=` and `!=`. Anything
-else, such as `nil` or a struct, makes the query invalid. NaN and infinities
-are also invalid.
-
-The contract compares strings without regard to case: `Where("category", "SHOES")`
-matches `shoes` or `Shoes`. Comparisons are type-sensitive: a number is not a
-string containing digits. Missing, null, array, and object values match no scalar
-condition, `!=` included. Keep one scalar kind per field across documents;
-ordering mixed field kinds is undefined.
-
-Memory, Postgres, and OpenSearch perform typed comparisons. Meilisearch's native
-filter coercion has [portability limits](drivers.md#compatibility-matrix), even
-when the facade accepts your query. Keep operand types aligned with stored
-fields; native coercion is not a relaxation of the contract.
-
-For a membership condition, pass a nonempty list to `WhereIn` or `WhereNotIn`:
+The two-argument `Where` is equality; the three-argument form accepts `=`, `!=`,
+`<`, `<=`, `>`, or `>=`, either as strings or their `search.Operator` constants
+such as `search.OpLessOrEqual`. Conditions append with AND. Use membership
+methods, not `OpIn` passed to `Where`, for sets:
 
 ```go
-filtered := search.NewQuery(Products, "", func(query *search.QueryBuilder) {
-	query.WhereIn("category", "boots", "socks")
-	query.WhereNotIn("price", 15, 25)
+selection := search.NewQuery(Products, "", func(criteria *search.QueryBuilder) {
+	criteria.WhereIn("category", "boots", "socks")
+	criteria.WhereNotIn("price", 15, 25)
 })
 ```
 
-`WhereIn` needs an equal operand of the stored scalar's kind. `WhereNotIn` needs
-every operand to have that kind and differ from the stored value. A numeric field
-therefore does not match `WhereNotIn("price", "15")`. A mixed-kind list such as
-`WhereNotIn("price", []any{15, "15"}...)` is a valid declaration but matches no
-scalar under the typed contract, regardless of operand order. Missing, null,
-array, and object fields match neither membership operator. OpenSearch also
-compiles mixed-kind `NOT IN` to match nothing and keeps homogeneous comparisons
-in separate typed containers. Meilisearch's native coercion limits still apply;
-prefer homogeneous lists matching the field kind.
+Membership lists must be nonempty. Operands accept named or unnamed strings,
+booleans, integers, floats, and exact `time.Time` values. Numbers normalize to
+float64; integers above 2^53 can lose precision. Times normalize to RFC 3339 UTC
+strings, so store comparable document timestamps in UTC. Booleans permit only
+equality and inequality. Nil, unsupported types, NaN, and infinities invalidate
+the query.
 
-### Combining conditions
+Strings compare case-insensitively. The typed contract does not equate numeric
+15 with string `"15"`. Missing, null, array, and object values match no scalar
+condition, including `!=` and `NOT IN`. `IN` needs one same-kind equal operand;
+`NOT IN` needs every operand to have the stored kind and differ. Consequently,
+a mixed-kind `NOT IN` list matches no scalar. Prefer homogeneous lists matching
+the stored field. Meilisearch's native coercion remains a
+[portability limit](drivers.md#compatibility-matrix), not a weaker contract.
 
-The following alternatives start a fresh query so the introductory query's
-category and price filters do not change their meaning.
+## Permission Filters
 
-Conditions are joined with AND. `OrWhere` joins a condition to the previous
-one with OR, and AND binds tighter than OR, as in SQL:
-
-```go
-query := search.NewQuery(Products, "", func(query *search.QueryBuilder) {
-	query.Where("category", "socks")
-	query.Where("in_stock", true)
-	query.OrWhere("category", "boots")
-	// (category = socks AND in_stock) OR category = boots
-})
-```
-
-To control precedence, put conditions in a group, which is a function that
-receives a restricted `*search.PredicateBuilder` on the same index:
+Search does not authorize results. Derive the tenant from authenticated,
+authorized application state, not from a client-supplied filter. For a trusted
+`tenantID`, make the permission boundary part of every search:
 
 ```go
-query := search.NewQuery(Products, "shoes", func(query *search.QueryBuilder) {
-	query.Where("category", "shoes")
-	query.WhereGroup(func(predicate *search.PredicateBuilder) {
-		predicate.Where("in_stock", true)
-		predicate.OrWhere("backorder", true)
+selection := search.NewQuery(Products, input.Text, func(criteria *search.QueryBuilder) {
+	criteria.Where("tenant_id", tenantID)
+	criteria.WhereGroup(func(availability *search.PredicateBuilder) {
+		availability.Where("in_stock", true)
+		availability.OrWhere("backorder", true)
 	})
 })
-// category = shoes AND (in_stock OR backorder)
 ```
 
-A predicate draft has no ordering methods. Group callbacks share one draft,
-run directly once in order, and validate the final combined expression. An
-earlier empty callback is valid if a later one adds a condition; a final empty
-group is invalid. Zero callbacks (also expanded nil/empty slices) make an empty
-group, while a supplied nil callback panics.
+The expression is `tenant_id = tenantID AND (in_stock OR backorder)`. Without
+the group, `tenant AND in_stock OR backorder` means `(tenant AND in_stock) OR
+backorder` and can expose another tenant's documents. AND binds tighter than
+OR. Never append a root `OrWhere` alternative that escapes a permission filter.
 
-## Ordering
+Group callbacks receive `*search.PredicateBuilder`, which supports predicates
+and nested groups but no ordering. Callbacks share one draft; their final
+combined group must be nonempty.
 
-To show cheaper products first and newer products first within each price,
-use `OrderBy` and `OrderByDesc`. They sort by a sortable field, and several calls sort
-by each key in turn:
+For a cheaper view, derive a query without changing this permission-scoped base:
 
 ```go
-filtered := query.Derive(func(query *search.QueryBuilder) {
-	query.OrderBy("price").OrderByDesc("created_at")
+discounts := selection.Derive(func(criteria *search.QueryBuilder) {
+	criteria.Where("price", "<", 50)
 })
 ```
 
-For an unchanged index, a result has a deterministic order within one driver:
+`Derive` preserves text, existing conditions, orders, and the first error; it
+adds settings rather than replacing existing restrictions. This is a convenience,
+not an authorization object: later application code must still preserve the
+logical boundary. If permissions can change before reindexing, recheck them
+against authoritative state before disclosing sensitive documents. Filtering the
+fetched page afterward does not repair leaked counts or a wrongly scoped search.
 
-1. The query's orders, in the order you added them. Strings sort by their
-   lowercase bytes, numbers numerically, and documents that lack the field come
-   last in both directions.
-2. Relevance, highest score first, when the query has text.
-3. The document ID, ascending, by bytes.
+## Result Ordering
 
-With text and no `OrderBy`, results are therefore ranked by relevance and
-equal scores fall back to the ID. With no text and no `OrderBy`, results come
-back in ID order. An order that has ties, such as sorting by `price` when two
-products cost the same, falls back to relevance and then ID. Relevance differs
-between drivers and can change when documents change, so neither cross-driver
-ordering nor a snapshot across page requests is guaranteed.
-
-## Pagination
-
-`Search` takes `pagination.PageParams`. Zero values use the usual defaults (page
-1, 25 per page, at most 100 per page), and the page is normalized the same way
-as for [database pagination](../database/pagination.md):
+To show cheaper products first and newer ones first at the same price, publish
+an ordered variant of your scoped query:
 
 ```go
-page, err := engine.Search(ctx, query, pagination.PageParams{Page: 3, PerPage: 20})
-// page.Items, page.Total, page.CurrentPage, page.LastPage
+ordered := selection.Derive(func(criteria *search.QueryBuilder) {
+	criteria.OrderBy("price")
+	criteria.OrderByDesc("created_at")
+})
 ```
 
-Search backends cannot page arbitrarily deep, so a search reaches only the
-first 1,000 hits (`search.MaxHits`). A page whose last item would be beyond
-that, that is, when page times per-page is above 1,000, fails with
-`search.ErrInvalidQuery`. `Total` is exact up to 1,000 and never reports more,
-so `LastPage` never points past what you can request. When a result is larger,
-ask the user to narrow the query instead of offering page 500.
+Only declared sortable fields are accepted. Orders apply in declaration order,
+then descending relevance, then ascending document ID by bytes. Strings sort by
+lowercase bytes, numbers numerically, and missing values last in either
+direction. Keep one scalar kind per field; mixed-kind ordering is undefined.
 
-A page past the last one is not an error if its requested window stays within
-the 1,000-hit bound; it returns no items. Search uses page numbers, not cursor
-pagination, and changing documents between requests can change page contents.
+With no explicit orders, positive text ranks by relevance then ID. Empty or
+exclusion-only text has score zero and falls back to ID. Scores are comparable
+only within one result, not across queries or drivers. Meilisearch's string/ID
+length limits and OpenSearch's ID-fielddata requirement can affect this ordering;
+see [Search Drivers](drivers.md#compatibility-matrix).
 
-To prepare the fetched hits for display, use the eager collection in
-`page.Items` directly. After checking the search error, extract the current
-window's typed documents:
+## Result Windows
+
+Run the query with page-number parameters to fetch a bounded window:
+
+```go
+page, err := engine.Search(ctx, ordered, pagination.PageParams{Page: 3, PerPage: 20})
+```
+
+Zero values normalize to page 1 and 25 items; the default per-page maximum is
+100. The [pagination guide](../queries/pagination.md) explains these shared page
+types and normalization, not search text or backend execution.
+
+`search.MaxHits` is 1,000. A normalized page times per-page above that bound
+returns `search.ErrInvalidQuery` before driver I/O. `Total` is exact up to
+1,000 and never reports more. `LastPage` uses that capped total, but does not
+override the window check: at 30 items per page and a total of 1,000, its value
+is 34 and requesting page 34 fails because its window ends at 1,020. Use a page
+size that divides 1,000, such as 20 or the default 25, to navigate the full cap.
+Ask readers to narrow large searches instead of offering arbitrarily deep pages.
+A window past the last match is empty, not an error, when it stays within the
+bound.
+
+Pages are not a snapshot or cursor traversal. Concurrent document changes can
+alter contents between requests. The bound limits reachable results, not the
+backend's indexing work or scan cost.
+
+After checking the search error, extract documents from the current page:
 
 ```go
 products := page.Items.Map(func(_ int, hit search.Hit[Product]) Product {
@@ -252,36 +202,37 @@ products := page.Items.Map(func(_ int, hit search.Hit[Product]) Product {
 })
 ```
 
-`products` preserves the window's order. `page.Items.Filter` and `GroupBy` also
-operate locally; hit values retain their document ID and relevance score unless
-your callback replaces them. These are in-memory operations, not streaming or
-another search. They visit only the fetched page and do not recompute `Total`,
-`LastPage`, or `PerPage`, even if you replace `page.Items` with filtered hits.
-Put filters in the search query when they must change server counts or ordering;
-there is no collection operation that traverses all search results for you.
-JSON still emits `items` as an array with the same metadata fields.
+`Map`, `Filter`, and `GroupBy` are eager, local collection operations. They visit
+only the fetched window, make no search requests, and do not recompute page
+metadata. Put conditions in the search query when they must change server-side
+counts or ordering. JSON serializes items as an array with the page metadata.
 
-## Checking a query before running it
+## Query Validation
 
-`query.Err()` returns the first problem without running anything, which is useful
-when the query is built from user input in a handler:
+`NewQuery` publishes an immutable value without I/O. Its first declaration
+error is retained by `Err()` and returned by `Search` before reaching the driver:
 
 ```go
-if err := query.Err(); err != nil {
-	return err // wraps search.ErrInvalidQuery
+if err := selection.Err(); err != nil {
+	return err
 }
 ```
 
-An undeclared field, a field used for the wrong purpose (a condition on a
-field that is not filterable), an unsupported value type, an unknown operator,
-and an empty membership list are all invalid queries. A zero query's `Err()`
-wraps both `search.ErrInvalidQuery` and the missing index's `search.ErrInvalidName`;
-`Derive` preserves that failure, and `Search` rejects it before calling the driver.
-Map `search.ErrInvalidQuery` to a 400 response with the
-[`errormap` middleware](../http-fundamentals/error-handling.md)
-when users can influence field names. Prefer fixed, allowed fields when users
-only need to supply text and values; still validate the values, since unsupported
-types, NaN, and infinities also make a query invalid.
+Undeclared filter/sort fields, unsupported values/operators, empty membership
+lists, and empty groups wrap `search.ErrInvalidQuery`. A zero query also wraps
+the missing index's `search.ErrInvalidName`; deriving it does not repair that
+failure. Registration and schema matching are checked separately by the engine.
+Native provider limits can still return `search.ErrUnsupported` for a valid
+query. Never retry by silently dropping a filter, especially a permission filter.
 
-For every function and option, see [the `search` API
-reference](https://pkg.go.dev/arkoren.dev/core/service/search).
+Callbacks run synchronously once in order even for invalid bases. Supplied nil
+callbacks panic; expanded empty callback slices omit edits. Empty groups remain
+invalid. Publication, derivation, and `Inspect()` detach owned text, condition,
+group, membership, and order containers; editing a retained draft or inspection
+cannot change a published query.
+
+When user input makes a query invalid, classify its error at your
+[HTTP boundary](../http-fundamentals/error-handling.md). Prefer fixed fields and
+validated values instead of exposing the complete predicate builder to clients.
+
+For every function and option, see the [search API reference](https://pkg.go.dev/arkoren.dev/core/service/search).

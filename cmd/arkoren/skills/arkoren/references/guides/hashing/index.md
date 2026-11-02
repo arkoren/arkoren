@@ -1,6 +1,6 @@
 ---
 title: Hashing
-description: Store passwords so they cannot be recovered, check them, and keep their hashes strong over time.
+description: Store and check password hashes, choose a driver and resource budget, and renew verified credentials.
 order: 70
 section: Security
 ---

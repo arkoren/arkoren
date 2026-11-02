@@ -1,138 +1,163 @@
 ---
 title: CORS
-description: Allow browser applications on other origins to call your API, with explicit origins, methods, headers, credentials, and preflight.
+description: Grant explicit cross-origin browser response access and handle preflights without confusing CORS with request authorization.
 order: 30
+summary:
+  - Allow a known front end's origin, methods, and headers without treating CORS as authorization.
+  - Answer preflights before authentication and control their advertised cache lifetime.
+  - Enable cookie credentials and readable response metadata deliberately.
+  - Distinguish public defaults, explicit empty lists, and malformed origin failures.
 ---
 
 # CORS
 
-## Introduction
+A portal at `https://portal.example.com` cannot normally read responses from
+`https://api.example.com`. Cross-Origin Resource Sharing (**CORS**) lets the API
+grant that browser access with response headers. An origin consists of a scheme,
+host, and optional port; changing any of them changes the origin.
 
-Browsers do not let a page read responses from another origin unless that
-origin agrees. **Cross-Origin Resource Sharing** (CORS) is how a server agrees:
-it answers with headers that name which origins, methods, and headers it
-accepts. For some requests, the browser first sends a **preflight**, an
-`OPTIONS` request that asks for permission, and only sends the real request
-if the answer allows it.
+CORS is a browser response-access policy, not authentication or a write barrier.
+Disallowed origins can still reach your handlers without CORS permission
+headers. Keep authentication, resource authorization, and
+[CSRF protection](csrf-protection.md) where cookies authorize actions.
 
-The `cors` middleware sets these headers and answers preflights from allowed
-origins before they reach your handlers. CORS controls what browser code can
-read; it is not authentication or [CSRF protection](csrf-protection.md).
+## Allow a Front End
 
-## Usage
-
-Import `arkoren.dev/core/http/middleware/cors`. With an existing
-[router](../http-fundamentals/routing.md) `r`, register middleware before routes.
-For a public API that does not use browser credentials, the defaults allow any
-origin to make simple `GET`, `HEAD`, and `POST` requests:
+For a portal that reads account details and sends JSON changes with a bearer
+token, allow its exact origin, methods, and request headers. Import `net/http`
+and `arkoren.dev/core/http/middleware/cors`. On a fresh API router `routes`,
+register this before authentication, body checks, and routes:
 
 ```go
-r.Use(cors.Middleware())
-```
-
-For an API used by your own front end, replace that default policy with explicit
-origins and the methods and headers it uses. Import `net/http` for method constants:
-
-```go
-r.Use(cors.Middleware(func(policy *cors.Builder) {
-	policy.AllowedOrigins("https://app.example.com")
-	policy.AllowedMethods(http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete)
-	policy.AllowedHeaders("Accept", "Content-Type", "Authorization")
+routes.Use(cors.Middleware(func(policy *cors.Builder) {
+	policy.AllowedOrigins("https://portal.example.com")
+	policy.AllowedMethods(http.MethodGet, http.MethodPatch)
+	policy.AllowedHeaders("Content-Type", "Authorization")
 }))
 ```
 
-Origins are written as `scheme://host` with an optional decimal port from `0`
-through `65535`. Except for the complete wildcard `*`, each must be a bare ASCII
-origin. Construction panics for missing schemes or hostnames, userinfo such as
-`user:password@`, any path (even `/`), query or fragment delimiters (even empty
-`?` or `#`), invalid or empty ports, and wildcard host patterns such as
-`https://*.example.com`. Non-ASCII hostnames must use ASCII punycode.
+Requests with that `Origin` receive permission headers. `Authorization` must be
+listed when browser code supplies a bearer token; listing it does not validate
+the token. The policy applies to every route on this router, including unmatched
+requests, so the portal can read eligible error responses too. Choose narrower
+[group scope](../http-fundamentals/middleware.md#choose-scope) if only part of
+the API shares the policy.
 
-Configured origins are lowercased, but not fully canonicalized like browser
-URLs. In particular, default ports are not removed: `https://example.com:443`
-does not match the browser spelling `https://example.com`. Use trusted origins
-in the form the browser sends in `Origin`; this validation is not a URL sanitizer.
+Use bare ASCII origins, without a trailing slash. Construction panics for
+missing schemes or hostnames, userinfo, paths (including `/`), query or fragment
+delimiters (including empty `?` or `#`), wildcard host patterns, and invalid or
+empty ports. Decimal ports must be in `0`–`65535`; international hostnames need
+ASCII punycode. Only the complete `*` wildcard is supported.
 
-### Defaults and empty lists
+Configured origins are lowercased, not fully canonicalized. For example,
+`https://portal.example.com:443` does not match a browser's
+`https://portal.example.com`. Configure the spelling the browser sends in
+`Origin`; this validation is not a general URL sanitizer.
 
-Callbacks run once, in order; validation uses the final settings after all
-callbacks finish. Each list setter replaces its previous list. Omitted or nil
-origin, method, and request-header lists receive these defaults:
+## Handle Preflights
 
-| Setting | Default |
-| --- | --- |
-| `AllowedOrigins` | `*` |
-| `AllowedMethods` | `GET`, `POST`, `HEAD` |
-| `AllowedHeaders` | `Accept`, `Content-Type` |
+Before a cross-origin JSON `PATCH`, the browser asks whether the API permits
+the method and headers. This **preflight** is an `OPTIONS` request with
+`Origin` and `Access-Control-Request-Method`:
 
-A nonnil empty slice stays empty. For example,
-`policy.AllowedOrigins([]string{}...)` grants no origins; calling
-`policy.AllowedOrigins()` passes nil and restores the default wildcard instead.
-The same nil-versus-empty distinction applies to `AllowedMethods` and
-`AllowedHeaders`; empty lists omit their preflight headers. `ExposedHeaders`
-defaults to empty. All supplied lists are copied during construction.
-
-> [!NOTE]
-> Add `Authorization` to the allowed headers if your front end sends bearer tokens.
-
-## Cookies and credentials
-
-For a browser front end that relies on cookies across origins, enable
-credentials for its explicit origin:
-
-```go
-cors.Middleware(func(policy *cors.Builder) {
-	policy.AllowedOrigins("https://app.example.com")
-	policy.AllowCredentials(true)
-})
+```http
+OPTIONS /account/preferences HTTP/1.1
+Host: api.example.com
+Origin: https://portal.example.com
+Access-Control-Request-Method: PATCH
+Access-Control-Request-Headers: authorization, content-type
 ```
 
-Credentials are off by default and cannot be combined with any `*` origin entry.
-Browsers reject that combination, and the middleware panics on it, because
-allowing every site to make authenticated requests on behalf of your users would
-be unsafe. List your origins instead.
+For an allowed origin, the middleware answers `204 No Content` without calling
+the next layer. It advertises your configured method and header lists; the
+browser checks those lists before sending the actual request. A `204` alone
+does not mean the requested method or headers were approved.
 
-Install this configured middleware with `r.Use` instead of the earlier policy.
-Your front end must also request credentials, for example with
-`fetch(url, { credentials: "include" })`. Cookie `SameSite` and `Secure` rules
-still apply; CORS does not override them or stop a cross-site form submission.
+Requests without `Origin`, requests from disallowed origins, and ordinary
+`OPTIONS` requests without `Access-Control-Request-Method` continue to the next
+layer. Allowed non-preflight requests also continue. CORS does not reject an
+ordinary request because its method is absent from `AllowedMethods`.
 
-## How requests are handled
+Preflights arrive without credentials, so CORS must precede authentication.
+Otherwise an authentication failure can stop the browser before it sends its
+authenticated request. See [policy ordering](../http-fundamentals/middleware.md#order-policies).
+Non-browser clients do not enforce these permission headers.
 
-A request without an `Origin` header passes through without CORS headers.
-So does a request from a disallowed origin; for a cross-origin browser request,
-the missing permission headers prevent the page from reading the response,
-not the handler from running.
+Preflight answers default to `Access-Control-Max-Age: 300`, allowing five minutes
+of caching, subject to browser limits. To disable this advertised cache lifetime,
+add `policy.MaxAge(0)` to the construction callback. Positive durations are
+rounded down to whole seconds: `1500*time.Millisecond` sends `1`. Nonpositive
+durations and positive durations below one second omit the header; import `time`
+when using duration expressions.
 
-An ordinary request from an allowed origin gets CORS headers and reaches your
-handler. A preflight from an allowed origin is answered with `204 No Content`
-and never reaches a handler. A preflight is an `OPTIONS` request with an
-`Access-Control-Request-Method` header.
+## Send Credentials
 
-The middleware advertises your configured method and header lists; it does not
-reject an ordinary request whose method is outside those lists. The browser
-decides whether a preflight authorizes its request. Non-browser clients are not
-restricted by CORS.
+If the portal uses session cookies instead of bearer tokens, explicitly allow
+credentials for that trusted origin. Replace the previous registration with
+this cookie-backed variant:
 
-Response headers that scripts may read, beyond the basic ones, are listed with
-`cors.Builder.ExposedHeaders`.
+```go
+routes.Use(cors.Middleware(func(policy *cors.Builder) {
+	policy.AllowedOrigins("https://portal.example.com")
+	policy.AllowedMethods(http.MethodGet, http.MethodPatch)
+	policy.AllowedHeaders("Content-Type")
+	policy.AllowCredentials(true)
+}))
+```
 
-### Preflight caching
+Credentials are off by default. Combining `AllowCredentials(true)` with any `*`
+origin entry panics at construction. Never replace a trusted origin list with
+arbitrary reflection of the request's origin.
 
-By default, the middleware sends `Access-Control-Max-Age: 300`, permitting
-browsers to cache preflight answers for five minutes; browsers can impose their
-own limits. Change this with `policy.MaxAge(duration)` in a configuration
-callback. Positive durations are rounded down using whole-second integer
-division: `1500*time.Millisecond` sends `1`. Nonpositive durations and positive
-durations below one second omit the header. Explicit `MaxAge(0)` therefore
-omits it rather than restoring the default. Duration expressions use `time`.
+Browser code must also opt in to credentials, for example with
+`fetch(url, { credentials: "include" })`. Cookie `SameSite`, `Secure`, and browser
+privacy rules still apply; CORS does not override them. Configure
+[session cookies](../http-capabilities/sessions.md#enable-sessions) appropriately
+and retain CSRF protection, with a [trusted origin](csrf-protection.md#trust-browser-origins)
+for intentional cross-origin writes. Trusting an origin for response access neither
+authenticates its visitors nor authorizes their account changes.
 
-## Placement
+## Expose Metadata
 
-Register CORS as one of the first middleware on the router. Preflights must be
-answered before authentication runs, because browsers send them without
-credentials. Since the router passes unmatched requests through its
-middleware, CORS headers are also set on `404` responses, so a front end can
-read those errors.
+If the portal displays an API request ID for support, allow script access to
+that response header. This separate construction example assumes your server
+already sets `X-Request-ID`:
 
-For every option, see the [`cors` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/cors).
+```go
+routes.Use(cors.Middleware(func(policy *cors.Builder) {
+	policy.AllowedOrigins("https://portal.example.com")
+	policy.ExposedHeaders("X-Request-ID")
+}))
+```
+
+`ExposedHeaders` names response headers beyond the browser's basic readable
+set; it does not create their values. Include the method, request-header, and
+credential settings from your chosen policy when combining these examples.
+With an explicit origin list, responses vary on `Origin`, including requests
+without that header. Recognized allowed preflights also vary on requested
+method and headers, so shared caches can distinguish permission answers.
+
+## Refine Defaults
+
+Use `cors.Middleware()` without configuration only when you intend public
+cross-origin response access without credentials. It allows `*`, advertises
+`GET`, `POST`, and `HEAD`, and allows request headers `Accept` and `Content-Type`.
+No extra response headers are exposed by default.
+
+List setters replace earlier lists. After all callbacks run, omitted or nil
+origin, method, and request-header lists receive defaults; nonnil empty lists
+remain empty. To grant no origins explicitly:
+
+```go
+routes.Use(cors.Middleware(func(policy *cors.Builder) {
+	policy.AllowedOrigins([]string{}...)
+}))
+```
+
+That omits origin permission but still passes requests onward. In contrast,
+`policy.AllowedOrigins()` supplies nil and restores the wildcard default. The
+same distinction applies to `AllowedMethods` and `AllowedHeaders`: explicit
+empty lists omit their preflight headers. Configuration lists are copied during
+construction, and validation uses the final settings after all callbacks.
+
+For every setting, see the [`cors` API reference](https://pkg.go.dev/arkoren.dev/core/http/middleware/cors).

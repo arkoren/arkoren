@@ -1,185 +1,140 @@
 ---
 title: Authorization Overview
 nav: Overview
-description: Decide what a signed-in user may do with plain Go rules, protect routes with the gate, and check resources in handlers.
+description: Check actions with plain Go rules and keep permission decisions beside the resources they protect.
+summary:
+  - Match gate rules to the authenticated identity type and distinguish denials from failed checks.
+  - Combine route admission with resource checks against authorized store results.
+  - Reload identities and recheck permissions before deferred work runs.
 order: 10
 ---
 
 # Authorization Overview
 
-## Introduction
+A signed-in user is not necessarily allowed to export a report or change
+another customer's records. Authentication establishes an identity;
+**authorization** decides what that identity may do. Arkoren's `gate` package
+runs your permission checks before the protected action proceeds.
 
-[Authentication](../authentication/overview.md) tells you who sent a request.
-**Authorization** decides whether they may do what they asked: an editor may
-publish posts, a customer may see their own invoices but not anyone else's, and
-only an administrator may delete accounts.
+A **rule** is a Go function that receives a context and your authenticated user
+type, then returns `(bool, error)`. You supply the roles, ownership checks, and
+other application decisions. The gate supplies ordered evaluation and the
+missing-user and forbidden errors.
 
-Arkoren's `gate` package expresses these decisions as **rules**, plain Go
-functions that receive the signed-in user and answer yes or no. There is no
-policy language, no registry of abilities, and no roles built in. A rule can
-check a field, query the database, or call another service, and rules combine
-with ordinary `if` and `||`. The gate runs them, and turns a "no" into the right
-HTTP response. Use route checks for admission to an area of your service, then
-resource rules for the particular record being read or changed. Passing a route
-check does not grant access to every resource behind that route.
+## Identity Boundaries
 
-The gate is independent of how the user signed in. It reads the user from the
-request's context and nothing else, so the same rules work behind
-[session login](../authentication/session-login.md),
-[API tokens](../authentication/api-tokens.md),
-[OAuth](../authentication/oauth.md), an authenticator of your own, or a
-background job that has no request at all. Authentication can change without
-touching a single rule.
+Configure [credential resolution](../authentication/overview.md#resolve-credentials)
+before using the gate. Rules must accept the exact type that authentication puts
+in the context: `User` and `*User` are different types. A mismatch produces
+`auth.ErrUnauthenticated` (`401`), even if credentials were valid for the other
+type. The gate does not resolve credentials itself.
 
-For tools, keep resource checks in the shared application operation rather
-than only on an HTTP route. [Securing MCP](../mcp/securing-mcp.md) distinguishes
-endpoint admission and tool availability from authorization of each resource.
-
-This page covers rules and where to check them. [Writing Policies](policies.md)
-organizes rules by feature and covers roles, permissions, teams, and token
-scopes. [Row-Level Access](row-access.md) keeps "which records may this user
-see?" in queries, and [Handling Denials](denials.md) explains the responses and
-how to observe them.
-
-## Writing a rule
-
-Examples import `gate` from `arkoren.dev/core/http/auth/gate`, `auth` from
-`arkoren.dev/core/http/auth`, `router` from `arkoren.dev/core/http/router`, and
-`context` from the standard library. `r` is your authenticated router;
-`User`, `Post`, and their fields are application-owned types.
-
-A rule receives the request's context and the user, and returns whether the
-user is allowed:
+The examples use standard-library `context`, `auth` from
+`arkoren.dev/core/http/auth`, and `gate` from
+`arkoren.dev/core/http/auth/gate`. Assume your authenticator stores this
+application-owned identity:
 
 ```go
-func isAdmin(ctx context.Context, u User) (bool, error) {
-	return u.Role == "admin", nil
+type User struct {
+	ID         int
+	CustomerID int
+	CanExport  bool
 }
 ```
 
-The two return values keep two different situations apart. `false` means the
-user is not allowed, and the request is denied with `403 Forbidden`. An error
-means the rule could not decide, for example because the database is down, and
-the error is returned as is, usually as a `500`. A rule that fails is therefore
-never mistaken for a denial, and never for permission.
+These fields come from your trusted identity loader, not request form fields.
+Focused snippets omit routine error propagation, but retain checks that prevent
+unauthorized work.
 
-## Protecting routes
+## Route Admission
 
-`gate.Require` checks rules before a route's handler runs:
-
-```go
-r.With(gate.Require(isAdmin)).Delete("/users/{id}", deleteUser)
-```
-
-The gate reads the user that the [auth middleware](../authentication/overview.md#the-auth-middleware)
-stored on the request. An anonymous request is rejected with `401`, so you do
-not need `auth.Require` in front of the gate. A signed-in user whom a rule
-denies receives a `403` Problem Details response, described in
-[Handling Denials](denials.md).
-
-To protect a whole area of your service, apply the gate to a group:
+Use a route rule for an ability that does not depend on a particular record.
+For example, an export entitlement can admit users to the report-export route:
 
 ```go
-r.Group("/admin", func(admin *router.Router) {
-	admin.Use(gate.Require(isAdmin))
-	admin.Get("/", dashboard)
-	admin.Get("/users", listUsers)
-})
-```
-
-`gate.Require` panics when you give it no rule, because a gate that checks
-nothing is almost always a mistake. To require only that someone is signed in,
-use `auth.Require`.
-
-## Checking in a handler
-
-A route-level rule only knows the user. Many decisions also depend on the
-thing being accessed: an author may edit their own post, not every post. Load
-the resource in the handler first, then check with `gate.Authorize`, which runs
-the same rules and returns the same errors. With `post` already loaded by your
-application's store, stop the update if authorization fails:
-
-```go
-if err := gate.Authorize(r.Context(), canEdit(post)); err != nil {
-	return err
+func canExport(_ context.Context, user User) (bool, error) {
+	return user.CanExport, nil
 }
 ```
 
-Return the error unchanged: the gate's missing-user and denial errors are
-Problem Details values that render as `401` and `403`. A rule's own error is
-returned as is and follows your application's normal error rendering; it is not
-necessarily a Problem Details value.
-
-### Rules about a resource
-
-A rule about a resource is a function that takes the resource and returns a
-rule. The returned rule closes over the resource, so it still has the shape the
-gate expects:
+With your authenticated router `r` and application handler `exportReport`, apply
+the rule before the handler runs:
 
 ```go
-func canEdit(post Post) func(context.Context, User) (bool, error) {
-	return func(ctx context.Context, u User) (bool, error) {
-		return u.Role == "admin" || post.AuthorID == u.ID, nil
+r.With(gate.Require(canExport)).Post("/reports/{id}/export", exportReport)
+```
+
+No user of type `User` produces `401`. A rule returning `false, nil` produces
+`gate.ErrForbidden` (`403`); a non-nil error is returned unchanged, even if the
+boolean is `true`. An infrastructure failure therefore does not become either
+permission or an ordinary denial. [Handling Denials](denials.md) explains how
+these errors render.
+
+If you pass several rules, every rule must allow. They run in argument order,
+stopping at the first denial or error; put inexpensive checks before external
+lookups. Express alternatives inside a rule with ordinary Go conditions.
+`gate.Require` panics with no rules. For sign-in alone, use
+`auth.Require[User]()` instead.
+
+## Resource Checks
+
+Passing `canExport` does not authorize every report. Restrict which records the
+caller can load through a [scoped store lookup](row-access.md), then check any
+additional action-specific permission against the stored record. Never build an
+ownership decision from a request-supplied `CustomerID` or `OwnerID`.
+
+For reports whose existence is already visible to the caller, an owner-only
+export rule can close over the report returned by your store:
+
+```go
+type Report struct {
+	ID         int
+	CustomerID int
+	OwnerID    int
+}
+
+func canExportReport(report Report) func(context.Context, User) (bool, error) {
+	return func(_ context.Context, user User) (bool, error) {
+		return report.CustomerID == user.CustomerID && report.OwnerID == user.ID, nil
 	}
 }
 ```
 
-The `||` is how rules combine: there are no special combinators, because Go
-already has them.
-
-### Several rules
-
-When you pass several rules, all of them must allow. They run in order, and the
-first denial or error stops the check, so put cheap rules before rules that
-query the database:
+In the handler, with `report` already loaded through that scoped lookup, stop
+before exporting if the resource check fails:
 
 ```go
-gate.Require(isActive, hasPaidPlan(db))
+if err := gate.Authorize(r.Context(), canExport, canExportReport(report)); err != nil {
+	return err
+}
 ```
 
-## Where the user comes from
+Keep checks in the shared application operation when HTTP, tools, and jobs can
+perform the same action. A transport-only gate cannot protect a direct call;
+[MCP security](../mcp/securing-mcp.md) also separates tool availability from
+resource permission. A check followed by a database write can race with another
+request; use [conditional writes and locking](row-access.md#conditional-writes)
+when permission or state can change between them.
 
-The gate looks the user up with `auth.FromContext`, by its type. The type
-parameter of a rule must therefore be exactly the type your authenticator
-returns. If the auth middleware stores a `User` and a rule takes a `*User`, the
-gate finds no user of that type and answers `401` for every request, even
-signed-in ones. Use one user type for authentication and authorization, and let
-the compiler infer it from the rules.
+## Deferred Work
 
-Because the gate only reads the context, it also works where there is no HTTP
-request. A [queue job](../queues/consuming-jobs.md) or a scheduled task that acts for a
-user can put the user in its context with `auth.NewContext` and check the same
-rules a handler would. First load the current user from your application's
-store; with `user` and the queued `job` available, authorize before exporting:
+A queued export might run after membership or permissions change. Load the
+current user and the report through your authorized store again when the job
+runs, rather than trusting the queued permission snapshot. With those trusted
+`user` and `report` values, attach the actor to the job context and reuse the
+rules:
 
 ```go
 ctx = auth.NewContext(ctx, user)
-if err := gate.Authorize(ctx, canExport(job.ReportID)); err != nil {
-	return err // the user lost access after the job was queued
+if err := gate.Authorize(ctx, canExport, canExportReport(report)); err != nil {
+	return err
 }
 ```
 
-Here `canExport` is your application's resource rule for the report, following
-the same pattern as `canEdit` above.
+`auth.NewContext` attaches a value; it does not authenticate that value. The job
+owns resolving the queued actor reference to a current identity. Do not attach
+an arbitrary user decoded from the job payload and treat it as trusted.
 
-Checking again in the job matters when time passes between the request and the
-work: a user whose access was revoked after queueing an export should not
-receive it.
-
-## Testing
-
-Rules are functions, so the simplest test calls them directly:
-
-```go
-ok, err := canEdit(Post{AuthorID: 7})(t.Context(), User{ID: 8})
-if err != nil || ok {
-	t.Fatalf("a stranger may edit the post: %v, %v", ok, err)
-}
-```
-
-To test a protected route, put a user in the request's context and send it
-through the router, as shown in [Testing Authentication](../testing/auth-tests.md).
-Test each route both with a user who is allowed and with one who is not: the
-second test is the one that catches a missing check.
-
-For every function, see the [`gate` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth/gate).
+As related checks grow, [Writing Policies](policies.md) keeps them together
+without introducing a separate policy language. For all functions and options,
+see the [`gate` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth/gate).

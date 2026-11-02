@@ -1,249 +1,201 @@
 ---
-title: Mail Events and Telemetry
+title: Events and Telemetry
 nav: Events & Telemetry
-description: Observe returned submission outcomes with events, measure send attempts, and understand panic and privacy boundaries.
-order: 30
+description: Observe mail submission attempts with bounded outcome events, spans, and metrics while preserving privacy and uncertainty boundaries.
+order: 50
+summary:
+  - Attach shared observation handles and react to synchronous submission outcome events.
+  - Interpret bounded failure classes, send spans, and attempt metrics without inferring delivery.
+  - Understand panic and privacy boundaries and add transport-level HTTP tracing when needed.
 ---
 
-# Mail Events and Telemetry
+# Events and Telemetry
 
-## Introduction
+When an expected email is missing, first distinguish a rejected submission from
+an accepted one. Mail outcome events report what `Send` returned; telemetry
+measures the attempt. Neither tells you whether an inbox received the email.
+For later delivery or bounce notifications, configure the optional
+[provider receiver](drivers.md#provider-notifications) separately.
 
-When a customer reports a missing receipt, you need to know whether sending
-failed and how long the provider took to respond. The mailer reports those
-outcomes in two ways. **Events** announce the outcome of a send so your code
-can react: alert on a failure, store the receipt.
-**Telemetry** measures each send with a span and a duration, so you can see
-which sends are slow and which fail.
+## Observation Setup
 
-These are submission outcomes, not delivery notifications: `mail.Sent` means
-the driver accepted the message. With the log driver, no mail leaves the process.
-To learn about later delivery or bounces, configure an optional
-[provider webhook receiver](drivers.md) separately.
-
-Events require an explicit bus; telemetry uses an explicit service or the
-[process default](../observability/telemetry.md#the-process-default), initially
-a no-op. Neither can change the result of a send: a listener that fails is
-logged by the bus, and telemetry only observes.
-Both also avoid mail's sensitive parts. Addresses, subjects, bodies, and
-attachment names or contents are not telemetry attributes or dedicated event
-fields. Failure events retain only a bounded classification and counts, not
-driver diagnostics. [What is recorded](#what-is-recorded-and-what-is-not) lists
-the telemetry fields. With `arkoren.dev/core/service/mail` imported, an existing `mail.Driver`
-named `driver`, and your `*application.Application` named `app`, enable both:
+Events require an explicit bus. Telemetry uses an explicit service or the
+[shared process handle](../observability/telemetry.md#shared-handle), resolved at
+each send; it records nothing until its instrumentation is active. With import
+`arkoren.dev/core/service/mail`, an existing driver named `driver`, and your
+`*application.Application` named `app`, attach the application's handles:
 
 ```go
-mailer := mail.New(driver, func(mailer *mail.Builder) {
-	mailer.Events(app.Events())
-	mailer.Telemetry(app.Telemetry())
+mailer := mail.New(driver, func(sender *mail.Builder) {
+	sender.From(mail.Address{Email: "notifications@acme.test"})
+	sender.Events(app.Events())
+	sender.Telemetry(app.Telemetry())
 })
 ```
 
+The bus and telemetry service remain shared, not cloned or managed by the
+mailer. Omitted or nil `Events` publishes nothing; omitted or nil `Telemetry`
+follows the process default, including later changes. Direct driver or native
+client calls bypass these facade signals.
+
 ## Events
 
-With a bus and a nonnil context, the mailer publishes one of two events when
-`Send` returns normally:
+With a configured bus and nonnil context, a normally returning `Send` publishes
+one outcome synchronously before returning:
 
-| Event | Name | Published when |
+| Topic | Payload | Meaning |
 | --- | --- | --- |
-| `mail.Sent` | `mail.sent` | the driver accepted the message |
-| `mail.Failed` | `mail.failed` | validation or the driver returned an error, including a canceled or expired context |
+| `mail.Sent` (`mail.sent`) | `mail.SentEvent` | Driver acceptance, not recipient delivery. |
+| `mail.Failed` (`mail.failed`) | `mail.FailedEvent` | A returned validation or driver error. |
 
-`mail.Sent` carries a `mail.SentEvent` with the `Receipt` and the counts
-`Recipients` (to, cc, and bcc together) and `Attachments`. `mail.Failed` carries
-a `mail.FailedEvent` with the same counts and a bounded `ErrorClass` string.
-It contains no raw error, cause, diagnostic text, or arbitrary provider type name.
-[Built-in Events](../events/built-in-events.md#mail)
-lists them next to the other services' events.
+Both payloads count recipient entries across To, CC, and BCC, including repeats,
+and count regular and inline attachments together. `SentEvent` adds the
+`Receipt`, whose opaque ID can be empty. `FailedEvent` instead adds a bounded
+`ErrorClass`; it carries no error object, diagnostic text, or native type name.
+Log-driver success still publishes `Sent` without sending mail externally.
 
-> [!NOTE]
-> This is a breaking payload API change: `FailedEvent.ErrorClass` replaces `Err`.
-> Compare the string in listeners instead of calling `errors.Is` on a payload
-> error. `Mailer.Send` still returns the original error with its causes intact
-> for `errors.Is` and `errors.As`.
+Classification follows wrapped and joined causes in this priority order:
 
-Classification checks wrapped and joined causes in this priority order; the
-first matching class wins:
-
-| `ErrorClass` | Selected when |
+| `ErrorClass` | Matching Cause |
 | --- | --- |
-| `context.Canceled` | The returned error matches `context.Canceled`. |
-| `context.DeadlineExceeded` | It matches the deadline error but not cancellation. |
-| `mail.ErrInvalidMessage` | It matches invalid input but neither context error. |
-| `error` | No known class matches; native diagnostics remain with the caller. |
+| `context.Canceled` | Cancellation, even if other known causes also match. |
+| `context.DeadlineExceeded` | Deadline expiry without cancellation. |
+| `mail.ErrInvalidMessage` | Invalid input without either context class. |
+| `error` | Any other returned failure. |
 
-Validation errors are published too; distinguish them with
-`observed.ErrorClass == "mail.ErrInvalidMessage"`. A nil context fails before
-telemetry or events, and a mailer without a bus publishes nothing. If the driver panics,
-the original panic propagates without `mail.sent` or `mail.failed`: a panic is
-neither observed acceptance nor a returned rejection. Events follow returned
-outcomes, so a retry that succeeds publishes `mail.failed` for the first attempt
-and `mail.sent` for the second.
-
-> [!WARNING]
-> The bounded event does not redact the separate error returned by `Send`.
-> That error can quote a rejected recipient or other provider diagnostics.
-> Review and redact returned errors before forwarding them to third-party logs
-> or alerts; do not attach the raw error chain to this event.
-
-Listening is the ordinary event bus call, covered in [Events](../events/overview.md).
-With `context` imported, page someone for a failure other than an invalid message.
-Here `alerts.Notify(context.Context, string, string) error` is your
-application-owned notification service, accepting the fixed class rather than
-provider diagnostics:
+To alert on submission failures without exporting provider diagnostics, listen
+using the standard-library `context` import. Here `alerts.Notify` is your
+application-owned method with signature
+`Notify(context.Context, string, string) error`:
 
 ```go
-_, err := app.Events().Listen(mail.Failed,
+unsubscribe, err := app.Events().Listen(mail.Failed,
 	func(ctx context.Context, observed mail.FailedEvent) error {
 		if observed.ErrorClass == "mail.ErrInvalidMessage" {
 			return nil
 		}
 
-		return alerts.Notify(ctx, "mail failed", observed.ErrorClass)
+		return alerts.Notify(ctx, "Mail submission failed", observed.ErrorClass)
 	})
 ```
 
-To retain receipts for support questions, supply your application-owned
-`receipts.Record(context.Context, string, int) error` implementation:
+Handle the registration error and retain `unsubscribe` for the listener's
+lifetime. This example omits invalid-input alerts so application validation can
+report them separately; it does not classify every other failure as retryable.
+See [listener ownership](../events/listeners.md) for registration and removal.
+
+If you want an acceptance feed for support, a separate listener can call your
+`receipts.Record(context.Context, string, int) error` method:
 
 ```go
-_, err := app.Events().Listen(mail.Sent,
-	func(ctx context.Context, e mail.SentEvent) error {
-		return receipts.Record(ctx, e.Receipt.ID, e.Recipients)
+unsubscribe, err := app.Events().Listen(mail.Sent,
+	func(ctx context.Context, observed mail.SentEvent) error {
+		return receipts.Record(ctx, observed.Receipt.ID, observed.Recipients)
 	})
 ```
 
-The details that matter when you write listeners:
+This is an alternative registration fragment, not a redeclaration in the same
+scope. Receipts identify submissions, not your application record. For durable
+correlation with an order or account, record the result around the original
+`Send` call where that identity is known; best-effort events are not an outbox.
 
-- A listener runs synchronously on the goroutine that called `Send`, before
-  `Send` returns, so a slow listener slows the caller. Hand slow work to a
-  [queue](../queues/overview.md).
-- A listener receives the context of the call.
-- A listener's error or panic is logged by the bus and never changes what
-  `Send` returns; the submission outcome is already known. A failing listener does
-  stop the listeners after it.
-- The event does not identify the message. It has counts and a receipt, so a
-  listener cannot tell which email failed. If you need that, wrap the call
-  that sends and log there, where you know the message.
+Listeners run on the sending goroutine with its context. Slow listeners delay
+the caller; hand slow work to a [queue](../queues/overview.md). A listener error
+or panic is logged by the bus and stops later listeners, but cannot change the
+submission result. A retry produces a separate outcome for each normally
+returning attempt. A nil context fails before any event or telemetry.
 
-## Telemetry
+## Send Telemetry
 
-With telemetry started and a nonnil context, each `Send` records one client span
-named `mail send` and updates two metrics. Disabled instrumentation records
-nothing and adds no telemetry allocations; the driver still has its normal
-submission costs.
-Validation failures are recorded too, since the span starts before the
-message is checked.
+When enabled, each nonnil-context call creates one client span named `mail send`,
+starting before validation and ending after submission but before outcome
+listeners. It is a child of the calling request/job span when one exists.
+SMTP connection, TLS, authentication, and message exchange are inside that
+duration; listener latency is not.
 
-### Spans
-
-| Attribute | Value |
+| Span Attribute | Value |
 | --- | --- |
 | `arkoren.mail.operation` | `send` |
-| `arkoren.mail.recipients` | To, cc, and bcc counted together; span only |
-| `arkoren.mail.attachments` | Number of attachments; span only |
-| `error.type` | Set for a returned error, not for a driver panic |
-
-The span covers validation and driver submission: the provider API request or
-SMTP's connection, STARTTLS, authentication, and message exchange. It ends before
-outcome listeners run, so a slow listener increases caller latency without
-extending this span. The span sits under
-the span of whatever called `Send`, such as the request that triggered the mail
-or the queue job.
-
-### Metrics
+| `arkoren.mail.recipients` | Total To, CC, and BCC entries |
+| `arkoren.mail.attachments` | Regular and inline attachment count |
+| `error.type` | Class of a returned error; absent for success or a driver panic |
 
 The counter `arkoren.mail.operations` counts attempts, not accepted messages.
-The histogram `arkoren.mail.operation.duration`, in seconds, records how long
-they took. Both use the keys `arkoren.mail.operation` and `error.type`. The
-buckets run from ten milliseconds to a minute, since a provider API and a slow relay differ by orders
-of magnitude. There is no attribute for the driver and none for the kind of
-mail, so you cannot split the metrics by provider or by "welcome" versus
-"receipt". If you need that, record your own bounded labels; separate mailer
-instances alone do not add those labels. [Instrumented components](../observability/instrumented-components.md#mail)
-lists these next to the other components, and [Telemetry](../observability/telemetry.md)
-explains how to export them.
+The histogram `arkoren.mail.operation.duration` records seconds. Both use
+`arkoren.mail.operation` and `error.type`; recipient and attachment counts are
+span-only. Duration bucket boundaries are 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5,
+10, 30, and 60 seconds.
 
-### Failures
+No provider or message-purpose label is added automatically. Separate mailer
+instances do not split metrics into welcome/report or SMTP/API groups. If you
+need that comparison, add your own bounded application labels without addresses
+or individual message IDs. See [instrumented components](../observability/instrumented-components.md#mail)
+for the shared inventory and [Telemetry](../observability/telemetry.md) for export
+setup. Disabled instrumentation records nothing and adds no telemetry allocations;
+normal driver submission costs remain.
 
-A returned error sets the span status to error and `error.type` to the class of
-the error: `mail.ErrInvalidMessage` for validation, `context.Canceled` or
-`context.DeadlineExceeded` for a matching context error, and otherwise the Go
-type of the innermost wrapped error. The text of the error is never recorded.
-Context cancellation takes precedence over deadlines, then invalid input.
-Unlike an event's `ErrorClass`, telemetry's fallback can be a native Go type
-name rather than the fixed string `error`.
+## Failure Signals
 
-Use `error.type` to separate invalid messages from submission failures. A rise
-in `mail.ErrInvalidMessage` points to message construction or mailer setup.
-Other classes include cancellation and deadlines as well as provider or network
-failures; inspect the class before deciding where to investigate.
+Returned validation failures are observed even though no driver submission
+occurs. A returned error marks the span as error and sets `error.type` to
+`context.Canceled`, `context.DeadlineExceeded`, or `mail.ErrInvalidMessage`, in
+that precedence order. Otherwise telemetry uses the innermost wrapped Go error
+type. Unlike event `ErrorClass`, its fallback is not restricted to the string
+`error`. Error text is not recorded.
 
-If the driver panics, the mailer ends its own span and records the attempt's
-count and duration before letting the original panic propagate. It does not end
-the caller's parent span. A panic alone leaves the span status unset and adds no
-`error.type`; the mailer does not record the panic value, an exception event, or
-a panic log. These observations measure an interrupted attempt, not acceptance,
-rejection, or recovery. Instrument panic handling at the application's existing
-recovery boundary if you need a separate signal; do not infer it from mail
-failure events.
+A rise in invalid-message failures points to composition or sender setup.
+Context interruption and other provider/network classes need separate
+investigation; a failure signal alone is not evidence that remote acceptance
+did not happen. `Send` still returns the original error with causes available
+through `errors.Is` and `errors.As`.
 
-### HTTP detail
+A driver panic propagates unchanged and publishes neither outcome event.
+The mailer still ends its own span and records count and duration without
+ending the parent's span. A panic alone leaves span status unset and adds no
+`error.type`, panic value, exception event, or panic log. These signals measure
+an interrupted attempt, not successful submission or confirmed rejection. Add
+panic reporting at your existing application recovery boundary rather than
+inferring it from missing mail events or retrying blindly.
 
-The span covers one `Send` and says nothing about the requests underneath it. To
-see them, give the driver an HTTP client whose transport is
-`app.Telemetry().Transport(nil)`. Postmark accepts a client with
-`postmarkmail.Builder.HTTPClient` in its construction callback; for Resend, Mailgun, and SES, build the vendor
-client with that HTTP client and pass it to `resendmail.NewFrom`,
-`mailgunmail.NewFrom`, or `awsmail.NewFrom`. Those spans then nest under the
-`mail send` span. SMTP does not use HTTP, so it shows only the facade span.
+## HTTP Detail
 
-## What is recorded and what is not
-
-Telemetry records the operation, the number of recipients and attachments, the duration,
-and the class of an error. Never recorded: addresses, the subject, bodies,
-attachment names and contents, headers, the text of an error, and the receipt
-ID. The receipt ID is left out because it identifies one message at the
-provider; correlate through your own record instead, for example by logging the
-receipt next to the trace ID when you handle `mail.sent`.
-
-## Testing
-
-To assert what your code reports, use the in-memory telemetry fake from
-`arkoren.dev/core/service/telemetry/telemetrytest`. Also import
-`arkoren.dev/core/service/telemetry` and
-`arkoren.dev/core/service/mail/mailtest`. With `t *testing.T`, record signals
-instead of exporting them:
+If a slow attempt needs transport-level investigation, supply an HTTP client
+whose transport comes from your telemetry service. With standard-library
+imports `net/http` and `time`:
 
 ```go
-fake := telemetrytest.New()
-mailer := mail.New(mailtest.New(), func(mailer *mail.Builder) {
-	mailer.From(mail.Address{Email: "no-reply@acme.test"})
-	mailer.Telemetry(fake.Telemetry(t))
-})
-```
-
-In a test with `t *testing.T`, send one message and assert the reported signals:
-
-```go
-message := mail.NewMessage(mail.Recipients{
-	To: []mail.Address{{Email: "ada@example.com"}},
-}, mail.Body{Text: "Hello"})
-_, err := mailer.Send(t.Context(), message)
-if err != nil {
-	t.Fatal(err)
+client := &http.Client{
+	Timeout:   10 * time.Second,
+	Transport: app.Telemetry().Transport(nil),
 }
-fake.AssertSpan(t, "mail send", telemetry.String("arkoren.mail.operation", "send"))
-fake.AssertCounter(t, "arkoren.mail.operations", 1,
-	telemetry.String("arkoren.mail.operation", "send"),
-)
 ```
 
-Events need no fake: create an `event.New()` bus, listen to `mail.Sent` and
-`mail.Failed`, pass the bus with `Builder.Events`, and assert on what the listener
-collected. To produce a `mail.failed` event on demand, make the fake driver
-fail with `FailNext`. See [Testing](../testing/overview.md).
+Configure it before concurrent use. Postmark accepts it through
+`postmarkmail.Builder.HTTPClient` during construction. For Resend, Mailgun,
+or SES, configure the native SDK with this client before `NewFrom`; the
+[driver sections](drivers.md) explain the respective constructor and borrowed
+ownership. HTTP spans nest under `mail send`. SMTP does not use HTTP and has
+only the facade span.
 
-For every function and option, see [the `mail` API reference](https://pkg.go.dev/arkoren.dev/core/service/mail),
-[the `event` API reference](https://pkg.go.dev/arkoren.dev/core/event), and
-[the `telemetry` API reference](https://pkg.go.dev/arkoren.dev/core/service/telemetry).
+## Privacy Boundaries
+
+Mail's facade telemetry omits addresses, subject, text/HTML, attachment names and
+bytes, headers, error text, and receipt ID. Events omit message content and
+addresses; success events deliberately retain the opaque receipt, while failure
+events retain only a fixed class and counts.
+
+Those omissions do not redact the separate error returned by `Send`, data in
+your context, native-client diagnostics, or the Log driver's records. A returned
+error can quote a rejected recipient or up to part of a provider response.
+Select and redact diagnostics before sending them to logs or alerts, and do not
+attach the raw error chain to a bounded failure event.
+
+Verify application assertions with the [mail fake](../testing/fakes.md#assert-mail),
+[injected failures](../testing/fakes.md#inject-failures), and
+[captured telemetry](../testing/fakes.md#capture-telemetry). These tests can prove
+requested submission and recorded signals, not real provider delivery.
+
+For every function and option, see the
+[`mail` API](https://pkg.go.dev/arkoren.dev/core/service/mail),
+[`event` API](https://pkg.go.dev/arkoren.dev/core/event), and
+[`telemetry` API](https://pkg.go.dev/arkoren.dev/core/service/telemetry).

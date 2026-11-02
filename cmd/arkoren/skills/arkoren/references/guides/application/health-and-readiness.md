@@ -1,196 +1,230 @@
 ---
-title: Application Health and Readiness
-nav: Health and Readiness
-description: Keep unusable instances out of traffic, tune background checks, and inspect cached readiness safely.
+title: Health and Readiness
+description: Control traffic with cached dependency checks while keeping restart and startup decisions separate.
 order: 40
+summary:
+  - Select required dependency checks and distinguish traffic readiness from liveness and startup completion.
+  - Tune non-overlapping background passes while accounting for cooperative cancellation and stale results.
+  - Inspect cached reports safely and run fresh checks without changing the traffic verdict.
+  - Interpret health-transition events without treating them as every possible cause of unavailability.
 ---
 
-# Application Health and Readiness
+# Health and Readiness
 
-A PostgreSQL outage should remove an unusable instance from traffic, not restart
-every replica. Use **readiness** to decide whether an instance can serve work,
-**liveness** to decide whether it is still running, and a **startup probe** to
-protect initialization from premature restarts.
+A database outage can make requests fail while the service process remains
+healthy enough to recover. Use **readiness** to control traffic, **liveness** for
+restart decisions, and a **startup probe** to give initialization time to finish.
+Restarting every replica does not repair an unavailable shared database.
 
-These examples assume your existing PostgreSQL-backed HTTP service. Add the
-registration and routes during its next startup, inside the synchronous
-[composition](composition.md) you already use. Here, `composer` is the current
-`*application.Composer`, `app` is its application (`composer.App()`), and `routes`
-is your existing `*router.Router`. Import `application` from
-`arkoren.dev/core/application` and `router` from `arkoren.dev/core/http/router`.
-The existing `db` is a `*postgresdatabase.Driver` from
-`arkoren.dev/driver/postgres/postgresdatabase`, with its connection startup and
-cleanup already wired.
+This page assumes an [application coordinator](overview.md) with dependency
+[startup and cleanup](lifecycle-and-ownership.md) already registered. Add checks
+and routes during synchronous composition, before startup begins. Import
+`application` from `arkoren.dev/core/application`.
 
-## Configure readiness for traffic
+## Select Required Checks
 
-### Check only dependencies required to serve work
-
-If requests cannot succeed without PostgreSQL, include it in readiness. Leave
-optional integrations out: an optional shared outage should not remove every
-replica from traffic. Register the driver's context-aware connectivity check:
+Include a dependency when requests cannot succeed without it. Leave optional
+integrations out: otherwise their shared outage can remove every replica from
+traffic. For an existing root `connection *postgresdatabase.Driver` from
+`arkoren.dev/driver/postgres/postgresdatabase`, register its connectivity check:
 
 ```go
-composer.Check("database", db.Ping)
+composer.Check("inventory-database", connection.Ping)
 ```
 
-Registration does not call `Ping`. After all composition and startup hooks
-finish, background checks begin. `Start` does not wait for their results. A nil
-callback result means passing; an error or panic means failing. A failed check
-makes the instance unready without failing `Start`, changing liveness, or
-triggering runner-failure shutdown.
+Registration does not call `Ping`. After composition and all startup hooks
+succeed, a background loop begins checking. `Start` does not wait for its first
+result. Nil means passing; an error or panic means failing. A failed check
+changes readiness, not startup success, liveness, or runner-failure supervision.
+The loop continues so a later successful pass can restore traffic.
 
-Register checks only during synchronous composition, never from startup hooks,
-requests, or later goroutines. Use nonempty, application-wide unique names and
-nonnil callbacks; invalid registration panics. See
-[`Composer.Check`](https://pkg.go.dev/arkoren.dev/core/application#Composer.Check)
-for validation errors. If you write a custom network check, propagate its context
-and close any received response body; in-memory dependencies need no connectivity
-check.
+Check names must be nonempty and application-wide unique; callbacks must be
+nonnil. Invalid registration panics with `ErrNilFunc` or `ErrDuplicateCheck`.
+Register only during synchronous composition, not in startup, requests, or later
+goroutines; invalid phases panic with `ErrInvalidPhase`. Custom network checks
+must propagate their context and close response bodies. In-memory dependencies
+need no connectivity check.
 
-### Mount probes where the platform can reach them
+## Mount Probes
 
-Probe handlers have no built-in authentication. Use `routes` on a listener with
-restricted network access that your platform can still reach. Kubernetes HTTP
-probes normally connect to the pod IP: changing the probe port does not make a
-loopback-only listener reachable. Keep
-[sensitive diagnostics](../observability/exposing-diagnostics.md) on loopback
-with port forwarding or behind authentication instead.
+Probe handlers have no built-in authentication. Mount them on a listener with
+restricted network access that your platform can reach. Kubernetes HTTP probes
+normally connect to the pod IP; a different port does not make a loopback-only
+listener reachable. Keep sensitive
+[diagnostics](../diagnostics/capture-setup.md) on loopback with port forwarding
+or behind authentication and authorization instead.
 
-During router composition, mount the application-owned handlers:
+With `app := composer.App()` and an existing `routes *router.Router` from
+`arkoren.dev/core/http/router`, mount the three application-owned handlers:
 
 ```go
-routes.Get(application.LivePath, app.LiveHandler())       // /livez
-routes.Get(application.ReadyPath, app.ReadyHandler())     // /readyz
-routes.Get(application.StartupPath, app.StartupHandler()) // /startupz
+routes.Get(application.ReadyPath, app.ReadyHandler())
+routes.Get(application.LivePath, app.LiveHandler())
+routes.Get(application.StartupPath, app.StartupHandler())
 ```
 
-Each returns `200` with `ok\n` or `503` with `unavailable\n`. None runs a
-dependency check; readiness reads the latest completed background pass.
+The paths are `/readyz`, `/livez`, and `/startupz`. Each returns `200` with
+`ok\n` or `503` with `unavailable\n`. None calls a dependency on request; polling
+readiness more often does not cause more database calls.
 
-- Use `/readyz` to control traffic. It succeeds when the application is live and
-  its cached checks are passing and fresh. Without registered checks, readiness
-  equals liveness.
-- Use `/livez` for restart decisions. It succeeds while the application is
-  running, no runner failure is recorded, and the runner group has not finished.
-  A database failure alone does not change it.
-- Use `/startupz` to protect initialization. It succeeds once startup completes,
-  **without waiting for health checks**, and remains successful during and after
-  shutdown if its listener remains reachable.
+| Probe | Success Means | Platform Use |
+| --- | --- | --- |
+| Readiness | The application is live and its cached checks pass and remain fresh. Without checks, readiness equals liveness. | Admit traffic. |
+| Liveness | The application is running, no runner failure is recorded, and the runner group has not finished. | Decide whether to restart. |
+| Startup | Startup completed, without waiting for checks. | Protect initialization from premature restarts. |
 
-Before startup completes, all three return `503`. Shutdown immediately makes
-liveness and readiness return `503`; no verdict keeps a stopped listener
-reachable. Never configure readiness as a restarting probe: restarting replicas
-does not repair their shared database. Set the platform's probe paths and
-shutdown grace period using the [deployment guide](../first-steps/deploying.md#health-probes).
+Before startup completes, all return `503`. Shutdown makes liveness and readiness
+unavailable immediately. The startup probe stays successful during and after
+shutdown following successful startup, if its listener remains reachable. No
+verdict keeps a stopped listener reachable. A database-check failure alone does
+not change liveness, while a runner failure does even if cached checks pass.
+Configure your platform's [health probes](../first-steps/deploying.md#health-probes)
+accordingly; never use readiness as a restarting probe.
 
-If these routes belong in your OpenAPI document, pass `application.LiveOperation`,
-`ReadyOperation`, or `StartupOperation` as the corresponding route's third
-argument. These [built-in annotations](../openapi/built-in-handlers.md) describe
-responses only; they do not mount routes, enable details, or provide access control.
+If you include probes in OpenAPI, pass `application.ReadyOperation`,
+`LiveOperation`, or `StartupOperation` as the corresponding route's third
+argument. These [annotations](../openapi/built-in-handlers.md) describe responses;
+they do not mount handlers, enable details, or apply access control.
 
-## Tune timing only when needed
+## Tune Check Timing
 
-Readiness is a continuing observation, not a one-time startup gate. With checks
-registered, it is pending (`503`) until the first pass completes. A passing pass
-makes a live application ready; a failing pass makes it unready; a later passing
-pass restores readiness without a restart. A cached result stays fresh through
-three intervals of age. An older result makes readiness `503`, even if every
-cached check passed. Results interrupted by shutdown are discarded.
+With checks registered, readiness remains pending until the first completed
+passing pass. A failure makes it unavailable; a later passing pass restores it
+without restarting. A cached result remains fresh through three intervals of age.
+Older results make readiness unavailable even if their individual checks passed.
+Results interrupted by shutdown are discarded.
 
-The first background pass starts immediately after startup. Later passes follow
-an interval ticker, not a full interval after the previous pass finishes. For
-example, a 400 ms pass on a one-second interval normally starts its next pass one
-second after the first started, not 1.4 seconds later. Checks within a pass run
-concurrently, but the pass waits for every callback, and background passes never
-overlap. A slow pass therefore delays later observations. Polling `/readyz` more
-often does not add database calls or make its verdict fresher.
+The first pass starts immediately after startup. Later passes follow an interval
+ticker, not a full interval after completion. A 400 ms pass on a one-second
+interval normally starts its next pass one second after the first began, not
+1.4 seconds later. Checks in a pass run concurrently; the pass waits for all of
+them, and background passes never overlap. Slow callbacks delay later observations.
 
 Keep the defaults unless dependency latency or your traffic-removal budget needs
 different timing. The interval defaults to five seconds; the timeout defaults to
-two fifths of the configured interval (two seconds by default). Change
-[`ReadinessInterval`](https://pkg.go.dev/arkoren.dev/core/application#Builder.ReadinessInterval)
-and [`ReadinessTimeout`](https://pkg.go.dev/arkoren.dev/core/application#Builder.ReadinessTimeout)
-in your existing application construction settings, not on the running `app`.
+two fifths of the configured interval, or two seconds by default. To use a shorter
+cadence, set both during construction (`time` is the standard library package):
+
+```go
+app := application.New(func(app *application.Builder) {
+	app.ReadinessInterval(2 * time.Second)
+	app.ReadinessTimeout(500 * time.Millisecond)
+})
+```
+
 Zero or negative selects the respective default. Keep the timeout shorter than
-the interval.
+the interval. These settings are not setters on a running application.
 
 > [!WARNING]
-> A timeout cancels the pass context, not callback code. Checks that ignore
-> cancellation prevent completion and delay later passes and shutdown. Keep checks
-> lightweight, honor cancellation, and return an error when canceled. Returning
-> nil after the deadline is not automatically converted into failure.
+> Timeouts cancel the pass context, not callback code. A check that ignores
+> cancellation prevents completion and delays later passes and shutdown. Keep
+> checks lightweight, honor cancellation, and return an error when canceled.
+> Returning nil after the deadline is not automatically converted into failure.
 
-## Inspect readiness before running fresh checks
+## Inspect Cached Results
 
-### Read the cached verdict
+When traffic stops reaching an instance, request `/readyz?verbose` on the
+restricted probe listener first. It returns JSON with the plain probe's status
+and no new dependency calls. Presence of `verbose` selects JSON regardless of
+its value, including `false`. A failed check normally appears as:
 
-When traffic stops reaching an instance, first request `/readyz?verbose` on the
-restricted probe listener. It returns a JSON report with the same HTTP status as
-the plain readiness probe and makes no new dependency calls. Check names and
-passing/failing statuses show which dependency failed; the report also explains
-when the application is not live, has no completed pass, or has a stale result.
-A stale report can still show passing checks, so inspect the overall verdict too.
+```json
+{
+  "status": "unavailable",
+  "checked_at": "2026-11-01T09:00:00Z",
+  "checks": {
+    "inventory-database": {
+      "status": "failed",
+      "error": "reason withheld"
+    }
+  }
+}
+```
 
-Plain and verbose probe responses both set `Cache-Control: no-store` and
+The timestamp identifies the completed observation, not the request time. Reports
+also explain `not live`, `no health pass completed`, and `health result stale`.
+A stale report can still show passing checks; inspect the overall status and
+reason. Plain and verbose probes set `Cache-Control: no-store` and
 `X-Content-Type-Options: nosniff`.
 
-Failed checks report `reason withheld` by default. Enable
-[`HealthDetails(true)`](https://pkg.go.dev/arkoren.dev/core/application#Builder.HealthDetails)
-during construction only where access is restricted to authorized operators:
-errors can expose addresses and connection details. Check names remain visible
-with details disabled. Actual errors are logged on failure transitions regardless
-of this setting, so restrict access to those logs too.
+Keep `HealthDetails` disabled unless every affected endpoint is operator-protected.
+For an operator-restricted deployment, enable details during construction:
 
-The same setting governs cached and fresh MCP health reports, `healthy` results,
-and check details in fail-fast condition failures. Protect all affected endpoints
-before enabling it. It does not redact trusted in-process results from `Checks`,
-`RunChecks`, or `CheckHealth`, or the errors passed to event listeners.
+```go
+app := application.New(func(app *application.Builder) {
+	app.HealthDetails(true)
+})
+```
 
-Inside your process, `app.Checks()` returns a copy of the cached results in
-registration order without contacting dependencies. It returns nil before the
-first completed pass and when no checks exist. The
-[`CheckStatus` reference](https://pkg.go.dev/arkoren.dev/core/application#CheckStatus)
-defines the observation and transition timestamps. For exact JSON fields, query
-parameter behavior, and report edge cases, see
-[`ReadyHandler`](https://pkg.go.dev/arkoren.dev/core/application#Application.ReadyHandler).
-For remote investigation, use [Diagnosing an
-Application](../observability/diagnosing-an-application.md).
+This includes backend error text, which can reveal addresses and connection
+details. Names remain visible when details are disabled. Actual errors are logged
+on failure transitions regardless of this setting; protect those logs too.
 
-### Run a fresh check for an admin command or test
+The setting also governs cached and fresh MCP health reports, `healthy` results,
+and check details in fail-fast condition failures. It does not redact trusted
+in-process `Checks`, `RunChecks`, or `CheckHealth` results, or event payloads.
+Protect all affected remote endpoints before enabling it.
 
-If you need to know whether PostgreSQL is reachable now, rather than what the
-traffic probe last observed, run fresh checks. With your existing started `app`
-and a caller context `ctx` carrying a deadline:
+Inside the process, inspect cached typed records without contacting dependencies.
+With the existing `app` and the standard library `fmt` package:
+
+```go
+for _, status := range app.Checks() {
+	fmt.Println(status.Name, status.Err == nil, status.CheckedAt)
+}
+```
+
+`Checks` returns copied records in registration order; error values remain shared.
+It returns nil before the first completed pass and when no checks exist.
+`CheckedAt` is the latest pass's completion time; `Since` records the first
+observation or latest passing/failing transition. Use
+[application diagnosis](../diagnostics/application-diagnosis.md) for remote
+investigation, and the
+[`ReadyHandler` contract](https://pkg.go.dev/arkoren.dev/core/application#Application.ReadyHandler)
+for report edge cases.
+
+## Run Fresh Checks
+
+An admin command or test may need the dependency's current state rather than the
+cached traffic verdict. With an already started `app` and a caller context `ctx`
+carrying a deadline:
 
 ```go
 err := app.CheckHealth(ctx)
 ```
 
-A nil error means all registered checks passed; a nonnil error joins the failed
-checks in registration order, prefixed with `health` and each check name. Treat
-that error as the admin command's failed dependency verdict, not as an application
-startup error. If you need individual passing and failing results instead, use
-[`app.RunChecks(ctx)`](https://pkg.go.dev/arkoren.dev/core/application#Application.RunChecks).
+Nil means every registered check passed. Otherwise the error joins failed checks
+in registration order, each prefixed with `health` and its name. This is the
+command's dependency verdict, not an application startup error. Use
+`app.RunChecks(ctx)` if you need individual passing and failing `CheckStatus`
+records; their `Since` is zero because a fresh run has no transition history.
 
-Both methods run checks concurrently with the configured readiness timeout in
-addition to the caller's deadline, and both still wait for every callback to
-return. They do not start dependencies, update cached readiness, or publish
-health-transition events. Calling before composition cannot see checks that
-composition has not registered yet. A fresh success therefore does not itself
-restore traffic: the next successful background pass does.
+Both methods run checks concurrently with the configured readiness timeout and
+the caller's deadline, and wait for every callback to return. They start no
+dependencies, update no readiness cache, and publish no transition events. Calling
+before composition cannot see checks not yet registered. A fresh success does
+not restore traffic; the next passing background observation does.
 
-Test callbacks directly for their own behavior. To verify wiring, compose and
-start the application before running fresh checks, and arrange shutdown even if
-an assertion fails. To verify cached readiness transitions instead, use
-`testing/synctest`, not fixed sleeps; fresh-check assertions do not test the cache.
+Test callbacks directly for their behavior. For wiring tests, compose and start
+the application before fresh checks and arrange shutdown even if assertions fail.
+For cached transitions, use `testing/synctest` rather than fixed sleeps: a fresh
+check assertion does not exercise the readiness cache.
 
-Background logs identify failure and recovery transitions rather than repeating
-every verdict. If you need alerts, the corresponding
-[`CheckFailed` and readiness events](https://pkg.go.dev/arkoren.dev/core/application#CheckFailed)
-describe completed background-pass transitions, not every cause of `503`:
-staleness, lifecycle changes, and fresh checks do not publish them. Send error
-details only to authorized destinations. Observer errors are logged without
-changing lifecycle success; use
-[lifecycle observation](lifecycle-and-ownership.md#observe-outcomes-without-controlling-them)
-when choosing observers rather than hooks.
+## Observe Transitions
+
+Background logs record failure and recovery transitions, not every repeated
+verdict. `CheckFailed` fires for a first failing observation or a change from
+passing to failing; `CheckRecovered` fires after a failing check passes.
+`Ready` and `Unready` report the first completed pass's verdict and later changes
+to whether all checks pass. These events describe background observations,
+independently of lifecycle liveness.
+
+Staleness, lifecycle changes, and explicit fresh checks publish none of these
+events, so events alone cannot explain every `503`. Health payloads are trusted
+in-process data; send errors only to authorized destinations, and do not mutate
+shared payload slices. Listener failures are logged without changing lifecycle
+success. Choose [observers rather than hooks](lifecycle-and-ownership.md#observe-outcomes)
+when alerts must not control startup or shutdown.
+
+For check records, probe handlers, and settings, see the
+[`application` API reference](https://pkg.go.dev/arkoren.dev/core/application).

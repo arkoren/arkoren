@@ -1,68 +1,101 @@
 ---
-title: Browser Security Overview
-nav: Overview
-description: Choose browser protections for framing, cross-origin response access, and forged state-changing requests.
+title: Overview
+description: Choose browser defenses for response handling, cross-origin access, and forged cookie-backed actions.
 order: 10
+summary:
+  - Distinguish response policies, cross-origin response access, and forged cookie-backed actions.
+  - Place browser defenses at router or group scope without replacing identity and permission checks.
+  - Test browser headers and rejected actions rather than relying on ordinary server requests.
 ---
 
-# Browser Security Overview
+# Overview
 
-## Introduction
+A visitor can stay signed in to your application while browsing an untrusted
+site. That site might frame your account page, try to read your API, or submit
+a request with cookies the browser attaches automatically. Browser security
+policies address these different interactions; no single policy covers them all.
 
-A signed-in visitor can open an untrusted page while your application is still
-open. Browser security controls limit how that page interacts with your service
-and how the browser handles your responses. Response headers, CORS, and CSRF
-protection address different risks; enabling one does not replace the others.
+These defenses do not identify the caller or grant access to a resource. Keep
+[authentication](../authentication/overview.md) and
+[authorization](../authorization/overview.md) on protected operations, including
+requests from trusted browser origins and non-browser clients.
 
-These controls do not establish identity or permissions. Use
-[authentication](../authentication/overview.md) to identify the caller and
-[authorization](../authorization/overview.md) to decide what they can do.
-Non-browser clients are not constrained by browser response policies.
+## Choose Defenses
 
-## Choosing protections
+An **origin** is a scheme, host, and optional port. A page at
+`https://portal.example.com` has a different origin from an API at
+`https://api.example.com`, even though both belong to your organization.
+Choose each defense for the interaction it controls:
 
-Start with [secure headers](secure-headers.md) on your router. Their defaults
-prevent framing and content-type guessing and restrict referrer disclosure.
-HSTS is opt-in after you establish HTTPS deployment. The default Content Security Policy only
-prevents framing; applications serving HTML need a policy that also matches
-their scripts, styles, and other resources.
+| Interaction | Defense | Boundary |
+| --- | --- | --- |
+| Another site embeds your page, or a browser guesses its content type | [Secure headers](secure-headers.md) | Response headers instruct the browser how to handle your content. |
+| Your separate browser front end needs to read API responses | [CORS](cors.md) | Permission headers tell browser code which cross-origin responses it may access. |
+| Another site submits an action using the visitor's cookies | [CSRF protection](csrf-protection.md) | Request-header checks reject unsafe cross-origin browser requests before application work. |
 
-If your service accepts browser session cookies, add
-[CSRF protection](csrf-protection.md) before authentication and state-changing
-handlers. Cross-site request forgery means an untrusted page causes a browser
-to submit an action with the visitor's cookies. Arkoren checks browser origin
-headers without requiring form tokens. Keep `GET` and `HEAD` free of side
-effects: the CSRF middleware allows those methods through.
+Start with secure headers. Their defaults forbid framing, disable content
+sniffing, and restrict referrer disclosure. The default Content Security Policy
+only forbids framing: HTML applications need a resource-loading policy suited to
+their pages. Enable HSTS only after establishing a lasting HTTPS deployment.
 
-Configure [CORS](cors.md) if a browser application on another origin needs to
-read your API responses. An origin consists of a scheme, host, and optional
-port. List the origins, methods, and headers that application needs; allow
-credentials only for explicitly trusted origins. Same-origin browser requests
-do not need CORS permission.
+Add CSRF protection wherever browser cookies authorize actions. Keep `GET`,
+`HEAD`, and `OPTIONS` free of state changes because the checker always allows
+them. Configure CORS only when a different browser origin needs response access;
+same-origin requests do not need CORS permission.
 
-## Cross-origin access is not permission to act
+CORS is not a write barrier. A disallowed origin can still reach a handler
+without permission headers, and a forged form submission can cause damage
+without reading its response. Conversely, a trusted CSRF origin does not gain
+permission to read responses. A separate cookie-backed front end can need both
+policies, plus authentication and resource authorization.
 
-CORS governs what browser code can read. A request from a disallowed origin
-can still reach your handler without CORS response headers, and a cross-site
-form can cause damage without reading the response. Use CSRF protection for
-cookie-authenticated actions even when your CORS policy is restrictive.
+## Place Policies
 
-Conversely, trusting an origin in the CSRF policy does not let its JavaScript
-read responses. A separate browser front end may need both an explicit CORS
-policy and a trusted CSRF origin. Neither policy grants access to protected
-application data; authentication and authorization still apply.
+Apply shared response headers at router scope so they also cover unmatched
+requests. With a fresh `routes` router and
+`arkoren.dev/core/http/middleware/secureheaders` imported:
 
-## Applying and checking the controls
+```go
+routes.Use(secureheaders.Middleware())
+```
 
-Follow [middleware ordering](../http-fundamentals/middleware.md#ordering) when
-combining these controls. CORS preflights must run before authentication so
-the browser can ask permission without credentials. Keep any CSRF bypass
-limited to routes with their own verification, such as signed webhook receivers.
+For account settings authorized by cookies, apply CSRF protection before the
+group's authentication and handlers. Import `arkoren.dev/core/http/router` and
+`arkoren.dev/core/http/middleware/csrf`; `requireAccount` is your authentication
+middleware and `changeEmail` is your existing authorized handler:
 
-Check response headers in a browser, test allowed and disallowed origins, and
-assert that blocked state-changing requests leave application data untouched.
-An ordinary test request without browser headers does not exercise the CSRF
-boundary; use the browser headers shown in the [CSRF tests](csrf-protection.md#testing).
+```go
+routes.Group("/account", func(account *router.Router) {
+	account.Use(csrf.Middleware(), requireAccount)
+	account.Post("/email", changeEmail)
+})
+```
 
-For excessive traffic and automated submissions, combine these controls with
-[abuse prevention](../abuse-prevention/overview.md).
+The group inherits the router headers; the CSRF policy does not affect unrelated
+routes. If `requireAccount` uses sessions, install the
+[session middleware](../http-capabilities/sessions.md#enable-sessions) before
+it. Register middleware before routes and choose
+[scope](../http-fundamentals/middleware.md#choose-scope) deliberately: signed
+webhook receivers outside this group need their own request verification.
+
+If you add CORS, place it before authentication and body checks so allowed
+preflights can finish without credentials. Place secure headers outside CORS
+if preflight responses also need those headers. See
+[policy ordering](../http-fundamentals/middleware.md#order-policies) for the
+execution model.
+
+## Verify Boundaries
+
+Check headers on successful responses and errors, then test CORS with allowed
+and disallowed origins. A successful server-side test alone does not prove that
+a browser can read a response; browser permission headers must also match.
+
+For CSRF tests, send cross-site browser headers and assert that rejection leaves
+application state unchanged. Requests without `Sec-Fetch-Site` or `Origin` pass
+the CSRF checker; that is compatibility behavior, not evidence of identity.
+Use the focused [rejection test](csrf-protection.md#test-rejection) to exercise
+the actual boundary.
+
+Begin with [Secure Headers](secure-headers.md) to establish the shared response
+policy. For traffic volume and automated submissions, use
+[abuse prevention](../abuse-prevention/overview.md) as a separate defense.

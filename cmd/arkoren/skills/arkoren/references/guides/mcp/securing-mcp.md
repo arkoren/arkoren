@@ -1,105 +1,118 @@
 ---
 title: Securing MCP
-description: Authenticate callers before dispatch and enforce TLS, Host, Origin, and remote OAuth boundaries outside the MCP adapter.
+description: Protect the MCP HTTP boundary with verified identity, TLS, Host and Origin policy, and deliberate OAuth integration.
 order: 40
+summary:
+  - Protect the HTTP endpoint with TLS, Host and Origin policy, and a verified typed user.
+  - Distinguish endpoint admission, browser CORS, and cookie CSRF protection.
+  - Bound execution and integrate remote OAuth without exposing private admission diagnostics.
 ---
 
 # Securing MCP
 
-## Introduction
+A private MCP tool needs an authenticated caller before protocol dispatch.
+`mcpserver` verifies no credentials and issues no tokens: keep admission in your
+HTTP service. Tool availability decides which operations to offer after admission;
+shared application services still authorize the records those operations use.
 
-The [first server](first-server.md) exposes a fixed status result on loopback.
-Private tools need an authenticated caller before protocol dispatch. Keep that
-boundary in your existing HTTP service: `mcpserver` verifies no credentials and
-issues no tokens. Tool availability and resource authorization build on this
-identity; neither replaces HTTP admission.
+The [first server](first-server.md) intentionally exposes only a fixed public
+label on loopback. Do not replace that result with private data without adding
+the boundaries below.
 
-The snippets use `auth` from `arkoren.dev/core/http/auth`, `gate` from
-`arkoren.dev/core/http/auth/gate`, `router` from `arkoren.dev/core/http/router`,
-`cors` from `arkoren.dev/core/http/middleware/cors`, `csrf` from
-`arkoren.dev/core/http/middleware/csrf`, and standard packages `context` and
-`net/http`. `User` is your application's existing identity type.
+## Transport Boundary
 
-## Require your typed application user
+Keep private tools on a private network or loopback listener, and use TLS whenever
+credentials cross a network. Before remote deployment, enforce allowed external
+Host values and validate Origin using your gateway or outer HTTP middleware.
+Bearer authentication does not replace Origin validation.
 
-Use your existing [bearer authenticator](../authentication/api-tokens.md).
-Here `verifyAccessToken` is your application's verifier with signature
-`func(context.Context, string) (User, error)`. It validates the credential and
-resolves your application `User`, not merely decoded claims. Authenticate requests
-before dispatching to the checked `endpoint` from
-[MCP Tools](tools.md#register-and-mount-explicitly):
+The pinned SDK enables localhost DNS-rebinding protection: requests arriving
+through a loopback local address with a non-localhost Host receive 403. This is
+not a public-host allowlist. The adapter does not enable the SDK's optional
+cross-origin protection, so your outer Origin policy remains necessary.
+
+With `router` imported from `arkoren.dev/core/http/router`, adapt your existing
+`boundary func(http.Handler) http.Handler` before authentication and mounting:
 
 ```go
 routes := router.New()
+routes.Use(router.HTTPMiddleware(boundary))
+```
+
+Here `boundary` is application-owned middleware enforcing the deployment's
+Host and Origin policy, not an Arkoren API. Behind a proxy, establish which
+component validates the external values and trust forwarded headers only from
+that proxy. A private proxy address alone does not make client headers trusted.
+
+## Typed Authentication
+
+Use your existing [bearer verifier](../authentication/api-tokens.md) to resolve
+the application's user, not merely decode claims. Assume `User` is your identity
+type and `verifyAccessToken` has signature
+`func(context.Context, string) (User, error)`.
+
+Import `arkoren.dev/core/http/auth` and add authentication to the router above
+before mounting the checked `endpoint` from [tool registration](tools.md#endpoint-registration):
+
+```go
 routes.Use(auth.Middleware(auth.Bearer(verifyAccessToken)))
 routes.Use(auth.Require[User]())
 routes.Mount("/mcp", endpoint)
 ```
 
-Serve `routes` using your existing server lifecycle. Configure middleware before
-mounting. `auth.Middleware` stores the
-verified `User` but permits anonymous requests when credentials are absent;
-`auth.Require[User]()` rejects those requests. Invalid credentials fail
-authentication. The router mount and adapter preserve the request context for
-`auth.FromContext[User]`, availability policies, and handlers.
+`auth.Middleware` stores a verified `User`, but permits anonymous requests when
+credentials are absent. `auth.Require[User]()` rejects those requests. Invalid
+credentials fail authentication. Configure middleware before `Mount` and serve
+the router through your existing HTTP lifecycle.
 
-Use the same concrete identity type everywhere. `User`, `*User`, and a separate
-identity type do not share an authentication slot; a mismatched lookup fails
-closed. If you already use `net/http` authentication middleware, keep it: reject
-anonymous requests and inject the verified user with `auth.NewContext` before
-calling the endpoint. Do not introduce another bearer parser solely for MCP.
+The mount and adapter preserve request context for policies and handlers.
+`auth.FromContext[User]` must use the exact concrete type stored at admission:
+`User` and `*User` occupy different slots. Mismatched lookups fail closed.
 
-## Restrict admission when needed
+If existing `net/http` middleware already verifies callers, retain it. Reject
+anonymous requests and inject the verified identity with `auth.NewContext`
+before calling the endpoint rather than adding another MCP-specific bearer
+parser.
 
-If only some authenticated users may reach MCP at all, add an existing Gate rule
-after authentication and before `Mount`:
+## Endpoint Admission
+
+Authentication need not grant everyone access to MCP. If your application has
+an endpoint-wide rule, import `arkoren.dev/core/http/auth/gate` and insert it
+after authentication but before the mount:
 
 ```go
 routes.Use(gate.Require(canUseMCP))
 ```
 
-`canUseMCP` has signature `func(context.Context, User) (bool, error)`.
-This endpoint-wide decision does not authorize individual tools or records.
-Continue with [Availability and Authorization](availability-and-authorization.md)
-for plan/administrator capabilities and ownership checks in shared services.
+`canUseMCP` is your existing `func(context.Context, User) (bool, error)` rule.
+This admits a caller to the whole endpoint; it does not authorize individual
+tools or records. [Capability Access](availability-and-authorization.md) handles
+those separate decisions.
 
-## Protect credentials and browser requests
+## Browser Access
 
-Keep private tools on a private network or loopback listener. Use TLS whenever
-credentials cross a network. Before public deployment, enforce an allowlist of
-external Host values and validate Origin at the outer HTTP boundary, using your
-existing gateway or application middleware.
-
-For example, if `allowedHost` is your existing middleware with signature
-`func(http.Handler) http.Handler`, add it before the other middleware and before
-mounting:
-
-```go
-routes.Use(router.HTTPMiddleware(allowedHost))
-```
-
-Bearer-only authentication does not need [CSRF protection](../browser-security/csrf-protection.md):
-browsers do not attach the `Authorization` header automatically. MCP's Origin
-validation is a separate transport boundary; keep it in your gateway or outer
-HTTP middleware even when authentication uses bearer tokens.
-
-If a trusted browser application calls MCP from another origin, configure
-[CORS](../browser-security/cors.md) before authentication and mounting:
+For a trusted browser application on another origin, configure
+[CORS](../browser-security/cors.md) before authentication and mounting. With
+`cors` from `arkoren.dev/core/http/middleware/cors` and standard `net/http`:
 
 ```go
 routes.Use(cors.Middleware(func(policy *cors.Builder) {
 	policy.AllowedOrigins("https://app.example.com")
 	policy.AllowedMethods(http.MethodPost)
-	policy.AllowedHeaders("Accept", "Content-Type", "Authorization", "MCP-Protocol-Version")
+	policy.AllowedHeaders("Accept", "Content-Type", "Authorization", "MCP-Protocol-Version", "Mcp-Method", "Mcp-Name")
 }))
 ```
 
-CORS answers preflights before authentication and lets that origin read
-responses. It does not reject requests from disallowed origins, so it does not
-replace the outer Origin policy.
+This is inserted before the authentication block, not after the completed
+mount. CORS answers preflights and lets the trusted browser read responses;
+it does not reject requests from disallowed origins. Keep the outer Origin
+policy. The `Mcp-Method` and `Mcp-Name` headers support newer protocol clients.
 
-If the endpoint also accepts session cookies, add CSRF protection before
-authentication. Trust the same browser origin if it needs cross-origin access:
+A bearer-only endpoint does not rely on browser-attached credentials, so it
+does not need cookie CSRF protection. If the endpoint also accepts session
+cookies, add [CSRF protection](../browser-security/csrf-protection.md) before
+authentication. Import `arkoren.dev/core/http/middleware/csrf` and trust only
+the browser origin that needs access:
 
 ```go
 routes.Use(csrf.Middleware(func(protection *csrf.Builder) {
@@ -107,58 +120,64 @@ routes.Use(csrf.Middleware(func(protection *csrf.Builder) {
 }))
 ```
 
-Unlike bearer tokens, cookies can accompany forged browser requests. CORS alone
-does not stop those requests from changing state.
+Cookies can accompany forged browser requests, so CORS alone does not prevent
+their effects. If you intentionally permit credentialed cross-origin browser
+requests, also configure `policy.AllowCredentials(true)` in the CORS callback
+and an appropriate cookie policy; never combine credentials with a wildcard
+origin.
 
-The pinned SDK's localhost DNS-rebinding protection remains enabled: when the
-local connection address is loopback, a non-loopback Host receives 403. This is
-not a public-host allowlist. Behind a proxy, decide which component validates
-the external Host and Origin, and trust forwarded headers only from that proxy.
-The adapter does not enable the SDK's optional cross-origin protection; keep
-your outer policy in place.
+## Execution Bounds
 
-## Bound request work
+Retain listener header/read/write/idle timeouts and set operation deadlines in
+outer middleware or application services. The adapter has no tool-duration
+option. Pass request context into dependencies: a write timeout or client
+disconnect is not a universal guarantee that work stops, and cancellation
+does not undo completed effects.
 
-Keep listener read/header/write/idle timeouts and set execution deadlines in
-outer middleware or services. The adapter has no tool-duration setting. Pass
-request context into dependencies: write timeouts and disconnected clients are
-not universal cancellation guarantees, and cancellation does not roll back
-completed effects. The [transport reference](tools.md#transport-and-protocol-versions)
-defines body limits and protocol-version-dependent disconnect behavior.
+The [transport contract](tools.md#transport-behavior) specifies the 4 MiB body
+limit and protocol-dependent disconnect cancellation. Configure any stricter
+body limit at your gateway or HTTP boundary. Managed error redaction protects
+tool responses, not arbitrary admission responses or application logs.
 
-## Recognize the remote OAuth boundary
+## Remote OAuth
 
-The bearer example assumes a client already has a valid token. It is not a
-complete remote MCP OAuth deployment. Remote clients can also require protected
-resource metadata and OAuth bearer challenges. Publish those separately and
-use an authorization server that issues tokens for your resource.
+The bearer example assumes a client already has a token. A remote MCP OAuth
+deployment also needs protected resource metadata, bearer challenges, and an
+authorization server issuing tokens for this resource. A login flow or a
+token verifier alone is not that complete integration.
 
-`oauthauth.Client.Verify` in `arkoren.dev/driver/oauth/oauthauth` verifies OIDC
-bearer access tokens with configured audiences and returns `oauthauth.Identity`.
-Map that identity to your application `User` when your policies expect `User`;
-the [OIDC bearer guide](../authentication/oidc-bearer.md) explains the
-verification boundary. This driver is not a token issuer or complete MCP
-authorization integration.
+`oauthauth.Client.Verify` from `arkoren.dev/driver/oauth/oauthauth` verifies
+OIDC bearer access tokens with configured audiences and returns
+`oauthauth.Identity`. Map it to your application `User` if your policies expect
+that type; the [OIDC bearer guide](../authentication/oidc-bearer.md) owns verifier
+configuration and lifecycle. The driver is neither a token issuer nor a complete
+MCP authorization server.
 
-For native SDK OAuth integration, the pinned SDK provides `auth.RequireBearerToken`
-and `auth.ProtectedResourceMetadataHandler` in
-`github.com/modelcontextprotocol/go-sdk/auth`. Configure a real token verifier,
-the resource metadata, and its authorization servers. These are outer HTTP
-components, not `mcpserver.Builder` settings. Preserve their required challenges.
+For native integration, the pinned SDK provides `RequireBearerToken` and
+`ProtectedResourceMetadataHandler` in
+`github.com/modelcontextprotocol/go-sdk/auth`. These are outer HTTP components,
+not `mcpserver.Builder` settings. Configure a real token verifier, accurate public
+resource metadata, and authorization-server URLs. Preserve required
+`WWW-Authenticate` challenges rather than replacing them with ordinary JSON
+authentication errors.
 
-Before managed dispatch, map verified `TokenInfo` from `TokenInfoFromContext` to
-your application user. SDK token information alone does not populate
-`core/http/auth`'s typed identity. The SDK requires nonzero token expiration by
-default. If endpoint admission requires OAuth scopes, configure them in
-`auth.RequireBearerTokenOptions.Scopes`; advertising supported scopes in resource
-metadata does not enforce them. Neither endpoint scope checks nor metadata
-authorize access to an individual invoice: keep those checks in the shared
-application service.
+SDK `TokenInfo` is separate from Arkoren's typed user context. Before managed
+dispatch, read it with `TokenInfoFromContext`, resolve your application user,
+and inject that user with `core/http/auth.NewContext`. Require the exact identity
+type your tool policies use. The SDK requires nonzero token expiration by
+default. Enforce endpoint scopes with `RequireBearerTokenOptions.Scopes`;
+advertising supported scopes in metadata does not enforce them.
 
-The [CLI connection guide](../cli/connecting.md)
-shows how to supply an existing bearer token. The CLI does not log in or refresh
-tokens for you.
+The SDK's bearer middleware returns verifier error text in HTTP failure
+responses. Return only approved public errors from that verifier and retain
+private diagnostics in protected local logs. Managed ToolError redaction does
+not apply to this earlier boundary. Resource metadata is public configuration,
+not a place for credentials; the SDK metadata handler does not validate its
+fields.
 
-For server construction and exact transport behavior, see the
-[MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver); for typed tool policies,
-see the [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp).
+Neither endpoint scopes nor metadata authorize a particular shipment or invoice.
+Keep resource checks in shared services. The [CLI connection guide](../cli/connecting.md)
+shows how to supply an existing token; the CLI does not log in or refresh it.
+
+For endpoint settings, see the [MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver);
+for tool policy declarations, see the [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp).

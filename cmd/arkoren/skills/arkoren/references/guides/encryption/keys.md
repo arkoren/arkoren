@@ -1,189 +1,147 @@
 ---
 title: Encryption Keys
-nav: Keys
-description: Generate encryption keys, load them from a secret store, rotate them without breaking stored data, and use one key per purpose.
-order: 20
+description: Keep current and previous encryption keys available and rotate writers without losing access to existing ciphertext.
+order: 30
+summary:
+  - Load durable keys without replacing missing material or exposing it in diagnostics.
+  - Configure current and previous drivers and roll out new writers before retiring old keys.
+  - Handle missing historical keys and application versions without assuming ciphertext identifies them.
 ---
 
 # Encryption Keys
 
-## Introduction
+Encrypted data must remain readable after a restart. Provision a persistent key
+once and load it at startup; generating a replacement whenever loading fails
+makes old data unreadable. Anyone who obtains the key can decrypt values made
+with it when the cipher and required authenticated context are known.
 
-Encrypted data must remain readable after a restart or deployment. That requires
-a persistent key: losing it loses access to the data, while anyone who obtains
-it can decrypt values made with it, given any required additional data.
+Use independent keys for different purposes. Separate keys limit the data
+exposed by one leaked key; purpose AAD prevents cross-purpose substitution but
+does not contain a key compromise. Generic key types and encodings belong in
+[Keys Overview](../keys/overview.md), and protected provisioning commands belong
+in [CLI Keys](../cli/keys.md).
 
-Generate the key once, keep it in a secret store, and retain old keys while stored
-values or backups still need them. Rotation lets new writes use a new key without
-immediately making old values unreadable.
+## Loading Keys
 
-## Generating a key
-
-A newly generated key is 32 random bytes, suitable for either driver. Install
-the CLI with `go install arkoren.dev/cmd/arkoren@latest`, then generate once in
-a protected provisioning environment, never on server startup:
-
-```sh
-arkoren key generate shared --out app-key.key
-arkoren key check shared app-key.key
-```
-
-Generation creates a base64 text file with mode `0600`, refuses existing files
-and symlinks, and never modifies `.env`. Validation confirms format and length,
-not entropy or provider connectivity. To intentionally send private material
-to a secret-store pipeline, use `--out -`; otherwise secrets stay off stdout.
-
-If the CLI is unavailable, keep this manual fallback. Protect its stdout and
-store the result securely; it uses the same padded standard base64 format:
-
-```sh
-openssl rand -base64 32
-```
-
-For an application-owned provisioning command, import
-`arkoren.dev/foundation/key` and use the same generator as the CLI:
+Load the persistent key from a protected mounted file or your configured
+[secret store](../secrets/overview.md). Both encryption drivers take a
+`key.Shared`, which validates exactly 32 bytes. With `key` imported from
+`arkoren.dev/foundation/key`, a mounted file can supply the material:
 
 ```go
-material, err := key.GenerateShared()
-encoded := material.Base64()
-```
-
-> [!WARNING]
-> Keep the key in a [secret store](../secrets/overview.md), never in your
-> source code, your container image, or a configuration file that is
-> committed. Back it up like your database: a database backup without its key
-> is unreadable.
-
-## Loading the key at startup
-
-Examples use standard-library `fmt`, `key` from `arkoren.dev/foundation/key`,
-`crypto` from `arkoren.dev/core/service/crypto`, and `aescrypto` from
-`arkoren.dev/driver/aes/aescrypto`.
-
-Read the key once, while the service starts, and build the encrypter from it.
-With a [secret store](../secrets/overview.md) that holds the key as base64
-text, use your existing `secrets` store:
-
-```go
-encoded, err := secrets.String(ctx, "prod/app-key")
+material, err := key.LoadShared("/run/secrets/calendar-key.key")
 if err != nil {
-	return fmt.Errorf("load prod/app-key: %w", err)
-}
-material, err := key.ParseShared(encoded)
-if err != nil {
-	return fmt.Errorf("decode prod/app-key: %w", err)
-}
-driver, err := aescrypto.New(material)
-if err != nil {
-	return fmt.Errorf("configure prod/app-key: %w", err)
+	return err
 }
 ```
 
-A mounted file needs only `material, err := key.LoadShared("app-key.key")`;
-an application-owned environment variable uses
-`key.ParseShared(os.Getenv("APP_KEY"))`. No environment name is implicit.
-Drivers require `key.Shared`, not raw bytes. Import existing bytes through
-`key.NewShared(raw)`; both AES-256-GCM and ChaCha20 require exactly 32 bytes.
-Zero typed values are rejected at construction.
+Fail startup on a missing, unreadable, or malformed key; do not print the file
+contents or generate substitute material. For secret-store text, use
+`key.ParseShared(encoded)` after successfully retrieving the value through your
+configured secret facade. No environment variable or secret name is implicit.
+See [Drivers](drivers.md) for constructing the selected cipher and owning its
+cleanup.
 
-A missing or malformed key stops startup without echoing key contents.
-Key values are immutable; explicit byte exports are detached copies. The driver's
-`Stop` waits for active operations and zeroes only its owned raw key copy, even
-with an ended cleanup context. It does not clear your `key.Shared` value, exported
-bytes, or every internal cipher copy. Go's cipher keeps key material that user
-code cannot clear, so treat process memory as sensitive regardless.
-The drivers' [diagnostic formatting](drivers.md#aes-gcm) protects their constructor
-pointers in ordinary `fmt` diagnostics, not arbitrary serialization, reflection,
-invalid verbs, native objects, or explicit key exports. Do not use it as permission
-to log key material.
+Keep key backups separate from ciphertext backups, with controlled access and
+a tested recovery procedure. Retain any key and context needed by backups for
+their entire retention period. A ciphertext backup without its key is not a
+recoverable backup.
 
-## Rotating keys
+## Selecting Keys
 
-Keys should change from time to time, and at once if one may have leaked.
-Rotation must not break the data already encrypted with the old key, so the
-encrypter accepts **previous keys** that it still decrypts with, but never
-encrypts with. Here `newKey` and `oldKey` are validated `key.Shared` values
-loaded from separate secret-store entries, not base64 strings or raw bytes:
+An encrypter has one **current driver**, used for every encryption, and an
+ordered list of **previous drivers**, used only as decryption fallbacks. This
+is a configured driver ring, not a remotely managed keyring: Arkoren does not
+fetch missing keys, watch secret changes, or switch the current key at runtime.
+
+Import `aescrypto` from `arkoren.dev/driver/aes/aescrypto` and `crypto` from
+`arkoren.dev/core/service/crypto`. Here `newKey` and `oldKey` are validated
+`key.Shared` values loaded from separate protected entries. Build both drivers
+with the context used for their ciphertext:
 
 ```go
-current, err := aescrypto.New(newKey)
-previous, err := aescrypto.New(oldKey)
+purpose := func(encrypter *aescrypto.Builder) {
+	encrypter.AdditionalData([]byte("calendar-credentials:v1"))
+}
+current, err := aescrypto.New(newKey, purpose)
+previous, err := aescrypto.New(oldKey, purpose)
+```
 
+Handle each construction error and register cleanup immediately after each
+successful acquisition. Then publish the facade with the old driver available
+for reads:
+
+```go
 enc, err := crypto.New(current, func(encrypter *crypto.Builder) {
 	encrypter.Previous(previous)
 })
 ```
 
-Decryption tries the current key first, then each previous key in order. New
-values are always encrypted with the current key. `crypto.New` fails if any
-previous driver is nil, so a missing old key stops the service at startup
-rather than leaving data silently unreadable.
+Decryption tries the current driver first, then previous drivers in configured
+order; repeated `Previous` calls append to that order. New values always use
+`current`. The facade copies the driver list, not the driver objects, and is
+immutable after construction. Rebuild it to change the ring.
 
-The encrypter retains the driver objects; it does not stop them for you. Register
-`current.Stop` and `previous.Stop` with your application's shutdown hooks so both
-drivers stop after their consumers. Keep previous drivers available until no
-running consumer needs them.
+Stop every current and previous driver only after all consumers finish. The
+facade does not own their lifecycle. Stopping the current driver alone does
+not prevent fallback decryption through an active previous driver.
 
-A rolling rotation needs two deployments so old instances can read values
-written by new ones:
+## Rotating Keys
 
-1. Generate the new key and store it under a separate secret name. Keep the
-   old key as the current encryption key.
-2. Deploy every reader with the old key current and the new key in its
-   decryption-only previous list. Wait until all readers accept both keys.
-3. Deploy with the new key current and the old key previous. Instances from
-   step 2 can already decrypt values written with the new key.
-4. Re-encrypt stored values with the new key, as described in
-    [Storing Encrypted Data](storing.md#re-encrypting-stored-values).
-5. Once no writer uses the old key and no stored value needs it, remove it
-   from the encrypter. Retain it securely for backups that still need it.
+Rotation changes the key used for future writes. It does not rewrite stored
+values. During a rolling deployment, old instances must be able to read new
+ciphertext before any writer switches keys:
 
-Skipping re-encryption leaves the old key in use for as long as old data
-exists. After a leak, re-encryption protects the replacement ciphertext from
-the old key. It cannot protect copies an attacker already obtained, or old
-backups that still use that key.
+1. Provision the new key under a separate protected name; retain the old key.
+2. Deploy all readers with the old driver current and the new driver in their
+   previous list. Wait until every reader can accept either key.
+3. Deploy the new driver as current and the old driver as previous. Readers
+   from the preceding deployment can already read new writes.
+4. [Re-encrypt stored values](storing.md#re-encrypting-values) and verify that
+   no live writer or stored value still depends on the old driver.
+5. Remove the previous driver from active configuration. Retain its key
+   securely for backups that still need it.
 
-## Separating purposes
+The previous list is a decryption role, so step 2 can contain a newly provisioned
+key. Deployments must preserve the exact cipher and AAD for each driver. Changing
+from AES-GCM to ChaCha20-Poly1305 also requires retaining the old cipher for old
+reads, even if key material stays available.
 
-An encrypted value can be decrypted anywhere the same key is used. If your
-service encrypts both session cookies and stored bank details with one key, a
-value from one place could be presented in the other. Give each purpose its
-own key, or bind each driver to its purpose with **additional data**, which is
-checked during decryption but not stored in the output:
+Rotate before 2^32 encryptions per key across all replicas sharing that key.
+A time-based schedule alone does not enforce this volume limit. If a key leaks,
+coordinate rotation and incident response; re-encryption cannot protect
+ciphertext copies already obtained with the leaked key.
 
-```go
-cookies, err := aescrypto.New(material, func(encrypter *aescrypto.Builder) {
-	encrypter.AdditionalData([]byte("cookies"))
-})
-bank, err := aescrypto.New(material, func(encrypter *aescrypto.Builder) {
-	encrypter.AdditionalData([]byte("bank-accounts"))
-})
-```
+## Missing Keys
 
-A value encrypted with `cookies` fails to decrypt with any other additional
-data, even under the same key. The additional data must stay the same for as
-long as values encrypted with it exist, and a previous driver for rotation
-needs the same additional data as the current one.
+`crypto.New` rejects a nil current or configured previous driver with
+`crypto.ErrInvalidDriver`. It does not know which historical keys your data
+requires: omitting an old driver can construct successfully and break old reads.
+Check the required key inventory during deployment rather than treating facade
+construction as proof that all data is readable.
 
-`AdditionalData` replaces the context and copies its input immediately; nil or
-empty clears it. `New` copies the completed context again, so retaining the draft
-cannot change a published driver's authentication context.
+Ciphertext contains no key identifier. Decryption tries each configured driver;
+if every attempt fails, the facade returns the current driver's original error,
+not the last fallback error. With active shipped drivers, wrong-key, wrong-AAD,
+altered, and truncated input wrap `crypto.ErrInvalidCiphertext`. There is no
+separate missing-key sentinel that identifies which key to fetch.
 
-Separate keys are the stronger choice for data of very different sensitivity,
-because a key that leaks then exposes only one kind of data. Additional data
-is the lighter choice for purposes of similar sensitivity within one feature.
+Preserve the stored bytes and restore the required historical key or context
+through your recovery process. Never retry an invalid value as plaintext or
+overwrite it with an empty value. Avoid logging keys, exported key bytes, or
+credential payloads when reporting the failure.
 
-## Limits
+## Ciphertext Versions
 
-Both drivers use random 96-bit nonces. Do not exceed 2^32 encryptions (about
-four billion) under one key, and rotate before reaching that limit. Count
-encryptions across every replica that shares the key; a calendar-only policy
-is not enough for a high-volume service.
+The shipped ciphertext format contains a nonce, ciphertext, and authentication
+tag, but no cipher name, key ID, AAD, or application schema version. The facade
+does not negotiate versions or return an unknown-version error. Retain the
+configuration needed to interpret existing values.
 
-Values encrypted with one driver cannot be decrypted with the other, even with
-the same key, so changing cipher is a rotation like any other: the new driver
-is current, the old one previous.
+If your application adds a format discriminator, reject unknown versions before
+selecting a decoder. Do not interpret an unknown version as the current one.
+Keep old decoders until their values and backups have migrated; a successful
+key fallback is not a schema migration. [Storing Data](storing.md#keeping-compatibility)
+explains which metadata needs authentication and how to preserve compatibility.
 
-For the options of each driver, see [Encryption Drivers](drivers.md).
-For generation, loading, and explicit exports, see the
-[`key` API reference](https://pkg.go.dev/arkoren.dev/foundation/key).
+For fallback configuration, see the [`crypto` API reference](https://pkg.go.dev/arkoren.dev/core/service/crypto).

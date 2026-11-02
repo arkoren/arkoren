@@ -1,24 +1,163 @@
 ---
 title: Fallible Collections
-description: Process sources that can fail halfway, including database cursors, storage listings, model streams, and files, with TryLazySlice and TryLazyMap.
+description: Preserve read and callback failures while choosing whether to stop, retain a partial result, or continue traversal.
 order: 30
+summary:
+  - Choose first-error or continuing traversal without treating partial successes as complete input.
+  - Track successful positions while preserving source and callback errors.
+  - Expose reader failures and retain producer-owned cleanup, cancellation, and replay constraints.
 ---
 
 # Fallible Collections
 
-## Introduction
+An import can fail after several records have succeeded. `TryLazySlice[T]`
+yields `(item, error)` pairs so that failure remains part of the traversal.
+`TryLazyMap[K, V]` yields `(MapEntry[K, V], error)` pairs, where `MapEntry`
+contains `Key` and `Value`. Ignore the item or entry whenever its error is
+non-nil.
 
-Reading from a database or a file can fail after you have already processed
-many items. A `TryLazySlice` carries an error alongside each item, and its
-methods take functions that can return one. Build one with `NewTryLazySlice`
-or start from a slice with `Try()`. Import `arkoren.dev/foundation/collection`
-alongside the standard-library `bufio`, `fmt`, and `strconv` packages. The example
-below uses an existing `io.Reader` named `r`; `bufio.Scanner` reports read failures, and
-`strconv.Atoi` can reject individual lines:
+These are lazy iterators, not saved results. Streaming transformations forward
+source and callback errors; the consumer decides whether to stop or continue.
+Ordinary terminal methods stop on the first error. Methods ending in `All`
+continue while the source permits it and return joined errors. Neither policy
+retries a failed operation or recovers a panic.
+
+## Parsing Import Values
+
+Import `arkoren.dev/foundation/collection` and the standard-library `strconv`
+package. Start with typed import lines so that source identity is available
+even if callback indexes change:
 
 ```go
-lines := collection.NewTryLazySlice(func(yield func(string, error) bool) {
-	scanner := bufio.NewScanner(r)
+type QuantityLine struct {
+	Line  int
+	Units string
+}
+
+lines := collection.NewSlice([]QuantityLine{
+	{Line: 1, Units: "3"},
+	{Line: 2, Units: "unknown"},
+	{Line: 3, Units: "5"},
+})
+```
+
+`Try()` converts an eager or infallible lazy collection to its fallible lazy
+form. It does not parse anything yet. Make parsing a step that can return an
+error:
+
+```go
+quantities := lines.Try().Map(func(_ int, line QuantityLine) (int, error) {
+	return strconv.Atoi(line.Units)
+})
+```
+
+The result is a `TryLazySlice[int]`. When consumed, successful conversions yield
+an integer and nil error; the invalid line yields a conversion error instead
+of a usable integer. A source error bypasses the callback entirely.
+
+## Stopping On Failure
+
+Choose `Items` when a failure should stop this read:
+
+```go
+units, err := quantities.Items()
+```
+
+`units` contains only `[3]`, and `err` is the conversion error for `unknown`.
+The third line is not processed. Decide whether your application can use that
+prefix or must reject the import; it is not a complete result. `Eager` returns
+an eager collection with the same first-error policy. A slice materializer
+returns nil if no values succeed; map materializers return allocated maps.
+Both own new outer storage with shallow element copies.
+
+`Each` also stops on the first source or callback error. Work completed by an
+earlier callback is not rolled back. If callbacks write application data, use
+your application's transaction or idempotency policy rather than assuming
+collection traversal is atomic.
+
+## Continuing Explicitly
+
+If independent import lines may succeed despite other invalid lines, choose
+`ItemsAll` instead. This is an alternative traversal of the replayable
+in-memory source above, not a second pass over an already consumed reader:
+
+```go
+units, err := quantities.ItemsAll()
+```
+
+`units` contains `[3, 5]`. `err` joins the encountered errors with `errors.Join`;
+it is still non-nil even though later values succeeded. `EagerAll` collects
+into an eager collection, and `EachAll` continues after both source and callback
+errors. Use `errors.Is` or `errors.As` to inspect a joined cause when needed.
+
+For a per-error decision, range over the fallible source. This loop deliberately
+reports each conversion failure and skips its accompanying value; import `fmt`
+for the output:
+
+```go
+for units, err := range quantities {
+	if err != nil {
+		fmt.Printf("Rejected quantity: %v\n", err)
+		continue
+	}
+	fmt.Println(units)
+}
+```
+
+The loop prints 3, reports the invalid quantity, then prints 5. Replacing
+`continue` with `break` stops the source at that error. Continuation moves to
+the next source result; it does not retry the failed line. A terminal read error
+can end a source even when the consumer wants to continue.
+
+## Limits And Indexes
+
+`Take` and `Skip` count successful values or map entries, not errors. Errors
+are forwarded in source order, including inside a skipped prefix. A positive
+`Take` stops immediately after its last requested success. `Take(0)` and
+negative limits consume nothing, so they cannot reveal any source error.
+Duplicate lazy-map keys count as separate entries, even though materialization
+keeps only the last successful value for a key.
+
+`Nth`, `Chunk`, and `Sliding` likewise count successful slice values. An error
+does not consume an offset, a step position, or space in a partial window.
+Continuing after the error resumes that progress if the source has more
+results; ignoring the error would conceal an incomplete or invalid input.
+Sizes and steps must be positive where required, as described in
+[Collection Methods](available-methods.md#nth).
+
+Streaming slice callbacks start at index zero. Source errors do not advance
+the index, and callback errors leave the next callback at the same index.
+For the three import lines, this records that difference:
+
+```go
+var indexes []int
+parsed := lines.Try().Map(func(index int, line QuantityLine) (int, error) {
+	indexes = append(indexes, index)
+	return strconv.Atoi(line.Units)
+})
+units, err := parsed.ItemsAll()
+```
+
+`indexes` contains `[0, 1, 1]`, `units` contains `[3, 5]`, and `err` is non-nil.
+A successful predicate still advances its input index when it rejects a value;
+a successful `FlatMap` advances once even when it returns no items. Later steps
+have their own input indexes. Carry `QuantityLine.Line` into application errors
+or output records when you need the original line number.
+
+`EachAll` deliberately differs: its index counts every successful source value,
+including a value whose callback fails. Calling it directly on `lines.Try()`
+therefore gives callback indexes zero, one, and two. Source errors still bypass
+its callback and do not advance that index.
+
+## Supplying Read Errors
+
+For an existing application-owned `io.Reader` named `reader`, a scanner-backed
+iterator must expose `Scanner.Err`, not silently treat a failed read as the end
+of input. Import `bufio` along with `collection`:
+
+```go
+text := collection.NewTryLazySlice(func(yield func(string, error) bool) {
+	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		if !yield(scanner.Text(), nil) {
 			return
@@ -28,145 +167,46 @@ lines := collection.NewTryLazySlice(func(yield func(string, error) bool) {
 		yield("", err)
 	}
 })
-
-numbers := lines.Map(func(_ int, line string) (int, error) {
-	return strconv.Atoi(line)
-})
 ```
 
-The reader remains owned by your application: wrapping it neither closes it nor
-cancels a blocked read. [Supplying an iterator](lazy-collections.md#supplying-an-iterator)
-explains source cleanup, cancellation, and the non-nil iterator prerequisite.
+`text.Items()` returns scanned lines and any read or scanner-limit error.
+The source returns immediately when `yield` is false. Its last error yield
+needs no continuation check because the iterator returns immediately afterward.
 
-## Stopping at the first error
+The reader remains application-owned: wrapping it does not close it or cancel
+a blocked read. If your iterator opens a resource, arrange its release inside
+the iterator on every return, including early stop. If it captures an already
+open resource, its existing owner arranges cleanup. Blocking sources must
+observe their own context; the collection supplies no cancellation or timeout.
+Use a non-nil iterator function, as explained under
+[Supplying An Iterator](lazy-collections.md#supplying-an-iterator).
 
-`Items()` collects until the first error, and returns what it had together
-with that error:
+This reader-backed source is single-use unless the reader itself supports
+replay. Materialize once when you need to inspect the same values repeatedly.
+Do not call `ItemsAll` after `Items` expecting it to resume with every original
+line: each traversal invokes a new scanner over the reader's current position,
+and buffering may already have read ahead.
 
-```go
-values, err := numbers.Items()
-```
+## Native Producers
 
-Use `err` to decide whether to keep the successfully collected prefix in
-`values` or reject the whole input. Do not treat that prefix as a complete read.
-Slice materializers return nil if no successful values were collected, including
-an error before the first success; map materializers return allocated maps.
+[Database cursors and batch traversal](../database/batching-and-streaming.md),
+[storage listings](../file-storage/overview.md), and
+[model streams](../llm/streaming.md) return fallible lazy data. Their producers
+own cleanup, cancellation, and repeat-traversal behavior. A storage listing's
+page size is not a total-item limit; repeated traversal can issue fresh requests.
+Repeating a model stream can repeat billed work, and stopping early interrupts
+execution rather than completing a model turn.
 
-Methods that end the chain, such as `Each` and `Reduce`, return an error as
-well. They stop on the first source or callback error. If you range over a
-`TryLazySlice` directly, you receive `(item, err)` pairs and choose when to
-stop; ignore any item yielded with a non-nil error.
+These producers stop after terminal read or execution errors. `ItemsAll` can
+continue after your transformation fails, but cannot reconnect a cursor, retry
+a failed page fetch, or resume a failed model request. Check the returned error
+before treating a collected prefix as complete.
 
-## Continuing after errors
+Full-input transformations have their own failure shapes: `Sort` and `Reverse`
+discard a failed materialization's prefix and yield only the error. `Partition`
+consumes at the call and makes both returned iterators yield the error without
+partial partitions. `GroupBy`, `KeyBy`, and `CountBy` return partial eager maps
+with the first error. JSON encoding returns the first source error instead of
+encoding a partial collection; materialization is not network streaming.
 
-When one bad item should not stop the rest, use `ItemsAll` instead of `Items`
-for that traversal. `ItemsAll` and `EagerAll` read to
-the end, keep every item that succeeded, and join the errors with
-`errors.Join`. `EachAll` is the variant of `Each` that keeps going.
-
-The `All` variants continue only if the source can continue. A database cursor
-ends after its terminal connection or scan error; `ItemsAll` cannot recover the
-connection or fetch the unread rows. This reader-backed example is single-use:
-materialize it once if you need to process the same lines twice.
-
-## Limiting successful results
-
-Use [`Take`](available-methods.md#take) to limit successful values or entries,
-and [`Skip`](available-methods.md#skip) to discard the first successful ones.
-Errors are forwarded in source order but consume neither a limit nor a skipped
-position. Errors within a skipped prefix are still observable. `Take(0)` or a
-negative limit consumes nothing, including no errors; a positive `Take` stops
-immediately after its last requested success.
-
-On a lazy map, these methods count entries, not distinct keys. Two successful
-entries for the same key consume two positions, even though materialization
-keeps only the last value for that key. Continuing after an error preserves the
-remaining limit or skipped count; stopping iteration stops the source. On slices,
-`Nth`, `Chunk`, and `Sliding` also count successful values rather than errors.
-
-## Callback indexes after errors
-
-`TryLazySlice` streaming callbacks start at index zero. A source error bypasses
-the callback and does not advance its index. A callback error also leaves the
-next callback at the same index if you continue iteration:
-
-```go
-var indices []int
-parsed := collection.NewSlice([]string{"bad", "10", "20"}).Try().Map(func(index int, text string) (int, error) {
-	indices = append(indices, index)
-	return strconv.Atoi(text)
-})
-values, err := parsed.ItemsAll()
-fmt.Println(values, indices, err != nil) // [10 20] [0 0 1] true
-```
-
-Continuation moves to the next source result; it does not retry the failed
-item. Successful callbacks advance once even when `Filter` rejects the value
-or `FlatMap` returns no values. Each step has its own indices, so carry an
-identifier in the value when you need to identify the original input.
-
-`EachAll` deliberately differs: its index counts every successful source value,
-including one whose callback returns an error. Given the same three source
-strings, its callback sees indices zero, one, and two even if it fails on
-`"bad"`. Source errors still bypass the callback and do not advance that index.
-
-## Sampling and windowing successful items
-
-Choose sampling before you consume the reader-backed pipeline. For a single
-traversal of the `numbers` from the introduction, apply
-[`Nth`](available-methods.md#nth). Its offset is zero-based and defaults to zero;
-a negative offset also starts at zero, just as on eager and infallible lazy slices:
-
-```go
-for value, err := range numbers.Nth(2, -1) {
-	if err != nil {
-		fmt.Println("skipped:", err)
-		continue
-	}
-	fmt.Println(value)
-}
-```
-
-This selects successful positions zero, two, four, and so on. A conversion
-error is forwarded but does not consume an offset or step position. The loop
-ignores the accompanying value and continues if the source has more results;
-it does not retry a failed read or parse.
-
-[`Sliding`](available-methods.md#sliding) likewise counts only successful items:
-`Sliding(2, 3)` yields two-item windows whose starts are three successful items
-apart. Errors leave a partial window and the gap unchanged, and are forwarded
-even within a skipped gap. A window yielded with an error must be ignored;
-successful windows have independent, shallow-copied slice storage.
-
-Both operations consume nothing until iteration. Breaking on a selected value,
-window, or forwarded error stops the source immediately. Continuing iteration
-preserves the offset, step, and partial-window progress, but cannot make a
-terminal source error recoverable. Their steps must be positive; steps through
-`math.MaxInt` are valid without wrapping.
-
-## Where fallible collections come from
-
-Arkoren returns fallible collections from several data producers:
-
-- [Database cursors and batch traversal](../database/pagination.md) read rows
-  as you consume them.
-- [Storage `Walk`](../file-storage/overview.md) follows listing cursors across pages
-  of object metadata. Its page size is not a limit on the total items yielded.
-- [LLM `Stream` and `RunStream`](../llm/streaming.md) yield model or agent events.
-  Stopping early interrupts execution rather than completing a model turn.
-
-These sources end on their terminal read or execution error. `ItemsAll` can
-continue past a transformation error when the source permits it, but cannot
-retry a failed page fetch or resume a failed model request. A successful prefix
-returned with an error is incomplete; decide explicitly whether your task can
-use that prefix.
-
-The producer owns cancellation and cleanup. Traversing a storage listing or
-model stream again performs fresh work, not a replay of a saved snapshot; model
-requests can incur additional charges. Materialize once if you need to inspect
-the same successful values repeatedly. [Native Arkoren results](overview.md#native-arkoren-results)
-compares the available sources, and [Lazy Collections](lazy-collections.md)
-explains deferred evaluation and source ownership.
-
-For every fallible collection method, see the
-[`collection` API reference](https://pkg.go.dev/arkoren.dev/foundation/collection).
+For exact declarations, see the [`collection` API reference](https://pkg.go.dev/arkoren.dev/foundation/collection).

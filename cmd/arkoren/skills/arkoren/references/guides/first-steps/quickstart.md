@@ -1,164 +1,138 @@
 ---
 title: Quickstart
-description: Bootstrap an HTTP service with arkoren new, then add routes, a cache counter, and error responses.
-order: 20
+description: Extend the generated HTTP service with a greeting route, a process-local counter, and a checked error response.
+order: 30
+summary:
+  - Run the starter and confirm its welcome page and readiness probe.
+  - Connect an error-returning handler to a POST route.
+  - Add an atomic cache counter with application-owned startup and cleanup.
+  - Return a client-safe problem response and stop the service cleanly.
 ---
 
 # Quickstart
 
-## Introduction
+Build a greeting endpoint, count greetings in memory, and reject an oversized
+name with an HTTP error. No database, broker, or credentials are needed.
 
-This guide creates a small HTTP service with `arkoren new`, then adds a route,
-an in-memory cache counter, and error responses. The generated files include
-configuration, health probes, lifecycle wiring, and debug diagnostics; you edit ordinary Go
-code as the service grows.
+Start with the `hello` service from [Creating Projects](creating-a-project.md),
+including its dependency-resolution step. Run every command below from that
+project's root. Keep the generated bootstrap files: the edits extend them rather
+than replacing their lifecycle, middleware, or probes.
 
-You need Go 1.27 or later. Install the Arkoren CLI below before creating a project.
-No database or broker is needed, because the service uses an in-memory cache.
-The shell commands use POSIX environment-assignment syntax; on PowerShell, set
-`$env:HTTP_ADDR = "127.0.0.1:8080"` before `go run ./cmd/server` instead.
+## First Request
 
-Focused snippets throughout the documentation omit routine error checks to keep
-the feature visible. Handle those errors in application code; complete programs
-and examples about failure handling include the relevant checks. Lifecycle
-fragments show composer callbacks; pass them to `app.Run(ctx, compose)` and
-keep their downstream service and handler wiring inside that callback. Import
-`arkoren.dev/core/application` for `application.Composer`. They are focused
-excerpts, not complete standalone programs.
-
-## Installing the CLI
-
-Install the `arkoren` executable with Go:
-
-```sh
-go install arkoren.dev/cmd/arkoren@latest
-```
-
-Go writes the executable to `GOBIN` if set, otherwise to the `bin` directory
-under the first entry in `GOPATH` (usually `$HOME/go/bin`). Add that directory
-to your `PATH` so your shell can find `arkoren`, then check the installation:
-
-```sh
-arkoren new --help
-```
-
-You should see `new DIR [flags]` and the project-creation options. This command
-does not need a running service or endpoint configuration. If your shell reports
-that `arkoren` cannot be found, check that Go's binary directory is on `PATH`.
-The [CLI installation guide](../cli/overview.md#installing-the-cli) also covers
-installing it as a module tool instead of a global executable.
-
-## Creating the project
-
-From the directory that will contain your project, generate the starter:
-
-```sh
-arkoren new hello --module example.com/hello
-cd hello
-```
-
-The command creates `hello` and writes a Go module, `cmd/server/main.go`,
-`internal/bootstrap`, `.env`, `.env.example`, and a README,
-but no tests. It does not
-download dependencies or start the service, and it never overwrites existing
-generated files. To preview the files without writing them, add `--dry-run`.
-[Creating a Project](creating-a-project.md) covers directory safety and
-direct composition.
-
-From the `hello` folder, resolve dependencies and check the code:
-
-```sh
-go get arkoren.dev/core arkoren.dev/driver/mcp
-go mod tidy
-go vet ./...
-```
-
-## Your first application
-
-Start the generated service from the project root, binding to loopback for local
-development:
+Start the service on loopback:
 
 ```sh
 HTTP_ADDR=127.0.0.1:8080 go run ./cmd/server
 ```
 
-Open `http://127.0.0.1:8080/` in your browser. You should see Arkoren's HTML
-welcome page, served by `app.WelcomeHandler()`. Replace this route with your
-application's home page when you need one; it is not an operator-info endpoint.
+The shell examples use POSIX environment assignments. In PowerShell, set
+`$env:HTTP_ADDR = "127.0.0.1:8080"` before running `go run ./cmd/server`.
+If port 8080 is occupied, choose another port and use it in the requests below.
 
-The **router** in `internal/bootstrap/router.go` maps URLs to handlers. An
-Arkoren handler looks like a `net/http` handler, except that it returns an
-`error`. The **server** in `server.go` serves that router, using the address
-policy defined alongside its lifecycle wiring. `app.go` supplies application
-settings and `logging.go` supplies the private log handler factory. The executable loads `.env` without overriding
-existing environment values. The generated file selects loopback and enables
-unauthenticated MCP route diagnostics at `/mcp` on the same listener.
-Loading uses `godotenv/autoload`, which ignores loading errors.
-Keep `.env` out of commits, bind development listeners to loopback, and disable
-debug in production; see [debug defaults and secrets](creating-a-project.md#local-telemetry-diagnostics-and-secrets).
-An empty `HTTP_ADDR` uses the server default `:8080` on all interfaces.
+The development `.env` enables unauthenticated diagnostics on the same listener.
+Keep the loopback address; do not expose this development process publicly.
+[Starter Defaults](creating-a-project.md#starter-defaults) explains the settings.
 
-`cmd/server/main.go` constructs the **application** and calls
-`app.Run(ctx, bootstrap.Compose)`. The composition function in
-`internal/bootstrap/bootstrap.go` obtains one shared router with
-`routes := compose.Use(Router())`. `Router()`, `MCP(routes)`, and `Server(routes)`
-return typed factories; their callbacks construct and return the router,
-diagnostic endpoint, and listener respectively. The root selects diagnostics
-with `compose.UseDebug` and applies listener setup with `compose.Use`.
-Returned components are not yet started. Every child shares the root's
-lifecycle and cleanup ownership.
-Ctrl+C or `SIGTERM` cancels the supplied context
-for a clean shutdown. Keep these generated files; the next steps extend them.
-
-## Adding routes
-
-Routes use the same patterns as Go's `http.ServeMux`, so a path can contain
-wildcards in braces. In `internal/bootstrap/router.go`, add this route inside
-the callback returned by `Router`, before `return routes`. Keep the existing
-welcome page and probes. Add `net/http` and `arkoren.dev/core/http/response`
-to this file's imports for the new handler:
-
-```go
-routes.Get("/hello/{name}", func(w http.ResponseWriter, r *http.Request) error {
-	name := r.PathValue("name")
-
-	return response.JSON(w, http.StatusOK, map[string]string{
-		"message": "Hello, " + name + "!",
-	})
-})
-```
-
-`r.PathValue` reads the `{name}` wildcard, and `response.JSON` encodes the
-value and sets the `Content-Type` header. Stop the
-service with Ctrl+C, run `HTTP_ADDR=127.0.0.1:8080 go run ./cmd/server` again,
-and try it:
+In another terminal, request the welcome page and readiness probe:
 
 ```sh
-curl localhost:8080/hello/Ada
+curl -i http://127.0.0.1:8080/
+curl -i http://127.0.0.1:8080/readyz
 ```
 
-```json
-{
-  "message": "Hello, Ada!"
+Both return `200 OK`; `/` contains an HTML welcome page and `/readyz` contains
+`ok`. The server's startup log reports its bound address. If binding fails, the
+process exits unsuccessfully rather than reporting a successful HTTP start.
+
+Stop with Ctrl+C before editing. Repeat the start command after each edit below;
+the starter does not watch or reload source files.
+
+## Greeting Handler
+
+An Arkoren HTTP handler takes the familiar response writer and request, then
+returns an error. The router renders returned errors centrally, so handlers can
+return failures without writing a second response.
+
+Create `internal/bootstrap/greeting.go`. Start it with the package, imports,
+and a typed response:
+
+```go
+package bootstrap
+
+import (
+	"net/http"
+
+	"arkoren.dev/core/http/response"
+)
+
+// Greeting is the JSON returned for an accepted greeting.
+type Greeting struct {
+	Message string `json:"message"`
 }
 ```
 
-## Adding a service
+Append this handler to the same file. It reads a route wildcard named `name` and
+returns JSON:
 
-Real services store things. Arkoren's services, such as the cache, the
-database, and queues, all work the same way: you create a **driver** for the
-backend you want and wrap it in a **facade** that your code uses. To count
-how often each name has been greeted, add these imports to
-`internal/bootstrap/bootstrap.go`:
+```go
+// greet responds to a greeting request using the route's name.
+func greet(w http.ResponseWriter, r *http.Request) error {
+	name := r.PathValue("name")
+
+	return response.JSON(w, http.StatusOK, Greeting{
+		Message: "Welcome, " + name + "!",
+	})
+}
+```
+
+`response.JSON` sets the content type and encodes the response. Returning its error
+keeps encoding or write failures visible to the router.
+
+## Route Registration
+
+In `internal/bootstrap/router.go`, inside the callback returned by `Router()`,
+add this line before `return routes`:
+
+```go
+routes.Post("/greetings/{name}", greet)
+```
+
+Keep the existing middleware, welcome route, and probe routes. Registration maps
+the method and path to the handler; it does not open a listener. Use POST because
+the next step records a greeting and changes state.
+
+Restart the service, then send a greeting:
+
+```sh
+curl -i -X POST http://127.0.0.1:8080/greetings/Mira
+```
+
+The response is `200 OK` with this JSON content:
+
+```json
+{
+  "message": "Welcome, Mira!"
+}
+```
+
+The starter's CSRF protection allows this command-line request without Origin
+or Sec-Fetch-Site headers. That is not authentication or permission to expose
+state-changing routes without an application security policy.
+
+## Counting Greetings
+
+Keep counters behind a cache facade so the handler does not depend on how values
+are stored. In `internal/bootstrap/bootstrap.go`, add these imports alongside
+the existing `application` import:
 
 ```go
 "arkoren.dev/core/service/cache"
 "arkoren.dev/core/service/cache/memorycache"
 ```
 
-Inside `Compose(compose *application.Composer)`, replace
-`routes := compose.Use(Router())` with the following setup. Create the cache
-before the router, register its cleanup immediately, and pass it to the factory:
+Inside `Compose`, replace only `routes := compose.Use(Router())` with:
 
 ```go
 driver := memorycache.New()
@@ -169,141 +143,121 @@ visits := cache.New(driver)
 routes := compose.Use(Router(visits))
 ```
 
-Do not keep the original router call or apply its routes twice. Keep
-`compose.UseDebug(MCP(routes))` and `compose.Use(Server(routes))` after this setup.
-Cleanup runs in reverse registration order, so the server drains before the
-cache closes. Every composer finishes before startup hooks run.
+Keep the following `compose.UseDebug(MCP(routes))` and
+`compose.Use(Server(routes))` calls. Cleanup is registered immediately at the
+driver's owner and runs in reverse order, so the server stops before the cache.
+Composition finishes before startup starts the cache's expiry janitor and binds
+the HTTP listener. Failures during composition or startup also release acquired
+resources.
 
-In `internal/bootstrap/router.go`, add the `cache` import and change the
-function declaration to
-`func Router(visits *cache.Cache) application.Factory[*router.Router]`.
-Keep its returned callback's `*router.Router` result, the `routes := router.New()`
-inside that callback, and its final `return routes`. The callback captures the
-typed cache service; HTTP handlers use that service, not the composer. Keep
-`name := r.PathValue("name")` in the `/hello/{name}` handler, and replace its return
-statement with a counter increment and the new response:
+In `internal/bootstrap/router.go`, import `arkoren.dev/core/service/cache` and
+change the factory declaration to accept the facade:
 
 ```go
-key := cache.NewKey[int64]("greetings." + name)
-count, err := visits.Increment(r.Context(), key, 1)
-if err != nil {
-	return err
-}
+func Router(visits *cache.Cache) application.Factory[*router.Router] {
+```
 
-return response.JSON(w, http.StatusOK, map[string]any{
-	"message": "Hello, " + name + "!",
-	"count":   count,
+Keep the existing factory body and replace the greeting registration with this
+closure, which passes the shared facade to the handler:
+
+```go
+routes.Post("/greetings/{name}", func(w http.ResponseWriter, r *http.Request) error {
+	return greet(w, r, visits)
 })
 ```
 
-Restart the service and request `/hello/Ada` twice. The second request returns:
-
-```json
-{
-  "message": "Hello, Ada!",
-  "count": 2
-}
-```
-
-The counts live only in this process and reset each time you restart it.
-`NewKey[int64]` creates a typed counter key with the exact supplied name, so
-Ada's counter is `greetings.Ada`. Creating the key does not write a value;
-`Increment` updates the stored count atomically.
-
-Later, when the service runs on several machines and the count must be shared,
-you replace `memorycache.New()` with a Redis driver. The handler stays the same,
-because it only knows the `visits` facade. Install the Redis module, configure its
-connection and credentials, and register its lifecycle as shown in
-[Cache Drivers](../cache/drivers.md#redis).
-[Facades and drivers](../core-concepts/facades-and-drivers.md) explains why.
-
-## Returning errors
-
-When a handler cannot do its job, it returns an error, and the router turns it
-into a response. Reject names that are too long by returning a ready-made
-problem from `arkoren.dev/foundation/problem`. Add
-`"arkoren.dev/foundation/problem"` to the file's import block, then insert
-the check immediately after the existing `name := r.PathValue("name")` line,
-before incrementing the counter:
+Add `net/http` to that file's imports. In `greeting.go`, add the `cache` import
+and a `Count int64` field with the tag `json:"count"` to `Greeting`. Replace
+the entire `greet` function with:
 
 ```go
-if len(name) > 40 {
-	return problem.UnprocessableContent().Derive(func(details *problem.Builder) {
-		details.Detail("The name is longer than 40 bytes.")
+// greet counts an accepted greeting and returns its current process-local total.
+func greet(w http.ResponseWriter, r *http.Request, visits *cache.Cache) error {
+	name := r.PathValue("name")
+	key := cache.NewKey[int64]("greetings." + name)
+	count, err := visits.Increment(r.Context(), key, 1)
+	if err != nil {
+		return err
+	}
+
+	return response.JSON(w, http.StatusOK, Greeting{
+		Message: "Welcome, " + name + "!",
+		Count:   count,
 	})
 }
 ```
 
-`len` counts bytes, not Unicode characters. Restart the service and send a
-name of 41 ASCII characters:
+The typed key names Mira's counter exactly `greetings.Mira`. `Increment` creates
+a missing counter and updates it atomically; it does not use the key's write TTL.
+These counters have no expiry, belong only to this process, and reset on restart.
+They are demonstration state, not durable business records or an exactly-once
+record of delivered responses. A write can succeed even if sending its response
+later fails.
 
-```sh
-curl -i localhost:8080/hello/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Restart, then issue the POST request twice. The second response contains:
+
+```json
+{
+  "message": "Welcome, Mira!",
+  "count": 2
+}
 ```
 
-The client receives a [Problem Details](https://www.rfc-editor.org/rfc/rfc9457)
-response, a standard JSON shape for HTTP errors:
+For shared counters across replicas, follow [Cache Drivers](../cache/drivers.md)
+for backend construction and ownership. The handler continues to use the facade.
+Use [Key Definitions](../cache/keys.md) and [Counters](../cache/counters.md) when
+you need reusable naming or bounded counter windows.
+
+## Expected Errors
+
+Reject an oversized name before changing its counter. Add
+`arkoren.dev/foundation/problem` to `greeting.go`'s imports. Immediately after
+`name := r.PathValue("name")`, insert:
+
+```go
+if len(name) > 32 {
+	return problem.UnprocessableContent().Derive(func(details *problem.Builder) {
+		details.Detail("The name must be at most 32 bytes.")
+	})
+}
+```
+
+`len` counts bytes, not Unicode characters. Restart and send 33 ASCII characters:
+
+```sh
+curl -i -X POST http://127.0.0.1:8080/greetings/abcdefghijklmnopqrstuvwxyzabcdefg
+```
+
+The response has status `422 Unprocessable Content` and a Problem Details body:
 
 ```json
 {
   "type": "about:blank",
   "title": "Unprocessable Content",
-  "detail": "The name is longer than 40 bytes.",
   "status": 422,
-  "instance": "/hello/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  "detail": "The name must be at most 32 bytes.",
+  "instance": "/greetings/abcdefghijklmnopqrstuvwxyzabcdefg"
 }
 ```
 
-With the default renderer, errors returned before the response is committed use
-this shape. Once headers or a streaming body have been sent, a handler cannot
-replace that response with a problem document.
-[Error handling](../http-fundamentals/error-handling.md) shows how to control the
-status and the fields.
+No counter is incremented for this rejected request. The router can render an
+error only before the response is committed; it cannot replace headers or body
+bytes already sent. See [Error Handling](../http-fundamentals/error-handling.md)
+for private internal failures and custom problem responses.
 
-## Checking health probes
+## Stopping Safely
 
-Platforms such as Kubernetes ask a service whether it is alive and ready
-before they send it traffic. The generated `Router` factory already registers the
-application's probes; leave these lines in place:
+Press Ctrl+C in the service terminal. The generated executable's signal context
+also handles `SIGTERM`. The application stops serving, runs registered cleanup,
+and returns before the executable exits; clean shutdown exits with status 0,
+while lifecycle failures exit with status 1.
 
-```go
-routes.Get(application.LivePath, app.LiveHandler())
-routes.Get(application.ReadyPath, app.ReadyHandler())
-routes.Get(application.StartupPath, app.StartupHandler())
-```
+The HTTP runner allows in-flight requests up to 15 seconds to drain by default.
+After exit, another request fails to connect and the memory counters are gone.
+This walkthrough creates no persistent backend or container to remove. Keep or
+delete only the `hello` project you created; do not remove a shared parent directory.
 
-Restart the service and request `curl -i localhost:8080/readyz`. Liveness and
-readiness answer `200 OK` with `ok` while this application runs. During shutdown they
-answer `503 Service Unavailable` while the server can still accept requests;
-before the server starts or after it closes, no HTTP response is available.
-
-## Stopping the service
-
-Press Ctrl+C in the terminal that runs the service. The application logs each
-step as it stops the server and the cache:
-
-```text
-level=INFO msg="app stopping" env=development service=hello
-level=INFO msg="app stopped" env=development service=hello
-```
-
-The server allows in-flight requests up to 15 seconds to finish by default,
-then closes remaining connections. The generated executable also handles
-`SIGTERM`. For deployment, align the shutdown budgets as described in
-[Deploying to Production](deploying.md#graceful-shutdown).
-
-## Next steps
-
-You have built a complete service. From here:
-
-- [Project Layout](project-layout.md) shows how to organize feature packages
-  as the service grows beyond the starter.
-- [Application](../application/overview.md) guides explain composition,
-  lifecycle ownership, failures, and readiness.
-- [Routing](../http-fundamentals/routing.md) and [Validation](../validation/overview.md) cover
-  handlers and request input in depth.
-- [Database Overview](../database/overview.md) adds a database
-   to the service.
-
-For every lifecycle and server option, see the [`application` API reference](https://pkg.go.dev/arkoren.dev/core/application)
-and the [`server` API reference](https://pkg.go.dev/arkoren.dev/core/http/server).
+You now have a working route, a shared dependency inside one process, and a
+checked error path. Continue with [Configuration](configuration.md) to translate
+application settings, [Project Layout](project-layout.md) to separate features,
+or [Deployment](deploying.md#shutdown-budgets) before running outside development.

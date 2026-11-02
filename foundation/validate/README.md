@@ -113,7 +113,7 @@ detach supported containers before rendering and publication, including imported
 `enum` and `const` parameters. `Errors.Localize` returns another detached container
 copy; `Errors.Add` and `Errors.All` instead retain or lend mutable storage.
 This is not arbitrary-object deep copying: see
-[diagnostic ownership](../../cmd/arkoren/skills/arkoren/references/guides/validation/advanced.md#diagnostic-ownership)
+[diagnostic ownership](../../cmd/arkoren/skills/arkoren/references/guides/validation/errors.md#diagnostic-ownership)
 for the supported containers and shared-object boundary.
 
 `JSONSchema` describes representable rules. Conditions, custom checks,
@@ -144,7 +144,7 @@ For runtime rules on a named container, use `Named[YourType](sourceSchema)` or
 a `NamedBuilder[YourType]` child callback with `Use(sourceSchema)`. The source
 and target must have identical underlying slice/map types. Parsing preserves
 the named result and the source's normalization, defaults, and input ownership.
-See [named containers](../../cmd/arkoren/skills/arkoren/references/guides/validation/collections.md#checking-named-containers)
+See [named containers](../../cmd/arkoren/skills/arkoren/references/guides/validation/collections.md#named-containers)
 for field registration and the distinction between runtime rules and wire metadata.
 
 Invalid explicit definitions return nil document bytes and an error wrapping
@@ -225,7 +225,9 @@ Continue with
 [structs and reuse](../../cmd/arkoren/skills/arkoren/references/guides/validation/structs-and-reuse.md),
 [collections](../../cmd/arkoren/skills/arkoren/references/guides/validation/collections.md), and
 [conditions](../../cmd/arkoren/skills/arkoren/references/guides/validation/conditions.md).
-The [advanced guide](../../cmd/arkoren/skills/arkoren/references/guides/validation/advanced.md)
-covers custom checks, files, JSON Schema limits, and ownership. The
+Continue with [custom rules](../../cmd/arkoren/skills/arkoren/references/guides/validation/custom-rules.md),
+[file rules](../../cmd/arkoren/skills/arkoren/references/guides/validation/available-methods.md#file-uploads),
+[JSON Schema](../../cmd/arkoren/skills/arkoren/references/guides/validation/json-schema.md), and
+[error ownership](../../cmd/arkoren/skills/arkoren/references/guides/validation/errors.md#diagnostic-ownership). The
 [API reference](https://pkg.go.dev/arkoren.dev/foundation/validate)
 records the exact contracts.

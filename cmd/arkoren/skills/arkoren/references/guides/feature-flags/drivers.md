@@ -1,144 +1,102 @@
 ---
 title: Feature Flag Drivers
 nav: Drivers
-description: Choose between the memory, OpenFeature, and LaunchDarkly drivers, then wire and configure each; OpenFeature reaches flagd and others.
-order: 30
+description: Choose and construct memory, OpenFeature, or LaunchDarkly drivers with explicit lifecycle and native-client ownership.
+order: 20
+summary:
+  - Compare memory, OpenFeature, and LaunchDarkly evaluation capabilities and availability limits.
+  - Construct drivers with explicit startup, readiness, cleanup, and restart policies.
+  - Configure ambient context or native SDK settings and retain the correct client owner.
+  - Exercise local SDK fixtures and understand provider-specific results and analytics.
 ---
 
 # Feature Flag Drivers
 
-## Introduction
+Choose memory for deterministic application tests or process-local settings.
+Choose OpenFeature when your flag service has an OpenFeature Go provider or your
+application already manages an OpenFeature client. Choose the native LaunchDarkly
+driver when you want direct integration with LaunchDarkly's official server SDK.
+All three expose the same [typed evaluation](overview.md#flag-decisions), but
+targeting rules, update delivery, and outage behavior are not interchangeable.
 
-The feature flag facade works the same with every driver, so the choice is
-about where your flags live. The **memory** driver holds flags in the process
-and suits tests and local development. The **LaunchDarkly** driver evaluates
-flags with LaunchDarkly's official Go SDK.
+## Compatibility Matrix
 
-The **OpenFeature** driver evaluates
-flags through [OpenFeature](https://openfeature.dev), a vendor-neutral standard
-with providers for many flag services, so one driver reaches flagd, GO Feature
-Flag, ConfigCat, Flagsmith, and any other service that publishes an OpenFeature
-Go provider, including LaunchDarkly's community-maintained one. See [Feature Flags Overview](overview.md) for using the facade,
-and [Choosing a Driver](../drivers/choosing-a-driver.md) for every service's
-drivers side by side.
+This comparison covers Arkoren's exposed evaluation contract, not provider flag
+administration. Scalar flags are booleans, strings, signed integers, and floats.
+Every driver accepts standalone and namespace-derived definitions; neither form
+creates provider keys or enforces a provider schema.
 
-If you use LaunchDarkly, prefer the native driver over OpenFeature's provider
-for it: the provider is community-maintained, while the native driver uses the
-SDK LaunchDarkly publishes and supports. Choose OpenFeature for LaunchDarkly
-only if you want to switch services without changing code, or already use
-OpenFeature hooks.
-
-## Compatibility matrix
-
-Compare flag evaluation and access exposed by Arkoren, not each vendor's flag
-administration API. Scalar flags are booleans, strings, integers, and floats;
-object-valued flags are outside the portable contract.
-
-Optional [namespaces](overview.md#sharing-a-flag-prefix-and-fallback) join literal
-names in core, not in the provider. Every row evaluates the final `Flag[T]`
-definition and its fallback; no driver gains native namespaces, flag creation,
-or schema enforcement. Create the final key in external providers before use.
-
-| Driver | Scalar flags | Typed application definitions | Subject-key targeting | Attribute-based targeting | Object flags | Native SDK client |
+| Driver | Scalar Flags | Key Targeting | Attribute Targeting | Object Flags | Native Client | Remote-Free Evaluation |
 | --- | --- | --- | --- | --- | --- | --- |
-| [Memory](#memory) | Yes | Yes — Standalone and namespace-derived flags work in evaluation and typed setup. | Yes — Explicit per-key overrides through SetFor. | No | No | No |
-| [OpenFeature](#openfeature) | Yes | Yes — Standalone and namespace-derived flags do not enforce provider schemas. | Partial — The configured provider decides which targeting rules apply. | Partial — Attributes pass through; provider rule support varies. | No | Yes |
-| [LaunchDarkly](#launchdarkly) | Yes | Yes — Standalone and namespace-derived flags do not enforce provider schemas. | Yes | Yes | No | Yes |
+| [Memory](#memory) | Yes | Yes — Explicit nonempty-key overrides. | No | No | No | Yes |
+| [OpenFeature](#openfeature) | Yes | Partial — Depends on the configured provider. | Partial — Attributes pass through; rule support depends on the provider. | No | Yes | Partial — Depends on the provider's evaluation and refresh model. |
+| [LaunchDarkly](#launchdarkly) | Yes | Yes — User contexts; anonymous subjects share one key. | Yes — Subject attributes become user-context attributes. | No | Yes | Yes — Evaluates locally after initial synchronization. |
 
-Memory ignores subject attributes and keeps independent process-local state.
-OpenFeature forwards the subject key and attributes to your chosen Go provider;
-it does not add targeting rules that provider lacks. The services named above
-are reached through that provider, not separate Arkoren drivers. LaunchDarkly
-uses user contexts; all anonymous subjects share the same anonymous key. Native
-client access is provider-specific and does not expand the portable flag types.
-All three drivers check cancellation first, then reject empty or unknown raw
-request kinds with `feature.ErrTypeMismatch` before readiness, lookup,
-disabled/default shortcuts, or provider I/O. Only the four scalar kinds are
-valid. This is [raw-request validation](overview.md#raw-driver-requests), not a
-new flag capability or a change to typed definitions and their fallbacks.
+No driver guarantees atomic rule changes across processes or identical rollout
+assignments across providers. Memory has independent state in each instance.
+OpenFeature's provider determines remote availability requirements. LaunchDarkly
+can evaluate its last received data during a connection outage, but that does not
+prove the data is current or let a new process start without initial data.
 
 Run installation commands from your application's Go module. Examples use
-`feature` from `arkoren.dev/core/service/feature` and your operation context
-`ctx`. Register driver hooks using your existing
-[application lifecycle](../application/lifecycle-and-ownership.md).
-Focused snippets omit routine error checks;
-handle constructor errors before registering hooks or evaluating flags.
-The LaunchDarkly examples also use standard-library `os` and `time`.
+`feature` from `arkoren.dev/core/service/feature`; `ctx` is an operation context.
+The facade itself has no lifecycle. Register driver startup, cleanup, and
+readiness with your existing [application lifecycle](../application/lifecycle-and-ownership.md),
+and do not evaluate an owned provider until startup succeeds.
 
 ## Memory
 
-The memory driver keeps flags in the process. It is part of `arkoren.dev/core`,
-so there is nothing to install, and it is how application tests set the flags
-they need. [Feature Flag Testing](testing.md#testing-your-application) shows
-how to set values, per-subject overrides, and disabled flags. It ignores
-subject attributes, so it cannot exercise targeting rules; use a real provider
-for that.
-
-### Connecting
-
-`New` takes no settings, performs no I/O, and has no lifecycle hooks:
+`memoryfeature` is included in `arkoren.dev/core` and needs no external service.
+Use it when your application controls the stored values and needs neither
+provider targeting rules nor shared state between processes.
 
 ```go
 import "arkoren.dev/core/service/feature/memoryfeature"
 
 driver := memoryfeature.New()
-checkout := feature.NewFlag("new-checkout", false)
-err := driver.Set(checkout, true)
-
 flags := feature.New(driver)
 ```
 
-### Configuration
+Construction performs no I/O, has no options, and starts no background work.
+There are no `Start`, `Stop`, or `Ping` hooks to register.
 
-There are no constructor options. Populate flags using `Set` and `SetFor`;
-updates affect the next evaluation and disappear when this driver is discarded.
+To supply the checkout decision, share the application's typed definition:
 
-### Evaluating flags
+```go
+expressCheckout := feature.NewFlag("checkout-express", false)
+err := driver.Set(expressCheckout, true)
+```
 
-Use the shared [evaluation example](overview.md#evaluating-a-flag). With the flag
-above it returns `true`; [testing](testing.md#testing-your-application) shows
-per-subject overrides and disabled flags.
+The next [facade evaluation](overview.md#flag-decisions) returns `true` unless
+the flag is disabled or a subject override selects another value. Setup errors
+must be handled before the value is used. `Set` retains existing overrides and
+disabled state; it does not install the definition's fallback as a stored value.
+[Testing](testing.md#memory-fixtures) covers overrides and state changes.
 
-### Behavior and limits
+The driver is concurrent-safe and loses all state when discarded. It ignores
+subject attributes, has no rollout engine, and never matches an override whose
+key is empty. Separately constructed definitions with the same provider name
+still address the same stored entry; they do not establish a schema.
 
-Each driver has independent concurrent-safe state, with no persistence or
-cross-process distribution. Subject attributes are ignored. `Set` and `SetFor`
-require a shared `feature.Flag[T]` and a value of that type; unsupported types
-fail to compile, and invalid definitions return `feature.ErrInvalidFlag` before
-mutation. Runtime provider checks remain in place; a second independently
-constructed definition with the same name does not declare a backend schema.
-Raw kind validation runs before reading the flag, including before a disabled
-or unmatched flag can return no value. For a known kind, those no-value results
-still select the typed definition's fallback without an error.
-
-For every function and option, see
-[`memoryfeature`](https://pkg.go.dev/arkoren.dev/core/service/feature/memoryfeature).
+See the [`memoryfeature` API](https://pkg.go.dev/arkoren.dev/core/service/feature/memoryfeature).
 
 ## OpenFeature
 
-The OpenFeature driver turns an OpenFeature provider into an Arkoren feature
-flag driver. Choose it when your flags live in a service that has an
-OpenFeature Go provider. What a flag means, how targeting rules are evaluated,
-how often the provider refreshes, and what happens when the service is down are
-all the provider's behavior, so the quality of the integration is the quality
-of the provider you pick. Read its documentation as well as this page.
+OpenFeature connects an evaluation API to a provider. Supply an
+`openfeature.FeatureProvider` from your chosen vendor's Go integration, configured
+with that vendor's endpoint and credentials. Provider documentation determines
+targeting support, refresh intervals, network calls, caching, and outage recovery;
+Arkoren does not add missing capabilities.
 
-### Installation
+### Provider Setup
 
-Install the driver, then the provider module of your vendor:
+Install the Arkoren module and the Go provider module you selected:
 
 ```sh
 go get arkoren.dev/driver/openfeature
 ```
 
-### Connecting
-
-`openfeaturefeature.New` takes the provider and owns it. It does no I/O: `Start`
-registers the provider and waits until it is ready, so a misconfigured provider
-fails startup, and `Stop` shuts it down. Construct the driver and facade:
-
-Here `provider` is the `openfeature.FeatureProvider` built by your vendor's
-provider package, configured with that service's endpoint and credentials.
+With the configured provider named `provider`, construct an owned driver:
 
 ```go
 import "arkoren.dev/driver/openfeature/openfeaturefeature"
@@ -147,221 +105,168 @@ driver := openfeaturefeature.New(provider)
 flags := feature.New(driver)
 ```
 
-Register `driver.Stop` for cleanup, `driver.Start` for startup, and `driver.Ping`
-for readiness in your existing composer. Evaluate only after startup succeeds.
-The driver registers the provider in a private OpenFeature API instance, so it
-never replaces the global OpenFeature provider, and you can run it next to code
-that uses OpenFeature directly. `Ping` backs a readiness check; it reports the
-provider's state without calling the service, and it fails until the state is
-`READY`. [Lifecycle and ownership](../application/lifecycle-and-ownership.md)
-explains the hooks and checks.
+`New` performs no I/O. `Start` registers and initializes the provider in a private
+OpenFeature API instance; it neither uses nor replaces the global provider.
+One provider belongs to one owned driver. Register `Stop` for cleanup, `Start`
+for startup, and `Ping` for readiness. `Ping` performs no network call and
+requires the SDK's provider state to be `READY`; a stale provider is not ready
+even if it can still serve a cached evaluation.
 
-If you already configure OpenFeature yourself, with hooks, domains, or a
-provider shared with other code, pass the client instead and keep ownership:
+An owned driver cannot restart after `Stop` or failed `Start`; construct a new
+one to retry initialization. Stopping before startup also makes it terminal,
+without initializing or shutting down the unused provider. Failed startup
+attempts provider cleanup and leaves evaluation unavailable.
 
-```go
-import "github.com/open-feature/go-sdk/openfeature"
+Owned lifecycle calls serialize, and waiting for another lifecycle call is not
+bounded by `ctx`. Context-aware providers must cooperate with initialization and
+cleanup cancellation. Legacy contextless shutdown is not bounded by the cleanup
+context, and a legacy initializer can outlive canceled startup inside the SDK.
+Do not call the same driver's lifecycle recursively from provider callbacks.
 
-client := openfeature.NewClient("checkout")
-driver := openfeaturefeature.NewFrom(client)
-```
+### Ambient Context
 
-`NewFrom` registers and shuts down nothing, so `Start` and `Stop` do nothing and
-you register and stop the provider yourself.
-Do not rebind or shut down a `New` driver's owned provider through the native
-client; use its lifecycle hooks instead.
-
-### Configuration
-
-If every flag rule needs the environment or service name, supply those facts
-once rather than repeating them on each subject. The driver's
-`Builder.EvaluationContext` adds these **ambient attributes** to
-every evaluation, such as the environment or the service name, which your
-targeting rules can match:
+If every rule needs a deployment fact, supply it once at construction. Import
+`openfeature` from `github.com/open-feature/go-sdk/openfeature`:
 
 ```go
 driver := openfeaturefeature.New(provider, func(features *openfeaturefeature.Builder) {
-	features.EvaluationContext(openfeature.NewTargetlessEvaluationContext(map[string]any{"env": "prod"}))
+	features.EvaluationContext(openfeature.NewTargetlessEvaluationContext(
+		map[string]any{"environment": "production"},
+	))
 })
 ```
 
-The subject you pass to the facade has precedence: its attributes replace
-ambient attributes of the same name, and its nonempty key replaces the ambient targeting key.
-Everything else, such as the service address, the polling interval, and the
-credentials, is configured on the provider.
+This is an alternative construction. Per-evaluation subject attributes replace
+ambient attributes of the same name; a nonempty subject key replaces the ambient
+targeting key. An empty key leaves the ambient key in effect. If neither provides
+a key, providers that require one report `feature.ErrInvalidSubject`.
 
-Callbacks run directly once in order on one fresh draft. Nil entries panic;
-expanded nil/empty slices omit edits. Ambient outer attribute maps copy at input
-and publication, not arbitrary nested values. Methods return the same draft;
-retained drafts cannot change the driver's context. NewFrom has no optional
-settings.
+Construction copies outer attribute maps at input and publication, not nested
+values. Retained drafts cannot change the published context; keep shared nested
+values immutable. Construction callbacks run once in order; nil callbacks panic.
+Configure credentials, polling, and network budgets on the provider, not on the
+Arkoren builder.
 
-### Evaluating flags
+### Evaluation Results
 
-Use the shared [evaluation example](overview.md#evaluating-a-flag) after startup.
-A successful evaluation returns the provider's value; a provider error returns
-your application default and the mapped error below.
+After startup, use the shared [flag decision](overview.md#flag-decisions).
+The subject key becomes the targeting key, and accepted attributes pass through
+unchanged. Each provider decides which types its rules support. Provider-side
+segments retain that provider's own identifiers and rules.
 
-### Behavior and limits
+Missing flags map to `ErrNotFound`; type and parse errors to `ErrTypeMismatch`;
+not-ready providers to `ErrNotReady`; missing targeting keys and invalid contexts
+to `ErrInvalidSubject`. Other failures retain the provider error code in the
+error. A reported disabled result supplies no value, so the facade uses the
+definition's fallback without an error.
 
-The subject key becomes OpenFeature's targeting key, and the attributes are
-copied into the evaluation context as they are. Strings, booleans, numbers,
-string lists, and times are passed unchanged, and each provider decides which
-of them its rules can match. An empty subject key leaves any ambient targeting
-key in effect. If neither supplies a key, a provider that requires one fails
-with `feature.ErrInvalidSubject`.
+Known reasons map to their portable equivalents; `STALE` maps to `ReasonCached`.
+Empty or unrecognized reasons become `ReasonUnknown`. Variants pass through
+unchanged. An OpenFeature default result can include a real provider value:
+`ReasonDefault` alone does not mean the application fallback was used.
 
-OpenFeature's error codes map to the contract's errors: an unknown flag is
-`feature.ErrNotFound`, a value of the wrong type is `feature.ErrTypeMismatch`,
-a provider that is not ready is `feature.ErrNotReady`, and a missing targeting
-key or invalid context is `feature.ErrInvalidSubject`. Any other code fails
-with an error that names it. A flag the provider reports as disabled returns the
-fallback declared in your flag definition. The reasons map one to one, except that
-OpenFeature's `STALE` becomes `feature.ReasonCached`, because both mean a value
-that may be out of date. Variants pass through, and how much a provider reports
-is up to it.
+### Native Ownership
 
-Only booleans, strings, integers, and floats can be read, like every Arkoren
-driver. OpenFeature's object flags are not available.
-Invalid raw kinds are rejected before the driver's readiness check or any
-provider call. For a known kind, readiness failures still return `ErrNotReady`,
-and a provider-reported disabled flag still yields the application's fallback.
+If your application already registers an OpenFeature provider and manages its
+hooks, domains, and shutdown, borrow its initialized `*openfeature.Client`
+named `client`:
 
-> [!NOTE]
-> The driver cannot be restarted after `Stop` or a failed `Start`. Build a new
-> driver to retry initialization. Stopping before `Start` also makes an owned
-> driver terminal, without initializing or shutting down the unused provider.
+```go
+driver := openfeaturefeature.NewFrom(client)
+flags := feature.New(driver)
+```
 
-Owned lifecycle calls serialize; waiting for an in-progress lifecycle call is
-not bounded by `ctx`. Context-aware providers receive the cleanup context and
-must cooperate with cancellation. Legacy contextless shutdown is not bounded by
-that context, and a legacy initializer can outlive canceled startup inside the
-SDK. Do not recursively call `Start` or `Stop` from native provider callbacks.
+`NewFrom` accepts no options. `Start` and `Stop` do nothing; the application
+retains provider registration and cleanup. `Ping` still reports provider state.
+Do not rebind or shut down a `New` driver's owned provider through native access.
 
-### Adding OpenFeature hooks
-
-When you need provider-specific evaluation observations, attach your
-application's `openfeature.Hook` implementation to the native client:
+To attach an existing `openfeature.Hook` named `hook` during setup, use the native
+client before concurrent evaluation:
 
 ```go
 driver.Client().AddHooks(hook)
 ```
 
-Here `hook` is your initialized SDK hook. Add hooks during setup before
-concurrent evaluations; the SDK invokes them for subsequent evaluations.
-Hooks can receive subjects and values that Arkoren telemetry deliberately
-omits, so filter sensitive data before exporting it. The client is available
-before startup, but evaluate through the facade only after `Start` succeeds.
-Use `NewFrom` for an externally managed client with domains or event handlers;
-you then own provider registration and shutdown. No separate Arkoren webhook
-or flag administration adapter is shipped.
+Hooks can receive subject data and values omitted by facade telemetry. Review
+their export policy before use. The owned native client is available before
+startup, but direct evaluation then returns SDK no-op results rather than the
+facade's `ErrNotReady`. Native calls bypass facade validation and telemetry.
+Native access does not add portable object flags,
+and Arkoren ships no OpenFeature flag-administration or webhook adapter.
 
-### Running locally
+### Local Provider
 
-The SDK ships an in-memory provider that needs no service, which suits local
-development and tests that should go through the real OpenFeature path:
+The SDK's memory provider exercises the OpenFeature path without a remote
+service. Define the fixture separately from driver construction:
 
 ```go
 import "github.com/open-feature/go-sdk/openfeature/memprovider"
 
 provider := memprovider.NewInMemoryProvider(map[string]memprovider.InMemoryFlag{
-	"new-checkout": {
-		Key:            "new-checkout",
+	"checkout-express": {
+		Key:            "checkout-express",
 		State:          memprovider.Enabled,
-		DefaultVariant: "on",
-		Variants:       map[string]any{"on": true, "off": false},
+		DefaultVariant: "express",
+		Variants:       map[string]any{"express": true},
 	},
 })
-driver := openfeaturefeature.New(provider)
-flags := feature.New(driver)
 ```
 
-Register this driver's start and stop hooks as shown above. After startup,
-`flags.Value(ctx, feature.NewFlag("new-checkout", false), feature.Subject{})` returns `true`
-with a nil error. Shutdown releases the provider. For application tests that
-only need flag values, the [memory driver](testing.md) is simpler.
+Pass this provider to `New` and run the lifecycle described above. After startup,
+evaluating `feature.NewFlag("checkout-express", false)` returns `true` with no
+error. `Stop` releases the provider; no server needs cleanup. This proves SDK
+wiring, not your production provider's targeting or refresh behavior.
 
-For every function and option, see
-[`openfeaturefeature`](https://pkg.go.dev/arkoren.dev/driver/openfeature/openfeaturefeature).
+See the [`openfeaturefeature` API](https://pkg.go.dev/arkoren.dev/driver/openfeature/openfeaturefeature).
 
 ## LaunchDarkly
 
-The LaunchDarkly driver evaluates flags with LaunchDarkly's official Go server
-SDK. The SDK streams flag changes into memory and evaluates them locally, so
-an evaluation makes no network call and keeps working through a short outage
-with the last flags it received. Choose it when LaunchDarkly is your flag
-service. It maps the SDK's reasons and errors to the contract directly, with
-no provider in between.
+Choose this driver for LaunchDarkly's official Go server SDK. The SDK receives
+flag updates and evaluates locally. You need a LaunchDarkly environment, its
+server-side SDK key, and the application's flags configured in that environment.
+Load the key from approved secret configuration rather than embedding it in code.
 
-You need a LaunchDarkly account, an environment, and that environment's
-server-side SDK key. Keep the key in secret configuration rather than source
-code. Create the boolean flag used by your application in that environment;
-the SDK evaluates flags but does not create them.
-
-### Installation
+### Provider Setup
 
 ```sh
 go get arkoren.dev/driver/launchdarkly
 ```
 
-### Connecting
-
-`launchdarklyfeature.New` takes the server-side SDK key of one LaunchDarkly
-environment and owns the SDK client. It does no I/O and fails only if the key
-is empty. `Start` builds the client and waits for the first flags, so a wrong
-key or an unreachable service fails startup instead of serving defaults, and
-`Stop` closes the client after flushing analytics events. Construct the driver
-and facade:
+With the environment's key already loaded as `sdkKey`, construct an owned driver:
 
 ```go
 import "arkoren.dev/driver/launchdarkly/launchdarklyfeature"
 
-driver, err := launchdarklyfeature.New(os.Getenv("LAUNCHDARKLY_SDK_KEY"))
+driver, err := launchdarklyfeature.New(sdkKey)
+```
+
+`New` performs no I/O and rejects an empty key. Handle that error before
+constructing the facade:
+
+```go
 flags := feature.New(driver)
 ```
 
-Handle the constructor error, then register `driver.Stop` for cleanup,
-`driver.Start` for startup, and `driver.Ping` for readiness in your existing
-composer. Evaluate only after startup succeeds.
-`Ping` backs a readiness check. It does no I/O and fails with an error wrapping
-`feature.ErrNotReady` until the client is initialized, so it also fails before
-`Start` and after `Stop`. [Lifecycle and ownership](../application/lifecycle-and-ownership.md)
-explains the hooks and checks.
+Register `Start`, `Stop`, and `Ping`. Startup builds the SDK client and waits for
+initial flag data; failure closes the acquired client instead of publishing it.
+The default SDK receives updates from LaunchDarkly; an SDK-configured persistent
+store can provide last-known data. Treat that data as potentially stale, not as
+proof of a live remote connection.
+`Ping` performs no I/O and checks that a client exists and reports initialized.
+It is not a remote connection or freshness check. Before startup and after stop,
+evaluation returns `ErrNotReady`.
 
-If you already build the client, for instance to share it with code that
-tracks events, pass it instead and keep ownership. Here `sdkKey` is the
-environment's server-side SDK key:
+Unlike OpenFeature, an owned LaunchDarkly driver can retry failed startup or
+start again after stop. Starting an already running driver fails. `Stop` closes
+the client and flushes pending analytics; the SDK's close is not bounded by the
+cleanup context. Owned lifecycle calls serialize without a context-bounded wait.
+Native construction hooks must not recursively call the driver's lifecycle.
 
-```go
-import ld "github.com/launchdarkly/go-server-sdk/v7"
+### Startup Budget
 
-client, err := ld.MakeClient(sdkKey, 5*time.Second)
-if client != nil {
-	defer client.Close()
-}
-driver := launchdarklyfeature.NewFrom(client)
-```
-
-`NewFrom` creates and closes nothing, so `Start` and `Stop` do nothing and you
-close the client yourself. The SDK can return a client together with an
-initialization error; the cleanup above releases it in either case.
-
-`Start` checks `ctx` before constructing the SDK client, but the SDK's startup
-wait is bounded by `StartWait`, not subsequent context cancellation. `Stop`
-waits for the SDK's analytics flush and is not bounded by its context. Set SDK
-network and event options to match your shutdown budget.
-Owned lifecycle calls also serialize, and that wait is not canceled by `ctx`.
-An SDK construction hook must not recursively call the same driver's `Start`
-or `Stop`.
-
-### Configuration
-
-| Builder method | Default | Notes |
-|---|---|---|
-| `Builder.StartWait(d)` | 5 seconds | How long `Start` waits for the first flags before failing. Zero selects the default; negative returns immediately and fails unless the data source is already ready. |
-| `Builder.SDK(fn)` | none | Stores a hook that changes the SDK's `ld.Config` at Start before the client is built, for a Relay Proxy or federal endpoint, a persistent store, event settings, or logging. |
-
-To allow more time for the first flags, set `StartWait`:
+Startup waits five seconds by default. If your deployment needs a longer initial
+synchronization budget, configure it when constructing the driver. Import
+standard-library `time`:
 
 ```go
 driver, err := launchdarklyfeature.New(sdkKey, func(features *launchdarklyfeature.Builder) {
@@ -369,123 +274,112 @@ driver, err := launchdarklyfeature.New(sdkKey, func(features *launchdarklyfeatur
 })
 ```
 
-This changes the startup wait, not evaluation deadlines. For native event
-settings, add an SDK hook to that construction callback. Import `ld` as
-`github.com/launchdarkly/go-server-sdk/v7` and `ldcomponents` as
-`github.com/launchdarkly/go-server-sdk/v7/ldcomponents`:
+Zero selects the five-second default; a negative wait returns immediately and
+fails unless the source is already ready. Startup checks `ctx` before client
+construction, but subsequent cancellation does not interrupt the SDK's wait.
+`StartWait` is not an evaluation timeout.
 
-```go
-features.SDK(func(config *ld.Config) {
-	config.Events = ldcomponents.SendEvents().FlushInterval(10 * time.Second)
-})
-```
-
-The SDK uses a ten-second event flush interval after startup.
-Handle the constructor's error before using `driver`. New callbacks run directly
-once in order on one fresh draft before validation.
-Nil entries panic; expanded nil/empty slices omit edits. Methods return the same
-draft; retaining it cannot change published settings. The SDK hook runs during
-Start, never construction. NewFrom has no optional settings because its client
-is already configured. Native SDK objects and function captures stay shared.
-NewFrom creates and closes nothing.
-
-### Evaluating flags
-
-Create `new-checkout` as a boolean flag in the LaunchDarkly environment whose
-server-side SDK key you configured. Use the shared
-[evaluation example](overview.md#evaluating-a-flag) after startup. A flag that
-is off or whose prerequisite fails returns your application default, **not**
-LaunchDarkly's off variation. Choose the default to match your safe off path.
-
-### Behavior and limits
-
-Every subject becomes a LaunchDarkly context of kind `user`, keyed by the
-subject key. An anonymous subject becomes one anonymous context with the key
-`anonymous`, so all anonymous subjects share a single percentage-rollout bucket
-and match the same targeting. Attributes keep their types; a list of strings is
-an array that a rule matches if any element matches, and a time becomes Unix
-milliseconds, which LaunchDarkly's date operators accept. An attribute named
-`key` or `kind` never replaces the subject's identity.
-
-> [!WARNING]
-> A flag that is switched off returns the fallback in your flag definition,
-> not LaunchDarkly's off variation, because the contract says a disabled flag
-> yields the caller's default. The same holds when a prerequisite fails. If a
-> flag must serve a specific configured value, keep it on with its prerequisites
-> satisfied and use targeting rules. To use that value while the flag is off,
-> make the application default match the off variation.
-
-Reasons map as follows: a target or rule match is `targeting_match`, the
-fallthrough is `default`, and a rule or fallthrough that is part of an
-experiment is `split`. The SDK does not report ordinary percentage rollouts, so
-they show as `targeting_match` or `default`. The variant is the variation's
-index as text, such as `"1"`, because LaunchDarkly variations have no names.
-
-Errors map to the contract's: an unknown flag is `feature.ErrNotFound`, a
-variation of the wrong type is `feature.ErrTypeMismatch`, a client without
-flags is `feature.ErrNotReady`, and a context the SDK rejects is
-`feature.ErrInvalidSubject`. A malformed flag or an SDK exception fails with an
-error that names it. A variation that is JSON `null` returns the caller's
-default. Integer reads accept whole numbers; LaunchDarkly stores numbers as
-floats, so `3.5` read as an integer is `feature.ErrTypeMismatch`.
-
-Only booleans, strings, integers, and floats can be read. LaunchDarkly's JSON
-flags are not available.
-Invalid raw kinds fail before readiness, SDK lookup, or the disabled/null
-shortcut. For known kinds, off flags, failed prerequisites, and null variations
-retain the fallback behavior above. Evaluation is local: after its initial
-context check, it does not observe later cancellation.
-
-### Tracking a native SDK event
-
-For LaunchDarkly analytics beyond flag evaluation, create a custom metric in
-your LaunchDarkly environment, then track its event name with the native client
-after successful driver startup:
-
-```go
-import "github.com/launchdarkly/go-sdk-common/v3/ldcontext"
-
-err := driver.Client().TrackEvent("checkout-completed", ldcontext.New(userID))
-```
-
-Here `userID` is the same stable string identity used for flag evaluation.
-A nil error means the SDK accepted the event; it does not confirm remote
-delivery. The SDK queues analytics and flushes during shutdown; avoid sending
-personal attributes you have not approved for LaunchDarkly. Do not close an
-owned client yourself: `driver.Stop` does that. With `NewFrom`, close the
-client yourself after all users finish. The driver ships no webhook receiver
-or flag administration adapter.
-
-### Running locally
-
-The SDK ships a test data source that needs no network, which suits tests that
-should go through the real SDK path. Build a client on it and wrap it:
+For native endpoints, storage, event settings, or network budgets, supply an SDK
+hook. This alternative construction disables SDK analytics, not facade telemetry:
 
 ```go
 import (
 	ld "github.com/launchdarkly/go-server-sdk/v7"
 	"github.com/launchdarkly/go-server-sdk/v7/ldcomponents"
-	"github.com/launchdarkly/go-server-sdk/v7/testhelpers/ldtestdata"
 )
 
-data := ldtestdata.DataSource()
-data.Update(data.Flag("new-checkout").VariationForAll(true))
+driver, err := launchdarklyfeature.New(sdkKey, func(features *launchdarklyfeature.Builder) {
+	features.SDK(func(config *ld.Config) {
+		config.Events = ldcomponents.NoEvents()
+	})
+})
+```
 
-client, err := ld.MakeCustomClient("test-key", ld.Config{
+The hook runs at `Start`, not at construction. Published settings are detached
+from the construction draft, but native objects and captured state remain shared.
+All construction callbacks run once in order; nil callbacks panic.
+
+### Evaluation Results
+
+Create `checkout-express` as a boolean flag in the selected environment, then use
+the shared [flag decision](overview.md#flag-decisions) after startup.
+
+> [!WARNING]
+> An off flag or failed prerequisite returns the definition's fallback, not
+> LaunchDarkly's configured off variation. Choose a safe application fallback.
+> If a configured provider value must be served, keep the flag on with its
+> prerequisites satisfied and select that value through targeting rules.
+
+Each subject becomes a context of kind `user`. An empty key becomes the anonymous
+key `anonymous`, so all anonymous subjects share one identity and rollout bucket.
+Attributes named `key` or `kind` cannot replace this identity. String lists become
+arrays, and `time.Time` becomes Unix milliseconds for date rules. The SDK can
+reject reserved attributes with incompatible types as `ErrInvalidSubject`.
+
+Target and rule matches report `ReasonTargetingMatch`; fallthrough reports
+`ReasonDefault`. Experiment rule matches and fallthrough report `ReasonSplit`;
+ordinary percentage rollouts need not. Variants are variation indexes formatted
+as strings, such as `"1"`, not named segments or variation labels.
+
+Missing keys, wrong types, uninitialized clients, and invalid contexts map to the
+corresponding portable errors. Malformed flags and SDK exceptions retain their
+error kind. Null variations supply no value and therefore use the fallback.
+Fractional numbers requested as integers fail rather than truncate. Evaluation
+is local and checks cancellation only before SDK evaluation.
+
+### Native Ownership
+
+If your application already owns a configured `*ld.LDClient` named `client`,
+wrap it with `launchdarklyfeature.NewFrom(client)`. The wrapper accepts no
+options, and its `Start` and `Stop` do nothing. You must close the client after
+all users finish, including any client returned alongside an initialization
+error. An owned driver's `Client()` is nil before successful startup and after
+stop; do not close its client yourself.
+
+For custom analytics, first configure the matching metric in LaunchDarkly. After
+successful startup, track the metric's event name with the same stable account
+identity used for evaluation:
+
+```go
+import "github.com/launchdarkly/go-sdk-common/v3/ldcontext"
+
+err := driver.Client().TrackEvent("checkout-completed", ldcontext.New(accountID))
+```
+
+A nil error confirms SDK acceptance, not remote delivery. Analytics can transmit
+context data outside facade telemetry's redaction policy; review permitted
+attributes and event configuration before enabling it. Arkoren ships no native
+flag-administration or webhook adapter.
+
+### Local Data
+
+The SDK's test data source exercises local evaluation without a LaunchDarkly
+connection. Using the SDK imports above, define a checkout fixture:
+
+```go
+import "github.com/launchdarkly/go-server-sdk/v7/testhelpers/ldtestdata"
+
+data := ldtestdata.DataSource()
+data.Update(data.Flag("checkout-express").VariationForAll(true))
+```
+
+Build a client with remote analytics disabled. Retain cleanup even if client
+initialization fails:
+
+```go
+client, err := ld.MakeCustomClient("local-checkout", ld.Config{
 	DataSource: data,
 	Events:     ldcomponents.NoEvents(),
 }, 0)
 if client != nil {
 	defer client.Close()
 }
-driver := launchdarklyfeature.NewFrom(client)
-flags := feature.New(driver)
 ```
 
-Reading `new-checkout` through `flags` for any subject returns
-`true` with a nil error. The deferred close belongs to you because this uses
-`NewFrom`; there is no server to clean up. For application tests that only need
-flag values, the [memory driver](testing.md) is simpler.
+Handle `err` before wrapping the client with `NewFrom` and constructing the
+facade. Evaluating `feature.NewFlag("checkout-express", false)` then returns
+`true` without a remote service. The deferred close is yours because the client
+is borrowed; there is no server to remove. Use [memory fixtures](testing.md)
+when only application behavior, rather than SDK integration, is under test.
 
-For every function and option, see
-[`launchdarklyfeature`](https://pkg.go.dev/arkoren.dev/driver/launchdarkly/launchdarklyfeature).
+See the [`launchdarklyfeature` API](https://pkg.go.dev/arkoren.dev/driver/launchdarkly/launchdarklyfeature).

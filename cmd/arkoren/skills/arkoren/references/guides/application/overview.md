@@ -1,128 +1,119 @@
 ---
 title: Application Overview
 nav: Overview
-description: Decide when to use the optional application coordinator and understand composition, startup, and shutdown.
+description: Decide whether your service needs an application coordinator and understand its boundaries.
 order: 10
+summary:
+  - Choose the optional coordinator without giving up standalone packages or explicit dependencies.
+  - Understand composition, startup, supervised work, and reverse-order cleanup.
+  - Separate public welcome content from protected operator information and shared telemetry.
 ---
 
 # Application Overview
 
-If your HTTP handlers need PostgreSQL, the database must be available before the
-server accepts requests and remain available until those requests finish.
-`application` coordinates that startup and shutdown order, along with background
-workers and readiness checks. The package is optional: if you only need an HTTP
-server, you can
-[run it directly](../http-networking/server.md); Arkoren's standalone packages
-do not require an application.
+An HTTP service often needs its database before accepting requests and must keep
+that database open until requests finish. The `application` package coordinates
+these dependencies across startup, running work, and shutdown. It does not
+construct dependencies for you or make them available through a lookup container.
 
-An **Application** is the runtime coordinator. A **Composer** is the temporary
-scope passed to a synchronous composition function: the code that connects your
-concrete dependencies and registers their lifecycle callbacks. You construct and
-pass dependencies explicitly; the composer does not discover them.
+## Choose Coordination
 
-## Start dependencies before serving requests
+Use an application when several components need one startup order, one owner for
+cleanup, or shared supervision. If your existing host already manages those
+responsibilities, keep using it: Arkoren's router, server, and service packages
+work independently. You can [run an HTTP server directly](../http-networking/server.md)
+or [adopt individual packages](../first-steps/installation.md#existing-applications)
+without adding an application.
 
-Import `application` from `arkoren.dev/core/application`. Here `ctx` is your
-service-lifetime context, `db` is an existing root
-[`*postgresdatabase.Driver`](https://pkg.go.dev/arkoren.dev/driver/postgres/postgresdatabase#Driver),
-and `srv` is an existing
-[`*server.Server`](https://pkg.go.dev/arkoren.dev/core/http/server#Server)
-whose handlers use that database. This application owns their lifecycle; neither
-resource has started, and no other owner closes them.
+To create an idle coordinator, import `arkoren.dev/core/application`:
 
 ```go
-app := application.New()
-err := app.Run(ctx, func(composer *application.Composer) {
-	composer.Cleanup(db.Stop)
-	composer.Startup(db.Start)
-	composer.Cleanup(srv.Stop)
-	composer.Startup(srv.Start)
-	composer.Run(srv.Serve)
+app := application.New(func(app *application.Builder) {
+	app.Name("inventory")
 })
 ```
 
-`Startup` registers initialization, `Run` registers supervised running work, and
-`Cleanup` registers resource release. Registration does not execute the callback.
-For releases with the signature `func()`, such as unsubscribing or canceling,
-use `Defer`; use `MustDefer` when acquisition returns `(func(), error)`. These
-use the same cleanup stack, not Go function-return timing. See
-[infallible releases](composition.md#own-subscriptions-and-infallible-releases).
-The database startup verifies connectivity, then the server binds its listener.
-Only after startup succeeds does `Serve` begin handling requests.
-Passing a driver to a facade does not register or run its lifecycle: the explicit
-database startup and cleanup registrations above remain necessary.
+This resolves construction settings but starts no resources or listeners.
+Choose [component settings](../first-steps/configuration.md#component-construction)
+when constructing the application; its builder is not a runtime control handle.
 
-Application `Run` waits for the runner group to finish or `ctx` to end, then
-shuts down. It cancels running work and waits within its shutdown budget before
-cleanup: the server stops before the database because cleanup reverses
-registration order. Register each release as soon as you own its resource so it
-also runs if later startup
-fails. Releases must tolerate a never-started or partially started component.
+## Understand Phases
 
-Handle `err` at your executable boundary. Caller cancellation alone after
-successful startup is a normal stop; startup, runner, and shutdown failures are
-returned. Focused snippets in these guides omit routine error propagation but
-retain checks that determine whether ownership or another consequential action
-can proceed.
+A **composer** is the temporary scope passed to your composition callback.
+Composition constructs concrete dependencies, passes typed values to their
+consumers, and registers work. Every composition callback finishes synchronously,
+in argument order, before any startup callback runs.
 
-## Keep construction separate from startup
+Inside composition, `Startup` registers initialization, `Run` registers supervised
+running work, and `Cleanup` registers resource release. These calls register
+callbacks; they do not execute them. Startup callbacks run in registration order.
+Only after all succeed do runners and background health checks launch. A
+constructed dependency is therefore not necessarily connected or ready to use.
 
-All composition functions finish, synchronously in argument order, before any
-startup callback runs. You can pass the constructed database to handlers during
-composition, but defer queries that require connectivity until startup or running
-work. Startup callbacks then run in registration order; runners and background
-[health monitoring](health-and-readiness.md) wait for every callback to succeed.
-Configured telemetry starts before those callbacks and finalizes after cleanup.
+Application `Run` combines startup, waiting for runners or caller cancellation,
+and shutdown. Shutdown cancels runners, waits within its budget, then releases
+resources in reverse cleanup-registration order. Register cleanup immediately
+when ownership begins: it also runs if later construction or startup fails,
+including for components whose startup never ran.
 
-Keep the composer in composition code, not request handlers or goroutines.
-`composer.Context()` is the startup context; a runner must use the context it
-receives instead. When services need shared logging, telemetry, or events, obtain
-those handles through `composer.App()` and pass the specific handles, not the
-application.
+[Composition](composition.md) shows how to construct and share typed values.
+[Lifecycle and Ownership](lifecycle-and-ownership.md) explains rollback,
+supervision, and cooperative shutdown. A successful startup does not establish
+continuing availability; [Health and Readiness](health-and-readiness.md) keeps
+that separate from lifecycle state.
 
-The logger can add trace and span IDs from a valid context even before startup;
-use context-aware methods such as `InfoContext`. That correlation does not enable
-recording. Application telemetry remains inactive during composition and, without
-explicit telemetry configuration or [diagnostic capture](../observability/exposing-diagnostics.md),
-records nothing after startup either. See [Telemetry](../observability/telemetry.md)
-for instrumentation and exporter setup.
+## Share Handles
 
-## Choose a public welcome page or operator information
+Services that need logging, telemetry, or events receive those specific handles,
+not the application. At the top of a composition callback, bind only the handles
+it uses, then pass them to constructors. The handles are stable: a logger obtained
+before capture is attached still reaches that capture after startup. Keep the
+composer out of request handlers and background goroutines. Its context belongs
+to startup; runners use their supplied context instead.
 
-If your service needs a landing page before you build its own UI, register
-`app.WelcomeHandler()` on your existing `*router.Router` during composition:
+The logger adds trace and span IDs from a valid context even before startup;
+use context-aware methods such as `InfoContext`. Correlation does not enable
+recording. Application telemetry records nothing without an explicit
+[telemetry configuration](../observability/telemetry.md) or
+[diagnostic capture](../diagnostics/capture-setup.md). Recording starts after
+composition, and telemetry finalizes after resource cleanup and final lifecycle
+events. The application owns that lifecycle.
+
+## Choose Handler Exposure
+
+If the service needs a temporary public home page, mount the welcome handler on
+your existing `routes *router.Router` (`arkoren.dev/core/http/router`):
 
 ```go
 routes.Get("/", app.WelcomeHandler(), application.WelcomeOperation)
 ```
 
-The exact-root route returns a self-contained HTML page with your configured
-application name and links to Arkoren's getting-started guide, documentation,
-and GitHub repository. An empty name uses a generic heading. Choose a name
-suitable for public display; it is HTML-escaped. The page needs no JavaScript,
-external fonts, or network assets, and includes no runtime, configuration, or
-build details. It is a landing page, not a health probe. Replace or remove the
-registration when you add your own home page.
+The exact-root route serves self-contained HTML containing the escaped application
+name and Arkoren resource links. Choose a name suitable for public display; an
+empty name uses a generic heading. It fetches no external assets, needs no
+JavaScript, and exposes no runtime, configuration, or build details. Replace it
+when you add your own home page; it is not a health probe. For a first request
+through a running service, follow the [quickstart](../first-steps/quickstart.md#first-request).
 
-For operator diagnostics instead, the separate `app.InfoHandler()` returns the
-full JSON description: name, version, environment, lifecycle state, log level,
-start time, uptime, and binary build information. Restrict its listener or add
-authentication and authorization **before** exposing it; it has no built-in
-access control. On your existing operator-only router:
+Operator information is different: `InfoHandler` exposes name, version,
+environment, lifecycle state, log level, start time, uptime, and binary build
+details. Restrict network access or add authentication and authorization before
+mounting it. On an existing operator-only router:
 
 ```go
 operatorRoutes.Get(application.InfoPath, app.InfoHandler(), application.InfoOperation)
 ```
 
-`app.Info()` returns the same diagnostic snapshot inside your process. Neither
-handler is mounted automatically, and neither depends on debug mode. The optional
-operation callbacks document only the routes you register; they do not enforce
-access policy. See [Exposing Diagnostics](../observability/exposing-diagnostics.md)
-for endpoint protection and [Health and Readiness](health-and-readiness.md) for
-traffic probes.
+`app.Info()` returns the same snapshot inside the process. Neither handler is
+mounted automatically or controlled by debug mode. Operation annotations document
+the registered routes; they do not protect them. Follow
+[diagnostic endpoint protection](../diagnostics/capture-setup.md) before remote
+exposure, and use dedicated [probes](health-and-readiness.md#mount-probes) for
+traffic and restart decisions.
 
-For settings and runtime methods, see the
+Focused fragments in these guides keep error results visible but omit routine
+propagation. Checks that determine ownership or another consequential decision
+remain explicit; complete application code must handle its errors.
+
+For construction and runtime contracts, see the
 [`application` API reference](https://pkg.go.dev/arkoren.dev/core/application).
-
-Continue with [Lifecycle and Ownership](lifecycle-and-ownership.md) to make this
-ordering safe when startup fails or shutdown runs out of time.

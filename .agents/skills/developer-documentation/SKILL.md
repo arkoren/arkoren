@@ -50,10 +50,10 @@ the custom raw-Markdown policy suite is retired. No archive-generation step exis
 
 1. Establish the actual contract from current source and tests, using existing documentation and examples as leads rather than proof. Check example calls and names against the API and repository conventions. Record exact names, scopes, defaults, prerequisites, outputs, failures, and version boundaries. Do not invent behavior.
 2. Resolve the [writing settings](#writing-settings) from the request before choosing a page shape. For prose changes, load [Prose style](references/prose-style.md); for a new or materially revised guide, also load the [mandatory guide review](references/revision-and-links.md#mandatory-guide-review) before outlining. Load other references when the task needs them.
-3. Establish the reader's starting situation and intended outcome before outlining. Order pages and sections by the questions, actions, and decisions needed to reach that outcome, not by an API inventory. Each section must advance that path or serve an identified lookup need. Group related setup, constraints, examples, and results; introduce alternatives when there is a reason to choose them. Resolve this organization before polishing sentences.
-4. Write examples as focused teaching units: reader's situation and goal → action → minimal snippet → observable behavior. Load [Example completeness](references/examples-and-reference.md#example-completeness) before changing code blocks: establish the smallest default construction first, then teach optional settings separately. When the purpose is not obvious, follow the [use-case-first pattern](references/prose-style.md). Name existing setup in prose and link to its own example. Reserve end-to-end code for an explicit quickstart or integration lesson.
+3. For a new or materially revised consumer guide, follow [Writing a Page](references/page-writing.md). Settle category boundaries before a category rewrite, justify each page from reader tasks and source evidence, and review one page at a time. Establish its starting state, outcome, scope, and section order before drafting; present the best-supported proposal first.
+4. Write small examples as focused teaching units: reader's situation and goal → action → minimal snippet → observable behavior. Load [Example completeness](references/examples-and-reference.md#example-completeness) before changing code blocks. Keep construction on the page that owns setup, split larger examples into meaningful steps with prose between them, and teach optional settings separately. Reserve end-to-end code for an explicit quickstart or integration lesson.
 5. Place each safety, production, lifecycle, security, compatibility, and destructive-operation constraint beside the action it qualifies. State a constraint before the example when acting first could cause harm.
-6. Review reader direction before style approval, using [Revision and links](references/revision-and-links.md). Follow incoming links and the page sequence, then read each whole page. Explain what each section enables the reader to understand, do, or decide next and why it belongs there; repair disconnected facts, unexplained alternatives, and unnecessary page jumps. Review fidelity separately against the verified contract and update affected links and examples.
+6. After settling a guide's body, write its descriptive `summary` frontmatter using [Page Summary](references/page-writing.md#page-summary). Review reader direction and fidelity separately using [Revision and links](references/revision-and-links.md), update affected links and examples, and get feedback before advancing to the next page of an interactive rewrite.
 
 ## Writing settings
 
@@ -65,8 +65,9 @@ Do not ask the user to configure them for routine work.
 | --- | --- | --- |
 | `page_type` | Package usage: when to use the capability, how to use it, and consequential behavior. | An explicitly requested quickstart, tutorial, integration lesson, runbook, or reference; preserve that purpose when revising an existing page of that type. |
 | `detail` | Concise: one reader goal per section, without unrelated setup or repeated sibling-page explanations. | Requested deeper coverage of named topics. |
-| `examples` | Small, concise teaching units tailored to the immediate need; no fixed line maximum. | Honor an explicitly requested size or complete-example scope. |
-| `authored_contents` | Omit hand-written contents lists, tables of contents, and in-page indexes. The website supplies section navigation. | Include only when the user explicitly asks for one. |
+| `examples` | Small blocks, one operation or decision each; split necessary larger examples into meaningful steps with explanatory prose. | Honor an explicitly requested size or complete-example scope without arbitrary slicing. |
+| `headings` | Short titles and headings, usually two or three words; four when needed. | Preserve exact official names and identifiers. |
+| `authored_contents` | Omit hand-written contents lists and in-page indexes. A completed guide's descriptive `summary` frontmatter is required and is not a table of contents. | Include an authored table of contents only when explicitly requested. |
 
 A request to document a package or add subpages does not request an app-building
 tutorial. Assume an existing project and name required collaborators in prose.
@@ -89,6 +90,7 @@ guide indexes are navigation infrastructure, not authored in-page contents lists
 
 | Need | Read |
 | --- | --- |
+| Write or materially revise a consumer guide: category decisions, page scope, short headings, small examples, frontmatter summary, and human review | [Writing a Page](references/page-writing.md) |
 | Write or place an Arkoren guide: the tree, files, page shape, mandatory driver compatibility matrices, per-driver structure and companion capabilities, depth | [Arkoren guides](references/guides.md) |
 | Make prose readable: relevance, early payoff, connected explanations, ambiguity, terminology, and sentence rhythm | [Prose style](references/prose-style.md) |
 | Choose a page shape for onboarding, concepts, tasks, runbooks, catalogs, or comparisons | [Page patterns](references/page-patterns.md) |

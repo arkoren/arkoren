@@ -1,185 +1,195 @@
 ---
 title: Lazy Collections
-description: How lazy collections defer work until you read the result, stop early, keep indexes through a chain, and behave when iterated twice.
+description: Defer collection work until traversal and choose safe stopping, buffering, and replay behavior for your source.
 order: 20
+summary:
+  - Consume only the needed prefix and recognize operations that read or buffer the full source.
+  - Supply iterators with explicit stop, cleanup, cancellation, and ownership rules.
+  - Interpret callback indexes and windows without assuming cached or replayable results.
 ---
 
 # Lazy Collections
 
-## Introduction
+If a packing station needs only the next two ready parcels, transforming every
+parcel first does unnecessary work. A `LazySlice` is an iterator: streaming
+steps such as `Filter` and `Map` run as you consume their result, not when you
+build the chain. `LazyMap` applies the same model to keyed entries.
 
-If you need only the first few matching users, an eager chain can still
-transform every user before selecting the result. A lazy chain pulls users
-through streaming steps as you read them, so it can stop once it has enough.
-Operations that need the full input, such as sorting or grouping, are the
-exception, as explained below.
-The examples use the `collection` package from
-`arkoren.dev/foundation/collection` and these users:
+Use eager collections when you want an immediately available result. Use lazy
+collections when deferring callbacks or stopping before the end matters. A lazy
+chain does not cache values, add concurrency, or make a source replayable.
+
+## Reading A Prefix
+
+Import `arkoren.dev/foundation/collection`. These parcels are already in memory;
+`Lazy()` changes when later operations run, without copying the source:
 
 ```go
-type User struct {
-	Name   string
-	Age    int
-	Active bool
+type Parcel struct {
+	ID    string
+	Ready bool
 }
 
-users := collection.NewSlice([]User{
-	{Name: "Ada", Age: 36, Active: true},
-	{Name: "Bob", Age: 17, Active: true},
-	{Name: "Cy", Age: 52, Active: false},
+parcels := collection.NewSlice([]Parcel{
+	{ID: "pkg-41", Ready: false},
+	{ID: "pkg-42", Ready: true},
+	{ID: "pkg-43", Ready: true},
+	{ID: "pkg-44", Ready: true},
 })
 ```
 
-Start a lazy chain from the eager collection with `Lazy()`:
+Observe the source before filtering to distinguish records read from records
+selected:
 
 ```go
-calls := 0
-first := users.Lazy().TapEach(func(int, User) {
-	calls++
-}).Filter(func(_ int, u User) bool {
-	return u.Active
-}).Map(func(_ int, u User) string {
-	return u.Name
+read := 0
+next := parcels.Lazy().TapEach(func(_ int, _ Parcel) {
+	read++
+}).Filter(func(_ int, parcel Parcel) bool {
+	return parcel.Ready
+}).Map(func(_ int, parcel Parcel) string {
+	return parcel.ID
 }).Take(2)
-// nothing has run yet: calls == 0
-
-names := first.Items() // [Ada Bob]; calls == 2
 ```
 
-Nothing happens when the chain is built. `Items()` pulls items through the
-whole chain one at a time, and `Take(2)` stops the pull as soon as it has two,
-so the third user is never read. `TapEach` is a convenience for observing items
-as they pass, such as for logging; it does not change them.
-
-A lazy collection is a function, so you can also range over it directly and
-break out whenever you like:
+`read` is still zero. `TapEach` observes each item without changing it; on a
+lazy collection it runs only during traversal. Materialize the selected IDs
+when the station is ready to use them:
 
 ```go
-for i, name := range first {
-	fmt.Println(i, name)
-}
+ids := next.Items()
 ```
 
-Choose between the two kinds by what the work costs:
+`ids` is `[]string{"pkg-42", "pkg-43"}` and `read` is 3. `Take(2)` stops after
+two matches; it does not read `pkg-44`. `Eager()` instead returns an eager
+`collection.Slice[string]` with methods. Both materializers collect new outer
+storage and copy elements shallowly. A slice with no yielded values is nil;
+an empty materialized map is allocated.
 
-- Allocating eager transformations create intermediate collections; windowing
-  methods such as `Take` share existing storage. For a few hundred
-  items this is cheap and easy to debug, because each step's result is an
-  ordinary value.
-- A streaming lazy chain avoids an intermediate result slice at each step, so it suits large inputs and
-  chains that end in `First`, `Take`, or `Contains`, which stop as soon as they
-  have an answer.
-- Some operations need every item. `Sort` and `Reverse` read the whole source
-  when you iterate their results. `Partition`, `GroupBy`, `KeyBy`, and `CountBy`
-  consume it when you call them. Do not use these operations on an infinite
-  source, or when the full result cannot fit in memory.
+You can also range over a lazy collection directly, or pass `Iter()` to a
+standard-library iterator consumer. Breaking the loop stops traversal, provided
+the source honors the iterator's stop signal.
 
-## Supplying an iterator
+## Full Input Operations
 
-`NewLazySlice`, `NewLazyMap`, `NewTryLazySlice`, and `NewTryLazyMap` retain the
-iterator function and its captures without invoking or copying them. Supply a
-non-nil function: a lazy collection's zero value, or a constructor given nil,
-is a nil function and panics if traversed. To obtain an iterable empty sequence,
-convert an empty eager collection instead:
+Not every operation can produce its first result from a prefix:
+
+| Operation | Source Consumption |
+| --- | --- |
+| `Filter`, `Map`, `Take`, `Skip` | During traversal, as downstream asks for values. |
+| `First`, `FirstWhere`, `Contains`, `IsEmpty` | At the call, stopping when an answer is known. |
+| `Items`, `Eager`, `Len`, `Last`, `Reduce`, `Each` | At the call, through the end unless the operation can stop. |
+| `Sort`, `Reverse` | The whole source before yielding, on every traversal. |
+| `GroupBy`, `KeyBy`, `CountBy`, `Partition` | At the method call, buffering their results. |
+
+Keep full-input operations off infinite sources. Sorting, reversing, grouping,
+and partitioning also retain data in memory; laziness does not remove that
+cost. In particular, `source.Sort(compare).Take(2)` still reads and sorts every
+item before it yields two. `Unique` streams but retains a set of seen keys,
+so its memory use can grow with the number of distinct keys.
+
+## Supplying An Iterator
+
+`NewLazySlice` accepts an iterator yielding `(index, item)` pairs. For example,
+an application can expose an existing ordered set of bin labels without first
+building a collection result:
 
 ```go
-empty := collection.NewSlice[int](nil).Lazy()
-fmt.Println(empty.Items() == nil) // true; traversal is valid.
-```
-
-Use `Try()` instead of `Lazy()` for an empty fallible sequence. Maps follow the
-same pattern through `NewMap[K, V](nil)`.
-
-A lazy collection can also be infinite, as long as the chain ends in something
-that stops, such as `Take`:
-
-```go
-naturals := collection.NewLazySlice(func(yield func(int, int) bool) {
-	for n := 0; ; n++ {
-		if !yield(n, n) {
+bins := collection.NewLazySlice(func(yield func(int, string) bool) {
+	for index, label := range []string{"A-01", "A-02", "B-01"} {
+		if !yield(index, label) {
 			return
 		}
 	}
 })
-
-first := naturals.Take(4).Items() // [0 1 2 3]
 ```
 
-The source must return when `yield` returns false, as in this iterator. If the
-source acquires a file, cursor, or other resource, it must release that resource
-on every return, including an early stop. Wrapping an existing resource does
-not transfer ownership or register cleanup: the owner still arranges its close.
+The constructor retains the function and its captures without invoking them.
+`bins.Take(1).Items()` returns only `A-01`. The source must return when `yield`
+returns false; continuing to yield violates the Go iterator protocol.
+`NewLazyMap` accepts an `iter.Seq2[K, V]`, such as `maps.All(existingMap)` from
+the standard-library `maps` package. A Go-map source retains unspecified order.
 
-Collection operations run synchronously and start no goroutines. They supply no
-context, timeout, or cancellation signal. A blocking source must capture and
-observe the caller's context itself; stopping downstream cannot interrupt work
-that is blocked before the next yield. For fallible I/O, use a `TryLazySlice` or
-`TryLazyMap` source to report read or cancellation errors.
+Supply a non-nil function. Lazy zero values and constructors given nil are nil
+functions, not iterable empty collections; traversing them panics. For an empty
+source, use `collection.NewSlice[Parcel](nil).Lazy()` or
+`collection.NewMap[string, int](nil).Lazy()`.
 
-Ending a lazy chain with `Items()` gives a plain Go slice, and `Eager()` a
-`Slice` you can continue with. `LazyMap` works the same way, and
-`collection.LazyKeys` and `collection.LazyValues` turn one into a `LazySlice`.
+## Source Ownership
 
-## Sampling and sliding windows
+Wrapping an iterator does not acquire or close its resources. If your source
+opens a file or cursor inside its iterator, release it on every return,
+including early stop and failure. If the source captures an already open
+resource, its existing owner still arranges cleanup. For I/O that can fail,
+use [Fallible Collections](fallible-collections.md) rather than hiding read
+errors in an infallible iterator.
 
-To sample a stream, use [`Nth`](available-methods.md#nth): it selects every
-`n`th position starting at an optional zero-based offset. A missing or negative
-offset starts at zero, matching eager slices. It counts positions in the
-sequence, not the indices supplied by a custom iterator, and yields dense
-output indices.
+Collection operations run synchronously in the consuming goroutine. They start
+no goroutines and supply no context, timeout, or cancellation signal. A blocking
+source must capture and observe the caller's context itself. Stopping downstream
+cannot interrupt work blocked before the next yield.
 
-For complete groups that can overlap or skip a gap, use
-[`Sliding`](available-methods.md#sliding). For example, stop after the first
-two-item window without reading the gap before the next window:
+The source and callbacks also determine concurrency safety. Do not mutate a
+captured slice or map while another goroutine traverses it without
+synchronization. A lazy wrapper is not a snapshot of its captured data.
+
+## Callback Indexes
+
+A callback on `LazySlice` receives the index yielded by its immediate input.
+Custom sources can supply arbitrary indexes. Transformations yield dense output
+indexes starting at zero, so an index is not a stable record identifier:
 
 ```go
-read := 0
-windows := collection.NewSlice([]int{1, 2, 3, 4, 5, 6}).Lazy().TapEach(func(_ int, _ int) {
-	read++
-}).Sliding(2, 3)
-// read == 0: construction has not consumed the source.
-
-for _, window := range windows {
-	fmt.Println(window) // [1 2]
-	break
-}
-// read == 2: the gap and remaining windows were not consumed.
+labels := parcels.Lazy().Filter(func(_ int, parcel Parcel) bool {
+	return parcel.Ready
+}).Map(func(index int, parcel Parcel) string {
+	return fmt.Sprintf("%d: %s", index, parcel.ID)
+}).Take(2).Items()
 ```
 
-Each yielded window owns independent slice storage, unlike eager `Sliding`
-windows; nested pointers, maps, and slices inside elements are still shared.
-Both methods require positive steps and accept steps through `math.MaxInt`
-without wrapping. A large step does not let a lazy iterator jump over its
-source: requesting the next selection or window still reads the intervening
-items. Stop iteration when you have enough.
+With the standard-library `fmt` package imported, `labels` contains
+`0: pkg-42` and `1: pkg-43`. The rejected parcel no longer occupies a position
+in `Map`'s input. Carry the parcel ID in the value when later steps need its
+identity. Map callbacks receive keys instead of indexes.
 
-## Indexes in lazy chains
+## Sampling And Windows
 
-If you use an index in a callback, it refers to that step's input, not
-necessarily the original slice. Filtering renumbers its output from zero, so
-the callbacks after `Filter` see dense indexes without gaps:
+Use `Nth` to sample positions, or `Sliding` to inspect complete neighboring
+groups. With the parcels above:
 
 ```go
-for i, label := range users.Lazy().Filter(func(_ int, u User) bool {
-	return u.Age > 20
-}).Map(func(i int, u User) string {
-	return fmt.Sprint(i, u.Name)
-}) {
-	fmt.Println(i, label)
-}
-// 0 0Ada
-// 1 1Cy
+sample := parcels.Lazy().Nth(2, 1).Items()
+windows := parcels.Lazy().Sliding(2, 3)
 ```
 
-## Iterating more than once
+`sample` contains `pkg-42` and `pkg-44`: offset 1 is zero-based. `Nth` defaults
+to offset zero and clamps negative offsets to zero. Selection counts sequence
+positions, not the indexes a custom source supplies.
 
-A lazy collection invokes its iterator every time you traverse it; this does
-not cache the result. A slice- or map-backed source can be traversed again,
-but a one-shot source such as an open file, channel, or network response might
-yield nothing or only the unread remainder on a second pass. Treat such a
-source as single-use. If you need the result twice, call `Eager()` or `Items()`
-once and reuse the materialized value. Repeating a traversal also repeats
-`TapEach` or `Map` callbacks for the items the source yields.
+`windows` is an `iter.Seq2[int, []Parcel]`. It yields only the first two-parcel
+window here; the next start has no complete window. `Sliding` defaults its step
+to one and omits incomplete final windows. Use `Chunk` for nonoverlapping
+groups that include a final short group. Lazy chunks and windows own independent
+outer slice storage, unlike eager windows; nested references remain shared.
 
-For every lazy collection method, see the
-[`collection` API reference](https://pkg.go.dev/arkoren.dev/foundation/collection).
+Validate sizes and steps before calling these methods: `Chunk` and `Sliding`
+panic on nonpositive sizes, and `Nth` and `Sliding` panic on nonpositive steps.
+Positive steps through `math.MaxInt` are valid without wrapping. A lazy source
+still reads intervening items to reach the next selection; a large step does
+not skip I/O. Stopping after a yielded selection or window avoids reading the
+following gap.
+
+## Repeating Traversal
+
+Every traversal invokes the retained iterator again. Reusing `next.Items()`
+from the prefix example repeats its callbacks and increments `read` again.
+A slice-backed source can be traversed again, but sees shared element data,
+not an isolated snapshot.
+
+An already open file, channel, or network response may yield only its unread
+remainder on a second pass. A source that opens a fresh request can repeat I/O,
+including billed model work. Treat a source as single-use unless its contract
+says otherwise. If you need to inspect the same result twice, materialize it
+once and reuse that eager value rather than traversing again.
+
+For exact declarations, see the [`collection` API reference](https://pkg.go.dev/arkoren.dev/foundation/collection).

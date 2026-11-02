@@ -164,14 +164,14 @@ test("former HTTP capabilities routes retain HTML and Markdown redirects", () =>
   );
 });
 
-test("former standalone webhook routes redirect back to capabilities", () => {
+test("former webhook routes redirect to the receiving guide", () => {
   const html = readFileSync(
     new URL("../dist/docs/guides/webhooks/receiving.html", import.meta.url),
     "utf8",
   );
   assert.match(
     html,
-    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/http-capabilities\/webhooks">/,
+    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/webhooks\/receiving-webhooks">/,
   );
   const markdown = readFileSync(
     new URL("../dist/docs/guides/webhooks/receiving.md.html", import.meta.url),
@@ -179,7 +179,7 @@ test("former standalone webhook routes redirect back to capabilities", () => {
   );
   assert.match(
     markdown,
-    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/http-capabilities\/webhooks\.md">/,
+    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/webhooks\/receiving-webhooks\.md">/,
   );
 });
 
@@ -190,7 +190,7 @@ test("the older webhook alias redirects directly to its current destination", ()
   );
   assert.match(
     html,
-    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/http-capabilities\/webhooks">/,
+    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/webhooks\/receiving-webhooks">/,
   );
   const markdown = readFileSync(
     new URL("../dist/docs/guides/http/webhooks.md.html", import.meta.url),
@@ -198,18 +198,18 @@ test("the older webhook alias redirects directly to its current destination", ()
   );
   assert.match(
     markdown,
-    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/http-capabilities\/webhooks\.md">/,
+    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/webhooks\/receiving-webhooks\.md">/,
   );
 });
 
-test("removed standalone provider pages redirect to the shared adapter links", () => {
+test("former provider pages redirect to the adapter guide", () => {
   const html = readFileSync(
     new URL("../dist/docs/guides/webhooks/providers.html", import.meta.url),
     "utf8",
   );
   assert.match(
     html,
-    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/http-capabilities\/webhooks#provider-adapters">/,
+    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/webhooks\/provider-adapters">/,
   );
   const markdown = readFileSync(
     new URL("../dist/docs/guides/webhooks/providers.md.html", import.meta.url),
@@ -217,7 +217,7 @@ test("removed standalone provider pages redirect to the shared adapter links", (
   );
   assert.match(
     markdown,
-    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/http-capabilities\/webhooks\.md#provider-adapters">/,
+    /<meta http-equiv="refresh" content="0;url=\/docs\/guides\/webhooks\/provider-adapters\.md">/,
   );
 });
 

@@ -213,5 +213,5 @@ every instance competes for the lock and a failed migration takes instances down
 Registering migrations with `compose.Startup` is suitable for development and
 single instances.
 
-See the [migration guide](../../../../cmd/arkoren/skills/arkoren/references/guides/database/migrations.md)
+See the [migration guide](../../../../cmd/arkoren/skills/arkoren/references/guides/migrations/overview.md)
 and [API reference](https://pkg.go.dev/arkoren.dev/core/service/database/migrate).

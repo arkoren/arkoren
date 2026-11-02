@@ -1,103 +1,132 @@
 ---
 title: Cache Counters
 nav: Counters
-description: Keep atomic integer counters in the cache, including counters that expire with their window through `IncrementWithTTL`.
-order: 20
+description: Update shared integer counts atomically and give request windows an expiry without a separate write.
+order: 40
+summary:
+  - Update int64 counts atomically without applying the key's write TTL.
+  - Establish expiring request windows while preserving an existing deadline.
+  - Distinguish unchanged arithmetic rejection from uncertain network outcomes.
 ---
 
 # Cache Counters
 
-## Introduction
+Concurrent requests can lose increments if each reads a count and writes back
+its own replacement. Counter operations perform the arithmetic and mutation
+atomically instead. Use them for replaceable counts such as article views or
+requests within a window—not as the only record of billing or inventory.
 
-Counters answer questions such as "how many times was this post viewed" or
-"how many requests has this client sent this minute". A read followed by a write
-can lose an update when callers race. Use the cache's atomic counter operations
-instead. If several replicas must share a count, use a [shared driver](drivers.md),
-such as Redis; separate memory drivers keep separate counts.
+These examples assume an existing `*cache.Cache` named `store` and operation
+context `ctx`. Use `cache` from `arkoren.dev/core/service/cache` and
+standard-library `time`. A [shared driver](drivers.md) is required for replicas
+to share counts; separate memory drivers each keep their own total. Focused
+snippets omit routine propagation while keeping error results visible.
 
-## Updating a counter
+## Updating Counts
 
-`Increment` and `Decrement` change an integer stored under a key and return the
-new value. The driver checks the range and applies the change as one atomic
-operation; callers must not emulate this with a read, a local check, and a write.
-A missing or expired key starts from zero when the result fits `int64`.
-
-Here `store` is the [cache facade](overview.md#creating-a-cache), `ctx` is your
-operation context, and `time` below is the standard library package. Focused
-snippets omit routine error checks but keep the error result visible:
+An article-view counter needs a `cache.Key[int64]`. Increment it when a view
+should count:
 
 ```go
-key := cache.NewKey[int64]("views.posts.7")
-views, err := store.Increment(ctx, key, 1)
+views := cache.NewKey[int64]("article-views.v1:article-73")
+total, err := store.Increment(ctx, views, 1)
 ```
 
-On success, `views` is the new count. `Decrement` subtracts its delta with the
-same atomic behavior. The counter is stored as its decimal text, so
-`store.Get(ctx, key)` reads it as `int64`; an existing value that is not a base-10 integer
-causes an error and is left unchanged.
-
-### Rejecting an out-of-range result
-
-`Increment`, `Decrement`, and `IncrementWithTTL` accept only mathematical results
-from `math.MinInt64` through `math.MaxInt64`, inclusive. If a result falls outside
-that range, the operation returns an error without changing the target's value
-or TTL. A missing or expired target remains absent. In particular,
-`IncrementWithTTL` does not add an expiry to an existing persistent counter when
-its arithmetic fails.
-
-Overflow errors keep the driver's native identity; there is no portable cache
-overflow sentinel. Check the error before using the returned count. This is the
-defined overflow rejection behavior, not a promise that a transport error proves
-no write occurred: a lost reply can leave a network operation's outcome unknown.
-
-`Decrement` checks subtraction directly, rather than negating its delta. With
-`math` imported from the standard library, subtracting the minimum delta from
-itself is valid:
+On success, `total` is the new value. A missing or expired counter starts from
+zero, so its first increment by one returns one. `Decrement` subtracts its delta
+with the same atomic behavior:
 
 ```go
-balance := cache.NewKey[int64]("balance")
-err := store.Put(ctx, balance, math.MinInt64)
-value, err := store.Decrement(ctx, balance, math.MinInt64)
+total, err = store.Decrement(ctx, views, 1)
 ```
 
-On success, `value` is zero. Subtracting `math.MinInt64` from zero instead fails
-without changing that zero; doing so on a missing target fails without creating
-it. Do not replace subtraction with `store.Increment(ctx, key, -delta)` in
-application code, because negating `math.MinInt64` overflows before the driver
-sees it.
+This is useful for correcting a counted view; it is not a condition that prevents
+negative totals. Counters store base-10 integer text, so `store.Get(ctx, views)`
+can decode the count as `int64`. An existing noninteger value causes an error
+and remains unchanged.
 
-### Choosing an expiry policy
+`Increment` and `Decrement` ignore the key's declared write TTL. A newly created
+counter has no expiry, and an existing counter keeps its current expiry. Giving
+the key a five-minute policy therefore does not make these updates expire.
 
-A counter key must be `cache.Key[int64]`. `Increment` and `Decrement` do not apply
-its write TTL: a counter created this way has no expiry, and an existing one keeps the expiry
-it had. A counter that should reset, such as "requests in this minute", needs an
-expiry that is set in the same step as the increment. Doing it in two calls
-leaves a gap: a crash between them gives you a counter that never resets.
+## Expiring Windows
 
-## Counters with an expiry
+Request counts usually need to reset. A separate increment followed by an
+expiry-setting call leaves a crash window in which the count never expires.
+`IncrementWithTTL` updates the count and ensures an expiry in one atomic step.
 
-For a count that resets after a window, use `Cache.IncrementWithTTL`. It
-increments a key and makes sure it expires, in one
-atomic step. It is part of the driver contract, so the memory and Redis drivers
-both provide it; a driver whose vendor cannot do it atomically returns
-`cache.ErrUnsupported`. Here `address` identifies the client whose requests you
-are counting:
+For requests from an already authorized account, use a stable internal account
+ID as the key component. Here `accountID` is that application's string ID:
 
 ```go
-clientKey := cache.NewKey[int64]("rate." + address)
-count, remaining, err := store.IncrementWithTTL(ctx, clientKey, 1, time.Minute)
-_ = count     // requests so far in this window
-_ = remaining // time until the counter resets
+requests := cache.NewKey[int64]("export-requests.v1:" + accountID)
+count, remaining, err := store.IncrementWithTTL(ctx, requests, 1, time.Minute)
 ```
 
-The explicit TTL argument, not the key's write policy, controls this operation.
-On success, a new key is created from zero and given the TTL. A key that has no
-expiry gets the TTL, and one that already has an expiry keeps it. The TTL must
-be positive, otherwise the call fails with `cache.ErrInvalidTTL`. Redis rounds every positive
-TTL up to whole milliseconds, including durations shorter than one millisecond;
-it returns the exact `int64` count without a floating-point round trip. Remaining
-Redis lifetimes larger than `time.Duration` can represent saturate at its maximum.
-The [rate limiting middleware](../abuse-prevention/rate-limiting.md) uses
-`IncrementWithTTL` for its counters.
+On success, `count` is the updated total and `remaining` is time until expiry.
+A missing entry starts from zero with a one-minute expiry. An existing entry
+without expiry receives one minute; an existing expiring entry keeps its current
+deadline. Later requests do not slide that deadline forward. The window begins
+when expiry is first established, not at an aligned wall-clock minute.
 
-For every counter method and error, see the [`cache` API reference](https://pkg.go.dev/arkoren.dev/core/service/cache).
+The explicit TTL argument controls this operation, not the key's write policy.
+It must be positive; zero or a negative duration returns `cache.ErrInvalidTTL`.
+A custom driver unable to provide atomic increment-and-expiry must return
+`cache.ErrUnsupported`, not emulate the operation with separate calls.
+
+Redis rounds positive counter TTLs up to whole milliseconds, including
+submillisecond durations. Its result remains exact throughout `int64`, and
+remaining lifetimes beyond `time.Duration` saturate at that type's maximum.
+The [rate limiting middleware](../abuse-prevention/rate-limiting.md) uses this
+operation and handles request rejection for you.
+
+## Handling Failures
+
+Check `err` before using the returned count or lifetime. Arithmetic overflow and
+noninteger contents are rejected without changing the stored value or expiry.
+That rejection is different from a transport failure: Redis might have applied
+an increment before its reply was lost.
+
+Do not blindly repeat an increment after an uncertain result; doing so can count
+the same action twice. Native clients can also have transport retry policies,
+so a single facade call or telemetry span is not proof of one backend execution.
+Choose native retry settings in [Cache Drivers](drivers.md#native-clients) and
+an application recovery policy appropriate to the count. Exactly-once business
+effects require a durable application protocol, not a cache counter.
+
+No expiry does not guarantee retention. Backend loss, eviction, deletion, or
+restart can erase counts and reset allowances. A cache-based limit must account
+for those failures rather than treating a successful update as permanent state.
+
+## Integer Bounds
+
+All three counter operations accept only mathematical results from
+`math.MinInt64` through `math.MaxInt64`, inclusive. An out-of-range result returns
+a backend-native error: there is no portable overflow sentinel. Rejection leaves
+the target value and TTL unchanged; a missing or expired target remains absent.
+In particular, overflow in `IncrementWithTTL` does not add expiry to a persistent
+counter.
+
+Subtraction checks the mathematical result directly, without first negating the
+delta. With standard-library `math`, initialize an adjustment counter at its
+minimum:
+
+```go
+adjustment := cache.NewKey[int64]("view-adjustments.v1:article-73")
+err := store.Put(ctx, adjustment, math.MinInt64)
+```
+
+After that successful write, subtracting the same minimum is representable:
+
+```go
+total, err := store.Decrement(ctx, adjustment, math.MinInt64)
+```
+
+On success, `total` is zero. Subtracting `math.MinInt64` from zero instead fails
+and leaves zero unchanged; doing so against an absent target fails without
+creating it. Do not replace subtraction with `Increment(ctx, key, -delta)`:
+negating `math.MinInt64` overflows in application code before the driver sees it.
+Nor should callers replace checked atomic arithmetic with a read, local range
+check, and write; concurrent updates can invalidate that check.
+
+For every counter operation and error, see the [`cache` API reference](https://pkg.go.dev/arkoren.dev/core/service/cache).

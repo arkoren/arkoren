@@ -1,6 +1,6 @@
 ---
 title: Secrets
-description: Read passwords, API keys, and encryption keys from a secret store, manage their versions, and rotate them.
+description: Read private credentials, choose a secret provider, manage retained versions, and coordinate consumer rotation.
 order: 76
 section: Security
 ---

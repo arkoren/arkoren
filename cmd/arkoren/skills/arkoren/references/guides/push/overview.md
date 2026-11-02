@@ -1,183 +1,161 @@
 ---
-title: Push Overview
-nav: Overview
-description: Submit push notifications through a portable sender and distinguish provider acceptance from browser display.
+title: Overview
+description: Submit typed push messages, choose retention, and distinguish acceptance from browser display.
 order: 10
+summary:
+  - Build immutable messages from typed application input and authorized recipients.
+  - Choose offline retention and handle uncertain acceptance without automatic retries.
+  - Observe submission outcomes without treating them as delivery or display confirmation.
 ---
-# Push Overview
+# Overview
 
-## Introduction
+Push notifications tell a customer about an update even when your site is not
+open. A `push.Sender` submits one message to its configured driver; the browser's
+service worker displays it. Provider acceptance does not establish delivery or
+display, and push is not a durable notification inbox.
 
-When an order ships, you can notify a customer even when your site is not open.
-The `push` service submits a visible notification to a push provider. Your
-application chooses the recipient; the browser's service worker displays the
-notification. A successful send means provider acceptance, not delivery or display.
+A **subscription** contains a browser-issued endpoint and encryption keys. Your
+application stores it for the signed-in user, authorizes recipient selection,
+and handles replacement or removal. Arkoren does not register devices, store
+subscriptions, route between providers, or retry sends. Configure a sender in
+[Drivers](drivers.md) and obtain subscriptions through
+[Browser Integration](browser-integration.md).
 
-A **subscription** is the browser-issued endpoint and encryption keys needed for
-Web Push. Keep it associated with the signed-in customer in your application's
-storage. Arkoren does not register browsers, store devices, select recipients,
-run background workers, or track delivery. Start with [browser integration](browser-integration.md)
-to obtain a subscription, and use the [Web Push driver](drivers.md#web-push)
-to submit notifications.
+## Preparing Messages
 
-## Sending a notification
+These focused examples assume a configured `sender`, a `context.Context` named
+`ctx`, and a `push.Subscription` named `subscription` loaded from an authorized
+registration record. Import `arkoren.dev/core/service/push`. Snippets retain
+error assignments but omit routine propagation; complete functions and security
+decisions handle errors before proceeding.
 
-Install the core module from your application's module directory:
-
-```sh
-go get arkoren.dev/core
-```
-
-Wrap your [configured push driver](drivers.md#web-push) in a sender:
+For an order update, keep application input typed before translating it into
+the message's string metadata:
 
 ```go
-import "arkoren.dev/core/service/push"
+type OrderNotice struct {
+	OrderID string
+	Path    string
+}
 
-sender := push.New(driver)
+notice := OrderNotice{OrderID: "123", Path: "/orders/123"}
 ```
 
-The following focused examples use this `sender`, a `context.Context` named
-`ctx`, and a `push.Subscription` named `subscription`
-loaded from your application's authorized registration record. Import
-the same `push` package. Focused snippets keep error assignments visible;
-complete functions and security decisions check errors before proceeding.
-
-`Subscription.Endpoint` must be an absolute HTTPS URL without URL credentials or
-a literal `#`, including an empty trailing fragment delimiter. Percent-encoded
-`%23` in the path or query is data, not a fragment, and is retained unchanged.
-These structural checks do not establish a trusted network destination; the
-[Web Push driver's endpoint policy](drivers.md#web-push) controls where requests
-can connect.
-
-To tell a customer that order 123 shipped, supply the recipient and title as
-required arguments and add optional display text and application data:
+Choose the subscription on the server, not from an arbitrary recipient in the
+request. Required arguments identify that recipient and a nonempty UTF-8 title;
+the construction callback adds optional body text and application data:
 
 ```go
 message := push.NewMessage(subscription, "Order shipped", func(notification *push.MessageBuilder) {
 	notification.Body("Your order is on its way.")
 	notification.Data(map[string]string{
-		"order_id": "123",
-		"url":      "/orders/123",
+		"order_id": notice.OrderID,
+		"url":      notice.Path,
 	})
 })
+```
+
+`Data` accepts string values, not arbitrary JSON or a provider notification
+object. Body text and metadata keys and values must also be valid UTF-8.
+`Message` is an immutable snapshot: construction copies the map, and
+`Data()` returns a detached copy. `Data` replaces earlier metadata rather than
+merging it. `Err()` and `Validate()` expose the first declaration error, even if
+a later callback supplies a valid replacement.
+
+Pass a `push.Subscription` or `push.Token` value, not a pointer. Tokens are
+interpreted only by a driver that supports them; the Web Push driver accepts
+subscriptions only. Subscription validation checks HTTPS structure and browser
+encryption keys without network I/O. It does not approve a destination for
+outgoing requests; [driver endpoint policy](drivers.md#endpoint-policy) does that.
+
+## Submitting Notifications
+
+Submit the published message once through the sender:
+
+```go
 receipt, err := sender.Send(ctx, message)
 ```
 
-The title is required even when you only need application data. `Data` deliberately
-accepts a string map, not arbitrary JSON: it is a portable application payload,
-not a provider-specific notification object. The Web Push driver's
-[flat JSON payload](browser-integration.md#displaying-the-notification) matches
-the service worker in the browser guide. It does not contain the recipient.
+`Send` validates before calling the driver. Invalid portable input never reaches
+it. A nil error means acceptance; `Receipt.ID` is optional opaque acceptance
+metadata and can be empty. Web Push deliberately returns an empty ID rather than
+exposing a sensitive provider URL.
 
-`Message` is an immutable snapshot. `Data` replaces and copies the supplied map;
-changing that map or retaining the construction draft does not change the message.
-`To`, `Title`, `Body`, and `Data` read the published values; `Data` returns a copy.
-`Err` reports construction errors and `Validate` checks the completed message.
-`Send` validates before calling the driver, so an invalid message is not sent.
+Do not put sensitive information in display text: notifications can appear on a
+locked device. Keep subscription endpoints, keys, native tokens, payloads, and
+receipt IDs out of general logs and telemetry. Top-level diagnostics redact
+recipient details, but explicitly unwrapped native errors can still contain URLs.
 
-## Choosing retention
+## Choosing Retention
 
-A customer can be offline when you send. The time to live (**TTL**) requests how
-long a provider can retain a notification before discarding it; it is not a
-delivery deadline or a promise that the provider stores it for that long.
+The time to live (**TTL**) requests how long the provider can retain an update
+while the browser is offline. It is neither a delivery deadline nor a promise
+that the provider stores or displays the notification.
 
-By default the sender requests 24 hours. To keep a short-lived status update for
-at most five minutes, import `time` and set a per-send option:
+The sender requests 24 hours by default. For a status update that becomes stale
+after five minutes, import `time` and override retention for this send:
 
 ```go
 receipt, err := sender.Send(ctx, message, push.TTL(5*time.Minute))
 ```
 
-Omitting the option or passing zero uses the sender's default. A positive value
-requests that duration; a negative value disables offline storage. Configure a
-different sender default at construction with `push.Builder.TTL`; zero restores
-24 hours and a negative default disables offline storage.
+An omitted option or `push.TTL(0)` inherits the sender default; a negative option
+requests no offline storage. No-store does not prevent immediate delivery.
+[Drivers](drivers.md#sender-settings) shows how to change the sender default.
+Direct driver calls differ: raw `push.SendConfig{TTL: 0}` means no-store, and a
+negative raw TTL is invalid. Web Push rounds positive durations down to whole
+seconds, so a duration below one second also becomes no-store.
 
-Web Push encodes TTL as whole seconds, rounded down, so a positive duration below
-one second becomes zero. Providers can impose their own retention limits; the
-portable contract does not impose one provider's maximum on every driver.
+## Handling Outcomes
 
-## Handling the result
+Classify failures with standard-library `errors.Is`. Check
+`push.ErrOutcomeUnknown` before cancellation or provider failures: a wrapped or
+joined error can match several causes without resolving whether acceptance
+occurred. Every failed send returns a zero receipt.
 
-`Receipt.ID` is an opaque acceptance identifier and can be empty. The Web Push
-driver returns no identifier rather than exposing a provider URL that could be a
-secret. Neither an ID nor a nil error confirms that the browser displayed anything.
-Permission changes, offline expiry, operating-system settings, and service-worker
-failures can all prevent display after acceptance.
-
-Use `errors.Is` from the standard `errors` package to classify a failed send.
-Check `push.ErrOutcomeUnknown` first: a wrapped or joined error can also match
-cancellation, a deadline, or another provider failure while acceptance remains
-uncertain. The returned error preserves all those causes; matching a context
-error does not override the uncertainty.
-
-| Error | Application action |
+| Error | Application Response |
 | --- | --- |
-| `push.ErrOutcomeUnknown` | The provider might have accepted the notification. Do not automatically replay it. |
-| `push.ErrInvalidMessage` | Fix the message or registration; do not replay it unchanged. |
-| `push.ErrUnsupported` | Use a recipient supported by the configured driver. Web Push accepts subscriptions, not device tokens. |
-| `push.ErrNotFound` | Invalidate the expired registration only if its stored version still matches the one you sent to. |
-| `push.ErrRateLimited` | Apply your application's bounded scheduling policy; the sender does not retry. |
-| `push.ErrUnavailable` | Report a provider or transport failure and apply an explicit application policy. |
+| `push.ErrOutcomeUnknown` | Acceptance is uncertain; decide whether a duplicate is acceptable before replaying. |
+| `push.ErrInvalidMessage` | Correct input, endpoint policy, payload size, or retention before resubmission. |
+| `push.ErrUnsupported` | Choose a recipient or operation supported by the configured driver. |
+| `push.ErrNotFound` | Invalidate only the stored registration version used for this send. |
+| `push.ErrRateLimited` | Apply an explicit bounded scheduling policy. |
+| `push.ErrUnavailable` | Report availability failure and apply application policy; do not delete the registration. |
 
-For Web Push, HTTP 404 and 410 definitively identify an expired subscription.
-Authentication failures are not evidence that the subscription expired: do not
-delete registrations because the VAPID key or contact is wrong. Conditional
-invalidation prevents an older send from deleting a registration refreshed while
-the request was in flight.
+Web Push maps authoritative HTTP 404/410 responses to `ErrNotFound`.
+Authentication failures do not prove expiry: repair credentials rather than
+deleting live subscriptions. Conditional invalidation prevents an older send
+from deleting a registration refreshed while the request was in flight.
 
 > [!WARNING]
-> A transport timeout can leave acceptance unknown. Automatic replay can display
-> the same notification twice. Arkoren performs no retries; decide whether a
-> duplicate is acceptable before scheduling another attempt.
+> A timeout after dispatch can leave acceptance unknown. Automatic replay can
+> produce duplicate notifications. Neither the sender nor the Web Push driver
+> retries automatically or provides exactly-once delivery.
 
-Top-level errors redact sensitive recipient details, but unwrapping native causes
-can reveal URLs or other secrets. Classify with `errors.Is`; do not log subscription
-endpoints, keys, payloads, or unwrapped error chains in general application logs.
+Permission revocation, offline expiry, operating-system settings, and worker
+failures can prevent display after acceptance. Use [Testing](testing.md) to check
+application submission and browser display as separate outcomes.
 
-### Events and telemetry
+## Observing Submissions
 
-For operational observations without logging recipient data, opt in at sender
-construction. With your existing `driver`, import `arkoren.dev/core/event` and
-pass a shared bus:
+For optional in-process observations, configure `push.Builder.Events` with a
+shared event bus as shown in [sender settings](drivers.md#sender-settings).
+`push.Accepted` and `push.Failed` report returned driver outcomes, not delivery.
+Their `SubmissionEvent` contains only duration and a bounded error class.
 
-```go
-events := event.New()
-sender := push.New(driver, func(delivery *push.Builder) {
-	delivery.Events(events)
-})
-```
+Portable preflight failures emit no event. A failed event with
+`ErrorClass == "outcome_unknown"` means acceptance could have occurred.
+Acceptance has an empty class; other classes identify cancellation, deadline,
+push sentinels, or an unclassified error. Listener failures and panics do not
+change `Send`'s result; driver panics propagate without an outcome event. These
+best-effort observations are not a durable audit log or retry mechanism.
 
-Listen to `push.Accepted` and `push.Failed` on this bus to observe one driver
-submission outcome per send. Their `push.SubmissionEvent` payload contains only
-duration and a bounded error class, never message content, recipients, receipt
-IDs, tokens, endpoints, keys, or native error text. Portable validation failures
-emit nothing; nil `Events` disables notifications. A failed event with
-`ErrorClass == "outcome_unknown"` means acceptance may have occurred, not that
-delivery failed. Listener errors and panics do not change the returned result.
-Acceptance events have an empty `ErrorClass`. Failure classification gives
-`outcome_unknown` precedence over `canceled`, then `deadline_exceeded`.
-Remaining push sentinels are checked in the table's
-order and use their full names; other failures use `error`. No native error
-cause is retained in the event.
-Driver panics propagate without an outcome event; only returned driver results
-produce notifications. Nil `Events` also skips event-related clock reads.
-These synchronous, best-effort in-process events are not a durable audit log,
-delivery confirmation, or an automatic retry mechanism.
+Telemetry follows the process default on each call unless explicitly selected.
+It records bounded operation/error classes, never message, recipient, receipt,
+or native error text. Unknown acceptance takes classification precedence over
+joined cancellation or deadline errors without replacing their returned causes.
+See the [push instruments](../observability/instrumented-components.md#push-notifications)
+for span and metric names.
 
-Telemetry uses `error.type == "push.ErrOutcomeUnknown"` whenever the returned
-error matches that sentinel, even if it also wraps cancellation or a deadline.
-The event still uses `ErrorClass == "outcome_unknown"`; this telemetry precedence
-does not replace the returned error or change notification semantics.
-Set `push.Builder.Telemetry` to use your service explicitly, or leave it unset
-to follow the process default. See the
-[push span and metric reference](../observability/instrumented-components.md#push-notifications).
-
-## Testing application sends
-
-Use `pushtest.Fake` to prove that application code requested the intended
-notification without network access. It does not prove encryption, provider
-acceptance, browser delivery, or display. See [testing and verification](testing.md)
-for a complete assertion and the real-browser checklist.
-
-For every function and option, see the [push API reference](https://pkg.go.dev/arkoren.dev/core/service/push).
+For message, recipient, and sender operations, see the
+[push API reference](https://pkg.go.dev/arkoren.dev/core/service/push).

@@ -161,7 +161,7 @@ append an `add-articles-author` migration rather than editing the first. A
 database lock keeps two instances that start together from applying the same
 migration twice. Run `Up` at startup during development, or as a separate
 deploy step in production. The
-[migrations guide](/docs/guides/database/migrations) covers rollbacks,
+[migrations guide](/docs/guides/migrations/overview) covers rollbacks,
 failures, and rolling deploys.
 
 ### The query that keeps growing
@@ -189,8 +189,8 @@ passed separately from the SQL, rather than interpolated into it. You can run
 the result through Arkoren's database package or build a statement for your
 existing database code, without adopting an ORM.
 
-The [query](/docs/guides/database/query-builder) and
-[schema](/docs/guides/database/schema-builder) guides cover the details.
+The [query](/docs/guides/queries/query-builder) and
+[schema](/docs/guides/migrations/schema-builder) guides cover the details.
 
 ### The input checks you keep rewriting
 
@@ -440,7 +440,7 @@ diagnostic MCP tools let you explore recent traces and logs without setting up a
 backend first.
 
 With [request tracing enabled](/docs/guides/observability/request-tracing),
-the [diagnostic tools on a loopback MCP endpoint](/docs/guides/observability/exposing-diagnostics),
+the [diagnostic tools on a loopback MCP endpoint](/docs/guides/diagnostics/capture-setup),
 and the [CLI connected to it](/docs/guides/cli/connecting),
 take the request's trace ID from its `traceresponse` response header and inspect
 it. Substitute that ID for the example below:
@@ -461,7 +461,7 @@ guesses. Before sending test requests, they can wait for readiness:
 arkoren app:ready --wait --timeout 30s
 ```
 
-The [diagnosis guide](/docs/guides/observability/diagnosing-an-application) connects these
+The [diagnosis guide](/docs/guides/diagnostics/application-diagnosis) connects these
 operations into a development loop.
 
 ## What's included

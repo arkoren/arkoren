@@ -44,9 +44,10 @@ const sectionSlug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g
 
   <DocsSection id="first-steps" title="First steps">
     <p class="mb-6 text-muted">
-      For a new service, start with the quickstart. It walks through installing the CLI, creating a
-      project, and serving your first request, then adds routes, a cache counter, and error
-      responses. You need Go 1.27 or later; no database or message broker is required.
+      For a new service, follow{" "}
+      <a href="/docs/guides/first-steps/creating-a-project">Creating Projects</a>, then extend the
+      starter with the quickstart: a greeting route, a cache counter, and checked error responses.
+      You need Go 1.27 or later; no database or message broker is required.
     </p>
     <DocsLinkList
       entries={[
@@ -56,7 +57,7 @@ const sectionSlug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g
           description: "Follow the quickstart from a new project to a running HTTP service.",
         },
         {
-          href: "/docs/guides/first-steps/existing-project",
+          href: "/docs/guides/first-steps/installation#existing-applications",
           title: "Add to an existing project",
           description: "Keep your router and project structure. Start with one Arkoren package.",
         },

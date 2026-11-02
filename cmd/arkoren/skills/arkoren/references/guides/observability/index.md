@@ -1,6 +1,6 @@
 ---
 title: Observability
-description: Instrument requests, log failures, protect telemetry, expose selected diagnostics, and diagnose a running application.
+description: Share telemetry, choose signal drivers, trace requests, log failures, and review data exposure.
 order: 170
 section: Operations
 ---

@@ -1,527 +1,374 @@
 ---
 title: Instrumented Components
-description: Look up built-in trace and metric names, labels, configuration, and observation boundaries.
-order: 20
+description: Look up built-in spans, metrics, labels, and the operation boundaries they measure.
+order: 30
+summary:
+  - Find exact built-in span names, metric names, label keys, and telemetry settings.
+  - Distinguish provider calls, stream lifetimes, retries, workflow attempts, and business outcomes.
+  - Identify omitted content and recorded names that still require privacy review.
 ---
 
 # Instrumented Components
 
-> [!NOTE]
-> Hatchet instrumentation references below are retained development context for
-> a pending, unpublished integration, not available support. See the
-> [workflow comparison](../workflows/drivers.md#compatibility-matrix) for available drivers.
+Use this catalog when you need the exact instrument behind a slow operation or
+an alert. It describes observations made through Arkoren facades, not every
+native SDK call. Configure a [telemetry handle](telemetry.md#shared-handle)
+first; following a trace across processes also requires propagation and telemetry
+in each process.
 
-## Introduction
+## Shared Rules
 
-You do not write spans for the parts of your application that Arkoren already
-knows how to describe. The database, cache, storage, mail, queue, broadcast,
-and schedule components each record a span and metrics for their operations
-when telemetry is on, and the [HTTP middleware and client transport](request-tracing.md)
-do the same for requests. Hashing and encryption expose aggregate metrics
-without spans because their APIs have no request context. Because every span
-starts from the context you pass in, the pieces join into one trace: a request
-span contains the
-database query it ran, the cache read before it, and the mail it sent
-afterwards.
+Core service scopes are their package paths, such as
+`arkoren.dev/core/service/cache`. Unless an entry says otherwise, spans are
+`Client` spans and duration histograms use seconds. Each listed error label is
+`error.type`; classifications vary by component between known sentinels, fixed
+fallbacks, and Go type names. Automatic spans and metrics omit raw error text
+and do not call `RecordError`.
 
-Use this catalog to find the span names, metrics, and attributes available for
-your dashboards and alerts. To enable them first, follow
-[Telemetry](telemetry.md#turning-telemetry-on). Names follow
-the OpenTelemetry semantic conventions where one exists. Where it does not,
-such as for cache, storage, mail, and scheduling, a span is named
-`{component} {operation}` in lowercase (`cache get`, `schedule run`), with any
-name or target in an attribute, and metrics and attributes live under the
-`arkoren.` prefix.
+Set the component's `Builder.Telemetry(handle)` to select an explicit handle.
+Nil or omission follows the process default at operation time; messaging,
+workflow, and LLM use their role-specific builders below. Native driver calls
+bypass facade instrumentation. An inactive handle skips observation work;
+an enabled handle does not imply every signal has a backend.
 
-These rules describe spans and metrics, not log redaction or application events.
-Logs retain the content their producer supplies; see
-[Telemetry Privacy](telemetry-privacy.md#logs). Events report discrete outcomes
-to listeners, whereas telemetry measures and correlates operations; use
-[auditing with events](../events/auditing.md) when individual actions need a
-durable record.
-
-All instrumented components share the following rules, which the sections below
-do not repeat:
-
-- A context-bearing operation's span is a **client** span unless noted, and its
-  metric is recorded alongside it, with the same attributes.
-- Failures record an `error.type` classification: depending on the component,
-  this is a known sentinel, a fixed fallback such as `other` or `error`, or a Go
-  type name. Traced operations also set the span status to error; metrics-only
-  operations have no span status. Error text is never recorded or passed to
-  `RecordError`, because it can contain keys, addresses, or query values.
-- An ordinary missing row, cache key, or storage object leaves the span status
-  unset. Other services classify their contract errors explicitly; for example,
-  a missing secret is reported as `secret.ErrNotFound`.
-- With telemetry off the cost is a single check; no span, attribute, or metric
-  allocates.
-
-## Giving a component the handle
-
-Each component takes the telemetry handle through its options. Pass
-`app.Telemetry()` from your [configured application](telemetry.md#turning-telemetry-on).
-Import `database` from `arkoren.dev/core/service/database`, `cache` from
-`arkoren.dev/core/service/cache`, `queue` from `arkoren.dev/core/service/queue`,
-and `telemetry` from `arkoren.dev/core/service/telemetry`. Here `driver`,
-`cacheDriver`, and later `queueDriver` are your configured service drivers:
-
-```go
-t := app.Telemetry()
-
-db := database.New(driver, func(connection *database.Builder) {
-	connection.Telemetry(t)
-})
-store := cache.New(cacheDriver, func(store *cache.Builder) {
-	store.Telemetry(t)
-})
-```
-
-Storage, mail, queue dispatchers, and schedulers accept the same
-`Telemetry(t)` setting in their own builder callbacks.
-
-If you leave the option out, the component follows `telemetry.Default()` and
-looks it up each time it runs. That means you can also build your services
-without the handle and call `app.SetDefaults()` once; see
-[Telemetry](telemetry.md#the-process-default). Use the explicit option when several
-telemetry handles exist in one process, for example in tests.
-
-The scope of each component's tracer and meter is its package path, such as
-`arkoren.dev/core/service/cache`. Backends show it as the instrumentation
-library, and you can filter on it.
+The exclusions here are not a redaction filter for logs, custom attributes, or
+diagnostic tools. Review [Telemetry Privacy](telemetry-privacy.md) separately.
+Counts describe observed calls or attempts, not an exactly-once business feed;
+[events and auditing](../events/auditing.md) have different responsibilities.
 
 ## Database
 
-The database records one span per statement it runs through `Exec`, `Select`,
-`Find`, or `Cursor`. A cursor's span covers the traversal, not each row.
-`Lock` and `TryLock` each record a lock-acquisition span. The span name
-follows the database conventions: the SQL verb and the table when Arkoren can tell
-(`SELECT users`, `INSERT tags`), the verb alone for other statements, and the
-database system (`postgresql`) when it cannot tell either.
+`database.Builder.Telemetry` selects the handle. Statements through `Exec`,
+`Select`, `Find`, and `Cursor` record spans named by SQL verb and known table,
+such as `SELECT reports`; without a known table they use the verb, and without
+a known verb they use the database system. Cursor timing covers traversal,
+not a separate span per row. `Lock` and `TryLock` observe acquisition as `LOCK`
+and `TRY_LOCK`.
 
-| Attribute | Value |
+| Field | Meaning |
 | --- | --- |
-| `db.system.name` | `postgresql`, `mysql`, or `sqlite`, from the driver's dialect; `other_sql` for others |
-| `db.namespace` | The name you set with `database.Builder.Namespace`; omitted when empty |
-| `db.operation.name` | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, `TRUNCATE`, `LOCK`, or `TRY_LOCK`; omitted for any other leading keyword |
-| `db.collection.name` | The table, when the statement comes from a query builder over a table |
-| `db.query.text` | Compiled SQL verbatim; span only, disabled by default, enabled only with explicit `database.Builder.QueryText(true)` |
+| `db.system.name` | Dialect-derived `postgresql`, `mysql`, `sqlite`, or `other_sql`; overridden by `Builder.System` |
+| `db.namespace` | `Builder.Namespace`, omitted when empty |
+| `db.operation.name` | Recognized leading SQL verb, or `LOCK` / `TRY_LOCK` |
+| `db.collection.name` | Table known from a table-based query builder |
+| `db.query.text` | Span only; compiled SQL when explicitly enabled |
 
-SQL text is excluded by default. Enable `database.Builder.QueryText(true)` only
-when the statements are safe to export: it records compiled SQL **verbatim**,
-including literals and comments. Separately bound argument values are omitted,
-but that does not redact values embedded in SQL. The setting provides no SQL
-redaction guarantee; keep it disabled for statements that can contain secrets
-or personal data.
+`db.client.operation.duration` uses `db.system.name`, `db.namespace`,
+`db.operation.name`, `db.collection.name`, and `error.type`. Recognized leading
+verbs are `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, and
+`TRUNCATE`; this classification does not parse comments or CTEs. Missing rows
+are not telemetry failures.
 
-The metric is the histogram `db.client.operation.duration`, in seconds, with
-the keys `db.system.name`, `db.namespace`, `db.operation.name`,
-`db.collection.name`, and `error.type`. The query text is never a metric label.
-
-A query that matches no row is a success. Use `database.Builder.System` to report
-a system name the dialect does not give, for example when a wrapper hides the
-dialect. The [database guide](../database/query-monitoring.md) shows the
-spans in context, including how to log slow queries.
+`QueryText` defaults to false. Enabling it exports compiled SQL verbatim,
+including literals and comments; bound arguments stay separate but embedded
+values are not redacted. Query text never becomes a metric label. See
+[database monitoring](../database/query-monitoring.md) before opting in.
 
 ## Cache
 
-The cache records a span named `cache {operation}` for each facade operation:
-`get`, `put`, `compare_and_put`, `delete`, `add`, `has`, `pull`, `increment`,
-`decrement`, `increment_with_ttl`, `ttl`, `lock`, `try_lock`, and `remember`.
-Lock spans cover acquisition, including the wait for `lock`;
-extending and releasing a lease are not traced.
+`cache.Builder.Telemetry` selects spans named `cache {operation}` and these
+metrics:
 
-| Attribute | Value |
+| Instrument | Label Keys |
 | --- | --- |
-| `arkoren.cache.operation` | The operation name above |
-| `arkoren.cache.store` | The name from `cache.Builder.Name`, or `default` |
-| `arkoren.cache.hit` | `true` or `false` when lookup outcome is known; a found value with a decode error is still a hit. Omitted for writes and backend failures with unknown lookup outcome. |
-| `error.type` | Set on failure |
+| `arkoren.cache.operations` (counter) | `arkoren.cache.operation`, `arkoren.cache.store`, `arkoren.cache.hit`, `error.type` |
+| `arkoren.cache.operation.duration` | `arkoren.cache.operation`, `arkoren.cache.store`, `error.type` |
 
-Two metrics are recorded: the counter `arkoren.cache.operations` with the keys
-`arkoren.cache.operation`, `arkoren.cache.store`, `arkoren.cache.hit`, and
-`error.type`, and the histogram `arkoren.cache.operation.duration`, in seconds,
-with the same keys except `arkoren.cache.hit`. Divide the `true` count by all
-reads to get a hit ratio per store. Give each cache a short, fixed name, such as
-`sessions`, so the ratios stay separate.
+Operations are `get`, `put`, `compare_and_put`, `delete`, `add`, `has`, `pull`,
+`increment`, `decrement`, `increment_with_ttl`, `ttl`, `lock`, `try_lock`, and
+`remember`. Store is `Builder.Name`, or `default`. Lock spans cover acquisition,
+including the blocking wait, not lease extension or release.
 
-The key and the value are never recorded. A missing key counts as a miss
-(`arkoren.cache.hit` is `false`), not as an error.
-`compare_and_put` omits the span's hit attribute and uses an empty hit label on
-the counter, as other non-read operations do. A guard mismatch is a successful
-comparison result, not a lookup miss or an error. Neither the guard nor the
-destination key or value is recorded.
+Known reads add a boolean `arkoren.cache.hit` span attribute and a `true` or
+`false` counter label. A missing key is a miss, not an error; finding bytes
+that fail decoding is still a hit. Unknown lookup outcomes and non-read
+operations have no span hit attribute and an empty counter hit label.
+`compare_and_put` guard mismatch is a successful comparison, not a miss or
+failure. Keys, guards, and values are omitted. For a correctly filtered hit
+ratio and nested `remember` observations, see [cache monitoring](../cache/monitoring.md).
 
-## Feature flags
+## Feature Flags
 
-Each evaluation records a span named `feature evaluate` (internal), plus a
-counter and a histogram.
+`feature.Builder.Telemetry` observes each evaluation with an internal
+`feature evaluate` span.
 
-| Attribute | Value |
+| Instrument | Label Keys |
 | --- | --- |
-| `feature_flag.key` | The flag key |
-| `feature_flag.provider.name` | The name from `feature.Builder.Name`, or `default` |
-| `feature_flag.result.reason` | The driver's reason, such as `static` or `targeting_match`; `error` on failure |
-| `feature_flag.result.variant` | The variant, on the span only and only when the driver gave one |
-| `error.type` | Set on failure |
+| `arkoren.feature.evaluations` (counter) | `feature_flag.key`, `feature_flag.provider.name`, `feature_flag.result.reason`, `error.type` |
+| `arkoren.feature.evaluation.duration` | `feature_flag.key`, `feature_flag.provider.name`, `error.type` |
 
-The counter is `arkoren.feature.evaluations` with the keys `feature_flag.key`,
-`feature_flag.provider.name`, `feature_flag.result.reason`, and `error.type`.
-The histogram `arkoren.feature.evaluation.duration`, in seconds, has the same
-keys except the reason. Subject keys, subject attributes, flag values, and
-error text are never recorded.
+The provider name is `Builder.Name` or `default`. Reason comes from the driver,
+such as `static` or `targeting_match`, and becomes `error` on failure. A supplied
+`feature_flag.result.variant` is span-only. Subject keys, subject attributes,
+and flag values are omitted; flag keys and variants still require your privacy
+and cardinality review. See [feature evaluation](../feature-flags/overview.md).
 
 ## Search
 
-The search engine records a client span named `search {operation}` for `sync`,
-`check`, `put`, `delete`, `drop`, and `search`, plus a counter and a histogram.
+`search.Builder.Telemetry` observes `sync`, `check`, `put`, `delete`, `drop`, and
+`search` as `search {operation}` spans. `arkoren.search.operations` is the
+counter; `arkoren.search.operation.duration` is the histogram. Both use
+`arkoren.search.operation`, `arkoren.search.name`, `arkoren.search.index`, and
+`error.type`.
 
-| Attribute | Value |
-| --- | --- |
-| `arkoren.search.operation` | The operation name above |
-| `arkoren.search.name` | The name from `search.Builder.Name`, or `default` |
-| `arkoren.search.index` | The index name; empty for `sync` and `check`, which cover every index |
-| `arkoren.search.hits` | The hits on the returned page, on a successful `search`; span only |
-| `error.type` | Set on failure |
-
-The counter is `arkoren.search.operations` and the histogram
-`arkoren.search.operation.duration`, in seconds, both with the operation,
-name, index, and `error.type` as keys. Query text, documents, and error text
-are never recorded.
+Name is `Builder.Name` or `default`; index is empty for engine-wide `sync`
+and `check`. Successful search spans add `arkoren.search.hits` for the returned
+page only. Queries, documents, and raw diagnostics are omitted. Index names can
+still reveal tenants; keep them bounded. See [Search](../search/overview.md).
 
 ## Storage
 
-The storage facade records a span named `storage {operation}` for `open`,
-`put`, `stat`, `delete`, `list`, and `sign`.
+`storage.Builder.Telemetry` records `storage {operation}` spans for `open`,
+`put`, `stat`, `delete`, `list`, and `sign`. The counter
+`arkoren.storage.operations` and histogram `arkoren.storage.operation.duration`
+use `arkoren.storage.operation`, `arkoren.storage.store`, and `error.type`.
+Store is `Builder.Name` or `default`; successful writes add the span-only
+`arkoren.storage.object.size` in bytes. Histogram bounds span 1 ms to 1 minute.
 
-| Attribute | Value |
-| --- | --- |
-| `arkoren.storage.operation` | The operation name above |
-| `arkoren.storage.store` | The name from `storage.Builder.Name`, or `default` |
-| `arkoren.storage.object.size` | Bytes written, on a successful `put`; span only |
-| `error.type` | Set on failure |
-
-The counter `arkoren.storage.operations` and the histogram
-`arkoren.storage.operation.duration`, in seconds, use the keys
-`arkoren.storage.operation`, `arkoren.storage.store`, and `error.type`. Duration
-buckets run from a millisecond to a minute, since a local stat and a large
-upload differ by orders of magnitude. A missing object is an answer, not a
-failure.
-
-Object keys, prefixes, list cursors, and signed URLs are never recorded; a
-signed URL is a credential.
+`open` ends when the driver returns the body, not after the caller reads or
+closes it. `put` measures reader submission; upload helpers reuse that
+observation. `list` measures one page, and `sign` measures URL creation rather
+than the later request using it. Missing objects are not failures. Object keys,
+prefixes, cursors, and signed bearer URLs are omitted. See
+[storage observations](../file-storage/events-and-telemetry.md).
 
 ## Mail
 
-Each `Mailer.Send` with a nonnil context records one span named `mail send`, with
-`arkoren.mail.operation` set to `send`, and two span-only counts:
-`arkoren.mail.recipients` (to, cc, and bcc together) and
-`arkoren.mail.attachments`. The counter `arkoren.mail.operations` and the
-histogram `arkoren.mail.operation.duration` have the keys
-`arkoren.mail.operation` and `error.type`; the buckets run from ten
-milliseconds to a minute, since sending talks to a relay or a provider API.
+`mail.Builder.Telemetry` records `mail send` for `Mailer.Send` with a nonnil
+context. `arkoren.mail.operation` is `send`; span-only counts are
+`arkoren.mail.recipients` (to, cc, and bcc combined) and
+`arkoren.mail.attachments`. The `arkoren.mail.operations` counter and
+`arkoren.mail.operation.duration` histogram use operation and `error.type`.
+Histogram bounds span 10 ms to 1 minute.
 
-Addresses, subjects, bodies, provider diagnostics, and the receipt are never
-recorded. Returned errors use `context.Canceled`, `context.DeadlineExceeded`, or
-`mail.ErrInvalidMessage`, in that precedence order; other errors use the Go type
-of the innermost wrapped error. Validation failures are recorded before driver
-submission. The separate failure event's bounded `ErrorClass` uses `error` as its
-fallback, not a native type name; see
-[mail failure observations](../mail/events-and-telemetry.md#events).
+Validation failures are observed before submission. Error precedence is
+`context.Canceled`, `context.DeadlineExceeded`, `mail.ErrInvalidMessage`, then
+the innermost wrapped Go error type. Addresses, subjects, bodies, provider
+diagnostics, and receipts are omitted.
 
-These metrics count attempts, not confirmed acceptance. A driver panic still
-ends the mailer's owned span and records the attempt's count and duration,
-without ending the caller's parent span, recording panic data, or adding an
-error classification for the panic itself. It propagates without a `Sent` or
-`Failed` event. A nil context produces neither telemetry nor events.
+These metrics count attempts, not confirmed delivery. A driver panic closes
+the mailer's span and records attempt count/duration without ending the parent
+span, retaining panic data, or classifying the panic itself; the panic still
+propagates and emits no `Sent` or `Failed` notification. Nil context produces
+neither telemetry nor events. Notification failure classes are bounded and
+separate from telemetry's native-type fallback; see
+[mail observations](../mail/events-and-telemetry.md).
 
-## Push notifications
+## Push Notifications
 
-After portable validation, the push sender records one client span named `push send`. Its counter is
-`arkoren.push.operations`; its duration histogram is
-`arkoren.push.operation.duration`, in seconds. Both use the bounded
-`arkoren.push.operation` and `error.type` keys. Pass the shared telemetry handle
-through `push.Builder.Telemetry`, or leave it unset to follow
-`telemetry.Default()` on each call.
+`push.Builder.Telemetry` observes calls after portable preflight validation as
+`push send`. The counter `arkoren.push.operations` and histogram
+`arkoren.push.operation.duration` use `arkoren.push.operation` and `error.type`.
+Operation is `send`.
 
-If a returned error matches `push.ErrOutcomeUnknown`, the span and both metrics
-use `error.type == "push.ErrOutcomeUnknown"`, ahead of wrapped or joined
-`context.Canceled`, `context.DeadlineExceeded`, or other provider failures.
-Without that uncertainty sentinel, cancellation takes precedence over deadlines,
-then known push sentinel classes; an unclassified error falls back to the Go
-type of its innermost wrapped error, not native diagnostic text.
-This normalization affects only telemetry: `Send` preserves the returned error's
-causes, and failure notifications retain
-their bounded `ErrorClass`, including `outcome_unknown` for uncertain acceptance.
+`push.ErrOutcomeUnknown` wins over joined or wrapped cancellation, deadline, and
+provider failures in telemetry. Otherwise cancellation precedes deadline, known
+push sentinels, and the innermost wrapped Go type. This changes observation
+classification only: returned errors preserve their causes and notifications
+retain their separate bounded classes.
 
-Recipients, subscription endpoints, token and encryption values, titles, bodies,
-application data, and receipt IDs are never recorded. Acceptance telemetry does
-not prove that a device received or displayed a notification. See
-[Push Notifications](../push/overview.md) for submission and retention behavior.
+No recipient, endpoint, token, encryption material, content, application data,
+or receipt ID enters these fields. Acceptance does not prove device delivery or
+display. See [Push Notifications](../push/overview.md).
 
 ## Payments
 
-The payment facade records a client span named `payment {operation}` after
-portable input validation. The counter `arkoren.payment.operations` and
-histogram `arkoren.payment.operation.duration`, in seconds, use
-`arkoren.payment.operation` and `error.type` as keys. Neither successful API
-acceptance nor its telemetry proves that funds settled.
+`payment.Builder.Telemetry` observes provider operations after portable
+validation as `payment {operation}`. The counter `arkoren.payment.operations`
+and histogram `arkoren.payment.operation.duration` use
+`arkoren.payment.operation` and `error.type`.
 
-Keys, IDs, amounts, approval URLs, customer information, and request/response
-payloads are not recorded. Pass your handle through `payment.Builder.Telemetry`
-from `arkoren.dev/core/service/payment`; the
-[payment observations](../events/service-operations.md#payments) describe the boundary.
+Keys, IDs, amounts, approval URLs, customer details, and payloads are omitted.
+API acceptance is not settlement evidence. For the distinction between these
+observations and business reconciliation, see [Payments](../payments/overview.md).
 
 ## Secrets
 
-The secret facade records a client span named `secret {operation}` for `get`,
-`put`, `update`, and `delete`. The counter `arkoren.secret.operations` and
-histogram `arkoren.secret.operation.duration`, in seconds, use
-`arkoren.secret.operation` and `error.type` as keys. Failures use only
-`secret.ErrNotFound`, `context.Canceled`, `context.DeadlineExceeded`, or `other`.
+`secret.Builder.Telemetry` observes provider `get`, `put`, `update`, and
+`delete` as `secret {operation}`. The `arkoren.secret.operations` counter and
+`arkoren.secret.operation.duration` histogram use `arkoren.secret.operation`
+and `error.type`. Failure classes are only `context.Canceled`,
+`context.DeadlineExceeded`, `secret.ErrNotFound`, or `other`, in that order.
+Unlike a cache miss, a missing secret is a failure observation.
 
-`Raw` observes the provider read once; `String` and typed `Get` reuse that
-observation. A typed JSON decoding error occurs after retrieval and is not
-reported as a provider failure. Facade writes are observed, but direct calls
-through `Driver()` or a native client bypass these observations.
+`Raw` observes one provider read; `String` and typed `Get` reuse it. A later
+JSON decode failure is not a provider failure. Direct `Driver()` or native
+calls bypass these observations. Names, versions, values, sizes, and native
+diagnostics are omitted. See [Managing Secrets](../secrets/managing.md).
 
-Pass the handle through `secret.Builder.Telemetry`, or leave it unset to follow
-the dynamic process default. Names, versions, values, sizes, and native errors
-are omitted. See [Managing Secrets](../secrets/managing.md).
+## Hashing And Encryption
 
-## Hashing and encryption
+`hash.Builder.Telemetry` and `crypto.Builder.Telemetry` record metrics only:
+their contextless APIs create no synthetic root spans.
 
-Hash and crypto record metrics only: their contextless methods create no spans.
-Use `hash.Builder.Telemetry` or `crypto.Builder.Telemetry`, or leave the setting
-unset to follow `telemetry.Default()` on each call. The scope remains the
-package path, and disabled telemetry avoids timing and metric allocation.
-
-| Component | Counter | Duration histogram (seconds) | Label keys |
+| Component | Counter | Duration Histogram | Label Keys |
 | --- | --- | --- | --- |
 | Hash | `arkoren.hash.operations` | `arkoren.hash.operation.duration` | `arkoren.hash.operation`, `arkoren.hash.outcome`, `error.type` |
 | Crypto | `arkoren.crypto.operations` | `arkoren.crypto.operation.duration` | `arkoren.crypto.operation`, `arkoren.crypto.outcome`, `error.type` |
 
-Hash operation names are `hash`, `check`, and `needs_rehash`. Outcomes distinguish
-`ok`, `match`, `mismatch`, `current`, `rehash_needed`, and `error`; a mismatch is
-not an error. Crypto operations are `encrypt` and `decrypt`, with `ok`,
-`previous_key`, or `error` outcomes. Each metric covers the complete facade call,
-including JSON work; decryption records one final outcome across all keys,
-not a failure for each key tried.
+Hash operations are `hash`, `check`, and `needs_rehash`; outcomes are `ok`,
+`match`, `mismatch`, `current`, `rehash_needed`, or `error`. Mismatch is not an
+error. Failure classes are `hash.ErrInvalidHash` or `error`. Crypto operations
+are `encrypt` and `decrypt`; outcomes are `ok`, `previous_key`, or `error`.
+Its classes are `crypto.ErrEncrypterClosed`, `crypto.ErrInvalidCiphertext`, or
+`error`.
 
-The labels contain no inputs, outputs, key material, or native error text/types.
-Rehash-needed and previous-key outcomes describe observations, not persisted
-upgrades. See [Hashing](../hashing/overview.md) and
-[Encryption](../encryption/overview.md) for caller-owned persistence.
+Metrics cover normally completed facade calls, including JSON work; panics do
+not create completed observations. Decryption reports one final outcome across
+all keys, not a failure per attempted key. No input, output, key, or native
+error text/type is retained. Rehash-needed and previous-key outcomes do not
+prove a persisted upgrade; applications own persistence as described in
+[Hashing](../hashing/overview.md) and [Encryption](../encryption/overview.md).
 
-## Queues and broadcast
+## Queues And Broadcast
 
-The queue and broadcast components share one instrumentation, shaped by the
-OpenTelemetry messaging conventions, and they connect the producer and the
-consumer into one trace even though the two run in different processes.
+Set telemetry on every participating `queue.DispatcherBuilder`,
+`queue.ConsumerBuilder`, `broadcast.PublisherBuilder`, and
+`broadcast.ConsumerBuilder`. Producers record `send {destination}`;
+consumers record `process {destination}`. With propagation enabled on both
+sides and preserved by the transport, consumer work can continue the producer
+trace. Queue retries are separate consumer attempts.
 
-When a job is dispatched or a broadcast is published, the component starts a
-**producer** span named `send {destination}` and injects the trace context
-into the message's metadata. The destination is the queue name for queues and
-the broadcast name for broadcasts. When a consumer receives the message, it
-extracts that context and starts a **consumer** span named
-`process {destination}` as a child of the producer, so a trace that began in an
-HTTP request continues through the worker that handled its job. For queues, a
-retry is a new consumer span with a higher attempt.
-
-| Attribute | Value |
+| Field | Meaning |
 | --- | --- |
-| `messaging.system` | The system the driver reports, such as `rabbitmq`, `aws_sqs`, `nats`, `redis`, or `memory`; `_OTHER` when the driver names none |
-| `messaging.operation.name` and `messaging.operation.type` | `send` or `process` (span only for the type) |
-| `messaging.destination.name` | The queue or broadcast name |
-| `messaging.message.id` | The message ID, when there is one; span only |
-| `arkoren.queue.job` | The job name; queues, span only |
-| `arkoren.queue.attempt` | The delivery attempt, from 1; queues, span only |
-| `error.type` | Set on failure |
+| `messaging.system` | Driver-reported system, or `_OTHER`; `System` overrides it |
+| `messaging.operation.name` | `send` or `process` |
+| `messaging.destination.name` | Queue or broadcast name |
+| `messaging.operation.type` | Span-only `send` or `process` |
+| `messaging.message.id` | Span-only message ID when available |
+| `arkoren.queue.job` | Span-only queue job name |
+| `arkoren.queue.attempt` | Span-only queue delivery attempt, starting at 1 |
 
-Four metrics are recorded, each with the keys `messaging.system`,
-`messaging.operation.name`, `messaging.destination.name`, and `error.type`: the
-counters `messaging.client.sent.messages` and `messaging.client.consumed.messages`,
-and the histograms `messaging.client.operation.duration` (the producer side) and
-`messaging.process.duration` (the consumer side), in seconds.
+Counters are `messaging.client.sent.messages` and
+`messaging.client.consumed.messages`; histograms are
+`messaging.client.operation.duration` for producers and
+`messaging.process.duration` for consumers. All four use `messaging.system`,
+`messaging.operation.name`, `messaging.destination.name`, and `error.type`.
+Send counts include attempted sends, not only confirmed acceptance.
 
-If your driver reports the wrong system name, or none, set it with
-`DispatcherBuilder.System` and `ConsumerBuilder.System`, or `broadcast.ConsumerBuilder.System`. Both the dispatching and the
-consuming side take the telemetry option, so give it to every dispatcher,
-publisher, and consumer you build:
-
-```go
-dispatcher := queue.NewDispatcher(queueDriver, func(dispatcher *queue.DispatcherBuilder) {
-	dispatcher.Telemetry(t)
-})
-consumer := queue.NewConsumer(queueDriver, func(consumer *queue.ConsumerBuilder) {
-	consumer.Telemetry(t)
-})
-```
-
-Payloads and metadata values are never recorded. The metadata does hold the
-propagated trace context, which is how the trace crosses the broker; see
-[Privacy](telemetry-privacy.md) for what that means for your broker's access.
+Payloads and metadata values are not span attributes or labels, but propagation
+does write trace context into metadata readable by broker operators. HTTP's
+incoming trust policy does not authenticate broker messages. See
+[queue telemetry](../queues/metadata-and-telemetry.md) and
+[broadcast metadata](../broadcasting/metadata-and-telemetry.md).
 
 ## Scheduling
 
-Every run of a scheduled entry or a deferred task records an **internal** span
-named `schedule run`, with the name you gave the entry in `arkoren.schedule.entry`. The
-run's context carries the span, so the database queries, cache reads, and mail
-that the task performs become its children.
+`schedule.Builder.Telemetry` records an internal `schedule run` span for a
+recurring entry or deferred task. Its returned execution context lets the
+task's dependencies become child spans.
 
-| Attribute | Value |
-| --- | --- |
-| `arkoren.schedule.entry` | The entry or task name |
-| `arkoren.schedule.kind` | `entry` for a recurring entry, `task` for one deferred with `At` or `After` |
-| `arkoren.schedule.outcome` | `ok`, `skipped` when the run returned `schedule.ErrSkipped`, or `failed` |
-| `error.type` | Set when the run failed; `schedule.panic` when it panicked |
-
-The counter `arkoren.schedule.run.count` and the histogram
-`arkoren.schedule.run.duration`, in seconds, carry the entry, kind, outcome, and
-`error.type` as keys. The buckets run from a millisecond to an hour. A skipped
-run is not an error: it has outcome `skipped` and no error status. Task payloads
-and error text are never recorded.
+The counter `arkoren.schedule.run.count` and histogram
+`arkoren.schedule.run.duration` use `arkoren.schedule.entry`,
+`arkoren.schedule.kind`, `arkoren.schedule.outcome`, and `error.type`.
+Histogram bounds span 1 ms to 1 hour. Kind is `entry` or `task`; outcome is
+`ok`, `skipped`, or `failed`. `schedule.ErrSkipped` is not a failed span;
+recovered panics use `schedule.panic` as their error class. Task payloads and
+error text are omitted, but developer-selected names are recorded. See
+[scheduled failures](../scheduled-tasks/error-handling.md).
 
 ## HTTP
 
-The server middleware and the client transport are documented on the
-[HTTP page](request-tracing.md). In short, the middleware records one server span per
-request, named `<METHOD> <route>`, and the histogram
-`http.server.request.duration` plus the up-down counter
-`http.server.active_requests`. The client transport records one client span per
-outgoing request, named after the method, and `http.client.request.duration`.
-`client.Transport` from the [HTTP client](../http-networking/http-client.md) wraps the
-telemetry transport, so each retry attempt is its own span, marked with
-`http.request.resend_count`.
+Use the handle's `Middleware()` and `Transport()` rather than service-builder
+options. Their scope is `arkoren.dev/core/service/telemetry`.
+
+| Boundary | Span | Instruments |
+| --- | --- | --- |
+| Server | `Server`, named `<METHOD> <route>` | `http.server.request.duration`, `http.server.active_requests` |
+| Client | `Client`, named `<METHOD>` | `http.client.request.duration` |
+
+Unknown methods use `HTTP` in span names and `_OTHER` in method attributes;
+unmatched server requests omit the route from the name. Server duration uses
+method, route, status, scheme, and `error.type`; active requests use method and
+scheme. Client duration uses method, destination address/port, status, and
+`error.type`. Full keys and outcome rules are in
+[Request Tracing](request-tracing.md#recorded-fields).
+
+Server completion includes router error rendering, not proof of delivery to
+the client. Client completion includes consuming or closing the response body.
+The [retrying HTTP client](../http-networking/http-client.md) already installs
+telemetry per attempt and marks resends with `http.request.resend_count`;
+wrapping it again duplicates observations.
 
 ## MCP
 
-Managed [MCP calls](../mcp/tools.md#observe-calls-without-payload-capture)
-emit internal `mcp call_tool` spans, `arkoren.mcp.calls`, and
-`arkoren.mcp.call.duration`, in seconds, in the `arkoren.dev/driver/mcp` scope.
-The only labels are `arkoren.mcp.tool` (a managed registered name) and
-`arkoren.mcp.outcome` (`success` or `error`). Arguments, results, raw errors,
-unknown tool names, and model-inference attributes are omitted. Native SDK
-registrations bypass this instrumentation. Configure the endpoint with
-`mcpserver.Builder.Telemetry(t)` from `arkoren.dev/driver/mcp/mcpserver`.
+`mcpserver.Builder.Telemetry` selects managed-call observations in scope
+`arkoren.dev/driver/mcp`. An internal `mcp call_tool` span, the counter
+`arkoren.mcp.calls`, and histogram `arkoren.mcp.call.duration` use only
+`arkoren.mcp.tool` (registered name) and `arkoren.mcp.outcome` (`success` or
+`error`).
 
-## Language models
+Arguments, results, raw errors, unknown tool names, and model-inference fields
+are omitted. Native SDK registrations bypass this instrumentation. This does
+not make the tool result itself private; diagnostic tools can return raw logs
+and attributes. See [managed MCP observation](../mcp/tools.md#call-telemetry)
+and [protected diagnostic registration](../diagnostics/capture-setup.md#protect-registration).
 
-`Model.Generate` and `Model.Stream` record a `chat {model}` span, and
-`Embedder.Embed` an `embeddings {model}` span, with the model, provider, finish
-reasons, and token counts as attributes. `Model.Run` records an
-internal `invoke_agent {agent}` span that contains a client `chat` span per turn
-and an internal `execute_tool {tool}` span per tool call. Two histograms,
-`gen_ai.client.operation.duration` and `gen_ai.client.token.usage`, record
-latency and tokens. Names follow the OpenTelemetry generative AI conventions.
-Prompts, replies, tool arguments, and tool results are never recorded. See
-[Language Models Overview](../llm/overview.md#usage-events-and-telemetry).
+## Language Models
 
-## The application and workflows
+`llm.ModelBuilder.Telemetry` and `llm.EmbedderBuilder.Telemetry` select these
+observations in `arkoren.dev/core/service/llm`:
 
-The application records no spans of its own. It owns the telemetry lifecycle,
-wraps the logger so records carry `trace_id` and `span_id`, and passes the
-service name and version to the driver; see [Telemetry](telemetry.md#turning-telemetry-on).
-Successful startup and shutdown are visible as the `app started`, `app stopping`,
-and `app stopped` log lines. There is no built-in `app starting` log. The
-`application.Starting` event runs after telemetry starts and before user startup
-callbacks; a listener can log through `app.Logger()` with telemetry active.
+| Operation | Span |
+| --- | --- |
+| `Model.Generate`, `Model.Stream` | Client `chat {model}` |
+| `Embedder.Embed` | Client `embeddings {model}` |
+| `Model.Run`, `Model.RunStream` | Internal `invoke_agent {agent}`, containing model turns and internal `execute_tool {tool}` spans |
 
-Workflow clients record `workflow start`, `workflow signal`, `workflow cancel`,
-`workflow status`, and `workflow result` client spans. Workers record
-`workflow step_attempt` spans around actual registered step-handler invocations.
-Retries are separate attempts; replayed orchestration and recorded step results
-produce no attempt observations. `result` measures the caller's wait, not run
-execution time; canceling that wait does not cancel the workflow.
+`gen_ai.client.operation.duration` uses `gen_ai.operation.name`,
+`gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, and
+`error.type`. `gen_ai.client.token.usage` adds `gen_ai.token.type` (`input` or
+`output`) when usage is reported. Other span-only fields include response ID,
+finish reasons, agent/tool names, token details, agent step count, and embedding
+input count. Model, agent, and tool names must remain bounded and nonsensitive.
+
+Prompts, replies, tool arguments/results, and error text are excluded. Stream
+traversal and cooperative iterator cleanup affect completion; usage is
+provider-reported rather than an invoice. See [Observing Calls](../llm/overview.md#observing-calls) for
+the consumption and notification boundaries.
+
+## Application Lifecycle
+
+The application creates no lifecycle spans. It supplies the resource, owns
+telemetry startup/shutdown, and wraps its logger for correlation. Built-in log
+messages include `app started`, `app stopping`, and `app stopped`; there is no
+`app starting` log. `application.Starting` runs after telemetry starts and before
+user startup callbacks, so listeners can log through active telemetry. See
+[application lifecycle](../application/lifecycle-and-ownership.md).
+
+## Workflow Attempts
+
+Configure `workflow.ClientBuilder.Telemetry` in producers and
+`workflow.RegistryBuilder.Telemetry` through `workflow.NewRegistry` in workers.
+Each process follows its own dynamic default when omitted. Client spans are
+`workflow start`, `workflow signal`, `workflow cancel`, `workflow status`, and
+`workflow result`; actual registered handler invocations get internal
+`workflow step_attempt` spans.
 
 The counter `arkoren.workflow.operation.count` and histogram
-`arkoren.workflow.operation.duration`, in seconds, use
-`arkoren.workflow.operation`, `arkoren.workflow.outcome`, and `error.type` as
-keys. Outcomes are `success`, `error`, or `already_started`; duplicate starts
-retain their existing handle/error semantics but are not telemetry failures.
-Labels omit workflow/step names, run IDs, inputs, outputs, signals, and metadata.
+`arkoren.workflow.operation.duration` use `arkoren.workflow.operation`,
+`arkoren.workflow.outcome`, and `error.type`. Outcomes are `success`, `error`,
+or `already_started`; duplicate-start handling preserves the API result while
+not classifying it as a telemetry failure. Names, run IDs, payloads, signals,
+and metadata are excluded from these automatic fields.
 
-Configure `ClientBuilder.Telemetry` in client processes and
-`RegistryBuilder.Telemetry` through `workflow.NewRegistry` in workers. Each
-defaults to its own process's current telemetry service. Export from every pod
-to a common backend; a local event bus or memory capture cannot aggregate pods.
-The [workflow wiring example](../workflows/overview.md#events-and-telemetry)
-shows both settings.
+Retries create separate attempts. Replayed orchestration and recorded results
+create none; do not add ordinary observation side effects to replayed workflow
+functions. `result` measures the caller's wait, not workflow runtime, and
+canceling that wait does not cancel the run. Local events and polling are not
+an authoritative terminal feed. Export from each process to a shared backend
+for cross-replica inspection; local capture cannot aggregate pods.
 
-`StartOptions.Trace` carries serialized propagation separately from application
-metadata. Memory, Temporal, Restate, and Hatchet forward it to actual attempts;
-supported child/spawn operations forward the start parent too. Signals do not
-replace that parent. This is explicit transport data, not a transported Go
-context, and native cancellation/deadlines remain attached to each attempt.
+Serialized `StartOptions.Trace` is separate from application metadata and is
+extracted at supported native attempt boundaries without transporting the
+caller's Go context. Signals do not replace the start parent. Upgrade Temporal
+workers before traced producers: older workers cannot decode traced envelopes;
+untraced histories retain their shape. See the available
+[workflow drivers](../workflows/drivers.md) and
+[Events And Telemetry](../workflows/running-workflows.md#events-and-telemetry).
 
-> [!WARNING]
-> Upgrade Temporal workers before enabling traced producers. Older workers
-> cannot decode the traced-input envelope. Existing untraced histories retain
-> their argument shape; see [Workflow Drivers](../workflows/drivers.md).
-
-Do not add ordinary telemetry side effects to workflow functions, which can
-replay. Local action events and polling do not provide an authoritative terminal
-feed; use engine history and application-owned durable reconciliation for that
-requirement.
-
-## Instrumenting your own component
-
-If your component can be used by several applications or tests, each telemetry
-handle needs its own instruments. Rebuilding them on every call wastes work,
-and keeping one global set sends data to the wrong handle.
-`telemetry.NewInstruments` builds them lazily and reuses the most recent handle's
-instruments. Switching to a different handle rebuilds them:
-
-```go
-type instruments struct {
-	tracer  telemetry.Tracer
-	renders telemetry.Counter
-}
-
-var renderInstruments = telemetry.NewInstruments(func(handle *telemetry.Telemetry) *instruments {
-	return &instruments{
-		tracer: handle.Tracer("example.com/reports"),
-		renders: handle.Meter("example.com/reports").Counter("reports.renders",
-			telemetry.Unit("{render}"), telemetry.Keys("format", "error.type")),
-	}
-})
-```
-
-Resolve those instruments for the current handle before recording a render.
-Import standard packages `cmp`, `context`, and `fmt`. Here `doRender` is your
-existing `func(context.Context, string) error`, not an Arkoren helper:
-
-```go
-func render(ctx context.Context, t *telemetry.Telemetry, format string) error {
-	t = cmp.Or(t, telemetry.Default())
-	if !t.Enabled() {
-		return doRender(ctx, format)
-	}
-
-	in := renderInstruments.For(t)
-	ctx, span := in.tracer.Start(ctx, "report render", telemetry.Attrs(telemetry.String("format", format)))
-	defer span.End()
-
-	err := doRender(ctx, format)
-	kind := ""
-	if err != nil {
-		kind = fmt.Sprintf("%T", err)
-		span.SetStatus(telemetry.Error, "render failed")
-		span.SetAttributes(telemetry.String("error.type", kind))
-	}
-	in.renders.Add(ctx, 1, telemetry.String("format", format), telemetry.String("error.type", kind))
-
-	return err
-}
-```
-
-`Enabled` is false when telemetry is a no-op, not yet started, or shut down.
-Checking it first means disabled telemetry costs one comparison, not the
-allocation of attributes. Report failures by class, as the built-in components
-do, and keep error text out of spans unless you have checked what it can
-contain.
-
-For every option and function, see [the `telemetry` API reference](https://pkg.go.dev/arkoren.dev/core/service/telemetry),
-[the `database`](https://pkg.go.dev/arkoren.dev/core/service/database), [`cache`](https://pkg.go.dev/arkoren.dev/core/service/cache),
-[`storage`](https://pkg.go.dev/arkoren.dev/core/service/storage), [`mail`](https://pkg.go.dev/arkoren.dev/core/service/mail), [`push`](https://pkg.go.dev/arkoren.dev/core/service/push),
-[`queue`](https://pkg.go.dev/arkoren.dev/core/service/queue), [`broadcast`](https://pkg.go.dev/arkoren.dev/core/service/broadcast),
-and [`schedule`](https://pkg.go.dev/arkoren.dev/core/service/schedule) API references.
+For custom observations, follow [Recording Spans](telemetry.md#recording-spans)
+and [Recording Metrics](telemetry.md#recording-metrics). Full declarations live
+in the [`telemetry` API](https://pkg.go.dev/arkoren.dev/core/service/telemetry), with
+adapter-specific MCP settings in the
+[`mcpserver` API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).

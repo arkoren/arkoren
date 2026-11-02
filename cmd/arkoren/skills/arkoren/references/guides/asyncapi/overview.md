@@ -1,154 +1,138 @@
 ---
 title: AsyncAPI Overview
 nav: Overview
-description: Describe the messages your application sends and receives, then generate your first AsyncAPI document without a broker connection.
+description: Generate a messaging contract from typed definitions, payload schemas, destinations, and application operations.
 order: 10
+summary:
+  - Build an AsyncAPI 3.1.0 contract from shared typed definitions and explicit application operations.
+  - Generate deterministic JSON without starting a broker or changing runtime messaging behavior.
+  - Keep document IDs, logical message names, and physical destinations distinct.
 ---
 
 # AsyncAPI Overview
 
-## Introduction
+Another service needs to know which messages your application sends, where they
+travel, and what a delivery contains. `arkoren.dev/core/asyncapi` combines your
+typed messaging definitions with explicit documentation metadata to export
+AsyncAPI **3.1.0** JSON. Generating that document requires no broker connection.
 
-Other services need to know where your application sends messages, which messages
-it accepts, and what those messages contain. Use `arkoren.dev/core/asyncapi` to
-declare that contract and export AsyncAPI 3.1.0 JSON. Your declarations describe
-the application boundary; they do not publish messages or start consumers.
+Use it for [broadcast topics](../broadcasting/overview.md#defining-topics) and
+[queued jobs](../queues/producing-jobs.md#defining-jobs). It neither publishes
+messages nor registers consumers. The synchronous [event bus](../events/overview.md)
+is a different mechanism; [OpenAPI](../openapi/overview.md) describes HTTP contracts.
 
-AsyncAPI documents [broadcasts](../broadcasting/overview.md) and
-[queued jobs](../queues/overview.md). It does not make the synchronous
-[event bus](../events/overview.md) asynchronous. For HTTP requests and responses,
-use [OpenAPI](../openapi/overview.md) instead.
+## Contract Model
 
-## Understanding a messaging contract
+A **message** describes one complete wire payload. A **channel** names the
+destination where messages travel, such as a topic or queue. Several message
+types can share a channel. An **operation** selects the messages your application
+sends or receives on that channel: `Send` means out of this application, and
+`Receive` means into it, never the broker's perspective.
 
-Start with what another application needs to understand. A **message** describes
-one complete payload on the wire. A **channel** describes the destination where
-that message can travel, such as a broker topic or a work queue. Several message
-types can share a channel.
+The typed helpers connect these declarations to application-owned definitions.
+`JSONTopic` takes a `broadcast.Topic[T]`; `JSONJob` takes a `queue.Job[T]`. Each
+helper uses the definition's logical name to describe an Arkoren JSON envelope
+and stores the decoded payload schema separately. You still supply the physical
+destination and the application's operations. Nothing discovers producers,
+samples traffic, or reads driver configuration.
 
-An **operation** says which channel messages your application sends or receives.
-`Send` means *from your application*; `Receive` means *into your application*.
-A producer usually declares `Send`, and a worker declares `Receive`. The
-broker's perspective does not reverse these directions.
+These are descriptions, not runtime validation or delivery policies. A document
+does not establish durable delivery, retries, ordering, or authorization. Keep
+those responsibilities in your messaging drivers, handlers, and infrastructure.
 
-A **server** describes the broker endpoint and protocol associated with a
-channel, not a live connection. A **document** gathers these declarations under
-an application contract title and version. You keep your existing drivers and
-application lifecycle: none of these declarations configures a broker.
+## Shared Definitions
 
-Keep document identifiers, application names, and transport addresses separate:
-
-| Value | Example | Meaning |
-| --- | --- | --- |
-| Server ID | `primary` | Local reference inside this document. |
-| Server host | `broker.example:9092` | Broker host and optional port, without a URL scheme or credentials. |
-| Channel ID | `orders` | Local reference used by operations. |
-| Channel address | `production.orders` | Literal physical destination used by your configured transport. |
-| Broadcast topic name | `order.created` | Logical fact name carried in the Arkoren envelope. |
-| Message ID | `created` | Local reference used to select a channel message. |
-
-A driver's prefixes or routing configuration can make the physical address
-different from the logical name. Supply the actual destination yourself; the
-exporter does not inspect driver configuration. IDs use nonempty letters,
-digits, dots, underscores, or hyphens. An empty channel address exports as `null`
-(unknown), not as a default destination. Address templates are not supported.
-
-## Generating your first document
-
-Suppose the order service publishes `order.created` to `production.orders`.
-This walkthrough declares that broadcast and writes a document; it needs no
-running broker, credentials, or application startup. Install the core module and
-the schema inference helper from your application's module directory:
-
-```sh
-go get arkoren.dev/core
-go get arkoren.dev/foundation/validate
-```
-
-First, create `contract/asyncapi.go` with the shared topic used by your runtime
-publisher. `validate.Infer` describes the logical Go payload:
+Suppose your reporting service announces completed reports. Keep the topic in
+your application's shared contract package so the runtime publisher and the
+document can use the same identity. With `broadcast` imported from
+`arkoren.dev/core/service/broadcast`, define its small logical payload:
 
 ```go
-package contract
-
-import (
-	"os"
-
-	"arkoren.dev/core/asyncapi"
-	"arkoren.dev/core/service/broadcast"
-	"arkoren.dev/foundation/validate"
-)
-
-type OrderCreated struct {
-	OrderID string `json:"order_id"`
+type ReportReady struct {
+	ReportID string `json:"report_id"`
 }
 
-var Created = broadcast.NewTopic[OrderCreated]("order.created")
+var Ready = broadcast.NewTopic[ReportReady]("report.ready")
 ```
 
-In the same file, declare the broker, channel, wire message, and sending
-operation. Use `JSONTopic` only when the transport JSON-encodes Arkoren's
-broadcast envelope:
+`Ready` identifies the fact; it does not identify a broker endpoint. Use
+`JSONTopic` only if your transport JSON-encodes `broadcast.Message`. A different
+wire representation needs an explicit [message schema](messages-and-schemas.md#other-wire-formats).
+
+## Document Generation
+
+Import `arkoren.dev/core/asyncapi` and `arkoren.dev/foundation/validate`. In the
+same application package, describe the physical destination and sending role:
 
 ```go
-var Document = asyncapi.New("Order events", "1.0.0", func(definition *asyncapi.Builder) {
-	definition.Server("primary", "broker.example:9092", "kafka")
-	definition.Channel("orders", "production.orders", func(channel *asyncapi.ChannelBuilder) {
-		channel.Servers("primary")
-		channel.JSONTopic("created", Created, validate.Infer[OrderCreated]())
+var Document = asyncapi.New("Reporting events", "1.0.0", func(definition *asyncapi.Builder) {
+	definition.Channel("reports", "production.reports", func(channel *asyncapi.ChannelBuilder) {
+		channel.JSONTopic("ready", Ready, validate.Infer[ReportReady]())
 	})
-	definition.Send("announce-order", "orders", func(action *asyncapi.OperationBuilder) {
-		action.Messages("created")
+	definition.Send("announce-report", "reports", func(action *asyncapi.OperationBuilder) {
+		action.Messages("ready")
 	})
 })
 ```
 
-Choose the protocol and address that match your deployment. If the document
-declares any servers, every channel must explicitly select at least one with
-`Servers`. Each operation must explicitly select at least one message with
-`Messages`; it does not automatically select every message on its channel.
+`validate.Infer` describes the Go payload's JSON shape. The wire message is a JSON
+envelope whose `payload` field contains base64-encoded JSON, not an inline
+`ReportReady` object. [Messages and Schemas](messages-and-schemas.md#wire-and-logical)
+explains both layers and the supported schema profile.
 
-`JSONTopic` describes the complete JSON envelope, whose `payload` is a base64
-string containing the logical value's JSON. It stores the logical schema
-separately; [Messages and Schemas](messages-and-schemas.md#understanding-the-wire-envelope)
-explains how to read both shapes. A transport with another representation needs
-an explicit wire schema instead of this helper.
+This portable document omits broker endpoints. If you add
+[server declarations](bindings-and-security.md#broker-endpoints), every channel
+must explicitly select at least one server. Every operation must select at least
+one message from its channel, whether or not servers are declared.
 
-Finally, add an export function to the same file. It overwrites an existing
-destination after validation succeeds; choose a generated-artifact path, not a
-file containing data you need to preserve:
+Generate the bytes in a test, build command, or other application code:
 
 ```go
-func Export(path string) error {
-	data, err := Document.JSON()
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0600)
-}
+data, err := Document.JSON()
 ```
 
-Call `contract.Export("asyncapi.json")` from your build tool and handle its
-returned error, including file-write failures. On success, the file contains
-deterministic AsyncAPI JSON with version `3.1.0`, the `orders` channel, and the
-`announce-order` send operation. Validation happens before the file is touched;
-an existing file is overwritten. Review broker details and examples before
-distributing the artifact.
+On success, `data` contains deterministic JSON with `asyncapi: "3.1.0"`, a
+`reports` channel, and an `announce-report` send operation. `1.0.0` is your
+contract's version, not the AsyncAPI specification version. Handle `err` before
+using the bytes; [Serving Documentation](serving.md) covers file exports and HTTP
+access. Focused snippets in these guides keep errors visible but omit routine
+propagation; complete application code must handle them.
 
-## Checking declarations early
+## Stable Names
 
-`New` runs construction callbacks synchronously, once in order, without I/O.
-Schema providers are called and their bytes copied during construction, not on
-the first HTTP request. Declaration errors are retained for `JSON()` or the
-handler to report later. Export in a test or build step so an invalid contract
-does not first fail on a documentation request.
+Choose document IDs independently of runtime names. This example separates four
+values with different purposes:
 
-The document is immutable and needs no `Start`, `Stop`, or cleanup. Build a new
-document when the contract changes. [Serving AsyncAPI Documentation](serving.md)
-covers cached exports, protected endpoints, and declaration failures.
+| Value | Example | Purpose |
+| --- | --- | --- |
+| Channel ID | `reports` | Local reference used by operations. |
+| Channel address | `production.reports` | Literal destination used by the deployed transport. |
+| Topic name | `report.ready` | Logical discriminator carried in the envelope. |
+| Message ID | `ready` | Local selection within the channel. |
 
-The remaining examples in this group are focused changes to existing
-declarations. They keep error results visible but omit routine checks unless
-error handling is the lesson; handle errors in your application.
+Document IDs accept nonempty ASCII letters, digits, dots, underscores, and
+hyphens. Duplicate IDs are errors, not replacements. Keep channel/message ID
+pairs unambiguous: typed logical schema components use `<channel>.<message>`,
+so pairs such as `reports.v1` / `ready` and `reports` / `v1.ready` collide.
 
-For every declaration and option, see the [`asyncapi` API reference](https://pkg.go.dev/arkoren.dev/core/asyncapi).
+The exporter does not apply a driver's destination prefixes or routing rules.
+Supply the deployed physical address yourself. An empty address exports as
+`null`, meaning unknown; it does not choose a default destination. Address
+templates containing braces are unsupported.
+
+## Early Checks
+
+`New` runs supplied construction callbacks synchronously, once in order, and
+captures schemas and examples immediately. It retains declaration errors rather
+than returning them. `JSON()` checks the completed graph, including forward
+references, and caches either the export or its error. Run an export before
+deployment so an invalid declaration does not first fail on an HTTP request.
+
+The resulting document is immutable and has no startup or cleanup work. Construct
+a new document when the contract changes; changing a retained builder or an
+exported byte slice does not update it. The exact
+[snapshot and failure behavior](serving.md#snapshot-behavior) also applies when
+you serve the document.
+
+For all declarations and options, see the
+[`asyncapi` API reference](https://pkg.go.dev/arkoren.dev/core/asyncapi).

@@ -1,22 +1,23 @@
----
-title: Recovering Hatchet Runs
-description: Pending, unpublished Hatchet integration notes on execution identity, signal history, and safe worker replacement.
-order: 45
----
-
-# Recovering Hatchet Runs
+# Hatchet Development Notes
 
 > [!NOTE]
 > Hatchet is pending and unpublished. This page preserves development recovery
 > and safety context; it does not describe an installable Arkoren module or
 > independently verified public behavior. See the available
-> [workflow drivers](drivers.md#compatibility-matrix) for new applications.
+> [workflow drivers](../../../../cmd/arkoren/skills/arkoren/references/guides/workflows/drivers.md#compatibility-matrix) for new applications.
+
+These contributor notes are excluded from the consumer guide tree. Historical
+provider setup and shared-host material remain available in the repository at
+commit `eef066440d289319e4864216b0fdf1cb30cd3496`:
+[driver notes](https://github.com/arkoren/arkoren/blob/eef066440d289319e4864216b0fdf1cb30cd3496/cmd/arkoren/skills/arkoren/references/guides/workflows/drivers.md#hatchet)
+and [host notes](https://github.com/arkoren/arkoren/blob/eef066440d289319e4864216b0fdf1cb30cd3496/cmd/arkoren/skills/arkoren/references/guides/workflows/shared-worker-host.md).
+Treat these as development context to reverify, not evidence of a released API.
 
 ## Introduction
 
 Recovering a worker must resume the intended physical execution without
 repeating another run's effects or consuming its signals. Use these identity
-and retention rules with the [Hatchet setup](drivers.md#hatchet). They apply to
+and retention rules with the [historical Hatchet setup](https://github.com/arkoren/arkoren/blob/eef066440d289319e4864216b0fdf1cb30cd3496/cmd/arkoren/skills/arkoren/references/guides/workflows/drivers.md#hatchet). They apply to
 worker and client-only processes in the same Hatchet tenant; namespaces route
 work but are not tenant authorization boundaries.
 
@@ -96,7 +97,7 @@ Hatchet's workflow execution timeout includes the configured margin. Steps use
 are truncated to milliseconds by the SDK, and remain subject to the native cap;
 older engines cannot preserve arbitrary initial delays. The local profile pins
 v0.111.0, which supports those overrides. The SDK lifecycle limits remain despite
-a passing full native suite; see [the driver limits](drivers.md#hatchet).
+a passing full native suite; see [the historical driver limits](https://github.com/arkoren/arkoren/blob/eef066440d289319e4864216b0fdf1cb30cd3496/cmd/arkoren/skills/arkoren/references/guides/workflows/drivers.md#hatchet).
 
 Unlimited registered step timeouts return `workflow.ErrUnsupported` from
 `NewRunner`. Finite step deadlines are cooperative: after a handler returns, late
@@ -145,6 +146,6 @@ native submission is not a safe workaround for portable child joins.
 Keep namespace and prefix stable for the lifetime of runs you need to access.
 After replacement, verify expected status and results by the same logical tuple,
 and test queued signals, replay after eviction, and retention boundaries against
-your engine. [Memory tests](testing.md) cannot establish engine replay or
+your engine. [Memory tests](../../../../cmd/arkoren/skills/arkoren/references/guides/workflows/testing.md) cannot establish engine replay or
 retention behavior. The [`hatchetworkflow` API reference URL](https://pkg.go.dev/arkoren.dev/driver/hatchet/hatchetworkflow)
 is pending publication; it does not establish package availability.

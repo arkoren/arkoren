@@ -1,233 +1,238 @@
 ---
 title: Certificate Commands
-description: Generate and check local TLS files offline, explicitly install or remove a root CA, and recover from partial operations.
+description: Generate local TLS identities, check file pairs, and explicitly manage exact-root system trust.
 order: 70
+summary:
+  - Generate protected root and server file pairs with explicit hostnames and no automatic trust installation.
+  - Check certificate structure and key matching without mistaking them for deployment verification.
+  - Approve exact-root system trust changes within each platform's supported scope.
+  - Recover from partial file, refresh, and native-cleanup failures without assuming rollback.
 ---
 
 # Certificate Commands
 
-## Introduction
+Local HTTPS needs both a server identity and client trust in its issuer. These
+are separate decisions: generating a private root CA and a server certificate
+never installs trust. Use the [installed CLI](overview.md#installing-arkoren)
+before starting the application. Certificate commands and their help run
+without MCP, `.env`, or endpoint settings.
 
-Use the offline certificate commands to provision a local HTTPS identity before
-starting an application. A private root CA signs the server certificate; clients
-must separately trust the root's public certificate. Generating files never
-installs that trust automatically.
-
-With Go 1.27 or later, install the CLI with
-`go install arkoren.dev/cmd/arkoren@latest`. These commands and
-`arkoren certificate --help` work without an MCP
-endpoint and do not read `.env` or endpoint settings. For Go applications, the
-[TLS Certificates guide](../http-networking/certificates.md) shows loading the
-files and configuring a server or client.
-
-## Generating a local root
+## Generate Roots
 
 > [!WARNING]
-> Anyone holding your root's private key can impersonate sites to clients that
-> trust that root. Generate as your normal user in a protected directory, protect
-> the private key and its parent directories, and never commit it. Do not run
-> certificate generation as an administrator merely to install trust later.
+> Anyone holding a root's private key can impersonate sites to clients that
+> trust that root. Generate as your normal user in a protected directory, keep
+> private files and backups out of version control, and restrict parent-directory
+> access. Do not elevate generation merely because trust installation needs it.
 
-Choose an identifying CA name and two explicit, previously unused file paths:
+Choose a recognizable local CA name and two unused output paths:
 
 ```sh
 arkoren certificate root generate --name "Example Local Development" --cert root.pem --key root-key.pem
 ```
 
-Success creates a public root certificate and an unencrypted private key. The
-root uses ECDSA P-256 and a default validity of 5 × 365 days. Keep `root-key.pem`
-private; distribute only `root.pem` to clients that need to trust this CA.
-The JSON result names both created paths in `certificate` and `key`, with
-`created: true` and `trust_changed: false`;
-it never prints the private key.
+Success creates a self-signed ECDSA P-256 root and an unencrypted PKCS #8 private
+key. Its default validity is 5 × 365 days, and it cannot issue intermediate CAs.
+Distribute only the public `root.pem`; keep `root-key.pem` private. The JSON
+receipt contains `created: true`, both absolute paths in `certificate` and
+`key`, and `trust_changed: false`, never the private contents.
 
-Both output paths are required. The CLI refuses existing files, symlinks, and
-paths that refer to the same destination, including names differing only by
-case in the same parent. Parent directories must already
-exist and must not be reached through symlinked parents. `-` is not a stdout
-destination. It preflights both destinations, then creates files exclusively;
-it does not overwrite established material. POSIX modes are `0644` for public
-certificates and `0600` for private keys, subject to umask. On Windows, private
-files receive a protected discretionary access control list (DACL) granting
-access only to the current user. It is installed atomically with exclusive
-creation, before any content is written, without temporarily inheriting broader
-parent access. Native Windows ACL execution remains unverified.
-Parent-directory permissions remain your responsibility on every platform.
+Both destinations are required. Parent directories must already exist without
+symlinked parents. Existing outputs, including dangling symlinks, are refused;
+the two paths must not identify the same destination, including case-only names
+in one parent. `-` does not select stdout. The CLI preflights both paths and
+then creates them exclusively, never overwriting established material.
 
-A write failure can leave a partial pair or an incomplete file at the exact
-reported paths. Creation is not transactional and there is no rollback promise.
-Follow [Partial file creation](#partial-file-creation) before retrying.
+Public files use POSIX mode `0644`; private files use `0600`, subject to umask.
+Windows private-file creation atomically installs a protected current-user-only
+discretionary access control list (DACL), without temporarily inheriting broader
+parent access. Native Windows ACL execution remains unverified. Parent-directory
+protection is still your responsibility on every platform.
 
-## Generating a server identity
+Pair creation is not transactional. A failure can leave an incomplete file or
+only part of the pair; inspect the exact reported paths before retrying as
+described under [Recover Failures](#recover-failures).
 
-With the root pair above, name every DNS name and IP address that clients will
-use. Repeat `--dns` and `--ip` as needed:
+## Issue Server Certificates
+
+With the root pair available, name every DNS name and IP address clients will
+use. For a loopback server:
 
 ```sh
 arkoren certificate generate --ca-cert root.pem --ca-key root-key.pem --dns localhost --ip 127.0.0.1 --ip ::1 --cert server.pem --key server-key.pem
 ```
 
-Success creates the server's public certificate chain and matching private key.
-The generated server key uses ECDSA P-256. Its default validity is 90 days,
-shortened if the issuer expires sooner. At least one explicit DNS name or IP
-address is required; the CLI does not discover hostnames. A connection to an
-unlisted name fails hostname verification even if the client trusts the root.
+This creates a new ECDSA P-256 server-auth identity: the public chain is leaf
+then root, and `server-key.pem` contains its private key. Default validity is
+90 days, shortened if the issuer expires sooner. The issuer must be a currently
+valid self-signed signing root with matching key and the supported no-intermediate
+profile.
 
-The same exclusive-output rules apply to `server.pem` and `server-key.pem`.
-Load them with the [server HTTPS setup](../http-networking/server.md#serving-https).
-Startup must fail if files are missing, not generate a new root or server
-identity. These commands do not create intermediates or client identities,
-renew certificates, or contact ACME.
+At least one explicit subject alternative name (SAN) is required. Repeat `--dns`
+or `--ip` rather than supplying comma-separated lists. Names must be bare DNS
+names or IP addresses, not URLs or host:port values; no localhost or loopback
+SAN is added implicitly. A connection using an unlisted name fails hostname
+verification even if the client trusts the root.
 
-## Checking stored material
+The same exclusive-pair and partial-write rules apply. Load the resulting pair
+with [Serving HTTPS](../http-networking/server.md#serving-https). Missing files
+must fail startup, not trigger replacement identities. These commands do not
+renew certificates, create intermediates or client identities, validate DNS
+ownership, or contact ACME.
 
-Check the public bundle, or also supply the private key to check the match:
+## Check Files
+
+To check that the public root bundle parses, without loading a private key:
 
 ```sh
 arkoren certificate check --cert root.pem
+```
+
+The JSON result has `parsed: true`, `key_matched: false`,
+`expiry_checked: false`, and `trust_checked: false`. No private material is
+printed. To check the server certificate's matching private key as well:
+
+```sh
 arkoren certificate check --cert server.pem --key server-key.pem
 ```
 
-Success prints JSON with `parsed: true`, `expiry_checked: false`, and
-`trust_checked: false`. `key_matched` is true only when a supplied key matched;
-without a key it is false.
-Neither prints private contents. This is structural validation, not an expiry,
-hostname, TLS-purpose, or trust test. Existing RSA, ECDSA, and Ed25519 identities
-in supported unencrypted PEM formats can be checked as well. A malformed bundle, mismatched key, or missing
-file fails without exposing the private material.
+Success now has `key_matched: true` and includes the key path. A malformed bundle,
+mismatched key, or missing file fails. Supported unencrypted PEM identities can
+also contain existing RSA, ECDSA, or Ed25519 keys.
 
-To verify deployment, connect through a client configured with the intended
-trust and URL, and check that the request succeeds. A successful file check
-alone does not prove that a service is running or that a browser trusts it.
+These checks establish structure and optional key matching, not validity dates,
+hostname, TLS purpose, revocation, or client trust. Verify deployment by making
+a request from the intended client with the intended URL and trust configuration.
+A file check cannot prove the service is running or a browser trusts it.
 
-## Installing system trust
+## Choose Trust
 
-Prefer a [client-specific CA pool](../http-networking/certificates.md#trusting-a-private-ca-in-an-http-client)
-when only one application needs the CA. System trust affects other applications
-that use that system store, so install only a root you control and intend to
-trust broadly.
+Prefer [client-specific trust](../http-networking/certificates.md#choose-client-trust)
+when only one application needs the root. System trust affects other applications
+using that store. Install only a root you control and intend to trust broadly;
+neither public-file generation nor structural checking grants that trust.
 
-The trust commands accept the public PEM containing exactly one self-signed CA
-certificate, never a private key or arbitrary chain. Installation additionally
-requires the root to be currently valid. Inspect the SHA-256 fingerprint, selected
-system store or anchor directory, and system-wide scope before approving:
+System trust is not universal. Browsers with separate stores, NSS, Java,
+containers, remote machines, and independently configured applications can need
+their own setup. Long-running clients can cache roots or TLS connections;
+restart them after changes and verify the actual client. Do not disable
+certificate verification to conceal a mismatch.
+
+## Install Trust
+
+The input must contain exactly one public self-signed CA certificate, with valid
+CA constraints and certificate-signing usage. A private key, arbitrary chain,
+leaf, or intermediate is not accepted. Installation also requires current
+validity.
+
+To request installation, use the public root only:
 
 ```sh
 arkoren certificate root trust root.pem
 ```
 
-Confirmation defaults to no. Noninteractive use requires an explicit `--yes`:
+Before mutation, stderr receives a JSON `warning` naming the action, SHA-256
+fingerprint, concrete target, and system-wide effects. Inspect those values
+before answering the text prompt. Confirmation defaults to no; only a complete
+`y` or `yes` line approves it, ignoring case and surrounding whitespace.
+
+If a reviewed automation procedure deliberately changes this system store,
+approve it explicitly:
 
 ```sh
 arkoren certificate root trust root.pem --yes
 ```
 
-Before mutation, stderr receives a JSON `warning` object with the action,
-fingerprint, concrete target, and scope warning, including with `--yes`.
-Interactive confirmation prompts remain text. Success returns JSON on stdout
-with `action`, `completed: true`, `sha256`, and `target`; this does not prove
-that every client uses that store.
+Noninteractive use requires bare `--yes`. `-yes`, `--yes=true`, and other
+value-bearing approval forms are invalid. The warning still appears with
+`--yes`. Success prints JSON with `action`, `completed: true`, `sha256`, and
+`target`; it does not prove every client uses that store.
 
-The CLI does not invoke `sudo`, request UAC elevation, or relaunch itself. If
-permissions are insufficient, rerun only the trust command with the privileges
-required by your system. Keep generation and private-key access under your
-normal user.
+The CLI never invokes `sudo`, requests UAC elevation, or relaunches itself.
+If permissions are insufficient, rerun only the trust operation with the
+privileges required by the selected store. Keep generation and private-key
+access under your normal user.
 
-### Supported system stores
+## Supported Stores
+
+Unsupported systems or Linux layouts fail rather than guessing a location.
+Native Windows trust execution remains unverified.
 
 | System | Target and prerequisites |
 | --- | --- |
-| macOS | System keychain (`/Library/Keychains/System.keychain`), using `security` and administrator SSL trust. |
-| Debian and Ubuntu Linux | `/usr/local/share/ca-certificates` and `/usr/sbin/update-ca-certificates`. |
-| Fedora and RHEL Linux | `/etc/pki/ca-trust/source/anchors` and `/usr/bin/update-ca-trust extract`. |
-| Windows | Native Crypt32 operations on the LocalMachine `Root` store; administrative permissions are required for changes. |
+| macOS | `/Library/Keychains/System.keychain`, administrator SSL trust, using `/usr/bin/security`; changes require root. |
+| Debian/Ubuntu Linux | Existing `/usr/local/share/ca-certificates` plus executable `/usr/sbin/update-ca-certificates`. |
+| Fedora/RHEL Linux | Existing `/etc/pki/ca-trust/source/anchors` plus executable `/usr/bin/update-ca-trust extract`. |
+| Windows | Crypt32 operations on the LocalMachine `Root` store; administrative permissions are required for changes. |
 
-Native Windows trust execution remains unverified.
+Operations match exact DER certificate content and fingerprint, not merely
+subject names. Matching installation and established absence are repeatable
+without replacing unrelated certificates.
 
-Other Linux layouts and unsupported systems return an error; the CLI does not
-guess an installation path. The operation identifies certificates by exact DER
-content and fingerprint, not only a subject name. Installing an already
-installed matching root is idempotent.
+On macOS, installation sets this root's administrator policy to SSL trust.
+Removal clears its administrator trust settings but keeps the public System
+keychain certificate, avoiding deletion of an item other tools might use.
+User-domain and vendor trust are unchanged. Unrecognized or localized
+missing-record diagnostics fail closed instead of establishing absence.
 
-On macOS, installation sets this root's administrator trust policy to SSL
-trust. Removal clears administrator trust settings for the exact root but
-retains its public System keychain certificate, avoiding deletion of items
-other tools might use. Neither operation changes user-domain or vendor trust.
-Unrecognized or localized missing-record diagnostics fail closed rather than
-being treated as proof that trust settings are absent.
+On Linux, Arkoren owns only its `arkoren-<SHA-256>.crt` or `.pem` anchor in the
+selected directory. Existing anchors must contain the exact canonical bytes;
+conflicting files and symlinks are refused. Install and removal run the native
+refresh tool even on repeat operations, allowing a repeat to repair failed
+refresh. Copies installed elsewhere are not managed. Serialize changes with
+other administrators' edits; refreshing the store is not transactional.
 
-On Linux, Arkoren manages only its own `arkoren-<SHA-256>` anchor file in the
-selected directory. An existing anchor must contain the expected canonical
-certificate bytes; conflicting files or symlinks are refused. Installing or
-removing an anchor also runs the native refresh tool, including on repeat
-operations, so a repeat can repair a previous refresh failure. This does not
-manage copies installed elsewhere by an administrator.
-Serialize these changes with other administrators' trust-store edits;
-refreshing the system store is not transactional.
+## Remove Trust
 
-System trust is not universal trust. Browsers with separate stores, NSS,
-Java, containers, remote machines, and independently configured applications
-can require separate setup. Restart long-running clients after changing trust:
-they can cache root sets or established TLS connections. Check the actual client
-after installation; do not disable certificate verification to hide a trust-store
-mismatch.
-
-## Removing system trust
-
-Retain the exact public root file so you can identify and remove that certificate
-later. Removal accepts an expired root, but still validates that it is exactly
-one self-signed CA:
+Retain the exact public root file so removal identifies the same certificate,
+not every certificate sharing its name:
 
 ```sh
 arkoren certificate root untrust root.pem
 ```
 
-As with installation, inspect the fingerprint and target; confirmation defaults
-to no, and noninteractive use requires `--yes`. Removal targets only the exact
-matching certificate, not every certificate with the same name. An established
-absence is idempotent; unknown native diagnostics remain errors. On Linux, removal affects only the
-Arkoren-managed anchor, not copies installed elsewhere. Removing trust does not
-delete generated files or revoke certificates for clients that maintain
-separate trust stores.
+Inspect the warning's fingerprint and target before confirming. Default-no
+confirmation and noninteractive `--yes` rules are the same as installation.
+Removal accepts an expired root but still validates exactly one self-signed CA.
+An established absence succeeds; unknown native diagnostics remain errors.
 
-## Recovering from failures
+On Linux, removal affects only Arkoren's anchor. On macOS, it leaves the public
+keychain item. Removing trust neither deletes your generated files nor revokes
+certificates for clients using separate stores. Verify the resulting behavior
+with the client that matters.
 
-### Partial file creation
+## Recover Failures
 
-If generation fails after creating a file, inspect only the reported output
-paths. Do not delete an established CA or assume that every reported file is
-complete. Use `certificate check` on any pair you intend to keep. Remove only
-new, incomplete provisioning outputs after confirming they are not deployed,
-or select fresh output paths and retry. The CLI never overwrites them for you.
+### Partial Files
 
-### Partial trust changes
+After generation failure, inspect only the named output paths. Do not delete an
+established CA or assume a reported file is complete. Check any pair you intend
+to keep. Remove only new incomplete outputs after confirming they are not
+deployed, or choose fresh destinations. There is no automatic overwrite or
+rollback.
 
-On Linux, an anchor write, sync, or close failure can leave a possibly incomplete
-file at the exact reported path. The CLI does not refresh the store or delete
-that pathname. Inspect the file and remove it only after confirming that it is
-incomplete and not deployed; then retry with the same public root. Existing
-conflicting anchors remain protected from replacement.
+### Partial Trust
 
-A store update can succeed before its refresh step fails. Follow the error's
-named path, store, and refresh command to inspect or repair that partial state;
-a nonzero exit does not prove rollback.
+A Linux anchor write, sync, or close failure can leave an incomplete file at the
+reported path. The CLI neither refreshes the store nor deletes that pathname.
+Inspect it and remove it only after confirming it is incomplete and not deployed;
+then retry with the same public root. Conflicting existing anchors remain
+protected.
 
-Cleanup can also fail after a native action. On macOS, staging-cleanup errors
-retain whether no change was attempted, the command completed, or changes may
-be partial. On Windows, native handle-cleanup errors retain completed or failed
-action outcomes; a partial removal can report how many exact roots were already
-removed. Completed changes remain in place. These errors do not produce a
-success receipt and do not undo the action.
+An anchor change can succeed before native refresh fails. The error names the
+path, requested state, and refresh command; inspect or repair that state, then
+repeat the same operation with the same root. A nonzero exit does not establish
+rollback.
 
-Inspect the reported outcome before retrying. After repair, repeat the same
-operation with the same root file and verify with the client that actually uses
-the store. Exact-certificate matching avoids removing unrelated roots, but does
-not make the operation transactional. There is no certificate status command.
+Native cleanup can fail after effects too. macOS staging errors distinguish no
+attempt, potentially partial change, and completed native commands. Windows
+handle-cleanup errors preserve completed or failed outcomes; partial removal can
+report how many exact roots were removed. Completed effects remain in place,
+and these errors do not produce a success receipt. Inspect the reported outcome
+before retrying. There is no certificate status command.
 
-All relative file paths resolve from the command's working directory. Invalid
-usage exits 2; file, validation, trust, or output failures exit 1; success exits
-0. Broken pipes and short stdout writes are failures even if files or trust
-have already changed.
-
-Continue with [TLS Certificates](../http-networking/certificates.md) to load
-the identity and configure application-specific trust or mutual TLS.
+All relative paths resolve from the working directory. Invalid usage exits 2;
+file, validation, trust, or output failures exit 1; success exits 0. Broken pipes
+and short stdout writes fail even after files or trust changed. Continue with
+[TLS Certificates](../http-networking/certificates.md) for application loading
+and client-specific trust.

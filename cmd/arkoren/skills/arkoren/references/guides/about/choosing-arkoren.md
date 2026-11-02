@@ -1,81 +1,92 @@
 ---
-title: Should I Choose Arkoren?
-nav: Choosing Arkoren
-description: Decide whether Arkoren fits your Go service, how to adopt it alongside existing packages, and which limits to evaluate first.
+title: Choosing Arkoren
+description: Evaluate Arkoren's shared conventions, integration boundaries, and backend limits before adopting a capability.
 order: 15
+summary:
+  - Weigh shared service APIs and explicit wiring against your application's existing integration work.
+  - Distinguish portable contracts from backend guarantees and application-owned policy.
+  - Plan incremental adoption and test compatibility with your HTTP stack and production backend.
 ---
 
-# Should I Choose Arkoren?
+# Choosing Arkoren
 
-## Introduction
+Choose Arkoren for a capability whose shared API and integration conventions help
+your application. You do not need to replace a working HTTP stack or standardize
+every dependency at once. The useful comparison is between the integration work
+you would otherwise maintain and the conventions and limits you accept by using
+Arkoren.
 
-If you are choosing libraries for a Go service, the decision is not whether to
-replace everything you already use. Arkoren is a toolkit of independently usable
-packages. Choose it where shared service interfaces, testing tools, and explicit
-application wiring save you work; keep the standard library or specialist
-packages where they already meet your needs.
+## Evaluate the Fit
 
-## When Arkoren fits
+If several services need common application-facing APIs and test substitutes,
+Arkoren's [facades and drivers](../core-concepts/facades-and-drivers.md) provide
+that separation. Your application calls a facade while a driver supplies backend
+behavior. For a cache, this lets a unit test use process-local storage while a
+deployed service uses a shared backend without changing the facade calls.
 
-Arkoren is useful when several backend capabilities need consistent setup,
-errors, telemetry, and tests. A **facade** is the application-facing service API;
-a **driver** implements it for a backend. This separation lets application code
-use the same cache API with an in-process driver in tests and Redis in a deployed
-service. You still configure and operate the chosen backend. See
-[facades and drivers](../core-concepts/facades-and-drivers.md).
+That boundary is useful only if the contract covers your task. If most of your
+code needs a vendor's specialized operations, a portable facade might add little
+value. Use the vendor package directly where appropriate; do not assume every
+vendor feature has an Arkoren equivalent.
 
-| Your situation | Decision |
-| --- | --- |
-| You repeatedly assemble service interfaces, lifecycle hooks, and test substitutes across projects. | Evaluate Arkoren's shared conventions against that integration work. |
-| A small `net/http` service already meets your needs. | Keep it; adding a toolkit is not a requirement for growth. |
-| You need a specialist package's full API more than a portable service interface. | Use that package directly, or isolate vendor-specific calls alongside Arkoren. |
-| You want automatic dependency discovery or a complete application with built-in business rules. | Arkoren is not that model: you construct dependencies and own application policy. |
+The same reasoning applies to application structure. Explicit constructors and
+optional lifecycle hooks fit applications where you want dependency wiring in
+Go. If a small `net/http` service already meets your needs, keeping it is a valid
+choice. Arkoren does not provide automatic dependency discovery or a container
+that wires the application for you.
 
-Core uses standard Go types and has no third-party Go dependencies; vendor
-libraries live in separately installed driver modules. This does not make a
-driver-backed application dependency-free. Compared with assembling packages
-yourself, you gain common contracts and test tools but take on Arkoren's API
-conventions and the limits of each contract.
+## Understand the Boundaries
 
-## Keep your existing router
+Shared APIs do not remove backend differences. Review the relevant
+[driver guide](../drivers/choosing-a-driver.md) before choosing an implementation,
+especially if your task depends on persistence, coordination between servers,
+or an optional operation. Some contracts permit unsupported operations to return
+`ErrUnsupported`; the presence of a facade method alone is not proof of support
+by every driver.
 
-Start with one capability, such as a cache or validation, without changing your
-HTTP stack. Services do not require the Arkoren router or application lifecycle.
-You can construct them in your existing composition code and pass them to your
-handlers.
+Memory drivers serve local and test scenarios, but their state is process-local
+and does not survive a restart. A passing [conformance suite](../testing/conformance-suites.md)
+is evidence about the behavior that suite tests, not about distributed operation,
+production capacity, or identical durability across backends. Vendor integration
+tests add backend-specific evidence; your deployment still needs its own tests.
 
-If you also want Arkoren HTTP handlers, both its router and its error-returning
-handler type implement `http.Handler`. An existing router that accepts that
-interface can serve them. In the other direction, `router.HTTP` adapts standard
-handlers into Arkoren routes, and `Mount` serves a handler tree beneath a prefix.
-Check path-prefix handling and middleware order at that boundary; `Mount` strips
-the prefix. See [mounting standard handlers](../http-fundamentals/routing.md#mounting-standard-handlers).
+You also retain responsibility for credentials, resource startup and cleanup,
+schema migrations, and authorization policy. Installing a module does not
+configure those responsibilities. There are no built-in [arks](../core-concepts/arks.md),
+the optional domain features intended to combine services with product-specific
+rules; do not assume signup or another complete business flow is included.
 
-## Check maturity, compatibility, and limits
+Core's Go dependencies are Arkoren's standard-library-only foundation modules,
+not third-party libraries. Vendor modules do bring external dependencies.
+Evaluate the module graph you actually install rather than treating the whole
+application as dependency-free.
 
-The current Go baseline is **Go 1.27 or later**. Modules are versioned
-independently, so evaluate the core and drivers you actually use rather than
-assuming one version covers the whole toolkit. Pin dependencies in your
-application and run its tests when upgrading, including tests against your real
-backend.
+## Keep Existing Components
 
-Arkoren includes [driver conformance suites](../testing/conformance-suites.md),
-in-process test implementations, and vendor integration tests. These provide
-evidence about specified behavior, not a production track record, performance
-guarantee, API freeze, or long-term support window. If your adoption depends on
-those assurances, establish them separately before committing.
+For a first adoption, choose a service or foundation library that does not affect
+HTTP routing. Construct it where your application already constructs dependencies
+and pass it to existing handlers. Neither the Arkoren router nor its application
+lifecycle is required.
 
-Evaluate these limits before choosing a capability:
+If you later adopt Arkoren HTTP handlers, its router and error-returning handler
+type both implement `http.Handler`. An existing router can serve them wherever it
+accepts that interface. In the other direction, `router.HTTP` adapts a standard
+handler, and `Mount` serves a handler tree beneath a prefix. `Mount` strips that
+prefix before forwarding the request, so test path handling and middleware order
+at the boundary. [Routing](../http-fundamentals/routing.md#mount-native-handlers)
+shows the integration.
 
-- A portable contract does not expose every vendor feature. Some operations can
-  return `ErrUnsupported`; check the selected [driver's behavior and limits](../drivers/choosing-a-driver.md).
-- In-memory state is process-local and is lost on restart. Passing memory-driver
-  tests does not establish distributed behavior or durability for your deployment.
-- You own dependency wiring, lifecycle registration, credentials, migrations,
-  and authorization policy; installing a package does not configure them.
-- There are no built-in [arks](../core-concepts/arks.md), the optional domain
-  features that combine services with business rules. Do not choose Arkoren on
-  the assumption that signup or other complete product flows are included.
+## Try One Capability
 
-If the trade-offs fit, follow [Installation](../first-steps/installation.md) and
-try one capability against an existing application test before expanding adoption.
+Arkoren requires Go 1.27 or later. Modules are versioned independently, so assess
+the versions of core, foundation libraries, and drivers that your application
+selects. Conformance and integration tests do not establish an API freeze,
+support window, performance guarantee, or production track record. If you require
+one of those assurances, establish it separately before committing.
+
+Start with the [existing-application installation example](../first-steps/installation.md#existing-applications)
+and add a test for the behavior you need. Before expanding adoption, test the
+chosen production driver against its backend, including the failure and
+unsupported-operation cases relevant to your application. Keep the dependency
+versions recorded in your application's module files and rerun those tests when
+upgrading.

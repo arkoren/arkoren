@@ -18,7 +18,7 @@ requested, mirror actual headings; the website already supplies section navigati
 
 Most pages should move in this order:
 
-1. **Introduction:** establish the reader's situation and purpose, then introduce the capability and primary interface; follow the [use-case-first pattern](prose-style.md#paragraph-rhythm).
+1. **Opening prose:** establish the reader's situation and purpose, then introduce the capability and primary interface; follow the [use-case-first pattern](prose-style.md#paragraph-rhythm). An Introduction heading is optional.
 2. **Mental model or prerequisite:** distinguish terms and establish required state.
 3. **Baseline operation:** show a focused example using the prerequisites already introduced.
 4. **Common variations:** add the options most readers will need.
@@ -37,12 +37,14 @@ both scanning and continuous reading.
 Use heading depth deliberately:
 
 ```text
-## Connections                    # a major concept or phase
-### Creating a connection         # a reader action or a focused concept
-#### Custom connection names      # a narrow variation or exception
+## Database Connections           # a major concept or phase
+### Creating Connections          # a reader action or a focused concept
+#### Connection Names             # a narrow variation or exception
 ```
 
-Keep sibling headings grammatically parallel. Prefer `Creating`, `Inspecting`, and `Deleting` over `Create`, `Inspection`, and `How to Delete`.
+Keep sibling headings grammatically parallel and short, normally two or three
+words, with four when needed. Prefer `Creating Records`, `Inspecting Records`,
+and `Deleting Records` over inconsistent forms or sentence-length headings.
 
 ## Onboarding and Quickstarts
 

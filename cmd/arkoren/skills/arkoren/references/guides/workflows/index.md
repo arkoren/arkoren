@@ -1,6 +1,6 @@
 ---
 title: Workflows
-description: Build durable, multi-step processes from retried steps, signals, and sleeps on the memory, Temporal, or Restate drivers.
+description: Coordinate long-running processes with steps and signals, then run and test them on memory, Temporal, or Restate.
 order: 160
 section: Background
 ---

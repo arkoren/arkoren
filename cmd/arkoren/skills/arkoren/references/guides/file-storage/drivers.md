@@ -1,110 +1,56 @@
 ---
-title: File Storage Drivers
-nav: Drivers
-description: Choose between the memory, local filesystem, and Amazon S3 storage drivers, connect and configure each, and use S3-compatible services.
-order: 50
+title: Drivers
+description: Choose and configure memory, filesystem, or S3 storage with explicit lifecycle, ownership, and backend limits.
+order: 20
+summary:
+  - Compare process-local memory, persistent filesystem roots, and shared S3 storage.
+  - Configure each driver and retain ownership of lifecycle and native dependencies.
+  - Account for filesystem containment, permissions, replacement, and staging cleanup.
+  - Use S3 prefixes, compatible endpoints, native access, and a disposable local fixture.
 ---
 
-# File Storage Drivers
+# Drivers
 
-## Introduction
+Choose storage by where your application runs and which processes must share
+its files. Memory suits isolated tests; filesystem storage suits one host with
+a persistent volume; S3 suits replicas that need the same objects and clients
+that transfer directly through signed URLs.
 
-Files that survive a local restart may still disappear when a container moves
-to another host. Choose storage by where your application runs and whether
-every replica must read the same files.
+All three use the same [object operations](overview.md) and portable key rules.
+The facade borrows its driver: `storage.New` neither starts nor stops it.
+Examples import `storage` from `arkoren.dev/core/service/storage` and use a
+non-nil operation context `ctx`. Run installation commands in your application's
+Go module, and check constructor errors before wrapping a driver.
 
-Arkoren ships three storage drivers: memory, the local filesystem, and Amazon
-S3. All of them implement the same contract, so you use the same `storage`
-facade, [key rules](overview.md#keys), and portable error identities. Backend
-failures still depend on the driver. What differs
-is where the bytes live, and a few places where that shows through: whether an
-object can seek, whether a URL can be signed, and how large a page of results
-is. This page covers how to connect each driver and what to know before you
-rely on it.
+Use memory for isolated tests, then run
+[integration tests](../testing/integration-tests.md) against the driver you
+deploy; passing memory tests does not establish provider permissions or limits.
 
-To choose a driver, start from how you run:
+## Compatibility Matrix
 
-- **Memory** suits tests and throwaway prototypes. Nothing is written
-  anywhere, and everything is gone when the process exits.
-- **Filesystem** suits a service on a single host, and local development that
-  needs files to survive a restart. It cannot be shared between hosts unless
-  they mount the same volume.
-- **Amazon S3**, or a service that speaks its protocol, suits production
-  deployments with more than one replica, large files, and direct client
-  access through [signed URLs](signed-urls.md).
+This compares behavior exposed by Arkoren, not every native provider feature.
+Download ranges refer to the application-served `Download` and `Inline` helpers.
 
-Because they share one interface, you can develop on the filesystem and deploy
-on S3 by changing the line that builds the driver. Run your integration tests
-against the driver you deploy; see [Integration tests](../testing/integration-tests.md).
-
-## Compatibility matrix
-
-Compare capabilities exposed by Arkoren's storage driver and download helper,
-not every feature offered by an object-storage service. The S3-compatible row
-uses the Amazon S3 driver with a custom endpoint; it is not a separate driver.
-
-| Driver | Shared across hosts | Survives app restart | Seekable reads | Download ranges | Signed downloads | Signed uploads |
+| Driver | Shared Across Hosts | Survives App Restart | Seekable Reads | Download Ranges | Signed Downloads | Signed Uploads |
 | --- | --- | --- | --- | --- | --- | --- |
 | [Memory](#memory) | No | No | Yes | Yes | No | No |
-| [Filesystem](#filesystem) | Partial — Hosts must mount the same volume; network-filesystem behavior still applies. | Partial — Requires the same persistent root directory. | Yes — Opened objects must be regular files. | Yes — Regular-file bodies use the native HTTP range helper. | No | No |
-| [Amazon S3](#amazon-s3) | Yes | Yes | No | No | Yes | Yes — PUT; a supplied presigner must preserve the requested signed content type. |
-| [S3-compatible services](#s3-compatible-services) | Yes | Partial — Depends on the service's persistence configuration. | No | No | Partial — The service must implement compatible SigV4 signing. | Partial — The service must honor SigV4 signatures and any bound headers. |
+| [Filesystem](#filesystem) | Partial — Requires the same mounted volume. | Partial — Requires the same persistent root. | Yes — Regular files only. | Yes | No | No |
+| [Amazon S3](#amazon-s3) | Yes | Yes | No | No | Yes — Requires a presigner. | Partial — PUT only; the presigner must preserve requested bindings. |
+| [S3-Compatible](#s3-compatible) | Yes | Partial — Depends on service persistence. | No | No | Partial — Requires compatible SigV4 signing. | Partial — Requires compatible signing and bound-header enforcement. |
 
-Shared storage assumes the same root or bucket and prefix, with appropriate
-permissions. Restart support means an application restart does not clear the
-backend; it does not promise backups, retention, or survival of backend failure.
-A filesystem root on ephemeral container storage does not survive replacement.
-Use S3 rather than a network filesystem for shared replica writes.
+Shared access assumes the same bucket/prefix or root and appropriate permissions.
+Restart support does not promise backups, retention, or recovery from backend
+failure. An ephemeral container directory is not persistent storage.
+S3-compatible services use the S3 driver with a custom endpoint.
 
-Download ranges refer to Arkoren's `Download` helper, which needs a seekable
-body. S3's native range support does not make its streamed `Open` body seekable;
-use a signed URL for direct client downloads instead. S3 signing supports GET
-and PUT with a maximum seven-day TTL, shortened by temporary-credential expiry.
-Clients supplied through `NewFrom` must support presigning; a client without it
-returns `storage.ErrUnsupported`. The driver also rejects presigner results that
-omit or replace a requested content type. Upload clients must send the bound headers;
-compatibility with a custom endpoint, including enforcement of those headers,
-must be checked against that service.
-
-All rows use the [portable key and prefix rules](overview.md#keys), including
-Windows filename restrictions even on other operating systems. These are
-exposed capabilities, not a claim that an emulator proves a cloud service's
-permissions, durability, or signed-header enforcement.
-
-Every row supports the facade's [lazy object traversal](overview.md#listing-files)
-through its existing paged `List` operation. `Walk` does not add driver
-capabilities or snapshot guarantees. Stopping traversal prevents future facade
-page requests, but does not undo memory/filesystem page preparation or S3
-read-ahead already performed for the current page. Custom S3-compatible services
-must still honor the underlying listing and continuation protocol.
-
-## Wiring a driver
-
-Run installation commands in your application's Go module. Examples use
-`storage` from `arkoren.dev/core/service/storage`, your operation context `ctx`,
-and an existing `app` from the [lifecycle guide](../application/lifecycle-and-ownership.md).
-Focused snippets omit routine error checks, following [the overview](overview.md#introduction).
-
-Constructors validate settings; S3 also loads AWS configuration, which can read
-local files or consult configured credential services. For the filesystem driver,
-register Start and Stop as shown below. Memory and S3 have no lifecycle hooks.
-With your configured `driver`, wrap it in the facade:
-
-```go
-files := storage.New(driver)
-```
-
-[Lifecycle and ownership](../application/lifecycle-and-ownership.md) explains
-cleanup ordering. Construction does not verify S3 bucket permissions.
+Every driver supports paged listing and the facade's [lazy traversal](overview.md#listing-objects).
+Neither provides a multi-page snapshot. Stopping a walk prevents later facade
+requests, not work already done preparing a page.
 
 ## Memory
 
-The memory driver keeps objects in the process. It is part of `arkoren.dev/core`,
-so there is nothing extra to install, and it is safe for concurrent use.
-
-### Connecting
-
-`New` never fails:
+The bundled memory driver stores objects only in this process. A new driver
+starts empty, needs no lifecycle hooks, and is safe for concurrent use:
 
 ```go
 import "arkoren.dev/core/service/storage/memorystorage"
@@ -112,10 +58,14 @@ import "arkoren.dev/core/service/storage/memorystorage"
 files := storage.New(memorystorage.New())
 ```
 
-### Configuration
+Use the shared [write and read tasks](overview.md#writing-objects) with this
+store. Bytes are copied into storage and into opened snapshots; later writes or
+deletions do not change an already opened body. Bodies support seeking and
+HTTP ranges, but objects consume application memory without a total-size quota.
+Signing returns `storage.ErrUnsupported`.
 
-The only setting is the page size of `List` when a request sets no limit,
-which is 100 by default:
+If housekeeping needs a different default page size, configure the driver at
+construction:
 
 ```go
 driver := memorystorage.New(func(store *memorystorage.Builder) {
@@ -123,322 +73,231 @@ driver := memorystorage.New(func(store *memorystorage.Builder) {
 })
 ```
 
-### Storing objects
+The default is 100; nonpositive configured values restore it. An explicit
+positive `ListOptions.Limit` overrides it for that request.
 
-Use the shared [write](overview.md#writing-files) and [read](overview.md#reading-files)
-examples with `files`. A successful write can be read immediately; no file is
-written to disk and a new driver starts empty.
-
-### Behavior and limits
-
-Objects are copied in and out, so a body you opened is a snapshot that later
-writes do not change. The body can seek, so [`Download`](uploads-and-downloads.md#headers-and-ranges)
-serves range requests. Listings are ordered by key. The driver cannot sign
-URLs: `Sign` returns `storage.ErrUnsupported`. Nothing limits the total size
-except the memory of the machine.
-
-For every function and option, see the [`memorystorage` API reference](https://pkg.go.dev/arkoren.dev/core/service/storage/memorystorage).
+See the [`memorystorage` API](https://pkg.go.dev/arkoren.dev/core/service/storage/memorystorage).
 
 ## Filesystem
 
-The filesystem driver stores each object as a regular file below a root
-directory. Choose it for a single host or for development that needs data to
-persist.
-
-### Installation
+Choose filesystem storage when one host owns a persistent directory. The
+application's operating-system identity must be able to create and access that
+directory. Keep the root application-controlled and separate from unrelated data;
+portable key validation is not a substitute for filesystem permissions.
 
 ```sh
 go get arkoren.dev/driver/filesystem
 ```
 
-### Connecting
-
-Pass the root directory to `New` and wrap the driver:
+Import `filesystemstorage` from
+`arkoren.dev/driver/filesystem/filesystemstorage`. Inside an existing
+`compose *application.Composer` (from `arkoren.dev/core/application`), construct
+the driver and register its lifecycle:
 
 ```go
-import (
-	"arkoren.dev/core/service/storage"
-	"arkoren.dev/driver/filesystem/filesystemstorage"
-)
-
-driver, err := filesystemstorage.New("./data/uploads")
+driver := compose.Must(filesystemstorage.New("./data/uploads"))
+compose.Cleanup(driver.Stop)
+compose.Startup(driver.Start)
 files := storage.New(driver)
 ```
 
-`New` resolves the path to an absolute one and rejects an empty root.
-Check its error before wrapping the driver. Register `Stop` as cleanup and
-`Start` as startup with the
-[application lifecycle](../application/lifecycle-and-ownership.md).
-`Start` creates the directory if it is absent and opens it, failing when the
-path exists but is not a directory. Using the driver before `Start`, or after
-`Stop`, returns an error.
+`New` rejects an empty root and resolves an absolute path without disk I/O.
+`Start` creates the directory if absent and opens it with `os.Root`; a
+nondirectory root fails startup. Operations before `Start` or after `Stop` fail.
+There are no optional construction settings. Follow
+[Lifecycle and Ownership](../application/lifecycle-and-ownership.md) for shutdown
+ordering: finish active work before `Stop`, which closes the root without
+joining readers or writers. Already opened bodies remain yours to close.
 
-### Configuration
+### Stored Files
 
-There is nothing to configure. The root is the one required argument of `New`.
+After startup, the [shared write task](overview.md#writing-objects) stores
+`reports/2026-q1.csv` at `<root>/reports/2026-q1.csv`; intermediate directories
+are created as needed. New directories request mode `0750`, subject to umask,
+and stored files are set to `0640` where the platform supports Unix modes.
+Existing directory permissions are not repaired. Restrict root ownership and
+access explicitly in your deployment.
 
-### Storing objects
+Replacement writes a temporary file beside the destination, syncs and closes
+it, then renames it into place. Atomic replacement depends on the volume's
+rename semantics; it does not promise crash durability on every filesystem.
+A later metadata failure can report an error after replacement succeeded.
 
-Use the shared [write](overview.md#writing-files) and [read](overview.md#reading-files)
-examples after the application starts. With this root, writing `avatars/42.png`
-creates `./data/uploads/avatars/42.png` in your application's working directory.
+New staging names start with `.storage-` and end in a dot, outside portable key
+syntax, so listings omit unpublished bytes. A valid name such as
+`.storage-report` is an ordinary object. Never remove files by prefix alone:
+stop writers, inspect ownership and leftovers, and remove only confirmed staging
+files. Back up the root before native migrations or cleanup.
 
-### Behavior and limits
+### Path Containment
 
-A key maps to a path below the root, so `avatars/42.png` is the file
-`<root>/avatars/42.png`, and intermediate directories are created as needed.
-`Put` writes to a temporary file, syncs it, and renames it into place. Atomic
-replacement depends on the filesystem's rename semantics; it is not a promise
-of crash durability for every volume. New staging names start with `.storage-`
-and end in a dot, outside portable object-key syntax, so listings omit them.
-Valid names such as `.storage-report` are ordinary application objects. Never
-delete files merely because they have the `.storage-` prefix: inspect leftovers
-and their ownership, and stop writers before removing a confirmed staging file.
+Operations through `os.Root` cannot traverse symbolic links outside the root;
+such attempts fail with an operational error, not `storage.ErrNotFound`.
+Internal symlinks can be followed for object operations. Listings skip symlinks
+encountered during walking, including links that point inside the root; a
+listing prefix that traverses an outside link fails.
 
-The driver opens the root with Go's `os.Root`, which keeps every operation
-inside it. Reading, writing, or deleting through a symbolic link that points
-outside the root fails with an error that is not `storage.ErrNotFound`. Links
-that stay inside the root are followed for these operations. Listings skip
-symbolic links encountered during the walk, whether they point inside or outside
-the root, since a listing returns only regular files. A list prefix that tries
-to traverse a link outside the root fails instead.
+`Open` and `Stat` accept regular files only. Directories are missing logical
+objects; FIFOs, sockets, and other special entries report operational errors.
+On Unix, FIFO opens do not wait for a writer. Regular bodies support seeking
+and [download ranges](uploads-and-downloads.md#headers-and-ranges).
 
-`List` returns files ordered by key and reads only the directory a prefix
-implies, so listing `avatars/` does not walk the whole tree. A request without a
-limit returns at most 100 objects. Bodies can seek, so range requests work, and
-the driver cannot sign URLs.
-
-Open and Stat accept regular files, not FIFOs, sockets, or other special entries.
-Directories are missing logical objects; other nonregular entries report an
-operational error. On Unix, opening is nonblocking before validating the actual
-handle, so a FIFO does not wait for a writer. Regular files retain seeking and
-the download helper's native HTTP range handling. Concurrent deletion that finds
-the object already missing succeeds. Finish active application work before Stop;
-it closes the root without joining readers or writers, while already opened
-bodies remain the caller's to close.
+Listings walk the directory implied by the prefix, sort matching portable keys,
+and default to 100 objects per page. Native regular files with portable names
+can appear as objects; invalid names and special entries are omitted.
 
 > [!WARNING]
-> Two hosts that write to the same directory through a network share can
-> overwrite each other, and rename is not atomic on every network filesystem.
-> For several replicas, use S3 or a service built for shared access.
+> Shared network volumes can have different rename behavior and competing
+> writers can overwrite one another. Prefer S3 for replicas on separate hosts;
+> do not infer shared-write safety from a successful local filesystem test.
 
-Back up the root directory like any other data. Native writers can add regular
-files with portable names that appear as objects; nonportable names and special
-entries are not ordinary listed objects. Keep the directory to storage alone.
+No emulator is needed locally. Write and read a test object, restart with the
+same persistent root to verify persistence, then delete only that test key.
+Stopping the driver does not remove stored data.
 
-### Running locally
-
-No service or emulator is needed. Use the constructor above with a writable
-application directory, start your application, and write an object using the
-shared task. Read the same key to verify its contents. Restart the application
-with the same working directory and root to verify persistence. Delete only
-the test objects with `files.Delete`; stopping the driver does not delete data.
-
-For every function and option, see the [`filesystemstorage` API reference](https://pkg.go.dev/arkoren.dev/driver/filesystem/filesystemstorage).
+See the [`filesystemstorage` API](https://pkg.go.dev/arkoren.dev/driver/filesystem/filesystemstorage).
 
 ## Amazon S3
 
-The S3 driver stores objects in one bucket, under an optional key prefix. It
-works with Amazon S3 and with services that implement its protocol.
-
-### Installation
+Use a pre-existing bucket and grant only needed actions: `s3:ListBucket` on
+the bucket, and `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on allowed
+objects. `Put` also reads metadata after uploading, so it needs read permission.
 
 ```sh
 go get arkoren.dev/driver/aws
 ```
 
-### Connecting
-
-`New` takes a context and the bucket name. It loads the AWS default
-configuration, the same chain the AWS CLI uses, so credentials and region come
-from environment variables, shared config files, or the instance or task role.
-The bucket must already exist. Grant only the needed bucket and object actions:
-`s3:ListBucket` on the bucket, and `s3:GetObject`, `s3:PutObject`, and
-`s3:DeleteObject` on the allowed prefix. `Put` also needs read permission for
-the metadata request after upload:
+Import `awsstorage` from `arkoren.dev/driver/aws/awsstorage`. Configure a region
+and optional namespace while constructing the driver:
 
 ```go
-import "arkoren.dev/driver/aws/awsstorage"
-
-driver, err := awsstorage.New(ctx, "my-bucket",
-	func(store *awsstorage.Builder) {
-		store.Region("eu-west-1")
-		store.Prefix("uploads")
-	},
-)
-
-files := storage.New(driver)
-```
-
-No S3 request is sent until the first operation, and the driver has no lifecycle
-hooks. A blank bucket name is an error.
-
-### Configuration
-
-Set optional values in trailing `awsstorage.BuilderFunc` callbacks:
-
-| Builder method | Meaning |
-| --- | --- |
-| `Builder.Region` | The AWS region. Defaults to the one the default chain resolves. |
-| `Builder.Endpoint` | A custom endpoint, for S3-compatible services. Also switches to path-style addressing. |
-| `Builder.Prefix` | A namespace inside the bucket. A trailing `/` is added for you. |
-| `Builder.Credentials` | A credentials provider. Defaults to the default chain. |
-
-The prefix is invisible to your code. With the prefix `uploads`, the logical key
-`avatars/42.png` is stored as `uploads/avatars/42.png`, and listings and
-signed URLs account for it. This separates names between environments or
-tenants, but does not grant or restrict access; enforce that in your application
-and bucket policy.
-
-To control the S3 client yourself, for example to add tracing, retries, or a
-custom HTTP client, build it and hand it over with `NewFrom`:
-
-```go
-import (
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-)
-
-awsConfig, err := awsconfig.LoadDefaultConfig(ctx)
-client := s3.NewFromConfig(awsConfig)
-
-driver, err := awsstorage.NewFrom(client, "my-bucket", func(store *awsstorage.Builder) {
-	store.Prefix("uploads")
+driver, err := awsstorage.New(ctx, "private-documents", func(store *awsstorage.Builder) {
+	store.Region("eu-west-1")
+	store.Prefix("reports")
 })
 ```
 
-Only Prefix applies from the construction callbacks; Region, Endpoint and
-Credentials are ignored because the client already
-carries the region, endpoint, and credentials. The caller keeps ownership of
-the client. `driver.Client()` returns the `*s3.Client` the driver uses, for
-operations the facade does not cover, such as the AWS upload manager for very
-large streams.
+After checking the error, wrap it with `files := storage.New(driver)`. `New`
+validates the bucket and prefix and loads AWS configuration; loading can read
+local configuration or consult configured credential services. Object requests
+begin with operations, not construction. No `Start` or `Stop` is required, and
+construction does not verify bucket access.
 
-The reporting-only `awsstorage.Config` records credential-provider types without
-retrieving credentials or invoking provider formatters. Endpoint and Prefix
-text are not sanitized. Native clients, middleware, credential providers and
-their diagnostics remain shared; do not treat native logging or errors as
-covered by the facade's privacy rules.
+Credentials and an omitted region use the AWS default configuration chain,
+including environment, shared files, and workload roles. `Builder.Credentials`
+accepts a shared `aws.CredentialsProvider` when that chain is unsuitable.
 
-For a [bound signed upload](signed-urls.md#letting-clients-upload-directly), the
-supplied presigner must report the exact requested `ContentType` as the sole
-`Content-Type` value in the returned
-[`v4.PresignedHTTPRequest`](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/aws/signer/v4#PresignedHTTPRequest)
-record's `SignedHeader`. If that value is missing or changed, signing returns an
-error wrapping `storage.ErrUnsupported` instead of an unbound URL.
-The default S3 presigner supports type-only binding;
-zero `ContentLength` leaves size unbound. The driver does not change the supplied
-client's middleware to force a binding, and it never closes the client.
+The prefix defaults empty; a configured `reports` becomes `reports/` before
+logical keys. A logical `annual.pdf` addresses `reports/annual.pdf` in the bucket,
+including for signing. Prefixes separate names, not permissions: enforce access
+in application authorization and bucket policy.
 
-The driver adds no timeout or retry policy over the AWS SDK configuration.
-Use operation contexts with deadlines; configure native SDK retries and HTTP
-timeouts before passing a client to `NewFrom` when the defaults do not fit.
+### Transfer Limits
 
-### Storing objects
+Use the shared [write and read tasks](overview.md#writing-objects). `Put` streams
+from a seekable source but buffers a non-seekable reader fully in memory before
+upload. Bound source sizes; choose a seekable file or
+[direct signed upload](signed-urls.md#direct-uploads) for large transfers.
 
-Use the shared [write](overview.md#writing-files), [read](overview.md#reading-files),
-and [direct signed upload](signed-urls.md#letting-clients-upload-directly) tasks.
-The configured prefix applies to all of them. A prefix separates names, not
-permissions; enforce tenant access in your application and bucket policy.
+An upload is followed by a metadata request. If that request fails, the new
+object can already exist despite the returned error; inspect with `Stat` before
+deciding recovery. No facade write event is emitted for a failed call.
 
-### Behavior and limits
+`Open` returns a non-seekable response body. App-served downloads stream the
+whole object without ranges or conditional handling; a signed GET lets S3 serve
+the client directly. Signing supports GET and PUT, at most seven days, and
+temporary credentials can shorten that validity. See
+[Signed URLs](signed-urls.md) for bindings and authorization.
 
-Objects are not seekable. `Open` returns the response body as a stream, so
-[`Download`](uploads-and-downloads.md#headers-and-ranges) sends the whole
-object without range support, and large downloads are better served through a
-[signed URL](signed-urls.md).
+`List` maps positive limits to `MaxKeys`; S3 returns at most 1,000 keys per page.
+Nonportable native keys are omitted. Continuation checks can read ahead through
+physical pages, adding requests while preserving native opaque cursor strings.
+The empty cursor means no further matching portable object was found.
 
-> [!WARNING]
-> A non-seekable upload is buffered fully in memory. Bound request sizes and
-> use a seekable reader or a direct signed upload for large objects to avoid
-> exhausting application memory.
+### S3-Compatible
 
-`Put` needs the length of the body. It streams from a reader that can seek, such
-as an uploaded multipart file, and buffers any other reader fully in memory
-first. A `Put` of a large body from an HTTP request is the case to avoid. After
-the upload the driver reads the object's metadata from S3, so a put costs two
-requests.
-
-An already-canceled raw driver call returns the context error before key/prefix
-validation or I/O; `Put` does not consume its input. Cancellation after a read
-has started cannot force an arbitrary reader to return, and native credentials,
-middleware, and transports must cooperate with their contexts. The facade can
-reject invalid input before calling the driver; see [error precedence](overview.md#errors).
-
-An upload can succeed while the following metadata request fails. In that case
-`Put` returns an error even though the new object exists, and no facade write
-event is emitted. Inspect the key with `Stat` before deciding how to recover.
-
-`Delete` is idempotent. `List` maps the limit to S3's `MaxKeys`, and S3 itself
-returns at most 1,000 keys per page. Listings are ordered by key.
-Native objects with nonportable keys are omitted. To determine whether another
-logical object exists, List can read ahead through physical pages containing
-only omitted keys. This can add requests; the returned cursor keeps its native
-S3 representation and points before the next usable page, not after it. An
-empty cursor means no further matching portable object was found. Do not parse
-or rewrite it, and do not assume a snapshot across concurrent bucket changes.
-
-URL signing uses SigV4, whose longest validity is seven days. A longer TTL
-returns `storage.ErrInvalidTTL`. If your credentials are temporary, such as an
-assumed role, a signed URL stops working when the session expires, even if its
-TTL is longer. Keep URLs short-lived and issue a fresh one after expiry rather
-than creating long-lived credentials just to extend a link. See
-[Signed URLs](signed-urls.md) for the options and the CORS rule a browser upload
-needs.
-
-### S3-compatible services
-
-Set an endpoint to use MinIO, LocalStack, or another service that implements
-the S3 protocol. The driver switches to path-style addressing, which these
-services expect:
+To use another S3 implementation, set its endpoint. This also enables path-style
+addressing. For the disposable local server below:
 
 ```go
-driver, err := awsstorage.New(ctx, "dev",
-	func(store *awsstorage.Builder) {
-		store.Endpoint("http://localhost:9001")
-		store.Region("us-east-1")
-	},
-)
-```
-
-Credentials come from the default chain, so export `AWS_ACCESS_KEY_ID` and
-`AWS_SECRET_ACCESS_KEY` for the service, or pass a provider with
-`Builder.Credentials`. Cloud services that offer an S3 API, such as Cloudflare R2,
-follow the same pattern with their own endpoint and region. Check which parts
-of the protocol they support before relying on them: signed uploads that bind a
-content type and length depend on the service honoring signed headers.
-
-### Using the native S3 client
-
-For operations outside the portable contract, `driver.Client()` returns the
-`*s3.Client` created or wrapped by the driver. For example, with `s3` imported
-above, inspect the bucket without changing objects:
-
-```go
-_, err := driver.Client().HeadBucket(ctx, &s3.HeadBucketInput{
-	Bucket: &bucket,
+driver, err := awsstorage.New(ctx, "dev", func(store *awsstorage.Builder) {
+	store.Endpoint("http://localhost:9001")
+	store.Region("us-east-1")
 })
 ```
 
-Here `bucket` is the same string used at construction. A nil error confirms
-bucket access; it does not verify every object permission. Native calls bypass
-the storage facade's validation, prefix mapping, events, and telemetry. For
-large streams, use this client with the AWS SDK's upload manager rather than
-passing an unbounded non-seekable stream to `Put`. `NewFrom` keeps ownership
-with you; the storage driver never closes the client.
+Supply that service's credentials through the default chain or
+`Builder.Credentials`. Check its persistence, listing, SigV4, and signed-header
+enforcement rather than assuming all S3 behavior. A successful emulator test
+does not establish cloud IAM permissions or durability.
 
-### Running locally
+See the [`awsstorage` API](https://pkg.go.dev/arkoren.dev/driver/aws/awsstorage).
 
-Install Docker with Compose/BuildKit and the AWS CLI. The original pinned
-`minio/minio` image is no longer served by Docker Hub. For disposable local
-storage, build the same MinIO release from its
-[official release artifacts](https://github.com/minio/minio/releases/tag/RELEASE.2025-09-07T16-13-09Z)
-instead of substituting an unverified mirror. This example supports Linux
-amd64/arm64 containers, not a production MinIO deployment.
+## Native Access
 
-Save this `Dockerfile` in a new empty development directory. It pins the base
-image and verifies the selected upstream binary's SHA-256 checksum. A mismatch
-or unsupported architecture must fail the build; do not remove the check:
+If SDK retry, HTTP timeout, or middleware settings need customization, configure
+a native client first. With `awsconfig` imported from
+`github.com/aws/aws-sdk-go-v2/config` and `s3` from
+`github.com/aws/aws-sdk-go-v2/service/s3`:
+
+```go
+settings, err := awsconfig.LoadDefaultConfig(ctx)
+if err != nil {
+	return err
+}
+client := s3.NewFromConfig(settings)
+driver, err := awsstorage.NewFrom(client, "private-documents", func(store *awsstorage.Builder) {
+	store.Prefix("reports")
+})
+```
+
+Only `Prefix` applies to `NewFrom`; region, endpoint, and credential settings
+already belong to the client. The driver neither copies nor closes it. Arkoren
+adds no timeout or retry policy over SDK settings; use operation deadlines and
+configure native policies before sharing the client.
+
+For an operation outside the facade, recover the concrete driver with
+`files.DriverAs[*awsstorage.Driver]()`. Both this result and `files.Driver()`
+are shared, not copied. With your existing bucket name `bucket`:
+
+```go
+if driver, ok := files.DriverAs[*awsstorage.Driver](); ok {
+	if client := driver.Client(); client != nil {
+		_, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &bucket})
+		if err != nil {
+			return err
+		}
+	}
+}
+```
+
+`Client()` is nil for non-native injected clients. A successful bucket check
+does not verify every object permission. Native operations bypass facade
+validation, prefix mapping, events, and telemetry. Large non-seekable streams
+can use this client with the AWS upload manager instead of unbounded `Put`.
+
+A native client supplied to `NewFrom` must provide presigning to sign URLs.
+For bound uploads, its presigner must report the exact requested content type
+as the sole signed `Content-Type` value; missing or changed bindings return
+`storage.ErrUnsupported`, not a weaker URL. Arkoren does not rewrite borrowed
+middleware. See [upload bindings](signed-urls.md#upload-bindings).
+
+The reporting-only `awsstorage.Config` redacts credential-provider details, not
+endpoint or prefix text. Native diagnostics, middleware, and provider errors
+are not sanitized by facade telemetry; keep secrets out of those settings and
+review native logging separately.
+
+## Local S3
+
+For disposable local storage, install Docker with Compose/BuildKit and the AWS
+CLI. The original pinned `minio/minio` image is no longer served by Docker Hub.
+Build this release from its
+[official artifacts](https://github.com/minio/minio/releases/tag/RELEASE.2025-09-07T16-13-09Z),
+not an unverified mirror. This fixture supports Linux amd64/arm64 containers,
+not a production MinIO deployment.
+
+Save this `Dockerfile` in a new empty development directory. Keep the pinned
+base and binary checksums; a mismatch or unsupported architecture must fail:
 
 ```dockerfile
 FROM alpine:3.22.7@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
@@ -457,9 +316,9 @@ RUN set -eu; \
 ENTRYPOINT ["minio"]
 ```
 
-Beside it, save this `compose.yaml`, not over an existing application
-configuration. These public example credentials are for disposable local data
-only; keep the service bound to loopback:
+Beside it, save `compose.yaml`, not over an existing application configuration.
+These public credentials are for disposable local data only; retain loopback
+binding:
 
 ```yaml
 services:
@@ -473,6 +332,8 @@ services:
       - "127.0.0.1:9001:9000"
 ```
 
+Start the service and configure the local client's credentials:
+
 ```sh
 docker compose up -d --build
 export AWS_ACCESS_KEY_ID=localstorage
@@ -480,22 +341,19 @@ export AWS_SECRET_ACCESS_KEY=localstorage-password
 export AWS_DEFAULT_REGION=us-east-1
 ```
 
-Create the bucket after MinIO starts. If the endpoint is not ready, retry this
-command; if the bucket already exists, reuse it:
+After the endpoint is ready, create the bucket; reuse it if it already exists:
 
 ```sh
 aws --endpoint-url http://localhost:9001 s3 mb s3://dev
 ```
 
-Use the S3-compatible constructor above for bucket `dev`, endpoint
-`http://localhost:9001`, and region `us-east-1`. Write and read a small object
-through `files` to verify its bytes, then inspect it with
-`aws --endpoint-url http://localhost:9001 s3 ls s3://dev`. For signing, the
-endpoint must also be reachable from the client that uses the URL.
-Run `docker compose down` when finished; this disposable configuration does
-not preserve its objects after the container is removed.
+Use the [S3-compatible constructor](#s3-compatible), write and read a small test
+object through the facade, then inspect it with
+`aws --endpoint-url http://localhost:9001 s3 ls s3://dev`. The signing endpoint
+must also be reachable by the client using the URL.
 
-For every function and option, see [the `storage` API reference](https://pkg.go.dev/arkoren.dev/core/service/storage),
-[`memorystorage`](https://pkg.go.dev/arkoren.dev/core/service/storage/memorystorage),
-[`filesystemstorage`](https://pkg.go.dev/arkoren.dev/driver/filesystem/filesystemstorage), and
-[`awsstorage`](https://pkg.go.dev/arkoren.dev/driver/aws/awsstorage).
+Run `docker compose down` when finished. This fixture does not preserve objects
+after its container is removed.
+
+For facade operations, see the
+[`storage` API reference](https://pkg.go.dev/arkoren.dev/core/service/storage).

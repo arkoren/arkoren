@@ -113,6 +113,46 @@
         "The revision does not strip meaningful recovery checks, security checks, test assertions, or complete runnable-program error handling elsewhere.",
         "The raw-byte comparison, physical key identity, and driver support constraints remain accurate."
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "Rewrite Database Overview as a facade-usage page. Assume db and the operation context are already configured. Keep the reading natural, use short headings and small code blocks, and use a realistic HTTP-style input struct for a targeted update. Add the page summary after settling the body. Do not fill the driver or transaction placeholders.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/database/overview.md"],
+      "expected_output": "A coherent facade guide with short headings, typed reading, a request-shaped update using the real conversion API, result mapping, and a descriptive summary in Markdown frontmatter.",
+      "expectations": [
+        "Defines the facade's responsibility and names preconfigured collaborators without driver construction, credentials, lifecycle wiring, or pool tuning.",
+        "Uses short headings, normally two or three words and four only when needed, rather than prescribing an Introduction or advanced-section template.",
+        "Keeps code blocks small and separates larger examples at meaningful steps with prose explaining their purpose and results; does not enforce an invented numeric maximum.",
+        "Uses a named request-shaped struct and query.Values(input), not a handwritten map literal or a nonexistent direct-struct Update API; establishes decoding and validation assumptions and keeps the target filter explicit.",
+        "Preserves missing-row versus empty-result behavior, affected-row caveats, column matching and nullable-field constraints beside the affected operations.",
+        "Writes descriptive summary sentences in the .md frontmatter, supported by the final body, without anchor links or page-ID logic in the website template."
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Revise Cache Overview for readers who already have a configured cache facade. Keep driver setup in Drivers, use one ordinary application scenario, and make each section useful in reading order. Add What's on this page using the shared frontmatter mechanism. Review this page only; leave sibling pages for later feedback.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/cache/overview.md"],
+      "expected_output": "A transfer check applying the page-writing workflow to another facade without copying Database Overview's exact headings, example count, or API choices.",
+      "expectations": [
+        "States the page's starting state and outcome and explains the cache facade's role, rather than importing database-specific headings or operations.",
+        "Links driver setup instead of forcing a memory driver construction example into this explicitly facade-only scope.",
+        "Connects natural, focused examples with prose and explains expiry, misses, ownership, and conditional operations where those behaviors are taught.",
+        "Uses short descriptive headings and a body-backed frontmatter summary without duplicating section navigation.",
+        "Reviews only the requested page and reports verification limits before advancing to siblings; preserves consequential safety boundaries."
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Evaluate the Database, Queries, and Migrations guide categories before we refine another page. Propose the best-supported page map with short titles, a brief purpose for each page, and evidence for any split or merge. Challenge unnecessary pages and avoid adding categories solely because a package is independent. Discuss the map before changing files.",
+      "files": ["../../../cmd/arkoren/skills/arkoren/references/guides/database/overview.md"],
+      "expected_output": "A source-backed category review that separates connection/execution, statement construction, and schema evolution by reader task, without beginning a bulk rewrite.",
+      "expectations": [
+        "Inspects the full relevant category inventory and source contracts rather than treating headings alone as evidence.",
+        "Each proposed page has a distinct starting state or outcome; split and merge recommendations explain a real reading-path benefit.",
+        "Presents a concrete recommendation upfront, distinguishes uncertain claims, and avoids mandatory overview-first or drivers-last ordering.",
+        "Keeps Schema Builder with the migration journey unless evidence supports enough distinct reader tasks for a separate category.",
+        "Does not restructure files or start drafting multiple pages before agreement on the category map."
+      ]
     }
   ]
 }

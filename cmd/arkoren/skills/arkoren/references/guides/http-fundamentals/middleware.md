@@ -1,264 +1,226 @@
 ---
 title: Middleware
-description: Apply middleware to routers, groups, and routes, choose a safe order, and write your own when the shipped middleware does not fit.
+description: Scope and order request policies, write wrappers, and preserve lifecycle behavior across native HTTP adapters.
 order: 50
+summary:
+  - Apply middleware at router, group, or route scope with an explicit execution order.
+  - Write request-local policies and register response hooks before commitment.
+  - Preserve context and understand where native middleware renders returned errors.
 ---
 
 # Middleware
 
-## Introduction
+Middleware wraps a handler to apply a policy to several requests: it can reject
+input, establish request state, or observe the result. Choose both its scope and
+its position. A wrapper sees only the handlers and middleware inside it, so an
+incorrect order can hide failures or leave work unprotected.
 
-**Middleware** is code that runs around a handler. It sees each request before
-the handler does and each result after it, which makes it the place for
-concerns that apply to many routes at once: security headers, authentication,
-rate limiting, logging, body limits. A middleware can let the request through,
-change it, add to the response, or stop the request with an error before the
-handler runs.
+These examples use `router` from `arkoren.dev/core/http/router` and a fresh
+router `routes`. Call `Use` before registering routes through that router or
+its derived routers; a later call panics. Configuration alternatives below are
+independent, not calls to append after earlier route examples.
 
-The order matters: middleware can observe or protect only the handlers and
-middleware inside it. Start by choosing its scope—router, group, or route—then
-place it in the chain. Arkoren's shipped middleware is documented alongside
-the capability it provides.
+## Choose Scope
 
-## Applying middleware
-
-There are three places to apply middleware, from widest to narrowest.
-
-The examples use an existing `routes := router.New()` from
-`arkoren.dev/core/http/router`. Import shipped middleware from
-`arkoren.dev/core/http/middleware/<name>`; `request` is
-`arkoren.dev/core/http/request`, and `problem` is
-`arkoren.dev/foundation/problem`. Call `Use` before registering routes: it
-panics after this router or a derived router has registered a route.
-Registration examples are independent; start each with a fresh router rather
-than applying later `Use` examples after earlier route registrations.
-
-**On a router**, with `Use`, it wraps every route registered after it. Use it
-for what every route needs:
+For behavior shared by every route, attach middleware to the router. Import
+`arkoren.dev/core/http/middleware/secureheaders`:
 
 ```go
 routes.Use(router.Recover(), secureheaders.Middleware())
 ```
 
-`Recover` converts a handler panic into an error response, and `secureheaders`
-adds protective response headers. Register routes after this call.
+Recovery protects the layers inside it; secure headers apply to the requests
+that reach that middleware. At router scope, unmatched `404` and `405` requests
+also traverse the stack.
 
-**On a group**, inside `Group`, it wraps only that group's routes.
-
-Here `requireAdmin` is your existing `router.Middleware`, and `stats` is your
-existing `router.Handler`:
+For a billing-only policy, group existing `listInvoices` and `createInvoice`
+handlers under `requireBilling`, your `router.Middleware`:
 
 ```go
-routes.Group("/admin", func(admin *router.Router) {
-	admin.Use(requireAdmin)
-	admin.Get("/stats", stats)
+routes.Group("/billing", func(billing *router.Router) {
+	billing.Use(requireBilling)
+	billing.Get("/invoices", listInvoices)
+	billing.Post("/invoices", createInvoice)
 })
 ```
 
-**On one route**, with `With`, it wraps a single registration and leaves the
-router unchanged. With an existing `store` of type `*cache.Cache` from
-`arkoren.dev/core/service/cache` and a `login` handler, limit that route to five
-requests per default one-minute window; see
-[rate limiting](../abuse-prevention/rate-limiting.md) for shared-store setup and client keys:
+The group inherits parent middleware without adding its policy to unrelated
+routes. To protect one registration, use `With` instead:
 
 ```go
-routes.With(ratelimit.Middleware(store, func(limiter *ratelimit.Builder) {
-	limiter.Limit(5)
-})).Post("/login", login)
+routes.With(requireBilling).Post("/invoices", createInvoice)
 ```
 
-## Ordering
+`With` leaves the parent's stack unchanged. All handler and middleware captures
+remain shared across concurrent requests; scoping a stack does not copy captured
+services or mutable state.
 
-Middleware passed to `Use` runs in the order given: the first one is the
-outermost and sees the request first and the result last. Order matters,
-because a middleware can only observe what happens inside it. A good default
-order for an API appears below.
+## Order Policies
 
-Here `mappings` is your `[]errormap.Mapping`, `policies` is your
-`[]cors.BuilderFunc`, and `tel` is your `*telemetry.Telemetry` from
-`arkoren.dev/core/service/telemetry`. Configure these through
-[error mapping](../http-fundamentals/error-handling.md#mapping-errors-to-responses),
-[CORS](../browser-security/cors.md), and [request tracing](../observability/request-tracing.md):
+Middleware runs in the order passed to `Use`: the first wrapper sees the
+request first and the returned result last. For example, with existing
+`[]errormap.Mapping` named `mappings`, import `errormap`, `requestlog`,
+`bodylimit`, and `contenttype` from `arkoren.dev/core/http/middleware/`:
 
 ```go
 routes.Use(
-	errormap.Middleware(mappings...), // sees every error from the middleware below
-	tel.Middleware(),                 // traces the whole request (tel is a *telemetry.Telemetry)
-	requestlog.Middleware(),          // logs failures, with trace IDs
-	router.Recover(),                 // turns panics into errors the above can see
+	errormap.Middleware(mappings...),
+	requestlog.Middleware(),
+	router.Recover(),
 	secureheaders.Middleware(),
-	cors.Middleware(policies...),
 	bodylimit.Middleware(),
 	contenttype.Middleware(),
 )
 ```
 
-The general rules behind it: error mapping goes first so it sees every error;
-observability comes next so it measures everything inside it; `Recover` comes
-after logging so a recovered panic is logged as a failure; and middleware that
-rejects requests early, such as CORS preflights and size limits, comes before
-the handlers it protects.
+The mapper sees errors from all inner layers. Logging sees recovered errors;
+recovery sees panics from the policy middleware and handler. Body limits precede
+anything that reads the body. An outer logger in this arrangement sees the
+original error before the mapper replaces it; choose observation placement
+deliberately if you need mapped errors instead.
 
-> [!NOTE]
-> Requests that match no route still pass through the router's middleware, so
-> a `404` or `405` response carries security and CORS headers too.
+Place [request tracing](../observability/request-tracing.md) outside logging
+when logs need its trace context. Place [CORS](../browser-security/cors.md)
+before authentication or body policies when preflights should terminate before
+those checks. A policy outside security headers can reject a request before the
+headers run, so choose that boundary consciously.
 
-## Writing middleware
+## Write Policies
 
-Write your own middleware when an application-specific concern does not fit a
-shipped one. A middleware takes a handler and returns a handler that wraps it.
-The wrapping function runs when the chain is built, not for every request. Keep
-request-local data inside the returned handler; captured state is shared across
-concurrent requests and must be safe for that use.
-
-The following functions use `net/http`; handler parameter `r` is the incoming
-request, not the router. This example checks presence only; it does not authorize
-access to a tenant. Enforce that with [authorization](../authorization/overview.md):
+A `router.Middleware` takes a handler and returns a handler. Construction runs
+when the chain is built, not per request. Keep request-local values inside the
+returned function. This example uses `net/http`,
+`arkoren.dev/core/http/request`, and `arkoren.dev/foundation/problem`:
 
 ```go
-func requireTenant(next router.Handler) router.Handler {
+func requireWorkspace(next router.Handler) router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		if request.Header(r, "X-Tenant") == "" {
+		if request.Header(r, "X-Workspace") == "" {
 			return problem.BadRequest().Derive(func(details *problem.Builder) {
-				details.Detail("A tenant header is required.")
+				details.Detail("A workspace header is required.")
 			})
 		}
-
 		return next(w, r)
 	}
 }
 ```
 
-Register it with `routes.Use(requireTenant)` before registering routes. A request
-without the header receives a `400` Problem Details response; otherwise the
-wrapped handler runs.
+Register it before the routes it protects. Missing input returns a `400`
+problem without calling the handler; otherwise the handler's error passes
+outward. This checks presence only. Validate the workspace and enforce
+[authorization](../authorization/overview.md) before using it as a trusted tenant.
 
-Because handlers return errors, so does middleware. A middleware that stops
-a request returns an error, which the router renders like any other. A
-middleware that calls `next` receives the handler's error and can inspect it,
-replace it, or pass it on, which is how [error mapping](../http-fundamentals/error-handling.md#mapping-errors-to-responses)
-works.
+A wrapper can inspect or replace the error from `next`. It cannot replace an
+already committed response by returning a different error. For shared domain
+translation, prefer [error mapping](error-handling.md#map-domain-errors).
 
-### Acting on the response
+## Use Response Hooks
 
-Middleware that needs to change ordinary response headers must do so before the
-handler writes the final status. Register a hook for that moment with `request.Hooks`.
-This function also imports `fmt` and `time`; serve it through the Arkoren router,
-which installs the request hook registry:
+Header edits made after `next` can be too late. To add timing at the last safe
+moment, register a hook before calling the handler. Inside a middleware's
+returned function, import `fmt` and `time` alongside the request package:
 
 ```go
-func serverTiming(next router.Handler) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
-		start := time.Now()
-		request.Hooks(r).BeforeWriteHeader(func(w http.ResponseWriter, _ int) {
-			w.Header().Set("Server-Timing", fmt.Sprintf("app;dur=%d", time.Since(start).Milliseconds()))
-		})
+started := time.Now()
+request.Hooks(r).BeforeWriteHeader(func(w http.ResponseWriter, _ int) {
+	w.Header().Set("Server-Timing",
+		fmt.Sprintf("app;dur=%d", time.Since(started).Milliseconds()))
+})
 
-		return next(w, r)
-	}
-}
+return next(w, r)
 ```
 
-`BeforeWriteHeader` runs for the final status, not for informational responses
-such as `103 Early Hints`; `101 Switching Protocols` counts as final.
-`AfterResponse` runs when router handling finishes, including while unwinding a
-panic, and receives the returned handler error. It suits logging and metrics,
-but is not proof that the client received the response. An unrecovered panic can
-leave that error nil.
+`BeforeWriteHeader` runs once before the final status, not for informational
+`1xx` except `101`. A body write or flush can commit an implicit `200`.
+`BeforeWrite` observes an attempted body write, which may still fail afterward.
+Do not record raw body contents merely to measure writes.
 
-### Passing values to handlers
+For work that observes handling completion, register an after-response callback.
+With an existing application metrics function `recordOutcome`:
 
-Middleware often resolves something that handlers need, such as the current
-tenant. `router.Provide` turns a function that returns a derived context into
-middleware. Derive it from the incoming `r.Context()`, not `context.Background()`
-or `context.TODO()`: replacing the context would discard cancellation, lifecycle
-hooks, and state used by outer middleware and adapters. The same requirement
-applies when your own middleware forwards a request with a changed context.
+```go
+request.Hooks(r).AfterResponse(func(err error) {
+	recordOutcome(err)
+})
+```
 
-Here `tenants.FromHost` and `withTenant` are application functions: the former
-validates the hostname against trusted tenant configuration, and the latter
-derives a context containing the tenant from its supplied parent. Import
-`context` and map domain errors with outer
-[error-mapping middleware](../http-fundamentals/error-handling.md#mapping-errors-to-responses)
-before registering routes:
+Callbacks run in reverse registration order when router handling ends,
+including panic unwinding. Their argument is the handler's returned error, not a
+delivery acknowledgment; an unrecovered panic can leave it nil. A hijacked
+connection can outlive these callbacks and remains the handler's responsibility.
+
+`request.Hooks` requires the context installed by `router.Handler.ServeHTTP`,
+including normal routed requests. Outside that lifecycle it panics with
+`request.ErrNoHooksMiddleware`; there is no non-panicking public lookup. Only
+register hooks where wiring guarantees that lifecycle.
+
+## Preserve Context
+
+Middleware can resolve application state with `router.Provide`. Here
+`workspaces.FromHost` validates a hostname against trusted configuration and
+`withWorkspace` derives a context containing that result. Import `context`:
 
 ```go
 routes.Use(router.Provide(func(w http.ResponseWriter, r *http.Request) (context.Context, error) {
-	tenant, err := tenants.FromHost(r.Context(), r.Host)
+	workspace, err := workspaces.FromHost(r.Context(), r.Host)
 	if err != nil {
 		return nil, err
 	}
-
-	return withTenant(r.Context(), tenant), nil
+	return withWorkspace(r.Context(), workspace), nil
 }))
 ```
 
-Handlers read the value from the incoming request's context. Returning an error
-stops the request.
+An error stops the chain. Derive successful contexts from `r.Context()`, not
+`Background` or `TODO`; replacing the parent loses cancellation, lifecycle
+hooks, and upstream adapter state. The same rule applies to custom middleware
+calling `next` with a changed request. Static values can use `ProvideStatic`,
+but mutable captured values still need concurrency-safe ownership.
 
-## Using `net/http` middleware
+## Native Middleware
 
-Middleware written for the standard library, in the form
-`func(http.Handler) http.Handler`, works with `router.HTTPMiddleware`.
-
-With an existing standard-library-compatible middleware named `gzip`, attach it
-before registering routes:
+For existing `func(http.Handler) http.Handler` middleware named `compress`, use
+the adapter:
 
 ```go
-routes.Use(router.HTTPMiddleware(gzip))
+routes.Use(router.HTTPMiddleware(compress))
 ```
 
-`HTTPMiddleware(gzip)` creates an adapter; it does not call `gzip` immediately.
-The native `gzip(next)` constructor runs once each time the adapter wraps a
-handler, not globally once per router. For registered routes, this happens during
-registration. One `Methods` or `Any` registration shares its chain across those
-methods; separate registrations build separate chains. The
-[unmatched-request fallback](routing.md#requests-that-match-no-route) has one
-additional chain, built on its first request and reused afterward. Native
-handlers and their captures must support concurrent requests.
+Creating the adapter does not call `compress`. Its native constructor runs
+once per wrapping, normally during registration, not once per request or once
+globally. A single `Methods` or `Any` registration shares a chain across its
+methods; separate registrations build separate chains. The unmatched-request
+fallback builds one additional chain on first use and reuses it. Native handlers
+and captures must therefore support concurrent use.
 
-Returned errors are rendered inside the native middleware when the response is
-still unwritten, so it can observe the error status and body. They are also
-returned outward. A recovered error rendered there can be wrapped without losing
-its `errors.Is` or `errors.As` behavior; it does not cause an abort merely because
-the adapter has now written the problem. A panic after earlier output remains a
-[post-commit failure](error-handling.md#after-the-response-has-started).
+Returned errors are rendered *inside* native middleware while output remains
+uncommitted, so it can observe the error status and body. The error also returns
+outward for observation. To map that HTTP response, put the mapper inside the
+adapter:
 
-For errors rendered inside native middleware, register `HTTPMiddleware(gzip)`
-before the error mapper that must choose that response. This puts the mapper
-inside the adapter, so mapping happens before rendering. An outer mapper still
-receives returned errors, but cannot rewrite a response already written by the
-adapter; the mapper inside can only see failures from the layers it wraps.
+```go
+routes.Use(
+	router.HTTPMiddleware(compress),
+	errormap.Middleware(mappings...),
+)
+```
 
-The adapter tracks writes through `next` and commitment observed at enclosing
-native boundaries, including through wrappers that hide `Unwrap`. It cannot see
-output written only to a middleware's private buffer before calling `next` until
-the middleware forwards it through a tracked boundary. Write normal HTTP output
-through the supplied writer: writing directly to an unwrapped writer bypasses
-hooks and commitment tracking. Use `http.ResponseController` for native capability
-operations instead, and preserve the incoming request context when calling `next`.
+An outer mapper still receives the returned error but cannot rewrite the
+adapter's committed output. An inner mapper sees only the layers it wraps.
+A recovered error rendered before earlier output is not treated as a
+post-commit panic; an actual panic after earlier output still follows the
+[abort rules](error-handling.md#committed-failures).
 
-## Middleware in Arkoren
+The adapter tracks writes through `next` and commitment at enclosing native
+boundaries, including wrappers hiding `Unwrap`. Output in a native wrapper's
+private buffer is not visible until forwarded through a tracked boundary.
+Use the supplied writer for normal output; unwrapping it to write bypasses
+tracking and hooks. Use `http.ResponseController` for capability operations,
+and preserve the incoming context when forwarding requests.
 
-These pages describe the general-purpose middleware:
-
-- [Body limit](body-limit.md) caps the size of request bodies.
-- [Content type](content-type.md) rejects bodies of the wrong media type.
-- [CORS](../browser-security/cors.md) lets browsers on other origins call your API.
-- [CSRF protection](../browser-security/csrf-protection.md) stops other sites from sending requests
-  as your signed-in users.
-- [Locale](../http-capabilities/locale.md) picks the client's language for messages.
-- [Rate limiting](../abuse-prevention/rate-limiting.md) limits how often a client can call a route.
-- [Request logging](../observability/request-logging.md) logs failed requests.
-- [Secure headers](../browser-security/secure-headers.md) sets protective response headers.
-
-Other middleware is described with the feature it belongs to:
-[CAPTCHA](../abuse-prevention/captcha.md) (vendor-local token verification for selected routes),
-[sessions](../http-capabilities/sessions.md), [secure links](../http-capabilities/secure-links.md),
-[error mapping](../http-fundamentals/error-handling.md#mapping-errors-to-responses),
-[authentication](../authentication/overview.md),
-[authorization](../authorization/overview.md), and
-[telemetry](../observability/request-tracing.md).
-
-For every router method and middleware adapter, see the
-[`router` API reference](https://pkg.go.dev/arkoren.dev/core/http/router).
+Individual policies belong with their capabilities: [Body Limits](body-limit.md),
+[Content Types](content-type.md), [secure headers](../browser-security/secure-headers.md),
+[rate limiting](../abuse-prevention/rate-limiting.md), and
+[authentication](../authentication/overview.md) explain their setup and boundaries.
+For composition and adapters, see the
+[`router`](https://pkg.go.dev/arkoren.dev/core/http/router) and
+[`request`](https://pkg.go.dev/arkoren.dev/core/http/request) API references.

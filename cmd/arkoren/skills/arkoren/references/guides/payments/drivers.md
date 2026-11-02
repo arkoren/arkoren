@@ -1,31 +1,36 @@
 ---
 title: Payment Drivers
 nav: Drivers
-description: Compare memory, Stripe, PayPal, and Mollie for hosted checkout, native mobile payment initialization, refunds, and subscriptions.
-order: 40
+description: Choose and configure a payment backend, with optional provider notifications and local call monitoring.
+order: 20
+summary:
+  - Compare Memory, Stripe, PayPal, and Mollie against the shipped payment capabilities.
+  - Configure credentials, HTTP ownership, client handoffs, and provider-specific limits.
+  - Add optional authenticated notifications, unsigned Mollie hints, or local call observations.
 ---
 
 # Payment Drivers
 
-## Introduction
+Choose Memory for local simulation, Stripe for hosted or native card payments,
+PayPal for wallet Orders, or Mollie for hosted one-off card payments. Stripe and
+PayPal also enroll buyers in existing recurring plans. Changing drivers does not
+migrate resources, credentials, or customer agreements.
 
-Choose memory for simulation, Stripe for hosted or native card payments and
-recurring Prices, PayPal for hosted/native wallet Orders and subscription Plans, or Mollie for
-hosted one-off card payments and refunds. No driver requires a webhook or worker;
-replacing drivers does not migrate provider resources or credentials.
+Install core from your application's module directory:
 
-Stripe and PayPal webhook adapters report outcomes without a browser return;
-Mollie's classic callback is an unsigned hint requiring an authenticated read.
-Neither completes payments or grants access automatically.
-The examples below are focused fragments, with credentials loaded from your
-application's configuration. Import
-`arkoren.dev/core/service/payment` for the portable client.
+```sh
+go get arkoren.dev/core
+```
 
-## Compatibility matrix
+The fragments use `arkoren.dev/core/service/payment`. Load credentials from
+server configuration, check construction errors, and begin with test/sandbox
+credentials. None of these drivers needs lifecycle hooks, a worker, or a webhook
+to make outbound calls. Construction performs no network I/O.
 
-Compare Arkoren's outbound payment operations and optional webhook companions,
-not the providers' full billing products. Memory implements local simulations;
-it has no hosted buyer flow, real collection, or renewal scheduler.
+## Compatibility Matrix
+
+This compares Arkoren's shipped operations and companions, not each vendor's
+full product. Memory supplies local state, not a real buyer page or collection.
 
 | Driver | Hosted buyer approval | Merchant completion | Payment lookup | Refund creation and lookup | Subscription enrollment | Immediate cancellation | Client preparation | Authenticated notifications | Facade call observations |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -34,55 +39,16 @@ it has no hosted buyer flow, real collection, or renewal scheduler.
 | [PayPal](#paypal) | Yes | Yes — Order capture. | Partial — Captures only. | Partial — Captures only. | Partial — Existing Plan. | Partial — Active/suspended; canceled succeeds. | Partial — Native Order; creation-only risk data; no web/backend return URL. | Yes — Separate receiver. | Yes — Opt-in, in-process only. |
 | [Mollie](#mollie) | Partial — One-off creditcard, automatic capture only. | No — ErrUnsupported. | Yes | Yes — Compound refund handle required. | No | No | No | No — Unsigned ID hints only. | Yes — Opt-in, in-process only. |
 
-Facade call observations come from `payment.Client`, not the driver or provider.
-Enable them with `Builder.Events` for any backend; direct driver calls bypass
-them. These best-effort API-call results include reads and replays, never prove
-settlement, and do not provide durable reconciliation or fulfillment triggers.
-Provider webhooks and persisted state remain application-owned. See
-[local operation monitoring](overview.md#optional-notification-handling).
-
-Stripe completion observes hosted collection without charging again; PayPal
-Orders require explicit capture after approval; Mollie's supported hosted cards
-capture automatically. Approval/subscription status is not payment evidence,
-and refund acceptance can precede returned funds. Cancellation is immediate,
-without scheduling, proration, or refunds. NextBillingAt is absent for Stripe
-and provider-supplied for PayPal, never collection evidence. PayPal sale events
-do not enable sale reads/refunds. Preserve keys and
-[reconcile uncertainty](overview.md#handling-uncertain-outcomes). Separate
-notification receivers never complete payments or grant access automatically.
-
-### Preparing optional notification handlers
-
-For the Stripe and PayPal notification examples, use an application `*router.Router` named `r`
-and an application-owned `accept` function of type
-`webhook.AcceptFunc[payment.Observation]` that durably stores or queues
-observations and returns its error. Import `arkoren.dev/core/http/webhook`,
-check construction errors, then configure the public HTTPS route and bound
-events in the provider dashboard.
-
-By default, core returns 200 after acceptance (also for unbound authenticated
-types), 503 on decode/accept failure, and 400 on rejected authentication. A body
-over the configured limit returns 413. Failure responses are rendered and committed
-by the receiver before its error returns: 4xx receipt errors match
-`webhook.ErrRejected`, and 503 receipt errors match `webhook.ErrUnavailable`, while
-retaining their original causes. An application-wide error mapper cannot rewrite
-that provider response; do not log unwrapped causes without redaction. A 200
-does not mean asynchronous processing finished. The
-[receiver guide](../http-capabilities/webhooks.md) covers retries and body limits.
-
-`webhook.Delivery` owns native event identity; `payment.Observation` carries
-facts/time. `Event.Map` adapts queue DTOs. Scope deduplication by provider,
-account, environment, and consumer; cache deduplication replaces neither
-operation keys nor a durable inbox/outbox.
+Approval is not collection, refund acceptance is not returned funds, and an
+active subscription is not paid access. Cancellation is immediate, without
+proration or refunds. Retain durable operation keys and respect
+[provider-specific recovery limits](recovery.md) before replaying any mutation.
 
 ## Memory
 
-Use the memory driver when no financial transaction should occur. It is bundled
-with `arkoren.dev/core`; no provider account or separate installation is needed.
-
-### Connecting
-
-Construct a simulator and wrap it in the portable client:
+Use the bundled simulator when no external financial effect should occur. Each
+instance has independent state that disappears on exit; it needs no credentials
+or separate module.
 
 ```go
 import (
@@ -94,475 +60,414 @@ simulator := memorypayment.New()
 payments := payment.New(simulator)
 ```
 
-### Configuration
+There are no optional settings or native client. Use the
+[local payment journey](testing.md#simulating-payments) to supply approval and
+settlement explicitly. Completion creates a pending payment; advancing time
+does not settle it or collect a renewal.
 
-The driver has no optional settings, credential input, or native client.
-Every `New()` creates independent state; no lifecycle hooks are needed.
+Preparation creates a pending payment and inert `memory.authorization` token,
+not a checkout or SDK credential. `ResolvePayment` supplies its result.
+`ResolveSubscription` separately supplies subscription lifecycle, not invoice
+payment. For ambiguous replies rather than simulated state, use the
+[scripted fake](testing.md#scripting-outcomes).
 
-### Simulating checkout
-
-Create a checkout with the [ordinary request](overview.md#starting-a-payment),
-then supply approval and settlement explicitly using the
-[local simulation example](testing.md#simulating-a-payment). A successful local
-payment status confirms the state you supplied, not a financial transaction.
-
-### Behavior and limits
-
-State is isolated and lost on exit. Controls supply outcomes without settlement
-or recurring billing. `PreparePayment` creates only a pending payment and inert
-`memory.authorization` token, not a checkout or usable SDK credential; explicitly
-`ResolvePayment` to supply its outcome. Use the
-[scripted fake](mobile-payments.md#testing-the-full-provider-boundary) for uncertain replies.
-
-### API references
-
-For controls and ownership, see
-[the memorypayment API reference](https://pkg.go.dev/arkoren.dev/core/service/payment/memorypayment).
+See the [memorypayment API](https://pkg.go.dev/arkoren.dev/core/service/payment/memorypayment).
 
 ## Stripe
 
-Use Stripe-hosted checkout with a Stripe account and test-mode API key. Create a
-recurring Price in Stripe before subscription enrollment; the one-time checkout
-example does not need a precreated Price.
-
-### Installation
-
-From your application's module directory, install the vendor module:
+Choose Stripe for hosted Checkout or guest native card intents. Obtain a Stripe
+test-mode API key; recurring enrollment additionally needs an existing recurring
+Price. One-time checkout uses an inline amount rather than a precreated Price.
 
 ```sh
 go get arkoren.dev/driver/stripe
 ```
 
-### Connecting
+### Connecting Stripe
 
-With an API key loaded from your application's configuration, construct the
-driver independently of notifications:
+With `stripeKey` loaded from server configuration, create the backend and facade:
 
 ```go
 import "arkoren.dev/driver/stripe/stripepayment"
 
-driver, err := stripepayment.New(apiKey)
-payments := payment.New(driver)
+backend, err := stripepayment.New(stripeKey)
+payments := payment.New(backend)
 ```
 
-`New` performs no network I/O and creates an SDK client without mutation retries.
-Checkout Session, PaymentIntent, Refund, and Subscription IDs stay distinct and
-unmodified. Enrollment takes an existing recurring Price at quantity one.
+The key must be nonempty without whitespace or controls. Invalid keys return
+`payment.ErrInvalidRequest` before callbacks run. Valid-key callbacks run once
+in order; nil callbacks and callback panics propagate. HTTP settings are checked
+afterwards.
 
-The API key must be nonempty and contain no whitespace or control characters.
-Invalid keys return `payment.ErrInvalidRequest` before any configuration callback
-runs. With a valid key, callbacks run once in order on one draft; nil entries and
-callback panics propagate. HTTP settings are validated after those callbacks.
-
-### Configuration
-
-To bound requests, import `net/http` and `time` and supply a client at
-construction:
+To use a shorter timeout, construct the backend with `net/http` and `time`:
 
 ```go
-driver, err := stripepayment.New(apiKey, func(connection *stripepayment.Builder) {
-    connection.HTTPClient(&http.Client{Timeout: 10 * time.Second})
+backend, err := stripepayment.New(stripeKey, func(connection *stripepayment.Builder) {
+    connection.HTTPClient(&http.Client{Timeout: 8 * time.Second})
 })
 ```
 
-Omitted/zero timeout selects 30 seconds; negative fails construction. The client
-is copied, redirects refused, and transport stays caller-owned. Transports must
-not replay mutations. No lifecycle hooks are required.
+The default/zero timeout is 30 seconds; a negative timeout fails construction.
+`New` copies HTTP settings, refuses redirects, and disables SDK retries and
+standard HTTP mutation replays, logging, and telemetry. Borrowed transports stay
+caller-owned and must not independently replay mutations.
 
-`NewFrom` preserves caller SDK/transport policies. `Client()` exposes native
-operations outside the contract; the driver closes neither client nor transport.
-Do not mutate shared clients during requests. Native safety/retries remain yours.
+`NewFrom` instead preserves the supplied SDK client's retry, redirect, logging,
+and timeout policies. `Client()` exposes the retained native client; direct
+native operations and their safety remain yours. The driver closes neither
+client nor transport. Do not mutate shared clients during requests.
 
-### Creating a checkout
+### Payment Flows
 
-Use the [hosted checkout request](overview.md#starting-a-payment) with `payments`.
-Persist its key and returned ID before redirecting to the sensitive approval URL.
-Test-mode checkout uses test payment methods and does not settle live money.
-For recurring payments, use the [subscription enrollment example](overview.md#enrolling-a-subscriber)
-with an existing recurring Stripe Price ID.
+Follow [Hosted Checkout](hosted-checkout.md) for a redirect or
+[Recurring Subscriptions](subscriptions.md) with a recurring Price at quantity
+one. Stripe's hosted UI collects payment; `CompleteCheckout` only observes
+completion and never charges again. Checkout Session, PaymentIntent, Refund,
+and Subscription IDs retain their distinct native families.
 
-### Behavior and limits
+For [Mobile Payments](mobile-payments.md), `PreparePayment` creates an unconfirmed,
+card-only PaymentIntent with automatic confirmation/capture settings. The
+sensitive `stripe.payment_intent` authorization goes only to the authenticated
+owner. Empty, web, iOS, and Android channels use the same guest profile. ReturnURL
+and DeviceReference must be empty; configure client return routing in the SDK.
+No Customer, CustomerSession, ephemeral key, or saved-card setup is supplied.
 
-`CompleteCheckout` observes the hosted flow or reports invalid state; it never
-charges again. Immediate cancellation requests no proration or new final invoice
-and decides neither refunds nor access. `NextBillingAt` stays absent: item period
-boundaries can remain after cancellation without proving another collection.
-Dispatched mutation errors can wrap `payment.ErrOutcomeUnknown`; preserve the
-original key and [reconcile](overview.md#handling-uncertain-outcomes).
+Refunds perform a currency-checking PaymentIntent preflight, then submit the
+explicit refund without post-success hydration. Immediate subscription
+cancellation requests neither proration nor a new final invoice. `NextBillingAt`
+stays absent: item period boundaries do not establish another collection.
+Dispatched ambiguous mutations can wrap `ErrOutcomeUnknown`; preserve the
+original request/key even if a later call fails differently.
 
-### Receiving Stripe notifications
+### Stripe Notifications
 
-Construct `stripewebhook` with the endpoint's signing secret, separately from
-the outbound API key. With import `arkoren.dev/driver/stripe/stripewebhook`, bind
-the event your application needs:
+Notifications are optional and use `stripewebhook`, installed by the same vendor
+module, independently of the payment backend. Configure a public HTTPS endpoint
+in Stripe with snapshot event version `stripe.APIVersion` from
+`github.com/stripe/stripe-go/v87`. Its endpoint signing secret is not the API key.
+
+The fragments assume `r *router.Router` and an application-owned
+`accept webhook.AcceptFunc[payment.Observation]` that durably accepts observations
+and returns its error. Import `arkoren.dev/core/http/webhook` and construct the
+source first:
 
 ```go
-source, err := stripewebhook.New(signingSecret)
+import "arkoren.dev/driver/stripe/stripewebhook"
+
+source, err := stripewebhook.New(endpointSecret)
 if err != nil {
     return err
 }
+```
+
+Bind only needed events and mount the checked handler:
+
+```go
 handler, err := webhook.Handler(source, func(receiver *webhook.Builder[stripewebhook.Envelope]) {
-    receiver.Handle(stripewebhook.CheckoutSessionCompleted, accept)
+    receiver.Handle(stripewebhook.PaymentIntentSucceeded, accept)
 })
 if err != nil {
     return err
 }
-r.Post("/webhooks/stripe", handler)
+r.Post("/payments/stripe/events", handler)
 ```
 
-Verification is network-free, using original bytes and timestamped signatures.
-Select endpoint version `stripe.APIVersion` from `github.com/stripe/stripe-go/v87`;
-bound snapshot mismatches cause retryable decode failure, not invalid authentication.
-Thin-event fetching is unsupported.
+Verification uses original bytes and timestamped signatures without network I/O.
+The secret needs `whsec_`, a nonempty suffix, and no whitespace/controls before
+callbacks run. Signature tolerance defaults to five minutes; change it with
+`stripewebhook.Builder.Tolerance`. Zero restores the default; negative is invalid.
+Freshness is not durable replay prevention.
 
-`stripewebhook.New` requires a `whsec_` prefix, a nonempty suffix, and no whitespace
-or control characters before running configuration callbacks. Invalid secrets skip
-callbacks; valid secrets retain once-only callback and panic behavior. Tolerance is
-validated afterwards.
+Bound snapshot version/schema mismatches fail decoding retryably; they are not
+authentication failures. Thin events and fetching missing relationships are not
+supported. `Envelope.CreatedAt` is native Unix seconds (zero means absent), not
+`time.Time`; JSON still uses `created`. Positive values populate portable
+`Observation.OccurredAt`.
 
-For a custom envelope decoder, replace the removed `Envelope.Created` field with
-`Envelope.CreatedAt`, for example `envelope.CreatedAt`. It remains an `int64` count
-of Unix seconds, not a `time.Time` or local receipt time; zero means absent.
-Stripe's JSON member is still `created`. Bindings using the shipped events still
-receive `payment.Observation`; positive timestamps populate its `OccurredAt` field.
+Definitions also cover Checkout completion, intent failure, refund updates,
+subscription creation/update/deletion, and invoice paid/payment-failed/
+invoice-payment-paid. Checkout/subscription lifecycle is not collection evidence;
+`invoice.paid` can describe zero or externally satisfied invoices. Correlate
+invoice references without guessing missing relationships. Events can repeat or
+arrive out of order, and refunds can remain pending.
 
-Accept decoded events durably before acknowledging. Checkout/subscription
-lifecycle is not collection evidence; `invoice.paid` includes zero or externally
-satisfied invoices. Correlate observed invoice references yourself; missing
-relationships are not fetched or guessed. Refunds can remain pending; events
-can repeat or arrive out of order.
-
-The signature age defaults to five minutes; `stripewebhook.Builder.Tolerance`
-changes it. Freshness is not replay prevention. Supported definitions include
-Checkout completion, PaymentIntent success/failure, refund updates, subscription
-creation/update/deletion, and invoice paid/payment-failed/invoice-payment-paid.
-
-### Preparing native mobile payments
-
-Use the same facade for an authorized native attempt. With server-derived
-`amount`, persisted `key`, and caller context `ctx`, prepare a guest card intent:
-
-```go
-prepared, err := payments.PreparePayment(ctx, payment.NewPreparePaymentRequest(amount, key))
-```
-
-Persist `prepared.PaymentID`; deliver its sensitive `stripe.payment_intent`
-authorization only to the authenticated owner. The driver creates an unconfirmed
-card-only intent with automatic confirmation/capture settings, not a Customer,
-CustomerSession, ephemeral key, or saved card. Empty, web, iOS, and Android channels
-use the same profile. Nonempty ReturnURL/DeviceReference is unsupported; configure return
-routing in the client, not the backend request. Follow the
-[shared mobile backend](mobile-payments.md) for authorization, protected JSON,
-verification, telemetry, and recovery. Client completion is not fulfillment
-evidence. Native UI integration remains application-owned; Stripe's
-[official mobile reference](https://docs.stripe.com/payments/accept-a-payment?payment-ui=mobile&platform=android)
-is optional background, not part of the portable backend contract.
-
-### API references
-
-See the [Stripe payment API](https://pkg.go.dev/arkoren.dev/driver/stripe/stripepayment) and
-[Stripe webhook API](https://pkg.go.dev/arkoren.dev/driver/stripe/stripewebhook).
+Apply the [receiver acceptance rules](#notification-acceptance) below. See the
+[Stripe payment API](https://pkg.go.dev/arkoren.dev/driver/stripe/stripepayment)
+and [Stripe webhook API](https://pkg.go.dev/arkoren.dev/driver/stripe/stripewebhook).
 
 ## PayPal
 
-For PayPal wallet checkout, create a developer application and start with sandbox
-merchant credentials. Recurring enrollment also needs an existing account Plan.
-
-### Installation
-
-From your application's module directory, install the module:
+Choose PayPal for hosted or native wallet Orders. Create a developer application
+and use sandbox merchant credentials. Subscription enrollment additionally needs
+an existing account Plan; a Stripe Price is not interchangeable.
 
 ```sh
 go get arkoren.dev/driver/paypal
 ```
 
-### Connecting
+### Connecting PayPal
 
-With client credentials from your application configuration, construct the
-sandbox-default driver:
+Load the sandbox application's credentials from server configuration:
 
 ```go
 import "arkoren.dev/driver/paypal/paypalpayment"
 
-driver, err := paypalpayment.New(clientID, clientSecret)
-payments := payment.New(driver)
+backend, err := paypalpayment.New(merchantID, merchantSecret)
+payments := payment.New(backend)
 ```
 
-### Configuration
-
-Sandbox is the default. Only after verifying your application with sandbox buyer
-approval, switch to production credentials and enable live operation. With imports
-`net/http` and `time`, configure the environment and request timeout explicitly:
+Callbacks run once in order before nonblank credential validation; nil callbacks
+panic. Sandbox is the default. To bound requests, use `net/http` and `time`:
 
 ```go
-driver, err := paypalpayment.New(clientID, clientSecret, func(merchant *paypalpayment.Builder) {
-    merchant.Live(true)
-    merchant.HTTPClient(&http.Client{Timeout: 10 * time.Second})
+backend, err := paypalpayment.New(merchantID, merchantSecret, func(merchant *paypalpayment.Builder) {
+    merchant.HTTPClient(&http.Client{Timeout: 8 * time.Second})
 })
 ```
 
-This can move real money; credentials and endpoints must belong to the same
-environment. `merchant.HTTPClient(client)` shares its transport but copies client
-settings, refuses redirects, and replaces nonpositive timeouts with thirty
-seconds. A positive timeout is preserved. The driver never closes that transport.
-The driver uses fixed trusted API origins and a private token cache;
-it starts no refresh worker and does not replay failed mutations automatically.
-No lifecycle hooks are required. `driver.HTTPClient()` exposes the actual client,
-not an SDK; treat it as read-only during use. Custom transports must not replay
-mutations.
+HTTP settings are copied, redirects refused, and a nonpositive timeout becomes
+30 seconds. Transports/jars remain borrowed and are never closed. Fixed trusted
+API origins and a private token cache require no refresh worker. Requests,
+including failed mutations, are not automatically replayed; custom transports
+must preserve that boundary. `HTTPClient()` exposes the actual client, not an
+SDK; treat it as read-only during use.
 
-### Creating and completing an Order
+Only after sandbox verification, use production credentials and
+`merchant.Live(true)` in construction. That setting selects a live origin and
+can move real money; merchant credentials, resources, and environment must match.
 
-Follow the [hosted checkout example](overview.md#starting-a-payment), save its
-key/ID, and redirect to its approval URL. Authorize the returning caller before
-[explicit completion](overview.md#completing-and-observing-checkout); approval is
-not collection. For [subscription enrollment](overview.md#enrolling-a-subscriber),
-use your PayPal Plan ID rather than the sample Stripe Price ID.
+### Payment Flows
 
-### Preparing a native PayPal Order
+Use [Hosted Checkout](hosted-checkout.md) and explicitly complete an approved
+Order with a separately persisted completion key. An approved Order can expire
+without capture; neither a notification decoder nor a return link captures it.
+Coordinate the same completion operation across authorized POSTs and workers.
 
-Use the [shared preparation handler](mobile-payments.md#preparing-and-recording-the-handoff)
-with the same `payments` facade. Persist `CheckoutID` and deliver its sensitive
-`paypal.order` action only to the authenticated owner; the native Order ID is not
-a financial PaymentID. No backend return URLs or approval link are required.
-Empty, iOS, and Android channels work; web/nonempty ReturnURL is unsupported.
-Optional DeviceReference forwards at most 255 visible ASCII bytes of risk
-correlation as `PayPal-Client-Metadata-Id` on creation only, never authorization.
+For [Mobile Payments](mobile-payments.md), preparation returns a native
+`paypal.order` action and a `CheckoutID`, not a financial PaymentID. Empty, iOS,
+and Android channels work; web and nonempty ReturnURL are unsupported. No backend
+approval link is required. Optional DeviceReference carries at most 255 visible
+ASCII bytes as `PayPal-Client-Metadata-Id` on creation only. It is risk correlation,
+never authorization. Client SDK approval must still precede server completion.
 
-The [shared backend](mobile-payments.md) owns authorization, protected JSON,
-approval checks, explicit completion, verification, telemetry, and recovery.
-An SDK callback is not payment evidence. Native UI integration remains
-application-owned; PayPal's [official mobile reference](https://developer.paypal.com/sdk/android/add-payment-methods/paypal-checkout.md)
-is optional background, not a portable backend requirement.
+Preserve returned resource-family prefixes. Payment reads/refunds support
+one-time Payments v2 captures, not subscription sales. Sale observations do not
+enable deprecated sale lookup/refund; those operations return `ErrUnsupported`.
+PayPal supports a subset of core currencies. HUF amounts must represent whole
+forints using canonical two-decimal minor units; unsupported currencies and
+fractional forints fail before authentication/payment I/O.
 
-### Behavior and limits
+[Subscriptions](subscriptions.md) activate through buyer approval. Cancellation
+supports active/suspended subscriptions; already-canceled succeeds without a
+mutation. There is no period-end scheduling, plan change, or proration.
+Provider-supplied `NextBillingAt` and active status do not establish payment.
 
-An approved Order can expire without capture if you omit `CompleteCheckout`.
-Coordinate one stable completion key across the return route, optional approval
-notification, and reconciliation; the driver installs none of those paths.
+Malformed successful GET JSON wraps `ErrUnavailable` without outcome uncertainty;
+semantic snapshot failures retain their specific validation/capability errors.
+Unusable OAuth responses also wrap `ErrUnavailable` before business dispatch.
+Neither resolves an earlier uncertain mutation. Successful mutation decoding
+failures remain outcome-unknown. `paypalpayment.Error` exposes safe status and
+machine-token fields, but unwrapped causes still require redaction.
 
-Preserve private resource-family prefixes in returned handles. Subscription-sale
-observations are not Payments v2 captures. This driver deliberately returns
-`ErrUnsupported` for sale lookup/refund rather than guessing compatibility with
-deprecated APIs. One-time captures support payment lookup and explicit refunds.
+### PayPal Notifications
 
-PayPal accepts a subset of core currencies. HUF requests must represent whole
-forints in canonical two-decimal minor units; fractional forints and unsupported
-currencies fail before authentication or payment I/O. See the
-[PayPal payment API reference](https://pkg.go.dev/arkoren.dev/driver/paypal/paypalpayment)
-for the driver's public surface.
-
-Subscriptions reference existing Plans and activate through buyer approval.
-Immediate cancellation supports provider-eligible states; it does not implement
-period-end scheduling, plan changes, or proration. Active status and next billing
-time are not proof of the latest payment.
-
-Dispatched mutation failures can leave the outcome unknown. Preserve the same
-operation key and reconcile instead of starting another charge; see
-[uncertain outcomes](overview.md#handling-uncertain-outcomes).
-
-A successful GET reply with malformed JSON returns an error wrapping
-`payment.ErrUnavailable`, without `ErrOutcomeUnknown`. Valid JSON that fails
-semantic snapshot checks retains its specific validation or capability error;
-for example, an unsupported resource shape is not silently reclassified as an
-availability failure. Provider HTTP failures retain their status-based categories.
-
-Malformed OAuth JSON or an unusable token response also wraps `ErrUnavailable`,
-before the business request is dispatched. That failure does not itself mark the
-current mutation outcome unknown, but it does not settle any earlier uncertain
-attempt with the same operation key. Successful mutation decoding failures remain
-outcome-unknown. `paypalpayment.Error` exposes safe status and machine-token fields;
-unwrapped transport or decoding causes still require application redaction.
-
-### Receiving PayPal notifications
-
-Construct `paypalwebhook` with matching environment credentials and the
-configured webhook ID. Sandbox is the default; select production separately
-with `Builder.Live(true)` only when the webhook configuration and credentials
-belong to that environment. With import
-`arkoren.dev/driver/paypal/paypalwebhook`, bind order approval if you want a
-notification-driven merchant completion path:
+Use the separate `paypalwebhook` package from the same module. Configure a public
+HTTPS webhook endpoint and selected event types in the matching sandbox account.
+The webhook registration ID and merchant credentials must share its environment.
+Use `r *router.Router`, import `arkoren.dev/core/http/webhook`, and supply an
+application-owned `accept webhook.AcceptFunc[payment.Observation]` that durably
+accepts observations and returns its error:
 
 ```go
-source, err := paypalwebhook.New(clientID, clientSecret, webhookID)
+import "arkoren.dev/driver/paypal/paypalwebhook"
+
+source, err := paypalwebhook.New(merchantID, merchantSecret, registrationID)
 if err != nil {
     return err
 }
+```
+
+Bind capture completion when your application needs collection observations:
+
+```go
 handler, err := webhook.Handler(source, func(receiver *webhook.Builder[paypalwebhook.Envelope]) {
-    receiver.Handle(paypalwebhook.CheckoutOrderApproved, accept)
+    receiver.Handle(paypalwebhook.PaymentCaptureCompleted, accept)
 })
 if err != nil {
     return err
 }
-r.Post("/webhooks/paypal", handler)
+r.Post("/payments/paypal/events", handler)
 ```
 
-The source remotely verifies original bytes at its trusted PayPal origin with
-the request context, never arbitrary certificate URLs or enrichment. Outages are
-retryable, not bad signatures. Authentication precedes duplicate suppression,
-so repeats can cause verification requests. Delivery identity is the event ID,
-not the transmission attempt ID.
+Production is selected separately with `paypalwebhook.Builder.Live(true)` and
+matching production registration/credentials. Its HTTPClient setting copies
+client settings, refuses redirects, and defaults nonpositive timeouts to 30
+seconds; its transport stays caller-owned.
 
-The decoder never captures an approved Order; your callback/worker must call
-`CompleteCheckout` with the shared completion key. Sale observations do not
-enable outbound sale lookup/refund, and missing relationships are not guessed.
-Events can repeat or arrive out of order; refund updates can remain pending.
+The source verifies original bytes remotely at a fixed PayPal origin using the
+request context. It never fetches arbitrary certificate URLs or enriches events.
+Verifier outages are retryable, not invalid signatures. Authentication precedes
+duplicate suppression, so repeated events can cause verification requests.
+Delivery identity is the event ID, not a transmission attempt ID.
 
-Other definitions cover capture outcomes, sale collection/refund, refund progress,
-and subscription lifecycle. Bind only needed events. Verify actual sandbox
-deliveries; mock events do not prove signature verification.
+Other definitions cover Order approval, capture outcomes, sale collection/refund,
+refund progress, and subscription lifecycle. Binding `CheckoutOrderApproved`
+does not capture: your authorized worker calls `CompleteCheckout` with the saved
+completion key. Missing relationships stay absent; events can repeat or arrive
+out of order. Mock events do not prove signature verification; validate actual
+sandbox deliveries separately.
 
-### API references
-
-See the [PayPal payment API](https://pkg.go.dev/arkoren.dev/driver/paypal/paypalpayment) and
-[PayPal webhook API](https://pkg.go.dev/arkoren.dev/driver/paypal/paypalwebhook).
+Apply the [receiver acceptance rules](#notification-acceptance). See the
+[PayPal payment API](https://pkg.go.dev/arkoren.dev/driver/paypal/paypalpayment)
+and [PayPal webhook API](https://pkg.go.dev/arkoren.dev/driver/paypal/paypalwebhook).
 
 ## Mollie
 
-Use Mollie for hosted one-off card payments, not subscriptions or native SDK
-initialization. Create an account and website profile, enable `creditcard`, and
-obtain its test API key. Other methods, customer/mandate setup, recurring APIs,
-and manual capture are not exposed.
-
-### Installation
-
-From your application's module directory, install the module:
+Choose Mollie for hosted, one-off `creditcard` payments with automatic capture
+and explicit refunds. Create a website profile, enable that method, and obtain
+a test profile API key. Other methods, manual capture, customer/mandate setup,
+recurring APIs, and native SDK preparation are not exposed.
 
 ```sh
 go get arkoren.dev/driver/mollie
 ```
 
-### Connecting
+### Connecting Mollie
 
-With a profile API key named `apiKey` loaded from server configuration, construct
-the driver and portable client:
+With the profile key loaded from server configuration:
 
 ```go
 import "arkoren.dev/driver/mollie/molliepayment"
 
-driver, err := molliepayment.New(apiKey)
-payments := payment.New(driver)
+backend, err := molliepayment.New(profileKey)
+payments := payment.New(backend)
 ```
 
-Construction validates a `test_`/`live_` profile key with alphanumeric suffix
-without I/O. Its prefix selects mode at the fixed origin; OAuth/organization
-credentials are unsupported. Live keys can move money.
+Keys need a `test_` or `live_` prefix and alphanumeric suffix. Their prefix selects
+mode at the fixed API origin; OAuth/organization credentials are unsupported.
+A live key can move money. Callbacks run once in order, even for invalid keys;
+nil callbacks panic.
 
-### Configuration
-
-Callbacks default to disabled. For status hints, supply a reachable absolute
-HTTPS URL without credentials/fragments. With imports `net/http` and `time`:
+Callbacks are disabled by default. To receive status hints, configure a reachable
+absolute HTTPS URL without credentials/fragments, using `net/http` and `time`:
 
 ```go
-driver, err := molliepayment.New(apiKey, func(merchant *molliepayment.Builder) {
+backend, err := molliepayment.New(profileKey, func(merchant *molliepayment.Builder) {
     merchant.WebhookURL("https://shop.example/payments/mollie")
-    merchant.HTTPClient(&http.Client{Timeout: 10 * time.Second})
+    merchant.HTTPClient(&http.Client{Timeout: 8 * time.Second})
 })
 ```
 
-Omitted/nonpositive timeouts select 30 seconds. Construction copies settings,
-refuses redirects, and borrows transport/jar without closing them. No lifecycle
-hooks are needed. `HTTPClient()` exposes the actual client, not an SDK; do not
-mutate it during use or weaken redirects. Custom transports must not replay or
-log credentials. WebhookURL installs no receiver/authentication.
+This installs no receiver or authentication. Nonpositive/omitted timeouts become
+30 seconds. HTTP settings are copied, redirects refused, and borrowed
+transport/jar objects never closed. `HTTPClient()` exposes the actual client;
+do not mutate it during use or weaken redirect policy. Custom transports must
+neither replay mutations nor log credentials.
 
-`fmt` formatting and `slog` logging of `Driver` or `*Driver` produce
-`Driver{REDACTED}`, hiding the owned API key and callback destination. This does
-not sanitize a borrowed transport or jar, objects returned by `HTTPClient()`,
-or explicitly unwrapped error causes. Their ownership and logging policies remain
-yours.
+### Payment Flows
 
-### Creating and observing hosted checkout
+Use [Hosted Checkout](hosted-checkout.md). The driver fixes `method: creditcard`,
+`sequenceType: oneoff`, and `captureMode: automatic`. An empty description becomes
+`Payment`; Reference becomes correlation metadata, not idempotency.
+Checkout/payment IDs refer to the same `tr_` resource using different Go ID types.
+`NeedsCompletion` is false and explicit completion returns `ErrUnsupported`.
+Only native `paid` maps to succeeded; `authorized` and `pending` are not collection.
 
-Use the [ordinary checkout example](overview.md#starting-a-payment) with an
-accepted currency/amount. Save IDs against the authorized account before
-redirecting to the sensitive ApprovalURL. The driver fixes `method: creditcard`,
-`sequenceType: oneoff`, and `captureMode: automatic`, never a broader method set.
-Empty description becomes `Payment`; Reference becomes metadata, not idempotency.
+Use [Payment Refunds](refunds.md) with the original currency. Mollie enforces
+currency and remaining balance without hidden preflight or post-mutation reads.
+Save the entire compound refund handle: it includes the parent payment needed
+for lookup. Queued/pending/processing refunds remain pending; only `refunded`
+succeeds, and unfamiliar native states stay unknown.
 
-On return or a status hint, read the saved ID with `GetCheckout` or `GetPayment`.
-Both identify the same `tr_` resource using distinct Go ID types.
-`NeedsCompletion` is false; `CompleteCheckout` returns `payment.ErrUnsupported`.
-Only `paid` maps to succeeded; `authorized` and `pending` are not collection.
+Subscriptions and preparation validate portable input, then return
+`ErrUnsupported` without HTTP. This does not disable hosted one-off checkout.
+Mollie Components, native wallets, and Mollie's recurring product are not shipped
+capabilities of this driver.
 
-### Refunding and reading refund progress
+> [!WARNING]
+> Mollie caches POST responses for one hour per exact API credential. Save the
+> request, key, and credential identity before dispatch. Credential rotation or
+> replay after expiry can create another effect, even within the same account.
+> See [Payment Recovery](recovery.md#replaying-requests) before replaying.
 
-Authorize the saved order and use the [ordinary refund request](overview.md#refunding-a-payment)
-with a positive amount in its original currency. Mollie enforces currency and
-remaining balance, without a hidden preflight or post-mutation hydration.
+There is one mutation attempt without automatic retries. Transport loss,
+conflicts, server failures, redirects, and unusable mutation successes can wrap
+`ErrOutcomeUnknown`. Malformed/unusable successful GET snapshots instead wrap
+`ErrUnavailable`, including missing required amounts or mismatched identities;
+transport/non-2xx failures retain their categories. None clears earlier uncertainty.
 
-Preserve all of `refund.ID`: its opaque compound handle includes the parent
-payment required for lookup, not only Mollie's `re_` token. With `refund` from
-the checked refund call, observe progress:
+`molliepayment.Error.Status` retains a non-2xx status or zero if none was retained.
+Zero can follow a successful HTTP reply that could not be read/decoded; it does
+not prove no reply arrived. Errors omit provider bodies. Driver `fmt`/`slog`
+formatting yields `Driver{REDACTED}`, hiding owned credentials and callback URL,
+but borrowed HTTP objects and explicitly unwrapped causes remain your redaction
+responsibility.
 
-```go
-refund, err = payments.GetRefund(ctx, refund.ID)
-```
+### Mollie Callbacks
 
-Queued/pending/processing refunds remain pending, not returned funds or an
-unknown mutation outcome. Only `refunded` succeeds; unknown native states stay unknown.
+Classic callbacks are unsigned form POSTs with an `id` hint. Anyone can forge
+them; there is no shipped `molliewebhook` or authenticated Source. Rate-limit
+and bound the route, accept exactly one ID, check its persisted merchant/test-live
+association, and read authoritative provider state with that merchant's client.
 
-### Behavior and limits
-
-Subscription creation, lookup, and cancellation return `payment.ErrUnsupported`
-after portable validation without HTTP. Mollie's recurring product is not a
-shipped Arkoren subscription capability.
-
-`PreparePayment` also validates, then returns `ErrUnsupported` without HTTP.
-This does not disable the supported hosted one-off card flow; Mollie Components
-and native wallet SDK initialization are not shipped preparation profiles.
-
-Mollie's [idempotency guarantee](https://docs.mollie.com/reference/api-idempotency)
-caches POST responses for **one hour** per exact credential. Persist request,
-key, and credential identity before dispatch. Rotating credentials, even within
-one account, loses replay scope; after an hour, key reuse creates a new request.
-This is not permanent exactly-once processing, especially for partial refunds.
-
-One attempt is submitted without automatic retries. Transport loss, conflicts,
-server failures, redirects, or an unusable mutation success can wrap `ErrOutcomeUnknown`;
-follow the [recovery limits](overview.md#handling-uncertain-outcomes). Errors omit
-provider bodies; unwrapped causes still need application redaction.
-
-Malformed JSON or an unusable snapshot from a successful GET wraps
-`payment.ErrUnavailable`, not `ErrOutcomeUnknown`. This includes missing required
-amounts and mismatched payment/refund identities. Transport and non-2xx failures
-retain their own categories; successful mutation decoding failures remain
-outcome-unknown rather than being treated as failed reads.
-
-When `errors.As` finds a `*molliepayment.Error`, its `Status` is a retained non-2xx
-status, or zero when none was retained. Zero can follow a successful HTTP response
-whose body could not be read or decoded; it does not prove that no reply arrived.
-Do not use it to clear an earlier uncertain attempt or authorize another charge.
-
-### Receiving Mollie status hints
-
-Mollie's [classic callback](https://docs.mollie.com/docs/webhooks) sends an
-unsigned form POST (`id=tr_example`) to WebhookURL. There is no shipped
-`molliewebhook` or authenticated Source. Anyone can forge this hint: rate-limit
-the route, bound its body, accept exactly one ID, and check its persisted
-merchant/environment association before an authenticated provider read.
-
-Mount a plain application handler, not `webhook.Handler`. With `net/http`
-imported, `mux *http.ServeMux`, and an application-owned `handleMollie` that
-implements those checks, register its route:
+With `mux *http.ServeMux` and your application handler, register a plain route:
 
 ```go
 mux.HandleFunc("POST /payments/mollie", handleMollie)
 ```
 
-The [callback wiring example](mollie-callbacks.md#reading-and-reconciling-the-hint)
-shows parsing, ownership checks, authoritative reads, and durable reconciliation.
-Require succeeded status, expected amount/currency, and order association before
-fulfillment. Return 200 after durable handling; acknowledge unknown IDs without
-disclosing order data. Failures allow retries; duplicate hints must not duplicate
-fulfillment. Select merchant credentials from persisted mappings, never input.
+[Mollie Callbacks](mollie-callbacks.md) shows parsing, ownership, lookup, and durable
+acceptance. Unknown IDs receive an acknowledgement without order disclosure.
+Require succeeded state and matching order amount/currency before fulfillment;
+duplicate hints must not duplicate effects. Refund callbacks carry the payment
+ID, so reconcile the compound refund handles you already saved. Next-gen
+webhooks are outside scope.
 
-Refund callbacks carry the payment ID, not the compound refund handle. Retrieve
-the refund IDs you already persisted with `GetRefund` to reconcile returned
-funds. Next-gen Mollie webhooks and native wallet SDK initialization are outside
-this driver's scope.
+See the [Mollie payment API](https://pkg.go.dev/arkoren.dev/driver/mollie/molliepayment).
 
-### API references
+## Notification Acceptance
 
-See the [Mollie payment API](https://pkg.go.dev/arkoren.dev/driver/mollie/molliepayment) for
-configuration, opaque handles, and error behavior.
+Stripe/PayPal receivers use the [HTTP webhook receiver](../webhooks/receiving-webhooks.md).
+By default, it answers 200 after acceptance, including unbound authenticated
+types; 503 for decode/accept errors; 400 for rejected authentication; and 413
+for an oversized body. The receiver commits its failure response before returning
+an error. Receipt 4xx errors match `webhook.ErrRejected`; 503 errors match
+`webhook.ErrUnavailable`, retaining causes. An outer error mapper cannot rewrite
+that response, and unwrapped causes require redaction.
+
+Accept observations durably before acknowledging. A 200 does not establish
+asynchronous completion or successful collection. `webhook.Delivery` carries
+native event identity; `payment.Observation` carries facts/time. Use `Event.Map`
+for application queue DTOs. Scope deduplication by provider, merchant,
+environment, and consumer; cache deduplication replaces neither a durable
+inbox/outbox nor operation keys.
+
+## Local Monitoring
+
+To observe facade calls locally, supply an in-process event bus at construction.
+With `driver payment.Driver` and `bus *event.Bus` already configured:
+
+```go
+payments := payment.New(driver, func(client *payment.Builder) {
+    client.Events(bus)
+})
+```
+
+Register listeners on `payment.OperationCompleted` and `OperationFailed` using
+the [event bus](../events/overview.md). Their `payment.OperationEvent` contains
+only a fixed operation name and bounded `ErrorType`, not IDs, amounts, URLs,
+keys, secrets, or arbitrary error text. Omitted/nil Events disables observations;
+direct driver calls bypass them.
+
+Each driver-returned call emits once: nil error completes, non-nil error fails.
+Validation failures, missing drivers, and pre-canceled calls emit nothing.
+`payment.ErrOutcomeUnknown` takes precedence over joined error classes, while
+the returned error retains its causes. Listeners run synchronously after
+telemetry with the operation context; their errors/panics cannot alter the API
+result, but slow listeners delay return.
+
+These best-effort observations include reads and replays. They prove neither
+money movement nor durable reconciliation and must not trigger fulfillment.
+Provider notifications and application-owned operation records remain separate.
+For facade configuration, see the
+[payment API](https://pkg.go.dev/arkoren.dev/core/service/payment).

@@ -1,321 +1,240 @@
 ---
 title: Requests
-description: Read path and query parameters, headers, cookies, JSON and XML bodies, and file uploads, with size limits and errors that become responses.
+description: Read typed request inputs, decode bounded bodies, and preserve input errors and upload ownership.
 order: 20
+summary:
+  - Parse URL values and distinguish invalid input from optional defaults.
+  - Decode JSON into request structs and combine decoding with an existing validation schema.
+  - Read XML, raw bodies, and multipart forms with explicit size and cleanup boundaries.
 ---
 
 # Requests
 
-## Introduction
+Client input needs parsing before your handler can use it. The `request`
+package adds typed URL values and bounded body readers to `*http.Request`.
+Input failures return problems that the router can render; operational failures
+remain errors for server-side handling.
 
-Before a handler can use client input, it needs to read and check it. The
-`request` package adds typed parameter parsing and size-limited body decoding
-to the standard `*http.Request`. Invalid input returns a problem error that
-an Arkoren router can render, so your handler can return the error rather
-than format an error response. Standard `net/http` request methods still work.
+Import `arkoren.dev/core/http/request`. These fragments run inside an
+[error-returning handler](routing.md#register-handlers), where `r` is the incoming
+request. Return errors before writing a response or using a failed result.
 
-Import helpers from `arkoren.dev/core/http/request`. In these handler fragments,
-`r` is the incoming `*http.Request`, not the router. Focused snippets retain error
-results but omit routine checks; return an error before using its result.
+## Read URL Values
 
-## Path parameters
-
-A route such as `/users/{id}` captures part of the path. `r.PathValue`
-returns the captured text, or an empty string when the route has no such
-wildcard:
+For `/invoices/{id}`, parse the captured value into the type your application
+uses. Named scalar types work too:
 
 ```go
-id := r.PathValue("id")
+type InvoiceID int64
+
+id, err := request.Param[InvoiceID](r, "id")
 ```
 
-`request.Param[T]` parses the value as `T`: the `int`/`uint` families through
-64 bits, `float32`, `float64`, `bool`, or `string`, including named types such as
-`type UserID int64`.
-`uintptr` is not a supported URL parameter type, even though JSON can decode it.
-If the value is missing, empty, out of range for `T`, or malformed, it returns
-a `400 Bad Request` problem that names the parameter, so the client learns which
-part of the URL was wrong:
+`Param` returns a `400` problem for missing, empty, malformed, or out-of-range
+values. It supports strings, booleans, integer types other than `uintptr`, and
+floating-point types, including named versions. For unparsed text, use
+`r.PathValue("id")`. A parsed ID still needs resource authorization.
+
+Query parameters use the same scalar conversion. A required count should fail
+when malformed; an optional display choice can use a fallback:
 
 ```go
-id, err := request.Param[int](r, "id")
-```
-
-When a bad value should fall back to a default instead of failing, use
-`request.ParamOr`, which infers `T` from the fallback.
-
-## Query parameters
-
-Query parameters work the same way. `request.Query[T]` parses the first value
-of a parameter and fails with a `400 Bad Request` problem, and
-`request.QueryOr` returns a fallback when the parameter is absent or invalid.
-For a plain string, `QueryOr(r, "q", "")` is the raw getter:
-
-```go
-sort := request.QueryOr(r, "sort", "name")
-
 limit, err := request.Query[int](r, "limit")
+sort := request.QueryOr(r, "sort", "issued_at")
 ```
 
-`request.HasQuery` reports whether a parameter is present at all, which is
-useful for flags such as `?verbose` that carry no value.
+`Query` reads the first value and returns a `400` problem on failure.
+`QueryOr` falls back for absent, empty, and invalid values; `ParamOr` does the
+same for path values. Use `HasQuery(r, "preview")` to test presence independently
+of value, including `?preview` or `?preview=`. Use an allowlist before turning a
+sort choice into a database identifier. [Pagination](../queries/pagination.md)
+owns `request.Page` and `request.Cursor`.
 
-> [!NOTE]
-> `QueryOr` also falls back for `?sort=`, because an empty value is not a
-> valid value for any type. Use `HasQuery` to tell the two cases apart.
+URL decoding follows `net/url`, including omission of malformed query pairs.
+Conversion follows `strconv`: booleans accept `1`, and floats accept `NaN` and
+infinities. Apply [validation](../validation/overview.md) for finite numbers,
+ranges, or stricter grammar. OpenAPI parameter descriptions do not enforce them.
 
-For paginated lists, `request.Page` and `request.Cursor` read the page or cursor
-and the page size in one call; see [Pagination](../database/pagination.md).
+## Read Request Metadata
 
-Query parsing follows `net/url`: values are URL-decoded once, and malformed
-pairs can be omitted rather than rejecting the whole query. Scalar conversion
-follows Go's `strconv`, not JSON Schema: floats accept `NaN` and infinities,
-and booleans accept spellings such as `1`. OpenAPI parameter schemas are
-descriptive only; a documented `minimum` does not enforce that bound. Apply
-application validation for finite numbers, ranges, or stricter URL grammar.
-
-## Headers and cookies
-
-`request.Header` returns a header's value, and `request.HeaderOr` a fallback
-when it is missing or empty:
+To read an optional client language preference:
 
 ```go
-lang := request.HeaderOr(r, "Accept-Language", "en")
+language := request.HeaderOr(r, "Accept-Language", "en")
 ```
 
-Cookies follow the same pattern with `request.Cookie`, which returns the whole
-cookie or `nil`, and `request.CookieValue` and `request.CookieValueOr`, which
-return only its value.
+`Header` returns an empty string when missing; `HeaderOr` also falls back for
+empty values. These read text, not a verified identity or negotiated locale;
+[locale selection](../http-capabilities/localization.md#select-languages) owns language negotiation.
 
-## JSON bodies
+`Cookie` returns the whole cookie or `nil`; `CookieValue` returns its value,
+and `CookieValueOr` supplies a fallback. Cookie and header values remain
+untrusted. Use the [session capability](../http-capabilities/sessions.md) rather
+than treating an arbitrary cookie value as authentication.
 
-> [!WARNING]
-> The body helpers do not check the `Content-Type` header. A browser can send a
-> cross-site `text/plain` form post with a JSON-looking body. Add the
-> [content type middleware](content-type.md) to JSON endpoints so
-> such requests are rejected.
+## Decode JSON
 
-To decode a JSON body into a struct, call `request.JSON` with the type you
-expect:
+JSON-looking bytes can arrive as `text/plain`, including in a cross-site
+browser post. Body decoders do not check `Content-Type`; apply
+[Content Types](content-type.md) before decoding, and use
+[CSRF protection](../browser-security/csrf-protection.md) where cookies authorize
+browser requests.
+
+Use a request-specific struct so the endpoint exposes only intended writable
+fields. For an invoice draft:
 
 ```go
-type CreatePost struct {
-	Title string `json:"title"`
-	Body  string `json:"body"`
+type CreateInvoice struct {
+	CustomerID string `json:"customer_id"`
+	Reference  string `json:"reference"`
+}
+```
+
+Decode the struct, rejecting misspelled or extra members when the endpoint has
+a fixed input shape:
+
+```go
+input, err := request.JSON[CreateInvoice](r,
+	request.Strict(),
+	request.MaxSize(64<<10),
+)
+```
+
+This reads at most 64 KiB under the helper's cap. Without options, body helpers
+use 10 MiB or the limit stored by [Body Limits](body-limit.md). An upstream
+reader's ceiling cannot be raised by a per-call option. Limits bound bytes
+read, not decoded memory or later application work. Call one body decoder per
+request: the body is a consumed stream, not a reusable value.
+
+The struct limits writable fields; it does not authorize the supplied customer.
+Check that the caller may create invoices for `input.CustomerID` before writing
+application data.
+
+`JSON` returns `request.ErrInvalidJSON` (`400`) for native input failures and
+`request.ErrBodyTooLarge` (`413`) when reading exceeds a cap. Unknown members
+are ignored without `Strict`. JSON-v2 defaults make names case-sensitive,
+reject duplicate members and a second top-level value, and reject fractions,
+exponents, or overflow for native integer fields.
+
+Ordinary custom decoder and body-read errors are not automatically bad input.
+They keep their causes; existing HTTP problems retain their identity. A custom
+decoder must deliberately identify client-input failures rather than exposing
+arbitrary callback diagnostics. [Plain Errors](error-handling.md#plain-errors)
+explains the router's private default rendering.
+
+## Validate Input
+
+Decoding establishes a Go value, not a valid invoice. With an existing
+`validate.Schema[CreateInvoice]` named `invoiceInput`, combine decoding and
+schema preparation:
+
+```go
+input, err := request.ParseJSON(r, invoiceInput,
+	request.Strict(),
+	request.MaxSize(64<<10),
+)
+```
+
+`ParseJSON` returns the schema's prepared copy, including normalizations and
+defaults. `ValidateJSON` checks the value but returns the decoded value instead.
+Define schemas during application setup; [Validation](../validation/overview.md)
+owns their construction and [definition errors](../validation/errors.md#definition-errors).
+
+Schema violations become `request.ErrValidationFailed` (`422`) with an `errors`
+member keyed by JSON Pointer. Pointers use wire member names, not Go selectors:
+`json:"a/b~name"` becomes `/a~1b~0name`. Native semantic decoding failures also
+become `422` violations with code `decode`; strict unknown members use `unknown`.
+Syntax failures, including duplicate names, remain `400`.
+
+Native decoding stops at its first semantic failure. Schema checks run on the
+partially decoded value with presence-rule violations suppressed, so a response
+is not an exhaustive list of malformed members. Fix the reported value and
+resubmit. Schema infrastructure errors take precedence over field feedback;
+ordinary application decoder failures remain operational errors.
+
+A `decode` violation has no `params.expected`. Its optional
+`params.default_representation` describes the Go type's default, not the required
+wire format: an integer tagged `,string` still needs a quoted number. Custom
+JSON methods, unsupported kinds, and `time.Duration` have no such hint. Keep
+native causes in server diagnostics, not client detail. Use the current
+[message catalog guidance](../validation/errors.md#translate-messages) to translate
+`decode`, and the [diagnostic ownership rules](../validation/errors.md#diagnostic-ownership)
+when recording causes.
+
+Clients migrating from older native-decoding feedback must replace assumptions
+about code `type` and `params.expected` with `decode` and the qualified default
+hint. This does not change schema-generated codes, the `unknown` code, the
+top-level validation problem identity, or its `422` status.
+
+JSON-v2 supports `omitzero`, `omitempty`, `string`, `case`, and `embed` options;
+the omission options do not change decoding, and `string` applies to a field's
+top-level number, not composite elements. It does not support `format:*` tags.
+`time.Duration` needs an explicitly represented input plus application conversion.
+Native decoding support does not imply schema support: explicit validation field
+registration rejects `embed`, `inline`, and `unknown` layouts. See
+[struct validation](../validation/structs-and-reuse.md).
+
+## Read Other Bodies
+
+For a small XML acknowledgment, choose the wire shape explicitly:
+
+```go
+type Acknowledgment struct {
+	Reference string `xml:"reference"`
 }
 
-input, err := request.JSON[CreatePost](r)
+ack, err := request.XML[Acknowledgment](r, request.MaxSize(16<<10))
 ```
 
-Native JSON input failures return `request.ErrInvalidJSON` (`400 Bad Request`),
-and a body larger than the limit returns `request.ErrBodyTooLarge`
-(`413 Content Too Large`). Return the error before writing the response so the
-router can render it.
+`XML` decodes only the first element and ignores trailing data. Native XML
+syntax and numeric-conversion errors remain `request.ErrInvalidXML` (`400`),
+including through `ValidateXML` and `ParseXML`; there is no native JSON Pointer
+for field feedback. Operational decoder and read errors retain their causes.
 
-Decoding uses Go's `encoding/json/v2` defaults: member names are case-sensitive,
-duplicate names are rejected, and a second top-level JSON value is rejected.
-Native integers reject fractional and exponent spellings, as well as overflow.
-These rules differ from permissive or legacy JSON decoders.
+`Bytes` and `String` read without decoding; `String` does not validate UTF-8.
+`Strict` is unsupported for XML and raw bodies and returns
+`request.ErrStrictUnsupported` before reading. A nil body is empty input: raw
+reads return no data, while JSON and XML return their malformed-body problems.
+For signed payloads, use the [webhook receiver](../webhooks/receiving-webhooks.md)
+rather than decoding before signature verification.
 
-By default, unknown fields in the JSON are ignored. Pass `request.Strict()` to
-reject them, which helps clients notice typos in field names:
+## Parse Uploads
+
+Allow `multipart/form-data` on upload routes before using `Multipart`. Its
+size argument caps the whole body, not each file:
 
 ```go
-input, err := request.JSON[CreatePost](r, request.Strict())
+form, err := request.Multipart(r, 12<<20)
+if err != nil {
+	return err
+}
+attachment := form.File("attachment")
 ```
 
-Ordinary errors from custom JSON or text decoder methods, body reads, and other
-operational work are not automatically bad-input problems. They retain their
-causes for server-side handling. A custom decoder must explicitly identify an
-intended input failure with an input problem or an appropriate native JSON
-error; do not turn arbitrary callback errors into field advice. Existing HTTP
-problems keep their identity. The router keeps ordinary error text private;
-see [error handling](error-handling.md#plain-errors).
+`attachment` is a `*multipart.FileHeader`, or `nil` when absent.
+`form.Value("reference")` reads the first text value. `Values` and `Files` keep
+all submitted values in order. Validate content and size with
+[file upload rules](../validation/available-methods.md#file-uploads); storage
+transfer belongs in [File Storage](../file-storage/overview.md).
 
-### Validating the body
+Up to 8 MiB of file content stays in memory; larger files spill to temporary
+disk storage. Oversized, non-multipart, and malformed input produce `413`, `415`,
+and `400` problems respectively. Transport and temporary-file I/O failures
+remain operational errors. Existing HTTP problems preserve their identity.
 
-Usually you want to check the input as well as decode it. Import
-`arkoren.dev/foundation/validate`. `request.ParseJSON`
-decodes the body and validates it against a schema in one call:
+When this helper parses inside a router handler lifecycle, it registers one
+after-response cleanup hook. Outside that lifecycle, call `form.RemoveAll()`
+after use. A form parsed elsewhere retains its existing cleanup owner. Successful
+later calls reuse the parsed form and ignore their size argument; never retry
+after a parsing failure because the stream has been consumed.
 
-```go
-var submission = validate.Struct(func(object *validate.StructBuilder[CreatePost]) {
-	object.Field("Title", func(title *validate.StringBuilder[string]) {
-		title.Trim()
-		title.Required()
-		title.Max(120)
-	})
-	object.Field("Body", func(body *validate.StringBuilder[string]) {
-		body.Required()
-	})
-})
+Consume and close opened uploads before cleanup; persist them before giving
+work to a background job. `RemoveAll` deletes disk-backed temporary files, not
+memory-backed data, and is safe to repeat. Removal failures can leave files
+behind. Automatic cleanup is best-effort and does not return its error to the
+handler; explicitly call `RemoveAll` before commitment if your application must
+observe that failure. If query parsing fails after successful body parsing,
+temporary-file cleanup is attempted and any cleanup failure stays in the error.
 
-input, err := request.ParseJSON(r, submission)
-```
-
-Schema violations become a `422 Unprocessable Content` problem matching
-`request.ErrValidationFailed`, with an `errors` member keyed by JSON Pointer.
-Pointers use JSON member names, not Go selectors: `json:"a/b~name"` becomes
-`/a~1b~0name`. `ParseJSON` returns the schema's normalized and defaulted copy,
-so `input.Title` is already trimmed. `ValidateJSON` checks the schema but returns
-the decoded value rather than the schema's prepared copy.
-[Validation](../validation/overview.md) explains schemas in depth.
-
-Native semantic decoding failures also become 422 violations, using code
-`decode`; strict unknown members keep code `unknown`. Syntax errors, including
-duplicate names, stay 400. Native decoding stops at its first semantic failure,
-so later members are not decoded. Schema checks still run on the partial value,
-but presence-rule violations are suppressed. Fix the reported value and resubmit
-to see later decoding errors. Schema infrastructure errors pass through instead
-of becoming validation feedback.
-
-### Decoding hints and migration
-
-Native error metadata describes the Go output type, not a field's required JSON
-representation. A `decode` violation therefore has no `params.expected`.
-Its optional `params.default_representation` is only a default-type hint, never
-advice about which wire kind to send. For example, `json:"count,string"` accepts
-`"42"` and rejects `42`, even though an integer's default hint is `integer`.
-Binary slices and arrays, timestamps, and text-decoded values retain a default
-`string` hint. Opaque custom JSON methods, unsupported Go kinds, and
-`time.Duration` have no hint.
-
-> [!NOTE]
-> Migration: native JSON semantic violations now use code `decode` and optional
-> `params.default_representation` instead of `type` and `params.expected`.
-> Treat the new parameter as a default-representation hint, never a required
-> wire kind. Add a `decode` entry to your validation message catalog, using a
-> generic message that requires neither parameter. Without that entry, the
-> message stays English. Schema-generated codes, including `type`, and the strict
-> unknown-member code `unknown` are unchanged.
-
-This changes violation metadata, not the top-level Problem Details `type` or
-HTTP status. The 422 problem identity and native JSON Pointer are preserved.
-Native semantic causes remain available through `errors.Is` and `errors.As`,
-without an intermediate 400 problem identity in the chain. The client-facing generic message
-does not contain native error text, submitted values, or Go implementation type
-names. Keep decoder causes in server-side diagnostics rather than copying them
-into a problem's detail or a translation. See
-[validation message catalogs](../validation/schemas-and-helpers.md#locale-helpers)
-for localization.
-
-### JSON-v2 representation limits
-
-The Go 1.27 JSON-v2 API supports `omitzero`, `omitempty`, `string`, `case`, and
-`embed` tag options; `omitzero` and `omitempty` do not affect decoding. The
-`string` option applies only to a field's top-level numeric value, not numbers
-inside a composite field. This API does not support `format:*` options such as
-`format:array`; the helpers do not add them. `time.Duration` has no default JSON
-representation. Choose an application decoder or an explicitly represented DTO
-field and convert it in your application.
-
-Native decoding support does not imply schema support for every layout. The
-validator rejects explicit field registration using JSON `embed`, `inline`, or
-`unknown` options rather than inventing field paths. `embed` is a native JSON-v2
-option; `inline` and `unknown` are not supported tag options in this API. Construct
-schemas during application setup so unsupported layouts fail before requests.
-
-### XML and raw bodies
-
-`request.XML`, `ValidateXML`, and `ParseXML` decode the first XML element only;
-they do not check trailing elements. Native syntax and numeric-conversion
-failures remain `request.ErrInvalidXML` (400), including with the validation
-helpers: XML errors have no JSON Pointer to turn into field feedback. Ordinary
-application decoder and transport errors retain their operational causes.
-`request.Strict()` is unsupported for XML and returns
-`request.ErrStrictUnsupported` without reading the body.
-
-`request.Bytes` and `request.String` read the body without decoding it; `String`
-does not validate UTF-8. A nil `r.Body` is empty input, both directly and through
-the [body limit middleware](body-limit.md): raw reads return no data, while
-JSON and XML return their existing malformed-body problems, not a panic.
-An oversized declared length can still be rejected by middleware before decoding.
-
-## Body size limits
-
-Every body helper limits how much it reads, 10 MiB by default. This bounds
-the body bytes read, not the total memory used by decoding or application
-work. For a single call, pass a different limit:
-
-```go
-input, err := request.JSON[CreatePost](r, request.MaxSize(1<<20)) // 1 MiB
-```
-
-To set one limit for a whole router or group, use the
-[body limit middleware](body-limit.md). Its limit is a ceiling:
-`MaxSize` can lower it for a call, but never raise it. `request.Unlimited()`
-removes only the helper's own cap; it cannot remove an upstream reader's limit.
-
-A body can only be read once. Call one body helper per request.
-
-## File uploads
-
-`request.Multipart` parses a `multipart/form-data` request, the format browsers
-use for forms with files. It takes the maximum size of the whole request:
-
-```go
-form, err := request.Multipart(r, 5<<20) // 5 MiB
-
-name := form.Value("name")
-avatar := form.File("avatar") // *multipart.FileHeader, or nil
-```
-
-Up to 8 MiB of file content stays in memory; larger uploads spill to temporary
-files. A request that is too large, is not multipart, or is malformed returns a
-`413`, `415`, or `400` input problem. Body-read and temporary-file I/O failures
-remain operational errors rather than client validation feedback; existing HTTP
-problems keep their identity and causes.
-
-When `Multipart` parses a form inside a `router.Handler` lifecycle, it registers
-one after-response cleanup hook. Outside that lifecycle, you own cleanup and
-must call `form.RemoveAll()` after using the uploads. A form already parsed by
-other code keeps its existing cleanup owner; reusing `r.MultipartForm` does not
-transfer ownership. Later successful calls reuse the parsed form and ignore the
-new size argument. Do not retry parsing after an error: the body is consumed.
-
-`RemoveAll` removes disk-backed temporary storage, not memory-backed file data.
-It is safe to call repeatedly. Headers for successfully removed disk files can
-no longer be opened; memory-backed files remain readable. Consume and close
-uploads before cleanup, and persist files before handing work to a background
-job. A removal error can leave files behind.
-
-Automatic after-response cleanup is best-effort: its error is not returned to
-the handler. If you need to observe removal failures, call `RemoveAll` yourself
-and handle its error before committing the response. If body parsing succeeds
-but query parsing fails, the helper attempts temporary-file cleanup before
-returning; a cleanup failure is retained alongside the parsing cause.
-
-To check an uploaded file's size, extension, and actual content type, use
-`validate.File` in a schema; [Validation](../validation/advanced.md#validating-files) shows
-how. To store it, pass it to the [file storage](../file-storage/overview.md)
-service.
-
-## Running code after the response
-
-Middleware sometimes needs to act just before final response commitment or when
-request handling finishes. `request.Hooks` requires the context installed by
-`router.Handler.ServeHTTP` (including normal routed requests). On an arbitrary
-request without that context, it panics with `request.ErrNoHooksMiddleware`;
-there is no non-panicking public lookup. Register hooks only where router wiring
-guarantees that context:
-
-```go
-request.Hooks(r).AfterResponse(func(err error) {
-	// err is the handler's returned error, not proof of client delivery
-})
-```
-
-`BeforeWriteHeader` runs once, before the final status, and can still edit
-headers. Informational `1xx` statuses other than `101` do not run that hook or
-commit the final response; `101 Switching Protocols` does. A body write or flush
-can commit an implicit `200` first. `BeforeWrite` observes an attempted body
-write, which can still fail afterward.
-
-After-response callbacks run in reverse registration order when the router
-finishes handling, including while unwinding a panic. They are not delivery
-acknowledgments, and a nil error does not prove the client received the response.
-A successfully hijacked connection can outlive these callbacks: the handler owns
-its closure and shutdown, not the router or hook registry. See
-[response commitment and ownership](responses.md#when-a-response-counts-as-written).
-
-For every helper and option, see the
+For all readers and body options, see the
 [`request` API reference](https://pkg.go.dev/arkoren.dev/core/http/request).

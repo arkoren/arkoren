@@ -1,37 +1,29 @@
 ---
-title: File Storage Events and Telemetry
+title: Events and Telemetry
 nav: Events & Telemetry
-description: React to objects written and deleted with events, see storage operations as spans and duration metrics, and what is never recorded.
-order: 40
+description: Observe successful object changes, interpret facade spans and metrics, and preserve storage privacy boundaries.
+order: 50
+summary:
+  - Connect a shared event bus and telemetry handle with a stable store name.
+  - React to successful writes and deletions without assuming durable event delivery.
+  - Interpret operation timing, page observations, metrics, and error classifications.
+  - Test facade observations and keep private object data out of diagnostics.
 ---
 
-# File Storage Events and Telemetry
+# Events and Telemetry
 
-## Introduction
+Deleting an image can require thumbnail cleanup, while a slow upload requires
+timing evidence. Storage exposes these as different observations: **events**
+announce successful facade writes and deletions; **telemetry** measures facade
+operations. Neither is a durable delivery receipt or a record of every native
+backend change.
 
-When an image is deleted, its cached thumbnail may need cleanup; when an upload
-is slow, you need to see where the time went. The storage facade reports those
-changes and timings in two ways. **Events** announce
-changes that your code may want to act on: an object was written, an object was
-deleted. **Telemetry** measures the operations themselves, with a span and a
-duration for each open, put, stat, delete, list, and sign, so you can see which
-calls are slow and which fail.
+Examples use `storage` from `arkoren.dev/core/service/storage`, your
+[configured driver](drivers.md), and an existing application `app`.
 
-Events need an explicit bus. Telemetry uses an explicit service or the
-[process default](../observability/telemetry.md#the-process-default), initially
-a no-op. You can pass both when you create the facade, and
-neither can change the outcome of an operation: a failing listener is logged,
-and telemetry only observes. Telemetry omits object keys, since they often hold
-a user's identifier or a document's name. Event payloads do include keys so your
-listeners can act on the object; choose carefully where you forward them.
-[What is recorded](#what-is-recorded-and-what-is-not)
-lists exactly what is.
+## Connecting Observers
 
-To enable both, pass them to `storage.New`:
-
-Here `storage` is `arkoren.dev/core/service/storage`, `driver` is your
-[configured storage driver](drivers.md), and `app` is your existing
-[application](../application/overview.md).
+Pass the application's bus and telemetry when constructing the facade:
 
 ```go
 files := storage.New(driver, func(store *storage.Builder) {
@@ -41,148 +33,134 @@ files := storage.New(driver, func(store *storage.Builder) {
 })
 ```
 
-The name labels this store in both. Give each store a short, fixed name. A
-store without one reports itself as `default`.
+The fixed store name labels events and telemetry; omitted or empty names report
+`default`. A name does not select a bucket or provide tenant isolation.
+Use a small stable set of names, not user identifiers.
 
-## Events
+Events require an explicit bus. Without explicit telemetry, each operation uses
+the [shared handle](../observability/telemetry.md#shared-handle), initially a
+no-op. Observe through the facade: direct driver or native-client calls bypass
+its instrumentation and notifications.
 
-The facade publishes two events, and they are the same for every driver:
+## Object Events
 
-| Event | Published | Name |
+When your application needs to react to storage changes, subscribe to the typed
+topics on the same bus passed to `Builder.Events`:
+
+| Topic | Payload | Successful Observation |
 | --- | --- | --- |
-| `storage.ObjectWritten` | after `Put` stored an object | `storage.object.written` |
-| `storage.ObjectDeleted` | after `Delete` succeeded | `storage.object.deleted` |
+| `storage.ObjectWritten` | `storage.ObjectWrittenEvent` | `Put` returns metadata after storing an object. |
+| `storage.ObjectDeleted` | `storage.ObjectDeletedEvent` | `Delete` succeeds, including for an absent object. |
 
-`ObjectWritten` carries a `storage.ObjectWrittenEvent` with the `Store` name and
-the stored object's `ObjectInfo`: its key, size, and modification time.
-`ObjectDeleted` carries a `storage.ObjectDeletedEvent` with the `Store` name and
-the `Key`. They are published for writes made through `PutBytes`, `PutFile`, and
-`PutFileAs` too, since those call `Put`.
+The topic names are `storage.object.written` and `storage.object.deleted`.
+Written payloads contain `Store` and `Object` metadata: key, byte size, and
+modification time. Deleted payloads contain `Store` and `Key`. They contain no
+object bytes or signed URLs, but keys can still identify private documents.
 
-An event means the operation succeeded. A failed `Put`, a key that is
-rejected as invalid, reads, listings, and signed URLs publish nothing.
-`Delete` publishes even when the object was already gone, because deleting a
-missing object succeeds. A write that a client makes straight to the backend
-with a [signed URL](signed-urls.md) never passes through the facade, so it
-publishes nothing either.
-
-Listening is the usual event bus call, covered in [Events](../events/overview.md).
-For example, to drop a cached thumbnail when its source image is removed, use
-your application's `thumbnails` service:
+For thumbnail cleanup, import standard `context`. Here `thumbnails` is your
+existing service with `Delete(context.Context, string) error`, accepting the
+source image key:
 
 ```go
-_, err := app.Events().Listen(storage.ObjectDeleted,
-	func(ctx context.Context, e storage.ObjectDeletedEvent) error {
-		if e.Store != "uploads" {
+unsubscribe, err := app.Events().Listen(storage.ObjectDeleted,
+	func(ctx context.Context, payload storage.ObjectDeletedEvent) error {
+		if payload.Store != "uploads" {
 			return nil
 		}
-
-		return thumbnails.Delete(ctx, e.Key)
+		return thumbnails.Delete(ctx, payload.Key)
 	})
 ```
 
-A few details matter when you write listeners:
+Check the registration error and retain `unsubscribe` until the listening
+component stops; call it during that component's cleanup. See the
+[event bus guide](../events/overview.md) for listener ownership.
 
-- A listener runs synchronously, on the goroutine that called `Put` or
-  `Delete`, before it returns. Keep it short, and hand slow work to a queue.
-- The listener receives the context of the call. If that context is canceled,
-  so is the listener's work.
-- A listener's error or panic is logged by the bus and never changes the
-  result of the storage call: the object is already written. A failing
-  listener does stop the listeners after it, so keep the important ones
-  independent and make each tolerate failure.
-- Compare `Store` when you share one listener between several stores.
+Listeners run synchronously before the storage call returns, on its goroutine
+and with its context. Keep them short; hand slow work to a queue when needed.
+An error or panic is logged by the bus and stops subsequent listeners for that
+publication, but never changes the completed storage result. Notifications are
+not a substitute for durable work: arrange durable reconciliation when missing
+cleanup would leave important state inconsistent.
 
-The event describes one request. Two concurrent writes to a key publish two
-events, but publication happens after each write. Do not use event order to
-infer the order in which the backend replaced the objects.
+`PutBytes`, `PutFile`, and `PutFileAs` reuse `Put` and publish the same write
+event. Failed calls publish nothing, even if replacement succeeded before a
+metadata lookup failed. `Delete` events do not prove the object existed.
+Concurrent writes can publish in a different order from backend replacement;
+do not reconstruct the current object from event order.
 
-## Telemetry
+Reads, listings, and signing publish no object event. A client using a
+[signed PUT](signed-urls.md#direct-uploads) writes directly to the provider and
+also publishes none.
 
-With telemetry enabled, each facade operation records one client span named
-`storage {operation}`, where the operation is one of `open`, `put`, `stat`,
-`delete`, `list`, or `sign`. The helpers use these: `PutBytes`, `PutFile`, and
-`PutFileAs` record a `put`, `Download` and `Inline` record an `open`, and both
-`Sign` and `SignURL` record a `sign`.
+## Operation Timing
 
-[`Walk`](overview.md#listing-files) calls `List` for each needed page, recording
-one `list` operation per page request. Creating a walk emits nothing; consuming
-it adds no separate traversal span or metric. Stopping early prevents telemetry
-for pages never requested. S3 read-ahead within one driver page remains part of
-that page's single facade operation.
+Each facade call records one client span named `storage {operation}` and two
+metrics. Operations are `open`, `put`, `stat`, `delete`, `list`, and `sign`.
+Upload helpers reuse `put`; download helpers reuse `open`; `Sign` and `SignURL`
+reuse `sign` rather than adding helper spans.
 
-### Spans
+`open` ends when the object is acquired, not after its contents are consumed or
+closed. Later download read/write/close failures belong to the caller's HTTP
+operation, not the completed storage span. `put` includes consuming the source
+and backend work, so a slow source can explain a long write duration. `sign`
+measures URL creation, not the client's later transfer.
 
-| Attribute | Value |
+[`Walk`](overview.md#listing-objects) records one `list` per requested page.
+Construction records nothing, and there is no separate traversal instrument.
+Early stopping avoids observations for pages never requested; S3 read-ahead
+inside one driver page remains part of that single facade operation.
+
+The counter `arkoren.storage.operations` counts calls. The histogram
+`arkoren.storage.operation.duration` records seconds, with buckets from 0.001
+to 60 seconds. Both label operation, store, and failure class when present:
+
+| Attribute | Meaning |
 | --- | --- |
-| `arkoren.storage.operation` | The operation name above |
-| `arkoren.storage.store` | The name from `Builder.Name`, or `default` |
-| `arkoren.storage.object.size` | Bytes written, on a successful `put`; span only |
-| `error.type` | Set on failure |
+| `arkoren.storage.operation` | The facade operation. |
+| `arkoren.storage.store` | Configured name or `default`. |
+| `error.type` | Error class on failure. |
+| `arkoren.storage.object.size` | Successful write size in bytes; span only. |
 
-The duration of `open` is the time to the response, not the time to read the
-body, and the duration of `put` is the time to consume the reader. A put of a
-large file from a slow client therefore measures the slow client as well as
-storage.
+See [Instrumented Components](../observability/instrumented-components.md#storage)
+for the shared instrument catalog and [Telemetry](../observability/telemetry.md)
+for exporter setup.
 
-### Metrics
+## Failure Classification
 
-Two metrics are recorded for every call. The counter `arkoren.storage.operations`
-counts operations, and the histogram `arkoren.storage.operation.duration`, in
-seconds, records how long they took. Both use the keys `arkoren.storage.operation`,
-`arkoren.storage.store`, and `error.type`. The duration buckets run from a
-millisecond to a minute, because a local `stat` and a large upload differ by
-orders of magnitude. [Instrumented components](../observability/instrumented-components.md#storage)
-lists them next to the other components, and
-[Telemetry](../observability/telemetry.md) explains how to export them.
+`Open` or `Stat` returning `storage.ErrNotFound` is an ordinary missing-object
+outcome: the span is not marked failed and no `error.type` is set. Other errors
+mark the span failed and report their class, not their text.
 
-### Failures
+Known classes include `storage.ErrInvalidKey`, `storage.ErrUnsupported`,
+`storage.ErrInvalidTTL`, and `storage.ErrInvalidSignOptions`. Cancellation uses
+the context error class; other errors use their Go type. A permission failure
+is not silently reclassified as absence.
 
-A missing object is an answer, not a failure: `Open` or `Stat` returning
-`storage.ErrNotFound` leaves the span unmarked and sets no `error.type`. Any
-other error sets the span status to error and `error.type` to the class of the
-error, for example `storage.ErrInvalidKey` or `storage.ErrUnsupported`, a
-context error for a canceled call, or else the Go type of the error. The text
-of the error is never recorded, since a driver error can quote a key.
+If development uses memory storage and intentionally falls back from signing,
+expect `sign` failures classified as `storage.ErrUnsupported`. Keep this known
+capability difference separate from operational alerts; do not hide unexpected
+provider failures under the same fallback.
 
-A signing request on a driver that cannot sign shows up as a failure of
-`sign` with `storage.ErrUnsupported`. If your application falls back to
-proxying uploads there, as described in [Signed URLs](signed-urls.md#drivers-that-cannot-sign),
-expect these errors in development and exclude them from alerts if they would
-be noise.
+## Privacy Boundaries
 
-### S3 requests
+Automatic storage telemetry excludes keys, prefixes, cursors, signed URLs,
+payloads, and raw error text. Correlate through a suitably chosen application
+identifier and trace ID rather than adding a private key to every span. Event
+payloads include keys for listeners; review destinations before forwarding them.
 
-The facade span covers one storage call and says nothing about the HTTP
-requests underneath it. To see those too, build the S3 client with the AWS
-`otelaws` middleware and pass it to `awsstorage.NewFrom`; the SDK spans then
-nest under the facade span. Those spans come from the AWS SDK, not from Arkoren,
-and follow its own rules about attributes.
+Facade exclusions do not sanitize native SDK middleware, credential providers,
+endpoints, or returned errors. If you add AWS `otelaws` instrumentation to a
+client passed through [Native Access](drivers.md#native-access), SDK request
+spans can nest under facade spans, but follow their own data policies. Review
+native attributes and HTTP/body logging separately; never record signed URLs
+or credential-bearing endpoints in ordinary diagnostics.
 
-Review that SDK instrumentation and any native HTTP/body logging separately.
-The facade's exclusions do not sanitize a supplied client, its middleware, or
-returned provider errors. Never add signed URLs, credential-bearing endpoints,
-payloads, or raw native error text to ordinary diagnostics.
+## Testing Observations
 
-## What is recorded and what is not
-
-Telemetry records the operation, the store name, the size of a successful put, and the
-class of an error. Never recorded: object keys, prefixes, list cursors, and
-signed URLs. A signed URL is a credential for as long as it lives, and a key
-often names a person or a document. Because the span has no keys, you cannot
-find the trace of one file by its name. Correlate through your own identifier
-instead, for example by logging the document ID with the trace ID of the
-request.
-
-## Testing
-
-Import `telemetrytest` from `arkoren.dev/core/service/telemetry/telemetrytest`,
-`telemetry` from `arkoren.dev/core/service/telemetry`, and `memorystorage` from
-`arkoren.dev/core/service/storage/memorystorage` for the fragment below.
-
-To assert what your code reports, use the in-memory telemetry fake from
-`telemetrytest`. It records spans and metrics instead of exporting them. In a
-test with `t *testing.T`, give the facade its telemetry and assert one write:
+For a test with `t *testing.T`, import `telemetrytest` from
+`arkoren.dev/core/service/telemetry/telemetrytest`, `telemetry` from
+`arkoren.dev/core/service/telemetry`, and `memorystorage` from
+`arkoren.dev/core/service/storage/memorystorage`. Construct an isolated store:
 
 ```go
 fake := telemetrytest.New()
@@ -190,11 +168,14 @@ files := storage.New(memorystorage.New(), func(store *storage.Builder) {
 	store.Telemetry(fake.Telemetry(t))
 	store.Name("uploads")
 })
+```
 
-if _, err := files.PutBytes(t.Context(), "avatars/1.png", []byte("png")); err != nil {
+Write a small object and assert the observation rather than exporting it:
+
+```go
+if _, err := files.PutBytes(t.Context(), "reports/a.txt", []byte("ready")); err != nil {
 	t.Fatal(err)
 }
-
 fake.AssertSpan(t, "storage put",
 	telemetry.String("arkoren.storage.store", "uploads"),
 )
@@ -203,10 +184,11 @@ fake.AssertCounter(t, "arkoren.storage.operations", 1,
 )
 ```
 
-Events need no fake: create an `event.New()` bus, listen on the topics you care
-about, pass it with `Builder.Events`, and assert on what the listener collected.
-See [Testing](../testing/overview.md).
+This checks facade reporting, not backend durability or client transfer success.
+For events, attach a real in-process bus, capture typed payloads, and assert
+your listener's effect; include failure and absent-delete paths when relevant.
 
-For every function and option, see [the `storage` API reference](https://pkg.go.dev/arkoren.dev/core/service/storage),
-[the `event` API reference](https://pkg.go.dev/arkoren.dev/core/event), and
-[the `telemetry` API reference](https://pkg.go.dev/arkoren.dev/core/service/telemetry).
+For every setting, see the
+[`storage` API](https://pkg.go.dev/arkoren.dev/core/service/storage),
+[`event` API](https://pkg.go.dev/arkoren.dev/core/event), and
+[`telemetry` API](https://pkg.go.dev/arkoren.dev/core/service/telemetry).

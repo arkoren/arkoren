@@ -1,133 +1,91 @@
 ---
-title: Validation Overview
-nav: Overview
-description: Build a schema, check typed input, and keep normalized values with Parse.
+title: Overview
+description: Define reusable rules for typed input and retain prepared values with Parse.
 order: 10
+summary:
+  - Construct a typed schema once and reuse it across input boundaries.
+  - Choose presence rules and defaults without confusing omission with zero.
+  - Keep parsed values only after validation succeeds.
 ---
 
-# Validation Overview
+# Overview
 
-## Introduction
+A decoded request can have the correct Go type but still contain an empty email
+or an unsupported plan. A validation **schema** defines which values your
+application accepts. It can also prepare a cleaned, defaulted copy of the input.
+Use the same schema for requests, configuration, CLI input, or imported records.
 
-Input can have the right Go type and still be unusable: an email can be empty,
-or a page size can exceed your application's limit. A validation **schema**
-describes which values your application accepts. Use the same schema for HTTP
-bodies, configuration, CLI input, and imported records.
-Failures identify each value by JSON Pointer, with a stable code and a message.
-
-`validate` is a standalone foundation module. It has no dependencies and does
-not need an application or HTTP server. Construct a schema once, then reuse it.
-
-From your application's Go module directory, install the standalone module:
+Install the standalone module from your application's module directory:
 
 ```sh
 go get arkoren.dev/foundation/validate
 ```
 
-Import `arkoren.dev/foundation/validate` as `validate`. The examples use
-standard-library `context`, `errors`, and `fmt` when needed.
+Import `arkoren.dev/foundation/validate` as `validate`. Examples use an existing
+`context.Context` named `ctx`. Focused fragments show error results without
+repeating routine propagation; application code must check them before using
+parsed input.
 
-Focused snippets leave error results visible without repeating routine error
-checks. In application code, check the error before using a parsed value or
-accepting the input.
+## Build a Schema
 
-You configure rules once, rather than rebuilding them for each input.
-A construction callback receives a temporary **builder** for those settings.
-Run the published schema
-afterward; `Parse`, `Validate`, and `JSONSchema` are not builder methods.
-
-## Checking a value
-
-To check an email address, configure a
-string schema in its construction callback:
-
-```go
-email := validate.String(func(address *validate.StringBuilder[string]) {
-	address.Trim()
-	address.Required()
-	address.Email()
-})
-err := email.Validate(ctx, " ada@example.com ")
-```
-
-Here and in the following fragments, `ctx` is a `context.Context`. Validation
-passes: whitespace is removed before checking presence and email syntax. The
-original string is unchanged.
-
-Use `Parse` when you need the cleaned value:
-
-```go
-address, err := email.Parse(ctx, " ada@example.com ")
-// address is "ada@example.com".
-```
-
-`Parse` runs the same checks as `Validate`. Use its result only after checking
-the error; it is not a partial-success API.
-
-## Builder operations
-
-Use this table to find settings and constructors after checking your first value.
-
-| Operation | Purpose and scope | Details |
-| --- | --- | --- |
-| `String`, `Int`, `Uint`, `Float`, `Bool`, `Time` | Construct scalar schemas with their concrete builders | [Scalar constructors](schemas-and-helpers.md#scalar-constructors) |
-| `File`, `Text[T]`, `Any` | Construct upload, text-marshaled, or dynamic-value schemas | [Scalar constructors](schemas-and-helpers.md#scalar-constructors) |
-| `Struct`, `Slice`, `Map`, `Ptr` | Construct nested or optional schemas | [Composite constructors](schemas-and-helpers.md#composite-constructors) |
-| `Required()` | Reject absence; all explicit builders | [Presence](#required-and-optional-values) |
-| `Default(value)` | Supply absence; all explicit builders except `FileBuilder` | [Defaults](#defaulting-a-value) |
-| `Use(schema)` | Import a supported schema of the same role and value type | [Reuse](structs-and-reuse.md#reusing-a-schema) |
-| `Check(fn)`, `Bail()` | Add a typed check; stop a value after its first violation | [Custom checks](advanced.md#custom-checks) |
-| `Normalize(fn)` | Prepare a replacement value; forbidden on map keys | [Normalization](normalizers.md#custom-normalization) |
-| `Describe(text)` | Set a JSON Schema description, not an error message | [Descriptions](schemas-and-helpers.md#jsonschema-and-describe) |
-| `EqField(path)`, `NeField(path)` | Compare with an exact-type field in an enclosing struct | [Field comparisons](available-methods.md#comparing-fields) |
-| `RequiredIf`, `RequiredUnless`, `RequiredWith`, `RequiredWithAll`, `RequiredWithout` | Require a field under a condition or presence dependency | [Conditions](conditions.md#field-builder-operations) |
-| `ProhibitedIf`, `ProhibitedUnless`, `ExcludeIf`, `When` | Reject, clear, or configure a field conditionally | [Conditions](conditions.md#field-builder-operations) |
-
-Role-specific methods appear in the tables for
-[scalar builders](available-methods.md#builder-operations),
-[struct and pointer builders](structs-and-reuse.md#builder-operations), and
-[collection builders](collections.md#builder-operations).
-
-## Defining a form
-
-When input has several fields, a struct schema keeps their rules together and
-reports which field failed. Register each field by its Go name, and configure
-it with a callback for its exact Go type:
+Start with the type your application already decodes. JSON tags determine
+diagnostic names; schema registration uses Go field names.
 
 ```go
 type Signup struct {
 	Email string `json:"email"`
 	Plan  string `json:"plan"`
 }
+```
 
-var signup = validate.Struct(func(object *validate.StructBuilder[Signup]) {
+Configure the accepted input inside `Struct`. Each callback receives a temporary,
+typed **builder**, not the published schema:
+
+```go
+signup := validate.Struct(func(object *validate.StructBuilder[Signup]) {
 	object.Field("Email", func(address *validate.StringBuilder[string]) {
+		address.Trim()
 		address.Required()
 		address.Email()
 	})
 	object.Field("Plan", func(plan *validate.StringBuilder[string]) {
-		plan.OneOf("free", "pro")
 		plan.Default("free")
+		plan.OneOf("free", "pro")
 	})
 })
 ```
 
-`Email` is required. An omitted plan becomes `"free"` when you parse the form.
-Only registered fields are checked. JSON tags control error paths, so an email
-failure appears at `/email`, not `/Email`.
+Only registered fields are checked. Construction callbacks run once,
+synchronously, in argument order; there is no separate `Build` call.
+The published schema exposes `Parse`, `Validate`, and `JSONSchema`.
+For nested input and shared field policies, use [Structs and Reuse](structs-and-reuse.md).
 
-Construction callbacks edit temporary **builders**. The published schema has
-only `Parse`, `Validate`, and `JSONSchema`; configuration stays inside the
-callbacks. There is no `Build` step. See [structs and reuse](structs-and-reuse.md)
-for nested fields and shared schemas.
+## Parse Input
 
-## Required and optional values
+Use `Parse` when the application needs the prepared value rather than the
+original input:
 
-Fields are optional by default. Empty strings, zero numbers, false booleans,
-and nil pointers, slices, and maps count as absent. Absent values skip ordinary
-rules. `Required` rejects absence.
+```go
+input := Signup{Email: " ada@example.com "}
+parsed, err := signup.Parse(ctx, input)
+```
 
-To require a positive quantity:
+On success, `parsed.Email` is `"ada@example.com"` and `parsed.Plan` is `"free"`.
+`input` is unchanged. On failure, `Parse` returns the zero result and an error,
+not a partially accepted form.
+
+If you only need a decision, call `signup.Validate(ctx, input)`. It performs the
+same preparation and checks but discards the prepared value. Neither method
+decodes JSON or converts an incompatible Go type.
+
+## Choose Presence
+
+Values are optional by default. Empty strings, zero numbers, false booleans,
+nil pointers, and nil slices or maps count as absent and skip ordinary rules.
+A zero `time.Time` is absent regardless of its location. `Required` rejects
+absence, rather than merely requiring a JSON key.
+
+For example, this schema rejects a missing quantity:
 
 ```go
 quantity := validate.Int(func(count *validate.IntBuilder[int]) {
@@ -137,17 +95,15 @@ quantity := validate.Int(func(count *validate.IntBuilder[int]) {
 err := quantity.Validate(ctx, 0)
 ```
 
-This fails `Required`. Without it, zero skips `Min(1)` and passes. Use a pointer
-when zero is a supplied value that needs checking; see
-[explicit zero values](structs-and-reuse.md#explicit-zero-values).
+Without `Required`, zero would skip `Min(1)` and pass. Use a
+[pointer field](structs-and-reuse.md#explicit-zero-values) when zero is a supplied
+value that must be checked. Non-nil pointees and collection entries are checked
+even when zero. An allocated empty slice or map is present: `Required` accepts
+it, while `Min(1)` rejects it. Nested value structs always check registered fields.
 
-A non-nil empty slice or map is present. `Required` rejects nil, but use
-`Min(1)` to reject an allocated empty collection. Container entries and
-non-nil pointees are checked even when their values are zero.
+## Supply Defaults
 
-## Defaulting a value
-
-To supply a page size when the input is zero:
+Use `Default` when absence should select an application policy rather than fail:
 
 ```go
 limit := validate.Int(func(size *validate.IntBuilder[int]) {
@@ -155,59 +111,46 @@ limit := validate.Int(func(size *validate.IntBuilder[int]) {
 	size.Between(1, 100)
 })
 size, err := limit.Parse(ctx, 0)
-// On success, size is 20.
 ```
 
-`Validate` also checks the defaulted value, but does not return it. Do not
-combine `Required` and `Default` on one schema. Defaults must already satisfy
-their schema and are not sent back through normalizers.
+On success, `size` is 20. Defaults must satisfy their rules and must already be
+in their final form: normalizers run before defaults, not again afterward.
+`Required` and `Default` cannot coexist on one definition. `FileBuilder` has no
+default setting. Slice and map defaults copy their outer containers, not
+arbitrary nested objects; pointer defaults take a pointee value.
+See [Normalizers](normalizers.md) for preparation order.
 
-## Handling failures
+## Share Schemas
 
-Rule failures return `validate.Errors`; custom checks can instead return an
-operational error. Print
-structured failures in stable path order:
+Construct stable definitions once and share their published values across
+goroutines. Publication detaches schema-owned rule containers; retained builders
+are not runtime configuration objects.
 
-```go
-if failures, ok := errors.AsType[validate.Errors](err); ok {
-	for pointer, violations := range failures.All() {
-		fmt.Println(pointer, violations[0].Message)
-	}
-}
-```
+This does not recursively clone arbitrary default objects or captured data.
+Keep shared maps, pointers, catalogs, and callback state immutable or synchronize
+access. Custom callbacks must not mutate data reachable from their input.
 
-Use violation codes for program decisions and messages for people. A scalar's
-root pointer is `""`. Do not parse the English summary from `err.Error()`.
+Bad definitions are programming errors, not rejected user input. `Struct`
+aggregates recorded construction problems and panics with `ErrInvalidSchema`;
+invalid standalone explicit schemas can panic when executed. See
+[Definition Errors](errors.md#definition-errors) before assembling dynamic rules.
 
-Keep bad input separate from a bad definition. `Struct` reports recorded
-construction problems together; standalone execution of an invalid explicit
-schema can panic with an error wrapping `ErrInvalidSchema`. Export reports
-definition errors as nil bytes plus an error wrapping that sentinel instead.
-See [definition errors](schemas-and-helpers.md#definition-errors) before accepting
-dynamically assembled schemas.
+## HTTP Input
 
-## Validating a request body
-
-Inside a router handler, parse the request body with the `signup` schema above:
+With `request` imported from `arkoren.dev/core/http/request`, an HTTP handler can
+decode and validate its body using the same schema:
 
 ```go
 input, err := request.ParseJSON(r, signup)
-// input contains the validated form, including its default plan.
 ```
 
-`ParseJSON` decodes, validates, and returns the parsed value. Rule failures
-become `422 Unprocessable Content` responses. For input validated separately,
-return `request.ValidationProblem(err)` instead of a raw `validate.Errors`;
-a raw validation error has no HTTP status and otherwise becomes a 500.
-See [requests](../http-fundamentals/requests.md) for decoding and body limits.
+Successful input includes normalization and defaults. Validation failures become
+422 responses. If you validate separately, convert failures with
+`request.ValidationProblem(err)`; raw `validate.Errors` has no HTTP status and
+otherwise becomes a 500. Configure decoding and body limits through the
+[request guide](../http-fundamentals/requests.md).
 
-## Where to go next
-
-Use [scalar rules](available-methods.md) for common checks,
-[collections](collections.md) for slices and maps, and
-[conditions](conditions.md) for rules that depend on other fields.
-[Advanced validation](advanced.md) covers custom checks, file uploads,
-normalization order, localization, and JSON Schema limits.
-
-For the complete contract, see the
+Continue with [Scalar Rules](available-methods.md) for constraints or
+[Validation Errors](errors.md) for structured diagnostics.
+For all public contracts, see the
 [`validate` API reference](https://pkg.go.dev/arkoren.dev/foundation/validate).

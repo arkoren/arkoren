@@ -1,50 +1,37 @@
 ---
 title: Request Tracing
-description: Trace incoming requests with the server middleware and outgoing ones with the instrumented transport and correlate logs.
-order: 30
+description: Trace HTTP boundaries, correlate failures, and control incoming trust and outgoing propagation.
+order: 50
+summary:
+  - Trace router requests and outgoing calls with accurate names, fields, and response-body lifetimes.
+  - Return correlation IDs and connect context-aware logs to request spans.
+  - Choose incoming trust and outgoing injection independently and verify instrumentation locally.
 ---
 
 # Request Tracing
 
-## Introduction
+An incoming request can wait on several outgoing calls. Instrument both HTTP
+boundaries to see where that time goes: server middleware starts the request's
+span, and the client transport creates child spans from the context you pass
+on. A started [telemetry handle](telemetry.md#shared-handle) supplies the trace
+driver and metric driver independently.
 
-To follow an incoming request into the services it calls, instrument both sides
-of the HTTP boundary. The **server middleware** wraps every incoming request
-in a span, records how long it took and how many requests are in flight, and
-hands the request's trace ID to your logs and to your clients. The **client
-transport** wraps an `http.RoundTripper`, so every outgoing call becomes a span
-that is a child of the request that caused it. It forwards trace context only
-to destinations allowed by your propagation policy; internal destinations are
-allowed by default.
+With an unstarted handle, both integrations pass work straight through. With
+only a metrics backend, measurements can work without creating trace IDs. Neither
+integration records bodies, headers, query strings, full paths, or raw error
+text; [privacy exclusions](telemetry-privacy.md) do not apply to your logs.
 
-Both come from the [`*telemetry.Telemetry`](telemetry.md) that you give the
-application, and both do nothing until that telemetry is started with a
-driver. With the default no-op telemetry the middleware calls the next handler
-directly and the transport passes requests straight to its base transport, so
-leaving them in place costs nothing in a service that does not collect
-telemetry yet.
+## Incoming Requests
 
-Neither one records URLs, query strings, headers, bodies, or error text. They
-record the method, the route template, the status, and a handful of other
-low-cardinality facts. [Privacy](telemetry-privacy.md) explains why.
-
-## Tracing incoming requests
-
-With an existing `app` configured as in
-[Telemetry](telemetry.md#turning-telemetry-on), register the middleware on your
-router `r` before everything else:
-
-Import `telemetry` from `arkoren.dev/core/service/telemetry`, `router` from
-`arkoren.dev/core/http/router`, and `requestlog` from
-`arkoren.dev/core/http/middleware/requestlog`. Later fragments use standard
-packages `net/http`, `net/netip`, and `net/http/httptest`, plus `telemetrytest`
-from `arkoren.dev/core/service/telemetry/telemetrytest`.
+With existing application `app` and Arkoren router `r`, register telemetry before
+the rest of the stack. Import `requestlog` from
+`arkoren.dev/core/http/middleware/requestlog` and `router` from
+`arkoren.dev/core/http/router`:
 
 ```go
-t := app.Telemetry()
-
+handle := app.Telemetry()
 r.Use(
-	t.Middleware(),
+	handle.Middleware(),
 	requestlog.Middleware(func(log *requestlog.Builder) {
 		log.Logger(app.Logger())
 	}),
@@ -52,299 +39,225 @@ r.Use(
 )
 ```
 
-Order matters. The span has to be open while the later middleware and the
-handler run, and it must end after Arkoren has rendered a returned error and
-after `router.Recover` has turned a panic into a `500`. Registered first, the
-middleware sees the status the client received, not the status the handler
-intended. It is also the reason the request log, which comes after it, can
-carry the trace ID (see [Correlating logs](#correlating-logs)).
+The span remains open through downstream middleware, error rendering, and
+recovered panics. Request logging uses the span context and observes errors
+produced by recovery. Mount this middleware through an Arkoren router: enabled
+instrumentation requires its lifecycle hooks and panics if those hooks are
+absent, before starting an observation.
 
-If you do not hold the application's telemetry at the point where you build the
-router, `telemetry.Middleware()` does the same for the process default. It looks
-the default up on every request, so it can be registered before
-`app.SetDefaults()` runs.
+If explicit handle wiring is unavailable, package-level
+`telemetry.Middleware()` resolves the process default on each request. Import
+`telemetry` from `arkoren.dev/core/service/telemetry`; later options use that
+package too. Setting the default later takes effect, but does not start it.
 
-### Spans
+## Recorded Fields
 
-For each request the middleware starts a server span and ends it when the
-response is complete. The span is named after the method and the route template
-that matched, such as `GET /invoices/{id}`, never after the concrete path, so
-the name has few distinct values. A request that matched no route, such as a
-`404` for an unknown path, is named after the method alone.
+A matched request creates a server span such as `GET /reports/{id}`. The
+template, not `/reports/19`, keeps names bounded. Unmatched routes use the
+method alone. Unknown methods use `HTTP` in names and `_OTHER` in method
+attributes, so arbitrary method strings do not create new values.
 
-The span carries the method, the URL scheme, the protocol name and version, and
-the route. When the response is done it also carries the status code. An
-unusual method such as `PURGE` is recorded as `_OTHER`, so a client cannot
-create new values by inventing methods.
+| Signal | Fields Or Label Keys |
+| --- | --- |
+| Server span | `http.request.method`, `url.scheme`, `network.protocol.name`, `network.protocol.version`, matched `http.route`, final `http.response.status_code` |
+| `http.server.request.duration` (seconds) | `http.request.method`, `http.route`, `http.response.status_code`, `url.scheme`, `error.type` |
+| `http.server.active_requests` (up-down counter) | `http.request.method`, `url.scheme` |
 
-Only server failures mark a span as failed. A `5xx` response sets the span's
-status to error with a description such as `HTTP 503` and records the status code as
-`error.type`. A `4xx` response is the client's mistake and the service behaved
-correctly, so the span status stays unset and the code is only visible in the
-status attribute.
+Only 5xx responses mark a server span failed, with `error.type` equal to the
+status code and a fixed description such as `HTTP 503`. A 4xx leaves status
+unset; it does not mean the caller achieved its goal. A returned error can
+therefore produce a [failure log](request-logging.md) without a failed span.
 
-### Metrics
+Duration ends after router response handling, including returned-error
+rendering. The observed writer status does not prove the caller received the
+response. Raw writes after a connection hijack are not ordinary response-body
+observations.
 
-The same middleware records two metrics:
+## Incoming Trust
 
-- `http.server.request.duration` is a histogram of request durations in seconds.
-   It is labeled by method, route, status code, scheme, and `error.type`, and
-  uses the bucket boundaries recommended by the OpenTelemetry HTTP conventions.
-- `http.server.active_requests` is an up-down counter of requests in flight,
-  labeled by method and scheme.
+The default is `telemetry.TrustNone`, including `TrustRemote(nil)`: no peer's
+incoming propagation headers are extracted, even from loopback, private, or
+link-local addresses. Without an existing parent in the request context, the
+request starts a root trace. `X-Forwarded-For` is never consulted.
 
-The route label is the template, so `GET /invoices/7` and `GET /invoices/8`
-fall into one series. The duration is recorded when the span ends, so it covers
-the whole stack the middleware wraps, including error rendering.
-
-## Trace context from callers
-
-When one of your services calls another, the caller sends its trace context in
-the `traceparent` header (and `baggage`, if the driver propagates it). The
-server middleware can adopt that context, so both services appear in one trace.
-But a header is input from the network, and a caller who controls it can pick
-trace IDs, force sampling on, or plant baggage that your service then forwards
-to its own dependencies.
-
-For that reason the middleware defaults to `telemetry.TrustNone`: it does not
-extract incoming trace headers, including from loopback, private, and link-local
-peers. Without a parent already in the request context, the request starts a new
-root trace. An explicit `TrustRemote(nil)` selects the same default.
-`X-Forwarded-For` and similar headers are never consulted.
-
-This policy gates header extraction; it does not erase context installed by
-other instrumentation. With OpenTelemetry, a valid native parent already in
-`req.Context()` takes precedence over a conflicting facade identity, including
-a non-recording or remote native parent. Otherwise a valid facade parent is
-adopted. Apply your trust policy before any upstream instrumentation extracts
-headers: `TrustNone` here cannot undo an earlier extraction. Facade observers
-receive that backend-selected parent through `FinishedSpan.Parent`, with its
-IDs, sampled flag, remote bit, and tracestate preserved; see
-[observing telemetry](telemetry.md#observing-telemetry).
+This prevents callers from choosing trace identities, influencing sampling, or
+introducing baggage through this middleware. It does not undo extraction by
+another instrumentation layer. A valid native OpenTelemetry parent already in
+the context wins over conflicting facade identity, even when remote or
+non-recording; otherwise a valid facade parent is adopted. Apply trust policy
+before any upstream extraction. Facade observers report that actual selected
+parent, preserving IDs, sampling, remote bit, and tracestate.
 
 > [!WARNING]
-> Behind a load balancer or reverse proxy that connects from a private address,
-> a browser's trace headers can pass through unchanged. Trusting the proxy's IP
-> address does not authenticate whoever supplied those headers. Keep the default
-> at a public edge unless the proxy strips untrusted context and forwards only
-> context from trusted workloads. Listing the proxy in `TrustedNetworks` alone
-> does not make browser-supplied context safe.
+> A private reverse-proxy address does not authenticate browser-supplied trace
+> headers. Keep `TrustNone` at a public edge unless the proxy strips untrusted
+> context and forwards only context from trusted workloads. Narrowing proxy
+> addresses alone does not make those headers safe.
 
-If only trusted workloads can reach your service, opt in to continuing their
-traces. For example, accept context from a restricted workload network:
-
-```go
-r.Use(t.Middleware(
-	func(middleware *telemetry.MiddlewareBuilder) {
-		middleware.TrustedNetworks(netip.MustParsePrefix("10.20.0.0/16"))
-	},
-))
-```
-
-`MiddlewareBuilder.TrustedNetworks` trusts only peers inside the listed prefixes.
-For a decision that depends on the request, pass a function to `TrustRemote`.
-Use `TrustRemote(telemetry.TrustAll)` only where access is restricted to trusted
-workloads. To reject incoming context explicitly, use
-`TrustRemote(telemetry.TrustNone)` or `TrustRemote(nil)`.
-
-### Migrating from the internal-peer default
-
-The default changed from `telemetry.TrustInternal` to `telemetry.TrustNone`.
-Services that previously relied on implicit internal header extraction now create
-separate root traces unless a parent was already installed in the context.
-After checking that only trusted workloads can supply context, preserve the
-former behavior explicitly:
+If a restricted workload network establishes that trust, opt in narrowly.
+Import standard-library `net/netip`; this is an alternative middleware
+construction, not an additional tracing layer:
 
 ```go
-r.Use(t.Middleware(func(middleware *telemetry.MiddlewareBuilder) {
-	middleware.TrustRemote(telemetry.TrustInternal)
+r.Use(handle.Middleware(func(policy *telemetry.MiddlewareBuilder) {
+	policy.TrustedNetworks(netip.MustParsePrefix("10.42.0.0/16"))
 }))
 ```
 
-`TrustInternal` accepts loopback, private (`10.0.0.0/8`, `172.16.0.0/12`,
-`192.168.0.0/16`, and IPv6 `fc00::/7`), and link-local peers. It rejects public
-and unparseable addresses. Prefer `TrustedNetworks` when a narrower network
-matches your deployment. This change affects incoming context acceptance only;
-outgoing propagation still allows internal destinations by default.
+`TrustedNetworks` tests the immediate peer against those prefixes. For a more
+specific request decision, use `TrustRemote` with your own predicate.
+`TrustAll` is appropriate only when all reachable callers are trusted workloads.
 
-## Exposing the trace ID
+`TrustInternal` is another explicit opt-in: it accepts loopback, RFC 1918
+private IPv4, IPv6 `fc00::/7`, and link-local unicast peers, rejecting public or
+unparseable addresses. It was the former default. Services migrating from that
+behavior must explicitly choose it after checking their deployment boundary;
+outgoing propagation defaults have not changed.
 
-A trace ID is most useful when the person who hits an error can quote it. When
-the span has a valid context, the middleware therefore puts the ID in three
-places.
+## Response Identity
 
-It sets the W3C `traceresponse` header on every response, in the form
-`00-<trace-id>-<span-id>-<flags>`. To also expose the bare trace ID under a name
-of your choice, pass `MiddlewareBuilder.TraceHeader`:
+When a span has valid identity, the middleware returns the W3C `traceresponse`
+header as `00-<trace-id>-<span-id>-<flags>` and adds `trace_id` to problem
+responses. A client can quote that identity to support; it is not an access
+credential or a guarantee the backend retained the trace.
+
+If your clients also need a bare-ID header, configure it at construction:
 
 ```go
-r.Use(t.Middleware(func(middleware *telemetry.MiddlewareBuilder) {
-	middleware.TraceHeader("X-Trace-ID")
+r.Use(handle.Middleware(func(policy *telemetry.MiddlewareBuilder) {
+	policy.TraceHeader("X-Trace-ID")
 }))
 ```
 
-And on [error responses](../http-fundamentals/error-handling.md) it adds a `trace_id`
-member to the problem document, so a client that only shows the body still
-shows the ID:
+No extra bare-ID header exists by default. `ProblemKey("request_id")` renames
+the problem member; `ProblemKey("")` omits it. `TraceResponse(false)` disables
+the W3C response header. Disable any configured `TraceHeader` separately if
+you want no response identity. Invalid/no-op spans add none of these fields.
+Request propagation uses `traceparent`, not an arbitrary correlation header.
 
-```json
-{
-  "type": "about:blank",
-  "title": "Service Unavailable",
-  "status": 503,
-  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+## Correlated Logs
+
+With the application logger and the request context, your handler can emit a
+record tied to the same span:
+
+```go
+app.Logger().InfoContext(req.Context(), "report requested", "format", "pdf")
+```
+
+The wrapped handler adds `trace_id` and `span_id`. Plain `Info` has no context
+and cannot add them; an unrelated slog handler does not gain correlation from
+middleware alone. Memory telemetry supplies IDs without external trace export;
+a log-capable driver can export the whole record too.
+
+This does not redact application attributes, exceptions, baggage, or native
+SDK logs. In particular, request failure logs include concrete paths and raw
+errors even though HTTP spans omit them. Review [Logs](telemetry-privacy.md#logs)
+before enabling export.
+
+## Outgoing Requests
+
+Wrap the base `http.RoundTripper` used by your existing client. Import
+standard-library `net/http`; nil selects `http.DefaultTransport`:
+
+```go
+sender := &http.Client{Transport: handle.Transport(nil)}
+```
+
+Create outgoing requests with the incoming context so the client span can be a
+child of the server span. With a validated internal service URL `endpoint`:
+
+```go
+outgoing, err := http.NewRequestWithContext(req.Context(), http.MethodGet, endpoint, nil)
+```
+
+After handling request-construction errors, send and retain the success guard
+before accessing the returned body:
+
+```go
+response, err := sender.Do(outgoing)
+if err != nil {
+	return err
 }
+defer response.Body.Close()
 ```
 
-`MiddlewareBuilder.ProblemKey("request_id")` renames the member, `MiddlewareBuilder.ProblemKey("")` leaves
-it out, and `MiddlewareBuilder.TraceResponse(false)` drops the `traceresponse` header. With a
-no-op telemetry, or a span that is not valid, none of these are set.
+Consume the response as your application requires and handle any body read or
+close failure. The span ends at EOF or close, so duration includes reading the
+body. Always close response bodies to release HTTP resources and complete spans.
+End this work before stopping telemetry.
 
-Clients propagate context with `traceparent`. Arkoren has no arbitrary
-correlation-ID header: the trace ID is the correlation ID.
+The transport clones requests before injection and does not mutate the caller's
+request. Client spans use method-only names and record method, scheme,
+`server.address`, `server.port`, and status. The seconds histogram
+`http.client.request.duration` uses `http.request.method`, `server.address`,
+`server.port`, `http.response.status_code`, and `error.type`.
+Transport failures, non-EOF body-read failures, and 5xx responses mark the span
+failed. Error labels are the Go type or status code, not diagnostic text.
+Responses without a body and protocol upgrades finish without waiting for body
+consumption.
 
-## Correlating logs
+The [retrying HTTP client](../http-networking/http-client.md) already uses this
+instrumentation: each attempt has its own span and resends add
+`http.request.resend_count`. Do not wrap it again with telemetry. Package-level
+`telemetry.Transport` instead follows the process default per request.
 
-The application wraps its logger so that every record logged with a context that
-holds a span gets `trace_id` and `span_id` attributes. The server middleware
-puts the request's span in the request context. In your existing handler, use
-the logger from `app.Logger()` with `req.Context()`:
+## Outgoing Policy
+
+The transport records every destination but injects context only where its
+propagation predicate allows it. By default `PropagateInternal` accepts
+loopback/private/link-local IP literals, single-label names such as `reports`,
+and names ending in `.internal`, `.local`, `.svc`, or `.cluster.local`.
+Matching is case-insensitive and ignores the port; a public name merely
+resolving to a private address is not automatically internal.
+
+Injection can reveal trace IDs and, with the default OpenTelemetry propagator,
+baggage. Do not copy inbound headers wholesale: a denied injection does not
+remove propagation headers you already placed on the request.
+
+If an approved partner should receive context, construct this alternative
+client transport:
 
 ```go
-logger := app.Logger()
-logger.InfoContext(req.Context(), "charging invoice", "invoice", "7")
-```
-
-With the JSON handler of a production application, the record is:
-
-```json
-{
-  "time": "2026-10-12T09:30:00Z",
-  "level": "INFO",
-  "msg": "charging invoice",
-  "env": "production",
-  "invoice": "7",
-  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
-  "span_id": "00f067aa0ba902b7"
-}
-```
-
-Searching your log store for that `trace_id` finds every record of the request,
-and the same ID opens the trace in your tracing backend. The correlation works
-only with the context methods (`InfoContext`, `ErrorContext`, ...); plain
-`Info` carries no context and so no IDs.
-
-With the application's logger wired as above, the request-log middleware needs
-no separate correlation setup. It logs failed requests with the request context,
-so registering it after telemetry gives those records the request's IDs; see
-[Request logging](request-logging.md).
-
-If the driver can export logs, as the OpenTelemetry driver does, the same
-records are also sent to the backend with the trace attached. The memory driver
-does not export, but it still produces IDs, so logs gain `trace_id` and
-`span_id` even with no backend.
-
-Correlation does not redact application logs, supplied exceptions, native SDK
-logs, or baggage. Review those values separately before enabling export; the
-HTTP span's field exclusions do not apply to the whole logging pipeline. See
-[Telemetry Privacy](telemetry-privacy.md#logs).
-
-## Tracing outgoing requests
-
-Wrap the transport of the `http.Client` you use for outgoing calls. Here `req`
-is your existing outgoing `*http.Request`, created with the incoming request's
-context so the client span becomes a child of the server span:
-
-```go
-sender := &http.Client{Transport: t.Transport(nil)}
-
-resp, err := sender.Do(req)
-defer resp.Body.Close()
-```
-
-A `nil` base transport means `http.DefaultTransport`. The request must carry
-the context of the incoming request so that the client span becomes
-a child of the server span. The transport starts a client span named after the
-method (`GET`), records `http.client.request.duration` for the call, and injects
-the trace headers into a clone of the request, so the request you passed is
-never modified.
-
-The span records the method, the destination host and port, the scheme, and
-the status code. A transport error, or a `5xx` response, marks the span as
-failed; `error.type` is the status code or the Go type name of the error, never
-its text. The duration histogram is labeled by method, host, port, status, and
-`error.type`.
-
-> [!NOTE]
-> The span ends when you read the response body to the end or close it, so its
-> duration includes reading the body. Always close response bodies, as
-> `net/http` already requires. A body that is never closed leaves the span open.
-
-End application work and close response bodies before stopping telemetry.
-`Span.End` waits for already-admitted recorder calls; those callbacks must return
-and must not synchronously end their own span. `Telemetry.Stop` suppresses new
-observer notifications but does not drain or cancel callbacks already admitted.
-A timeout cannot forcibly interrupt native work or an earlier serialized
-lifecycle call; see [lifecycle](telemetry.md#lifecycle).
-
-If you use the [retrying transport](../http-networking/http-client.md) from the `client`
-package, you do not wrap anything yourself: it builds on this transport, so each
-attempt is its own client span and each resend carries
-`http.request.resend_count`.
-
-### Which hosts receive trace headers
-
-The `traceparent` header, and baggage with it, tells the receiver which trace to
-join. Sending it to a third party leaks your trace identifiers and whatever
-baggage you carry, so the transport injects headers only into internal
-destinations: a loopback, private, or link-local IP address, a name without a
-dot (`billing`, as service discovery and Compose provide), and names that end
-in `.internal`, `.local`, `.svc`, or `.cluster.local`. The span and the metric
-are recorded for every host regardless.
-
-This gate controls injection, not removal: headers already on the caller's
-request remain on its clone. Do not forward inbound trace or baggage headers
-to an untrusted destination yourself.
-
-To include a partner that you want in your traces, list it. A name starting
-with `*.` matches every subdomain but not the bare domain:
-
-```go
-sender := &http.Client{Transport: t.Transport(nil,
-	func(transport *telemetry.TransportBuilder) {
-		transport.PropagationHosts("api.partner.com", "*.mycompany.com")
+sender := &http.Client{Transport: handle.Transport(nil,
+	func(policy *telemetry.TransportBuilder) {
+		policy.PropagationHosts("api.partner.example", "*.services.example")
 	},
 )}
 ```
 
-`TransportBuilder.Propagation` replaces the decision with your own function of the request,
-`telemetry.PropagateAll` injects everywhere, and `telemetry.PropagateNone`
-nowhere. The retrying transport takes the same decision through its `Propagate`
-option.
+The `*.` form matches subdomains, not the bare domain. `Propagation` replaces
+the predicate with your own request function; `PropagateAll` injects everywhere
+and `PropagateNone` nowhere. These choices govern injection, not collection or
+removal of existing headers. The retrying client's equivalent option is
+`Propagate`. Keep baggage nonsensitive and restrict which receivers may see it.
 
-## Testing
+## Verify Tracing
 
-The fake telemetry in `telemetrytest` records spans and metrics in memory, so a
-test can drive the router and assert what was recorded. In your existing test,
-`fake.Telemetry(t)` starts the handle and registers cleanup. `showInvoice` is
-your application's handler:
+In an existing router test, use `telemetrytest` from
+`arkoren.dev/core/service/telemetry/telemetrytest`, plus standard packages
+`net/http` and `net/http/httptest`. The fake starts its handle and registers test
+cleanup. With your application's existing `showReport` handler:
 
 ```go
 fake := telemetrytest.New()
 r := router.New()
 r.Use(fake.Telemetry(t).Middleware())
-r.Get("/invoices/{id}", showInvoice)
-
-rec := httptest.NewRecorder()
-r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/invoices/7", nil))
-
-fake.AssertSpan(t, "GET /invoices/{id}")
+r.Get("/reports/{id}", showReport)
 ```
 
-Set the request's `RemoteAddr` explicitly when testing a trust policy; do not
-assume `httptest.NewRequest` supplies a loopback peer. The `traceresponse`
-header is on `rec.Header()`.
-[Fakes](../testing/fakes.md) describes the fake in full.
+Drive the router, not its isolated middleware wrapper, and assert the template
+name:
 
-For every option, see the [`telemetry` API reference](https://pkg.go.dev/arkoren.dev/core/service/telemetry),
-and for the retrying client the [`client` API reference](https://pkg.go.dev/arkoren.dev/core/http/client).
+```go
+response := httptest.NewRecorder()
+r.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/reports/19", nil))
+fake.AssertSpan(t, "GET /reports/{id}")
+```
+
+Inspect `response.Header()` for `traceresponse`. Set `RemoteAddr` explicitly
+when testing trust: `httptest.NewRequest` is not evidence of a loopback peer.
+The fake proves local instrumentation, not remote export; [Drivers](telemetry-drivers.md)
+provides backend verification.
+
+For every HTTP option, see the
+[`telemetry` API reference](https://pkg.go.dev/arkoren.dev/core/service/telemetry).

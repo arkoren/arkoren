@@ -1,118 +1,97 @@
 ---
-title: Validation Normalizers
-nav: Normalizers
-description: Trim text, clamp numbers, and clean lists before checking the parsed copy.
+title: Normalizers
+description: Prepare cleaned values before checking presence and rules, without changing caller-owned input.
 order: 60
+summary:
+  - Choose deliberate transformations instead of rejecting the original value.
+  - Clean text, numbers, times, and lists in the parsed result.
+  - Account for child preparation, defaults, diagnostic indices, and callback ownership.
 ---
 
-# Validation Normalizers
+# Normalizers
 
-## Introduction
+An imported tag such as `" Go "` may be usable if you store it as `"go"`.
+A **normalizer** makes that deliberate replacement before validation. Use an
+assertion instead when the original spelling or range must be rejected.
 
-An imported tag such as `" Go "` may be acceptable if you store it as `"go"`.
-A **normalizer** makes that deliberate change before checking the value.
-Use an assertion instead when you must reject the original input rather than
-silently clean it.
+`Parse` returns the prepared value; `Validate` checks it and discards it.
+Neither modifies caller-owned input. Examples import
+`arkoren.dev/foundation/validate` and use an existing context named `ctx`.
 
-`Parse` returns the normalized copy. `Validate` checks the same prepared value
-but discards the result. Neither modifies the caller's input. Examples use an
-existing `context.Context` named `ctx`.
+## Clean Text
 
-## String normalizers
-
-To trim and lowercase an imported tag:
+Accept surrounding whitespace and mixed case for imported tags:
 
 ```go
-tag := validate.String(func(value *validate.StringBuilder[string]) {
-	value.Trim()
-	value.ToLower()
+tag := validate.String(func(text *validate.StringBuilder[string]) {
+	text.Trim()
+	text.ToLower()
+	text.Required()
 })
 parsed, err := tag.Parse(ctx, " Go ")
 ```
 
-On success, `parsed` is `"go"`. `Lowercase()` would instead reject uppercase
+On success, `parsed` is `"go"`. `Lowercase` would instead reject uppercase
 letters without changing them.
 
-| Normalizer | Small call | Change |
-| --- | --- | --- |
-| `Trim` | `value.Trim()` | Remove surrounding Unicode whitespace |
-| `ToLower` | `value.ToLower()` | Lowercase the text |
-| `ToUpper` | `value.ToUpper()` | Uppercase the text |
-| `TrimPrefix` | `value.TrimPrefix("acct_")` | Remove one matching prefix |
-| `TrimSuffix` | `value.TrimSuffix(".csv")` | Remove one matching suffix |
-| `Truncate` | `value.Truncate(80)` | Keep at most 80 runes |
+| Setting | Replacement |
+| --- | --- |
+| `Trim()` | Remove surrounding Unicode whitespace |
+| `ToLower()`, `ToUpper()` | Change case |
+| `TrimPrefix(prefix)`, `TrimSuffix(suffix)` | Remove one matching prefix or suffix |
+| `Truncate(n)` | Keep at most n runes |
 
-These settings belong to `*StringBuilder[S]`, preserving S in the result.
-`Truncate` does not report a length violation. Use `Max` to reject long input.
-`Truncate(0)` produces an empty string; a negative length panics with an error
-matching `validate.ErrInvalidSchema` during construction.
+These preserve the builder's exact string type. Truncation does not report a
+length violation: use `Max` to reject long text. Zero truncates to empty;
+negative lengths are invalid definitions.
 
-## Builder operations
+## Adjust Numbers
 
-These are transforming settings, not assertions. Configure them on the
-builder for the value you intend to replace.
-
-| Operation | Permitted builder roles and scope | Details |
-| --- | --- | --- |
-| `Trim()`, `ToLower()`, `ToUpper()`, `TrimPrefix(prefix)`, `TrimSuffix(suffix)`, `Truncate(n)` | `StringBuilder[S]`; preserve the exact string type S | [String normalizers](#string-normalizers) |
-| `Abs()`, `Clamp(low, high)` | `IntBuilder[N]`; no rounding method | [Numeric normalizers](#numeric-normalizers) |
-| `Clamp(low, high)` | `UintBuilder[N]`; no `Abs` or rounding method | [Numeric normalizers](#numeric-normalizers) |
-| `Abs()`, `Clamp(low, high)`, `Round(places)` | `FloatBuilder[N]`; nonnegative decimal places | [Numeric normalizers](#numeric-normalizers) |
-| `UTC()` | `TimeBuilder`; preserve the instant | [Time normalizers](#time-normalizers) |
-| `Sort(compare)`, `Filter(keep)`, `Reject(drop)`, `RejectZero()`, `Dedupe()` | `SliceBuilder[E]`; preserve or remove entries in the parsed copy | [Slice normalizers](#slice-normalizers) |
-| `Normalize(fn)` | All explicit builders, including `BoolBuilder`, `TextBuilder`, `AnyBuilder`, `FileBuilder`, `MapBuilder`, `PtrBuilder`, and `StructBuilder`; fn preserves the role's exact value type | [Custom normalization](#custom-normalization) |
-
-No normalizer is permitted on a map-key child, even when its concrete scalar
-builder normally has that method. Count constraints and condition observations
-also prohibit normalization. `MapBuilder` has custom `Normalize` but no
-built-in filtering, sorting, or deduplication methods.
-
-## Numeric normalizers
-
-To constrain an imported percentage by changing out-of-range values:
+For an import policy that intentionally caps percentages rather than rejecting
+out-of-range input, use `Clamp`:
 
 ```go
-percentage := validate.Int(func(value *validate.IntBuilder[int]) {
-	value.Clamp(0, 100)
+percentage := validate.Int(func(number *validate.IntBuilder[int]) {
+	number.Clamp(0, 100)
 })
 parsed, err := percentage.Parse(ctx, 120)
 ```
 
-On success, `parsed` is 100. A `Max(100)` assertion would reject 120 instead.
+The result is 100 on success. `Max(100)` would reject 120 instead. Signed,
+unsigned, and floating builders support inclusive `Clamp`; reversed bounds
+panic. Signed and floating builders also support `Abs`; the minimum signed
+integer stays unchanged because its positive counterpart cannot fit.
 
-| Normalizer | Builders | Behavior |
-| --- | --- | --- |
-| `Abs()` | `Int`, `Float` | Absolute value; minimum signed integer stays unchanged |
-| `Clamp(low, high)` | `Int`, `Uint`, `Float` | Clamp to the inclusive range; low greater than high panics |
-| `Round(places)` | `Float` | Round to nonnegative decimal places, halves away from zero; negative places panic |
-
-To round a measured value:
+Floating builders additionally support decimal rounding:
 
 ```go
-measurement := validate.Float(func(value *validate.FloatBuilder[float64]) {
-	value.Round(2)
+measurement := validate.Float(func(number *validate.FloatBuilder[float64]) {
+	number.Round(2)
 })
 parsed, err := measurement.Parse(ctx, 12.345)
 ```
 
-On success, the result is 12.35. Rounding changes the value; do not use it
-when retaining the original precision is required.
+The result is 12.35. Halves round away from zero; negative decimal places panic.
+Rounding changes the quantity and cannot restore precision already lost. Do not
+apply it when the original precision is part of the contract.
 
-## Time normalizers
+## Normalize Time
 
-`UTC` changes a time's location without changing its instant:
+To store an accepted timestamp with UTC location, import the standard `time`
+package for your input and configure `Time`:
 
 ```go
-timestamp := validate.Time(func(value *validate.TimeBuilder) {
-	value.UTC()
+timestamp := validate.Time(func(instant *validate.TimeBuilder) {
+	instant.UTC()
 })
 ```
 
-Parsing returns the time in UTC. The original time value is unchanged.
+Parsing changes its location to UTC without changing the instant or original
+value. Time assertions still compare instants.
 
-## Slice normalizers
+## Clean Lists
 
-To clean a list of tags before checking its size:
+Normalize entries before removing empty tags and duplicates:
 
 ```go
 tags := validate.Slice(func(items *validate.SliceBuilder[string]) {
@@ -127,71 +106,59 @@ tags := validate.Slice(func(items *validate.SliceBuilder[string]) {
 parsed, err := tags.Parse(ctx, []string{" Go ", "", "go", "Queues"})
 ```
 
-On success, `parsed` is `[]string{"go", "queues"}`. Entries normalize first,
-so the duplicate test sees two identical `"go"` values. Error indices refer
-to the cleaned slice rather than original row positions.
+The result is `[]string{"go", "queues"}` on success. Entry cleanup happens
+first, so deduplication sees identical `"go"` values. Diagnostics use the cleaned
+slice's indices, not original import-row positions.
 
-For numeric lists, these predicates keep positive values or identify negative
-ones to drop:
+`Sort` takes `func(E, E) int`, such as `cmp.Compare[int]` from the standard
+`cmp` package. `Filter` keeps entries matching `func(int, E) bool`; `Reject`
+drops matches. `RejectZero` drops zero entries. `Dedupe` keeps the first
+occurrence and requires comparable, non-interface elements.
 
-```go
-positive := func(_ int, n int) bool {
-	return n > 0
-}
-negative := func(_ int, n int) bool {
-	return n < 0
-}
-```
+Filtering is not `Every`, and deduplication is not `Unique`: the former change
+data while the latter [report invalid collections](collections.md). Maps have
+custom `Normalize`, but no built-in sort/filter/deduplication operations. Map
+keys never normalize, default, or exclude because that could change identity.
 
-Use them on a `*validate.SliceBuilder[int]` named `items`:
+## Custom Replacement
 
-| Normalizer | Small call | Behavior |
-| --- | --- | --- |
-| `Sort` | `items.Sort(cmp.Compare[int])` | Sort using the supplied comparator |
-| `Filter` | `items.Filter(positive)` | Keep matching entries |
-| `Reject` | `items.Reject(negative)` | Drop matching entries |
-| `RejectZero` | `items.RejectZero()` | Drop zero entries |
-| `Dedupe` | `items.Dedupe()` | Keep the first occurrence of each comparable, non-interface value |
-
-`Filter` is not `Every`: filtering removes entries, while `Every` reports
-invalid ones. `Dedupe` is not `Unique`: deduplication changes the result,
-while uniqueness rejects duplicates. See [collection assertions](collections.md).
-
-## Custom normalization
-
-`Normalize` accepts a typed function that returns a replacement value.
-Remove a known decoration:
+For an application-specific decoration, return a same-type replacement from
+`Normalize`. With the standard `strings` package imported:
 
 ```go
-name := validate.String(func(value *validate.StringBuilder[string]) {
-	value.Normalize(func(input string) string {
+name := validate.String(func(text *validate.StringBuilder[string]) {
+	text.Normalize(func(input string) string {
 		return strings.TrimPrefix(input, "@")
 	})
 })
 ```
 
-Parsing `"@ada"` returns `"ada"`. All explicit builders support `Normalize`;
-the function must preserve the builder's value type. Do not mutate shared
-maps, slices, or pointers inside a custom normalizer. There is no error return;
-use `Check` when an operation can fail.
+Parsing `"@ada"` produces `"ada"`. Every explicit rule builder supports typed
+`Normalize`, including structs, pointers, maps, files, text values, and dynamic
+values. Named-container adapters instead attach a configured source schema.
 
-## Execution order
+There is no error return. Use a [custom check](custom-rules.md) if an operation
+can fail. Keep callbacks concurrency-safe and do not mutate nested maps, slices,
+or pointers reachable from the input: arbitrary captured/default objects remain
+application-owned, not recursively cloned.
 
-Normalizers run in their declaration order relative to one another, before
-presence, defaults, and ordinary rules. Their placement among ordinary rules
-does not change that order. Whitespace-only text becomes absent after `Trim`,
-so `Required` fails or `Default` applies.
+## Preparation Order
 
-Defaults are not automatically normalized again. Supply defaults already in
-their final form. On slices, element normalization precedes slice
-normalization; collection assertions and element checks run afterward.
-Map values and pointer pointees likewise prepare their children before checks.
-Each normalizer runs once per value along that path.
+Unconditional normalizers run in their own declaration order before presence,
+defaults, and ordinary rules. Placing `Trim` after `Required` in the declaration
+does not make presence run first. Whitespace-only text becomes absent after
+trimming, so a requirement fails or a default applies.
 
-Normalizers and defaults are forbidden on map keys. They are also forbidden
-in condition predicates and `CountWhere` count constraints: those APIs test
-values and must not rewrite the data that decides a rule.
+Defaults are not normalized again at the value where they are assigned. Supply
+them in final form. Nested children prepare before enclosing conditions; slice
+elements prepare before slice normalizers, and pointer pointees and map values
+likewise prepare before their enclosing checks. Each normalizer runs once along
+that path. Container assertions and child validation then see prepared values.
 
-For custom-check ordering and shared-state requirements, see
-[advanced validation](advanced.md). For exact signatures, see the
+Conditional transformations remain [order-sensitive](conditions.md#effect-order).
+Map-key rules, condition observations, and `CountWhere` count constraints cannot
+normalize or default values: they test identity or actual observations rather
+than rewrite the data deciding a rule.
+
+For exact transformation contracts, see the
 [`validate` API reference](https://pkg.go.dev/arkoren.dev/foundation/validate).

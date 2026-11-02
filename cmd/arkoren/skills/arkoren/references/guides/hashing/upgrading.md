@@ -1,162 +1,192 @@
 ---
 title: Upgrading Hashes
-description: Move stored password hashes to stronger settings after login, migrate safely from bcrypt to Argon2id, and handle imported hashes.
-order: 30
+description: Renew verified password hashes with conditional writes and migrate supported records without changing unverified credentials.
+order: 40
+summary:
+  - Renew hashes only after successful password verification and a policy comparison.
+  - Use conditional storage updates that leave concurrent credential changes untouched.
+  - Migrate supported bcrypt records to Argon2id and plan recovery for unsupported or inactive accounts.
 ---
 
 # Upgrading Hashes
 
-## Introduction
+A stored hash cannot be converted into a hash of the same password under new
+settings without the password. A successful login supplies a verified attempt:
+check it against the old record, then hash those same password bytes under the
+new policy. A password reset is different: it establishes a new password through
+your application's recovery flow.
 
-Computers get faster, so the settings that make guessing expensive should grow
-over time, and an algorithm you chose years ago may no longer be the best one.
-You cannot convert a stored hash into a hash of the same password under new
-settings without knowing the password. A successful login provides that moment:
-check the attempt against the old hash, then hash the verified password again
-with the new settings. A password reset instead replaces it with a new password.
+This page assumes configured [hashing drivers](drivers.md), trusted account
+storage, and the [ordinary password check](overview.md#check-passwords). Budget
+the old check and new hash together under your [password-work limits](cost.md).
+Do not retain plaintext passwords in a queue or log them for a later migration.
 
-Every hash records the algorithm and the settings it was made with, so old and
-new hashes can live side by side. This page shows how to replace them as
-people sign in, how to change algorithm the same way, and what to do about the
-accounts that never sign in again.
+## Detect Renewal
 
-## Rehashing after login
+Changing construction settings affects new hashes, not the parameters used to
+check an existing record. `NeedsRehash` compares a stored record with the current
+policy; it does not rewrite storage or prove a password match.
 
-Examples import `auth` from `arkoren.dev/core/http/auth`, `bytes` and `log/slog`
-from the standard library. `hasher`, `argonHasher`, and `bcryptHasher` are
-`*hash.Hasher` values from `arkoren.dev/core/service/hash`.
+Argon2 compares memory, iterations, parallelism, variant, version, salt length,
+and digest length. bcrypt validates the complete record and compares cost.
+Differences in either direction request renewal, so lowering the configured
+cost can also flag a stronger stored hash. Review the target policy before
+deploying a bulk policy change.
 
-Apply the configured algorithm's input limits before checking a password. For
-bcrypt, reject attempts longer than 72 bytes; the migration example below shows
-that guard. A successful native bcrypt comparison alone does not enforce it.
+Both drivers return `true` for malformed records; Argon2 also does so for
+unsupported stored versions. These records cannot be upgraded through a login
+check that fails. Never treat `NeedsRehash` alone as permission to replace them.
 
-When you raise the work settings, supported stored hashes keep working. To bring
-them up to date, check the password as usual, then ask the hasher whether the
-stored hash uses the current settings. An unsupported or malformed record cannot
-be upgraded through this login path: `Check` must succeed first.
+## Verify First
 
-Here `hasher` is your configured hasher, `user` is the account being signed in,
-and `users.SetPasswordHash` is your application's persistence method, not an
-Arkoren helper. It accepts the original hash and applies a conditional write,
-so a concurrent password reset is never overwritten. A failed conditional match
-leaves the newer password unchanged. Keep a rehash failure separate from the
-login decision:
+Assume a decoded `LoginInput` with a `Password string` field, an account named
+`account`, and the current `*hash.Hasher` named `hasher`. Apply the appropriate
+input limits first. For bcrypt, reject attempts over 72 bytes before comparison:
+native checking can accept an extra suffix after a valid 72-byte prefix.
+
+With `auth` imported from `arkoren.dev/core/http/auth`, establish the credential
+decision separately from renewal:
 
 ```go
-ok, err := hasher.Check(attempt, user.PasswordHash)
-if err != nil || !ok {
+matched, err := hasher.Check(input.Password, account.PasswordHash)
+if err != nil {
+	return err
+}
+if !matched {
 	return auth.ErrUnauthenticated
 }
+```
 
-if hasher.NeedsRehash(user.PasswordHash) {
-	fresh, err := hasher.Hash(attempt)
-	if err == nil {
-		err = users.SetPasswordHash(ctx, user.ID, user.PasswordHash, fresh)
-	}
+Only this success path may attempt renewal. Preserve malformed-storage and other
+failures internally instead of counting them as ordinary wrong passwords. Map
+public failures without leaking account existence or storage details, as in
+[Session Login](../authentication/session-login.md#check-passwords).
+
+## Replace Safely
+
+Use a conditional write so renewal cannot overwrite a password reset that
+completed after your account read. In this example, `accounts.ReplacePasswordHash`
+is an application-owned repository method, not an Arkoren API. It takes the
+account ID, expected old hash, and replacement, and returns `(applied bool, err error)`.
+It must atomically update only that account whose stored hash still equals the
+expected value. No match is a concurrent change, not permission to retry an
+unconditional write.
+
+After the successful check above, create a replacement only if policy differs.
+Import standard-library `log/slog` for the bounded failure reports:
+
+```go
+if hasher.NeedsRehash(account.PasswordHash) {
+	fresh, err := hasher.Hash(input.Password)
 	if err != nil {
-		slog.WarnContext(ctx, "rehash password", "user", user.ID, "error", err)
+		slog.WarnContext(ctx, "password hash renewal failed", "stage", "hash")
+	} else {
+		applied, err := accounts.ReplacePasswordHash(ctx, account.ID, account.PasswordHash, fresh)
+		if err != nil {
+			slog.WarnContext(ctx, "password hash renewal failed", "stage", "store")
+		} else if !applied {
+			slog.InfoContext(ctx, "password hash renewal skipped", "reason", "concurrent change")
+		}
 	}
 }
 ```
 
-`NeedsRehash` compares the recorded parameters with the current policy, so
-lowering a cost setting also flags a hash. Argon2 compares salt length, hash
-length, memory, iterations, parallelism, mode, and version; changing salt length
-alone requires renewal. bcrypt compares cost after validating the complete
-record. Both drivers return `true` for malformed records, and Argon2 also does
-so for unsupported stored versions. That result is not proof of a valid password.
+A successful write installs a fresh salted record. A rejected conditional write
+leaves the newer credential untouched. This example treats renewal failures as
+best-effort maintenance after a valid check, rather than rejecting login because
+renewal failed; enforce any separate account or concurrent-reset login policy in
+your authentication flow. An unchanged old record can be retried on a later
+successful login.
 
-A failed rehash is logged rather than returned: the person already passed the
-password check, and the old hash still works, so the login succeeds and the next
-one tries again.
+Keep the attempt only for this request's synchronous work. The failure reports
+contain no credential, stored hash, or native error text; use similarly bounded
+diagnostics if you need to distinguish failures in monitoring.
 
-Each account moves to the new settings after a successful login and rehash
-write. Accounts that never sign in keep their old hash until they do; failed
-rehash writes also leave the old hash in place for another attempt later.
+## Change Algorithms
 
-## Migrating from bcrypt to Argon2id
+To move bcrypt accounts to Argon2id, keep a legacy bcrypt hasher alongside your
+target Argon2id hasher. New registrations and password changes use the target.
+Existing logins route by a known stored format, then let the selected driver
+validate the complete record. Do not try another driver after a mismatch or
+parse error.
 
-A service that started with bcrypt can migrate supported passwords to Argon2id
-after a successful login. Keep a hasher for each algorithm, check each stored
-hash with the one that made it, and store an Argon2id hash for later logins.
-
-Reject bcrypt attempts longer than 72 bytes before comparison. Native bcrypt
-comparison can accept an extra suffix after a valid 72-byte password; hashing
-the entire attempt with Argon2id would silently change the account's password.
-The limit counts bytes, not characters. If an imported account depends on
-historical truncation of a longer password, use a verified password-reset or
-recovery flow rather than silently truncating and migrating its login attempt.
-
-Create `argonHasher` and `bcryptHasher` with their respective
-[drivers](drivers.md) at startup. In this fragment, `user.PasswordHash` is the
-stored byte slice:
+Here `hasher` is the target Argon2id facade, `bcryptHasher` is the legacy facade,
+and `bytes` is the standard-library package. Select the checker from the
+application-owned record:
 
 ```go
-const bcryptLimit = 72
-checker := argonHasher
-if bytes.HasPrefix(user.PasswordHash, []byte("$2")) { // bcrypt hashes start with $2
-	if len(attempt) > bcryptLimit {
+checker := hasher
+switch {
+case bytes.HasPrefix(account.PasswordHash, []byte("$2")):
+	if len(input.Password) > 72 {
 		return auth.ErrUnauthenticated
 	}
 	checker = bcryptHasher
-}
-
-ok, err := checker.Check(attempt, user.PasswordHash)
-if err != nil || !ok {
+case bytes.HasPrefix(account.PasswordHash, []byte("$argon2id$")),
+	bytes.HasPrefix(account.PasswordHash, []byte("$argon2i$")):
+	// The Argon2 driver validates the stored variant, version, and parameters.
+default:
 	return auth.ErrUnauthenticated
-}
-if checker == bcryptHasher {
-	fresh, err := argonHasher.Hash(attempt)
-	if err == nil {
-		err = users.SetPasswordHash(ctx, user.ID, user.PasswordHash, fresh)
-	}
-	if err != nil {
-		slog.WarnContext(ctx, "migrate password hash", "user", user.ID, "error", err)
-	}
 }
 ```
 
-Pick the hasher by the hash's prefix, not by trying one and then the other:
-a hash the driver cannot parse is an error, not a wrong password or a reason to
-retry it with another algorithm. New passwords, from sign-up or a password change,
-are always hashed with Argon2id.
+A recognized prefix is only routing information, not format validation. Record
+unknown formats internally as unsupported storage without exposing the record
+to clients. Now verify with the selected checker:
 
-## Hashes that never upgrade
+```go
+matched, err := checker.Check(input.Password, account.PasswordHash)
+if err != nil {
+	return err
+}
+if !matched {
+	return auth.ErrUnauthenticated
+}
+```
 
-Accounts that stay inactive keep their old hashes, and a database leak exposes
-them at the old cost. Once most active accounts have moved, decide what to do
-with the rest. A count of the remaining old hashes, by prefix or with
-`NeedsRehash`, tells you how many accounts are affected.
+After success, use the conditional renewal block above with the target `hasher`.
+Its `NeedsRehash` returns true for bcrypt records it cannot parse, causing the
+verified attempt to be hashed with Argon2id. It also renews supported Argon2
+records whose policy differs. The prior successful legacy check—not that policy
+result—is what makes migration eligible.
 
-The usual choices are to wait, which is fine when the old settings were
-reasonable, or, when they were weak, to clear the remaining hashes and require
-those people to set a new password through the reset flow the next time they
-come back. Clearing is safe only when the reset flow works for every such
-account, for example because each has a verified email address.
+The 72-byte guard prevents an unverified bcrypt suffix from becoming part of a
+new Argon2 password. If an imported account relied on historical truncation,
+send it through verified recovery instead of truncating and migrating an attempt.
 
-## Importing hashes from another system
+## Import Records
 
-Check the complete format and version, not only the prefix, before planning an
-import. The Argon2 driver verifies Argon2id and Argon2i records with version 19:
-`$argon2id$v=19$...` or `$argon2i$v=19$...`. It does not verify version 16 or other
-stored versions: `Check` returns an error wrapping `hash.ErrInvalidHash`, and
-`NeedsRehash` returns `true`. Do not edit an encoded version label to bypass this
-check; use a verified password-reset or recovery flow for unsupported records.
+Treat imports as a controlled migration, not an endpoint for client-submitted
+hashes. Audit formats and encoded work factors before enabling checks: a
+parseable record can still demand excessive CPU or memory. Use isolated,
+resource-limited tests with known fixture passwords, never production passwords
+in source or logs. Confirm both valid and invalid attempts with the matching
+driver before importing the full set.
 
-The bcrypt driver requires the complete, canonically encoded record, including
-its salt and digest. Truncated records, trailing data, and noncanonical encodings
-are storage errors wrapping `hash.ErrInvalidHash`, not password mismatches.
-Complete legacy `$2$` records remain supported, and minor-version labels follow
-the native library's policy rather than an adapter allowlist. A supported label
-alone does not trigger rehashing. See the [bcrypt limits](drivers.md#bcrypt)
-for the full validation boundary; acceptance of a label does not establish
-compatibility with every historical implementation.
+Argon2 accepts Argon2i and Argon2id version 19 records. Version 16 and other
+versions fail with `hash.ErrInvalidHash`. Do not edit a version label to force
+acceptance; use a correct, separately reviewed legacy verifier or a verified
+recovery flow for unsupported data.
 
-Enforce the bcrypt input limit above; imported accounts that relied on truncation
-need a verified recovery flow. Import a few records with known passwords in a test
-first, and check them with the matching driver before migrating everyone. Hashes
-in another format, such as a salted SHA-1 from an old system, cannot be checked by
-either driver; send those accounts through a password reset instead.
+bcrypt requires complete canonical salt and digest encodings. Truncated records,
+trailing data, and noncanonical encodings are storage failures, not mismatches.
+Legacy `$2$` and native-accepted minor labels do not prove compatibility with
+historical algorithm quirks; test representative fixtures and retain the
+[bcrypt input limit](drivers.md#bcrypt).
 
-For the settings of each algorithm, see [Hashing Drivers](drivers.md), and
-for every function, the [`hash` API reference](https://pkg.go.dev/arkoren.dev/core/service/hash).
+Neither driver accepts arbitrary legacy schemes such as salted SHA-1. Without
+a suitable reviewed verifier, require password recovery rather than guessing a
+conversion or accepting a hash as a credential.
+
+## Inactive Accounts
+
+Accounts that never log in retain their old records, as do accounts whose renewal
+has not succeeded. Count those records by known scheme or policy to assess what
+remains; a policy count is not evidence that their passwords still verify.
+
+Choose whether to retain acceptable legacy records or require recovery for weak
+ones. Before disabling any old credential, ensure the account has a working,
+verified recovery route and plan the user impact. Do not clear hashes merely to
+make a migration count reach zero: that can lock people out permanently.
+
+For verification and policy operations, see the [`hash` API reference](https://pkg.go.dev/arkoren.dev/core/service/hash).

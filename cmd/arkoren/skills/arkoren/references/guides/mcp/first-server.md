@@ -1,49 +1,45 @@
 ---
-title: Your First MCP Server
-nav: First Server
-description: Install the MCP modules, serve a tool over local HTTP, and discover and call it with an MCP client.
+title: First Server
+description: Build a local HTTP MCP server and discover and call its first tool with an MCP client.
 order: 20
+summary:
+  - Create a typed public tool and explicitly register its HTTP MCP endpoint.
+  - Discover and call the tool with the MCP Inspector over loopback HTTP.
+  - Recognize connection failures and retain application-owned server lifecycle.
 ---
 
-# Your First MCP Server
+# First Server
 
-## Introduction
+Build a small server that returns a fixed service label through MCP. This
+walkthrough takes you from an empty Go project to client discovery and a tool
+call over HTTP. It needs no database, model API key, or Arkoren CLI.
 
-This guide builds a small Go server that exposes a read-only `status` tool.
-You will start it on your machine, connect an MCP client, and see the tool's
-result. No model-provider API key, database, or Arkoren CLI is needed.
+Use Go 1.27 or later. For the client checks, install Node.js 22.19 or later and
+npm to run the [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector).
+The Inspector is a client, not a server dependency.
 
-You need Go 1.27 or later. For the client checks,
-you also need Node.js 22.19 or later and npm to run the
-[MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector).
-The Inspector is a test client, not a dependency of your Go server.
+## Project Setup
 
-The steps below create two files for a standalone local process. You will
-verify discovery and execution over the protocol, not through direct Go calls.
-
-## Install the modules
-
-Create a project:
+Create a directory and initialize its module:
 
 ```sh
-mkdir mcp-status
-cd mcp-status
-go mod init example.com/mcp-status
+mkdir mcp-service
+cd mcp-service
+go mod init example.com/mcp-service
 ```
 
-Install the core and MCP server modules:
+Install the tool definitions and HTTP adapter:
 
 ```sh
 go get arkoren.dev/core arkoren.dev/driver/mcp
 ```
 
-`arkoren.dev/core/mcp` defines tools. `arkoren.dev/driver/mcp/mcpserver` serves them and brings in the
-official Go MCP SDK automatically. There is no separate MCP server package to
-install globally.
+The adapter brings in the official Go MCP SDK. The following steps create
+`tools.go` and `main.go` in this directory; append each block to its named file.
 
-## Define the tool
+## Service Operation
 
-Create `tools.go`:
+Create `tools.go` with its package and imports:
 
 ```go
 package main
@@ -55,37 +51,40 @@ import (
 )
 ```
 
-Add the result object and its handler:
+Add an object result and a handler that returns only a public sample label:
 
 ```go
-type Status struct {
-	Ready bool `json:"ready"`
+type ServiceInfo struct {
+	Name string `json:"name"`
 }
 
-func reportStatus(ctx context.Context, input mcp.NoInput) (Status, error) {
-	return Status{Ready: true}, nil
+func describeService(ctx context.Context, input mcp.NoInput) (ServiceInfo, error) {
+	return ServiceInfo{Name: "parcel-demo"}, nil
 }
 ```
 
-This sample always reports ready; it does not check real dependencies.
+This is static sample data, not a health check or inspection of the running
+process. `mcp.NoInput` represents an empty object, `{}`, not JSON `null`.
 
-Publish the handler as a package-level tool definition in the same file:
+## Tool Definition
+
+Publish the handler below it in `tools.go`:
 
 ```go
-var status = mcp.NewTool("status", reportStatus, func(definition *mcp.ToolBuilder[mcp.NoInput, Status]) {
-	definition.Description("Report the sample service's status.")
-	definition.ReadOnly(true)
-	definition.OpenWorld(false)
+var describe = mcp.NewTool("service.describe", describeService, func(action *mcp.ToolBuilder[mcp.NoInput, ServiceInfo]) {
+	action.Description("Return the public name of this sample service.")
+	action.ReadOnly(true)
+	action.OpenWorld(false)
 })
 ```
 
-`mcp.NoInput` means the tool accepts an empty JSON object, `{}`. The result is
-also an object. The description tells clients what the tool does; the read-only
-hint describes its behavior but does not enforce permissions.
+The definition supplies the name, schemas, and hints clients discover. It opens
+no network connection and does not call the handler. `ReadOnly` describes this
+operation; it does not enforce access control.
 
-## Build the HTTP endpoint
+## Endpoint Registration
 
-Create `main.go`:
+Create `main.go` with these imports:
 
 ```go
 package main
@@ -100,23 +99,27 @@ import (
 )
 ```
 
-Add a function that registers the tool with the server:
+Add a constructor that explicitly registers the tool:
 
 ```go
 func newEndpoint() (*mcpserver.Server, error) {
-	return mcpserver.New("status-service", "1.0.0", func(listener *mcpserver.Builder) {
-		listener.Tools(status)
+	return mcpserver.New("parcel-demo", "1.0.0", func(listener *mcpserver.Builder) {
+		listener.Tools(describe)
 	})
 }
 ```
 
-The name and version identify your server to clients. Construction checks the
-tool definition and returns an error if it is invalid. It does not open a
-network port: the returned endpoint is an `http.Handler`.
+The name and version identify your server. Construction rejects invalid tool
+definitions and duplicate names. The returned endpoint is an `http.Handler`,
+not a listening server.
 
-## Start the server
+## HTTP Mount
 
-Add `main` below `newEndpoint` in `main.go`:
+This unauthenticated sample is safe only for the fixed public result shown
+above. Keep it on loopback. Before exposing private tools or remote access,
+configure [TLS, authentication, Host, and Origin policy](securing-mcp.md).
+
+Append `main` to `main.go`:
 
 ```go
 func main() {
@@ -134,80 +137,72 @@ func main() {
 }
 ```
 
-This unauthenticated example exposes only a fixed, nonsensitive status result.
-It binds to loopback and uses Arkoren's [CSRF middleware](../browser-security/csrf-protection.md)
-to reject unsafe cross-origin browser requests. Keep that bind
-address: before exposing private tools or accepting remote traffic, configure
-[authentication, Host and Origin policy, and HTTP limits](securing-mcp.md).
+The [CSRF middleware](../browser-security/csrf-protection.md) rejects unsafe
+cross-origin browser requests. It is not authentication. Your application owns
+the listener and mount; the MCP endpoint has no `Start` or `Stop` method.
 
-From the project directory, run:
+Run the project:
 
 ```sh
 go run .
 ```
 
-The terminal logs the MCP URL and stays running. Leave it open for the client
-checks below. If the server reports that the address is already in use, stop
-the other local service or change the port in both the code and client commands.
+The terminal logs the endpoint URL and stays running. If port 8080 is occupied,
+choose another port in both the code and the client commands below.
 
-## Connect a client
+## Client Verification
 
-In a second terminal, ask the MCP Inspector to list the server's tools:
+Leave the server running and use a second terminal to discover its tools:
 
 ```sh
 npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8080/mcp \
   --transport http --method tools/list
 ```
 
-The first run downloads the Inspector if needed. The result lists `status`,
-its description, and its input and output schemas. This checks the MCP
-connection and discovery, not just whether the HTTP port is open.
+The first invocation downloads the Inspector if needed. The response lists
+`service.describe` with its description and object schemas. Discovery does not
+execute the handler.
 
-Now call the tool through the same client:
+Call the listed operation through the same HTTP transport:
 
 ```sh
 npx @modelcontextprotocol/inspector --cli http://127.0.0.1:8080/mcp \
-  --transport http --method tools/call --tool-name status
+  --transport http --method tools/call --tool-name service.describe
 ```
 
-The result's `structuredContent` contains:
+The result's `structuredContent` contains this object, also returned as text
+content:
 
 ```json
 {
-  "ready": true
+  "name": "parcel-demo"
 }
 ```
 
-The same JSON is also returned as text content. A successful list followed by
-this call verifies discovery, argument handling, handler execution, and the
-server's output checks over the actual MCP transport.
+A successful list and call confirm protocol discovery and execution, not merely
+an open HTTP port. To use an AI application's client instead, configure an MCP
+server with this URL and Streamable HTTP transport. A stdio-only client cannot
+connect. The client must run locally to reach this loopback address; a hosted
+client needs a reachable, secured deployment.
 
-To connect an AI application instead, add an HTTP MCP server in that
-application's client settings with URL `http://127.0.0.1:8080/mcp`. Choose
-Streamable HTTP, not a stdio command. The client must run on your machine to
-reach this loopback URL; a cloud-hosted client needs a reachable, secured
-deployment instead.
+## Connection Failures
 
-## If the connection fails
+If the client cannot connect, check that `go run .` is still running and that
+the host, port, and `/mcp` path match. Opening `/mcp` in a browser is not an MCP
+test: this stateless endpoint uses POST, and GET returns `405 Method Not Allowed`.
 
-Opening `/mcp` in a browser is not an MCP connection test. This stateless
-endpoint accepts protocol requests over POST, so an ordinary browser GET returns
-`405 Method Not Allowed`. Use the Inspector commands above.
+For manual protocol requests, send `Content-Type: application/json` and an
+`Accept` header containing both `application/json` and `text/event-stream`.
+Prefer an MCP client, which also handles protocol negotiation.
 
-If the Inspector cannot reach the server, check that `go run .` is still running
-and that the host, port, and `/mcp` path match. A stdio-only client cannot
-connect to this HTTP endpoint. If you inspect requests manually, send
-`Content-Type: application/json` and an `Accept` header containing both
-`application/json` and `text/event-stream`.
+## Application Integration
 
-## Next steps
+Stop the example with Ctrl+C. This standalone process does not implement
+graceful shutdown. When adding MCP to an existing application, retain its
+[HTTP lifecycle and timeouts](../http-networking/server.md); register the MCP
+handler without adding a second listener or lifecycle owner.
 
-Stop the local example with Ctrl+C. It is a small standalone process, not a
-production deployment with graceful shutdown.
-
-Continue with [MCP Tools](tools.md) to accept and validate arguments, test the
-operation, and mount it in your existing HTTP service. Before exposing private
-tools or remote access, follow [Securing MCP](securing-mcp.md).
-
-For all declarations and settings, see the [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp)
-and [MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).
+Continue with [Tools](tools.md) for validated arguments, output contracts, and
+safe failures. For exact declarations and settings, see the
+[core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp) and
+[MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).

@@ -1,190 +1,205 @@
 ---
-title: Queue Metadata and Telemetry
-nav: Metadata & Telemetry
-description: How a job's trace context travels in message metadata, the spans and metrics dispatching and consuming record, and how to test it.
-order: 40
+title: Monitoring
+description: Trace jobs across processes, count delivery attempts, and observe accepted retry and failure outcomes.
+order: 60
+summary:
+  - Connect dispatch and delivery spans through propagated trace metadata.
+  - Interpret attempt metrics separately from accepted settlement events.
+  - Protect diagnostics and test queue signals with telemetry fakes.
 ---
 
-# Queue Metadata and Telemetry
+# Monitoring
 
-## Introduction
+A report request and its background execution happen at different times, often
+in different processes. Queue telemetry connects those operations through trace
+context carried beside the payload. Consumer events answer a different question:
+which retry, rejection, or terminal-failure settlement did the driver accept?
 
-A job leaves the process that dispatched it and runs somewhere else, later. That
-is exactly where a trace usually breaks: the request that queued the work ends,
-and the worker's activity has nothing to connect it to. The queue repairs this
-with **metadata**, a small map of strings that travels beside the payload and
-carries the trace context from the dispatcher to the consumer. On top of it
-the queue records **telemetry**: a span and metrics for every dispatch and every
-delivery attempt.
+Neither signal is a report-completion database or a durable failure archive.
+Use [Delivery and Retries](delivery-and-retries.md) to interpret ambiguous sends,
+acknowledgement gaps, and backend failure handling.
 
-Trace propagation and recording use explicit telemetry or the
-[process default](../observability/telemetry.md#the-process-default), initially
-a no-op. They never
-change the outcome of a dispatch or a job, and neither records payloads or
-metadata values. The [telemetry guide](../observability/telemetry.md) explains
-how to export what the queue records.
+## Trace Continuity
 
-## Message metadata
-
-Every queue message has a `Metadata` map of strings, sent as a `metadata` field
-in the message and omitted when empty. Drivers deliver it unchanged: the consumer
-sees the same keys and values the dispatcher sent, and a message sent without
-metadata arrives with a nil map, so messages queued before metadata existed still
-decode. The broker drivers carry it inside the message body, which is why broker
-limits on headers and attributes, such as the ten message attributes of SQS,
-never apply to it.
-
-For a delivered message, the portable metadata round-trip contract covers these
-limits:
-
-| Limit | Value |
-| --- | --- |
-| Entries | At most 16 |
-| Key | 1 to 64 bytes from `A-Za-z0-9._-`, case-sensitive |
-| Value | Valid UTF-8 |
-| Total | At most 4096 bytes of keys and values together |
-
-Beyond them a driver may reject the message. The constants are
-`queue.MaxMetadataEntries`, `queue.MaxMetadataKeyLength`, and
-`queue.MaxMetadataSize`.
-
-In practice the only writer is the queue itself. `Dispatch` has no parameter for
-metadata; with telemetry enabled it adds the keys that propagate the trace,
-`traceparent` and `tracestate`, to a new map, and never modifies a map you own.
-The map exists on the message so that a custom driver, or code that talks to a
-driver directly, can carry its own values, and so that the consumer can read
-them. Metadata is not part of the payload and never affects which queue or
-handler a message reaches.
-
-## Telemetry
-
-Give the dispatcher and the consumer the application's telemetry; without it
-they use `telemetry.Default()`, which records nothing until you set one:
+With a configured `driver` and your application's telemetry handle
+`app.Telemetry()`, construct the dispatcher with explicit telemetry. Import
+`arkoren.dev/core/service/queue` as `queue`:
 
 ```go
-import "arkoren.dev/core/service/queue"
-
-dispatcher := queue.NewDispatcher(driver, func(dispatcher *queue.DispatcherBuilder) {
-	dispatcher.Telemetry(app.Telemetry())
-})
-consumer := queue.NewConsumer(driver, func(consumer *queue.ConsumerBuilder) {
-	consumer.Telemetry(app.Telemetry())
+dispatcher := queue.NewDispatcher(driver, func(producer *queue.DispatcherBuilder) {
+	producer.Telemetry(app.Telemetry())
 })
 ```
 
-Both sides need it. The dispatcher starts the producer span and injects the
-trace context; the consumer extracts it. A consumer without telemetry still runs
-the job, but its work is not part of the trace.
-
-### Spans
-
-Each dispatch records a producer span named `send {queue}`, such as `send emails`.
-Each delivery attempt records a consumer span named `process {queue}` that is a
-child of the producer span, in the same trace, so a trace that began in an HTTP
-request continues through the worker that ran its job. The handler's context
-carries the consumer span, so logs written with the `*Context` methods get the
-trace ID. A retry is a new consumer span with a higher attempt, which shows up as
-a series of siblings under the one producer span.
-
-| Attribute | Value |
-| --- | --- |
-| `messaging.system` | The driver's system, such as `memory`, `rabbitmq`, `nats`, `aws_sqs`, or `cloudflare_queues` |
-| `messaging.operation.name` | `send` or `process` |
-| `messaging.operation.type` | `send` or `process`; span only |
-| `messaging.destination.name` | The queue name |
-| `messaging.message.id` | The message ID; span only |
-| `arkoren.queue.job` | The job name; span only |
-| `arkoren.queue.attempt` | The attempt, when the driver reports one; span only |
-| `error.type` | Set on failure |
-
-The driver names its system. If it names none, or the wrong one, set it with
-`System("name")` on both `DispatcherBuilder` and `ConsumerBuilder`; without either,
-the system is `_OTHER`.
-
-### Metrics
-
-Four metrics are recorded, all with the keys `messaging.system`,
-`messaging.operation.name`, `messaging.destination.name`, and `error.type`. The
-counters `messaging.client.sent.messages` and `messaging.client.consumed.messages`
-count dispatches and delivery attempts. The histograms
-`messaging.client.operation.duration`, for the dispatch call, and
-`messaging.process.duration`, for decoding, execution, and settlement of one
-delivery, are in seconds. They follow the OpenTelemetry messaging conventions,
-and the broadcast side records the same
-four, so one dashboard serves both. [Instrumented components](../observability/instrumented-components.md#queues-and-broadcast)
-lists them next to the other components.
-
-The consumer counts every attempt, not every job. A job that succeeds on its
-third attempt adds three to the consumed counter, one of them without an error,
-which is what lets you chart the retry rate.
-
-### Failures
-
-A failed dispatch sets the producer span to the error status and `error.type`
-to the class of the error. A delivery attempt fails when the handler returns an
-error, including `queue.RetryAfter`, `queue.Reject`, and `queue.Permanent`, a
-recovered panic, and a timeout; the consumer span records the class of the root
-cause. A message that names no handler reports `queue.ErrUnknownName`. Returned
-context cancellation or deadline errors are classified as `context.Canceled` or
-`context.DeadlineExceeded`; other errors use their Go type. Merely passing a
-deadline does not make a successful handler an error.
-
-The consumer span reports the decoding or handler outcome, not settlement
-acceptance. A handler can return `nil` and still encounter an acknowledgement
-failure, or return an error whose retry settles successfully. For accepted retry,
-rejection, and terminal-failure notifications, configure the
-[consumer's event bus](consuming-jobs.md#when-a-job-fails-for-good). `JobFailed` is
-published only after successful terminal settlement, never for a failed settlement
-or a rejection.
-
-The text of an error is never recorded, because it can carry payload data. A span
-tells you that an attempt failed with `*net.OpError`, not what the message said;
-look in your logs for the text, correlated by trace ID.
-
-## What is recorded and what is not
-
-Recorded: the queue name, the job name, the message ID, the attempt, the
-messaging system, durations, and the class of an error. Never recorded: payloads,
-metadata values, and error text. The metadata does hold the propagated trace
-context, which is how the trace crosses the broker. Anyone who can read the broker can read it, as they can read the payload;
-[Telemetry privacy](../observability/telemetry-privacy.md) discusses what that
-means for your deployment.
-
-## Testing
-
-To assert what your code records, use `telemetrytest`. Its fake keeps spans and
-metrics in memory. In a test with `t *testing.T`, dispatch the welcome job from
-[Queues Overview](overview.md#jobs-dispatchers-and-consumers) to the memory
-driver and check the producer side without running a worker:
+Configure the worker independently; producer configuration does not reach another
+process or configure its consumer:
 
 ```go
-import (
-	"arkoren.dev/core/service/queue/memoryqueue"
-	"arkoren.dev/core/service/telemetry"
-	"arkoren.dev/core/service/telemetry/telemetrytest"
-)
-
-fake := telemetrytest.New()
-dispatcher := queue.NewDispatcher(memoryqueue.New(), func(dispatcher *queue.DispatcherBuilder) {
-	dispatcher.Telemetry(fake.Telemetry(t))
+consumer := queue.NewConsumer(driver, func(worker *queue.ConsumerBuilder) {
+	worker.Telemetry(app.Telemetry())
 })
+```
 
-if err := dispatcher.Dispatch(t.Context(), SendWelcomeJob, SendWelcome{UserID: 42}); err != nil {
+Without an explicit handle, both follow the [process default](../observability/telemetry.md#shared-handle)
+at each operation, initially a no-op. Configure an exporter through the
+[telemetry guide](../observability/telemetry.md). Telemetry is not required for
+dispatching or consuming and does not change the selected settlement outcome.
+
+Dispatch records a producer span named `send reports`; each delivery records a
+consumer span named `process reports`. The dispatcher injects trace context into
+message metadata and the consumer extracts it, so attempts can appear as siblings
+under the producer span. The handler receives the consumer span through its
+context; context-aware logging can correlate its work with that trace.
+
+Spans identify the logical destination with `messaging.destination.name`, the
+transport with `messaging.system`, and the operation with
+`messaging.operation.name` and `messaging.operation.type`. They also carry
+`messaging.message.id`, `arkoren.queue.job`, and `arkoren.queue.attempt` when
+available. Shipped system names are `memory`, `rabbitmq`, `nats`, `aws_sqs`, and
+`cloudflare_queues`. `System("name")` on either construction builder overrides
+driver discovery; unnamed custom drivers use `_OTHER`.
+
+## Attempt Metrics
+
+The queue records these instruments, also used by broadcasting:
+
+| Instrument | Observation |
+| --- | --- |
+| `messaging.client.sent.messages` | Number of dispatch attempts reaching driver instrumentation, including failures. |
+| `messaging.client.consumed.messages` | Number of delivery attempts, not distinct jobs. |
+| `messaging.client.operation.duration` | Dispatch operation duration in seconds. |
+| `messaging.process.duration` | Decode, execution, and settlement duration in seconds. |
+
+Metric keys are `messaging.system`, `messaging.operation.name`,
+`messaging.destination.name`, and `error.type` on errors. Message IDs, job names,
+and attempt numbers are span attributes, not metric labels. A job succeeding on
+its third attempt contributes three consumed observations. Do not interpret the
+consumed counter as the number of successfully completed reports.
+
+The consumer span and error classification describe decoding or the handler
+result, **not settlement acceptance**. A `nil` handler result with a failed
+acknowledgement still has successful handler telemetry. An ordinary error whose
+retry settles successfully still records a failed attempt. Context errors use
+`context.Canceled` or `context.DeadlineExceeded`; unknown jobs use
+`queue.ErrUnknownName`; other causes use their Go type. Merely exceeding a
+deadline does not mark a handler returning `nil` as failed.
+
+## Outcome Events
+
+To observe accepted settlements, supply an existing `*event.Bus` named `bus` from
+`arkoren.dev/core/event` when constructing the consumer:
+
+```go
+consumer := queue.NewConsumer(driver, func(worker *queue.ConsumerBuilder) {
+	worker.Events(bus)
+})
+```
+
+This is an alternative construction; combine `Events` and `Telemetry` in one
+callback if you need both. Nil events publish nothing. The bus is process-local,
+not a broker archive or durable notification channel.
+
+| Topic | Meaning |
+| --- | --- |
+| `queue.JobRetried` (`queue.job.retried`) | Driver accepted a policy retry; carries the requested delay. |
+| `queue.JobRejected` (`queue.job.rejected`) | Driver accepted rejection, not proof of native dead-letter transfer. |
+| `queue.JobFailed` (`queue.job.failed`) | Driver accepted terminal failure handling. |
+| `queue.JobTimedOut` (`queue.job.timed-out`) | Handler returned an error after its execution deadline; emitted before settlement. |
+
+For example, register a failure listener during application composition. Here
+`composer` is an existing `*application.Composer` and
+`alerts.Record(ctx, jobName, err) error` is your application operation. Import
+`context` and `arkoren.dev/core/application` for the surrounding composition code:
+
+```go
+unsubscribe, err := bus.Listen(queue.JobFailed, func(ctx context.Context, outcome queue.JobFailedEvent) error {
+	return alerts.Record(ctx, outcome.Name, outcome.Err)
+})
+composer.Require(err)
+composer.Defer(unsubscribe)
+```
+
+`Require` prevents registering a nil cleanup after listener-registration
+failure; `Defer` releases the subscription with its owner. Listeners run
+synchronously, so keep them short and honor their context. Listener failures do
+not change already accepted settlement.
+
+Outcome payloads identify the message ID, job name, logical queue, and reported
+attempt count. Retry, rejection, and failure carry error causes, but no job
+payload. `JobFailed` confirms accepted terminal handling, not archive durability
+or reversal of external effects. Rejection never also emits `JobFailed`.
+
+Failed settlement emits no accepted-outcome event. An errored timed-out attempt
+can emit `JobTimedOut` without a follow-up if settlement fails. Shutdown retries
+and unknown-name retries do not emit `JobRetried`; the shutdown retry path also
+skips timeout notification. Successful handlers emit none of these events.
+Missing events therefore do not prove absence of attempts or broker side effects.
+See [built-in queue events](../events/built-in-events.md#queues) for their types.
+
+## Message Metadata
+
+`queue.Message.Metadata` is a string map traveling beside the JSON payload.
+Broker drivers carry it inside the body, not as native message attributes, so
+SQS's native attribute-count limit does not constrain it. It never selects the
+queue or handler. A message without metadata arrives with a nil map; nil and
+empty are equivalent.
+
+Portable round trips cover at most 16 entries, keys of 1–64 bytes from
+`A-Za-z0-9._-` (case-sensitive), valid UTF-8 values, and at most 4096 bytes of
+keys plus values. Messages outside those bounds may be rejected. Constants
+`MaxMetadataEntries`, `MaxMetadataKeyLength`, and `MaxMetadataSize` expose those
+bounds.
+
+`Dispatch` has no caller-metadata argument. With enabled telemetry it creates a
+fresh propagation map, including `traceparent` and `tracestate` when supplied by
+the propagator. Raw driver callers can supply metadata themselves, but then own
+validation and encoding. Typed handlers receive the decoded payload and context,
+not the raw envelope or an arbitrary metadata-map argument.
+
+## Privacy Boundaries
+
+Automatic telemetry records names, IDs, durations, attempt counts, systems, and
+error classes. It does not record payloads, metadata values, or error text.
+Choose names safe to export rather than embedding personal data in destinations
+or job names. Anyone who can read broker messages can still inspect their payload
+and propagated trace metadata.
+
+Driver logs, handler logs, event error causes, native SDK diagnostics, and failure
+archives are separate surfaces; they can contain unsanitized data and error text.
+Keep secrets out of errors, apply logger redaction, and restrict broker/archive
+access and retention. [Telemetry Privacy](../observability/telemetry-privacy.md)
+explains deployment-level controls.
+
+## Testing Signals
+
+Use `telemetrytest` to inspect recorded spans without an exporter. In a test with
+`t *testing.T`, import `arkoren.dev/core/service/queue`, its `memoryqueue`
+subpackage, `arkoren.dev/core/service/telemetry`, and its `telemetrytest`
+subpackage. Use the report definition from
+[Producing Jobs](producing-jobs.md#defining-jobs):
+
+```go
+signals := telemetrytest.New()
+dispatcher := queue.NewDispatcher(memoryqueue.New(), func(producer *queue.DispatcherBuilder) {
+	producer.Telemetry(signals.Telemetry(t))
+})
+```
+
+Dispatch one report and check the producer observation:
+
+```go
+if err := dispatcher.Dispatch(t.Context(), BuildReportJob, BuildReport{ReportID: "rpt-204"}); err != nil {
 	t.Fatal(err)
 }
-
-fake.AssertSpan(t, "send emails",
-	telemetry.String("arkoren.queue.job", "send-welcome"),
-	telemetry.String("messaging.system", "memory"),
-)
-fake.AssertCounter(t, "messaging.client.sent.messages", 1,
-	telemetry.String("messaging.destination.name", "emails"),
-)
+signals.AssertSpan(t, "send reports", telemetry.String("arkoren.queue.job", "build-report"))
+signals.AssertCounter(t, "messaging.client.sent.messages", 1,
+	telemetry.String("messaging.destination.name", "reports"))
 ```
 
-Give the consumer the same `fake.Telemetry(t)` and run a job with `queuetest`'s
-`Drain` to assert on the `process emails` span. [Fakes](../testing/fakes.md#asserting-on-telemetry)
-covers the telemetry fake.
+This checks producer instrumentation, not worker execution or broker retention.
+To inspect `process reports`, give the consumer the same fake telemetry and
+[drain a fake-backed job](consuming-jobs.md#testing-handlers). Assert event
+publication separately from spans when testing settlement behavior.
 
-For every function and option, see [the `queue` API reference](https://pkg.go.dev/arkoren.dev/core/service/queue)
-and [the `telemetry` API reference](https://pkg.go.dev/arkoren.dev/core/service/telemetry).
+See the [`queue` API](https://pkg.go.dev/arkoren.dev/core/service/queue) and
+[`telemetrytest` API](https://pkg.go.dev/arkoren.dev/core/service/telemetry/telemetrytest).

@@ -1,128 +1,94 @@
 ---
-title: Browser Login with OAuth and OpenID Connect
-nav: OAuth Browser Login
-description: Sign people in through an external provider, map issuer and subject to a local user, and keep them signed in with a session.
+title: OAuth Login
+description: Complete external browser sign-in and map the provider identity to a local account safely.
 order: 40
+summary:
+  - Configure an external provider and complete browser login through a shared session identity.
+  - Link local accounts by issuer and subject while preserving state, nonce, and redirect checks.
+  - Apply each provider's callback and identity requirements and handle bounded outcome events.
 ---
 
-# Browser Login with OAuth and OpenID Connect
+# OAuth Login
 
-## Introduction
+Let a provider check a person's credentials, then create a local browser login
+for the matching account. OpenID Connect (OIDC) adds verified ID tokens to the
+OAuth 2 authorization flow; plain OAuth2 providers instead supply identity
+through an authenticated user API. `oauthauth` supports both paths.
 
-Instead of managing passwords yourself, you can let people sign in with an
-account they already have, at Google, Microsoft, GitHub, or your company's
-identity provider. The provider checks who they are and sends them back to your
-service with proof. **OpenID Connect** (OIDC) is the standard for this proof:
-it adds signed identity tokens on top of **OAuth 2**, the protocol that sends
-the browser to the provider and back. Some providers, GitHub among them, speak
-only plain OAuth 2, where the service asks the provider's API who the user is.
+You still own local accounts and external-account linkage. The adapter completes
+the provider flow, calls your mapper, and stores its returned account identifier
+with [Session Login](session-login.md). It is not an authorization server and
+does not acquire API tokens for arbitrary clients or refresh tokens for your
+service. To accept an existing JWT at an API, use [OIDC Tokens](oidc-bearer.md).
 
-The `oauthauth` package, in the `arkoren.dev/driver/oauth` module, handles
-both. This page covers browser login. For programs presenting provider-issued
-access tokens, follow [OIDC Bearer Verification](oidc-bearer.md).
-It is not a driver of a contract: it plugs into the [`auth`
-package](overview.md) as login handlers and as a bearer token verifier, so the
-rest of your service sees an ordinary signed-in user.
+## Choose Providers
 
-## Compatibility matrix
+Use a preset when it matches your provider; it includes identity checks that a
+generic adapter does not infer. The matrix describes shipped adapter behavior,
+not every feature offered by the provider. PKCE is the authorization-code
+challenge sent by default, not a claim about provider-side enforcement.
 
-Compare Arkoren's provider presets and generic adapters, not every authentication
-feature offered by each identity service. The PKCE column describes the default
-authorization-code challenge; it does not attest to provider-side enforcement.
-All browser rows use the shared session identity shown below.
+### Compatibility Matrix
 
-| Provider | Browser login | OIDC discovery | PKCE by default | Requires `key.Signing` | Verified-email filter |
+| Provider | Browser login | OIDC discovery | PKCE default | Verified-email filter | JWT verification |
 | --- | --- | --- | --- | --- | --- |
-| [Google](#google) | Yes | Yes | Yes | No | Yes |
-| [Microsoft](#microsoft) | Yes — Enforces the selected tenant policy. | Yes | Yes | No | Yes — Email is empty unless xms_edov is boolean true. |
-| [GitHub](#github) | Yes | No | Yes | No | Yes — Uses only the primary verified address. |
-| [Apple](#apple) | Yes | Yes | No | Yes | No |
-| [Generic OIDC](#generic-oidc) | Yes | Yes | Yes | No | No |
-| [Generic OAuth2](#generic-oauth2) | Yes | No | Yes | No | No — The application-supplied UserInfoFunc owns email verification. |
+| [Google](#google) | Yes | Yes | Yes | Yes | Yes — Requires explicit API audiences. |
+| [Microsoft](#microsoft) | Yes — Enforces the selected tenant policy. | Yes | Yes | Yes — Requires boolean xms_edov. | Yes — Enforces the selected tenant policy. |
+| [GitHub](#github) | Yes | No | Yes | Yes — Selects the primary verified address. | No |
+| [Apple](#apple) | Yes — Requires a POST callback and key.Signing. | Yes | No | No | Yes — Requires explicit API audiences. |
+| [Generic OIDC](#generic-oidc) | Yes | Yes | Yes | No | Yes — Requires explicit API audiences. |
+| [Generic OAuth2](#generic-oauth2) | Yes | No | Yes | Partial — The application owns user-info validation. | No |
 
-All clients need an encrypter for browser login. Apple forces PKCE off and uses
-a cross-site POST callback; follow its [callback setup](#apple) rather than
-the ordinary GET route. Only OIDC-based adapters support the separate
-[bearer-verification task](oidc-bearer.md), which requires an explicit API audience.
-Even a filtered email is not a safe account-linking key: use issuer and subject.
-Every OIDC row requires a nonempty final subject after provider-specific mapping;
-GitHub requires a positive numeric user ID. The generic OAuth2 function owns its
-issuer and subject checks. These checks do not establish an API token's purpose.
+All clients require an encrypter. JWT verification requires OIDC, explicit API
+audiences, and your provider's token-purpose policy; it is not interchangeable
+with browser ID-token verification. A filtered email is still not an account key.
 
-## Installation
+## Configure Clients
 
-Run this command from your application's module directory:
+Register an application and exact callback URL with your provider. Obtain its
+client ID and required credentials, then install the adapter in your module:
 
 ```sh
 go get arkoren.dev/driver/oauth
 ```
 
-Import the package under the name `oauth`:
+Import it as `oauth`. The example uses an existing `cipher *crypto.Encrypter`
+from [Encryption](../encryption/overview.md), plus `clientID` and `clientSecret`
+loaded from your configuration/secret provider:
 
 ```go
 import oauth "arkoren.dev/driver/oauth/oauthauth"
-```
 
-The examples use standard-library `context` and `os`, `auth` from
-`arkoren.dev/core/http/auth`, and `application` from `arkoren.dev/core/application` for the
-development-environment check. `r` and `web` are
-your existing router and CSRF-protected browser group; keep the session
-middleware outside that group when also serving an Apple callback.
-
-Focused construction snippets keep error results visible and assume success;
-handle constructor errors before using clients. Identity-mapping and login
-decisions retain their checks.
-
-## Creating a client
-
-Register your service with the provider first. It gives you a **client ID**
-and usually a **client secret**, and it asks for the exact URL it should send
-people back to, the **redirect URL**. You also need an
-[encrypter](../encryption/overview.md), named `cipher` below, to seal the
-short-lived login cookie. Use the same encryption key on every service instance:
-a login can start on one instance and finish on another. Then create a client
-with your registered values:
-
-```go
-client, err := oauth.New(
-	oauth.Google(),
-	cipher,
-	os.Getenv("GOOGLE_CLIENT_ID"),
-	func(client *oauth.ClientBuilder) {
-		client.ClientSecret(os.Getenv("GOOGLE_CLIENT_SECRET"))
-		client.RedirectURL("https://app.example.com/oauth/callback")
+client, err := oauth.New(oauth.Google(), cipher, clientID,
+	func(login *oauth.ClientBuilder) {
+		login.ClientSecret(clientSecret)
+		login.RedirectURL("https://app.example.com/oauth/callback")
 	},
 )
 ```
 
-The first argument selects the provider; the second supplies the encrypter;
-the third is the registered client ID. For OIDC login, that client ID is the
-required ID-token **audience**, the token's intended recipient: the token's
-`aud` must contain that value. `ClientBuilder.Audiences` applies only to bearer
-verification and does not change this callback check. Browser-only clients can
-leave it unset; see [Protecting an API](#protecting-an-api) for combined use.
+Handle the constructor error before using `client`. Construction validates
+inputs but performs no network I/O. Use a stable encryption key shared by all
+instances that can receive callbacks; key provisioning belongs in
+[Encryption Keys](../encryption/keys.md), not in each request handler.
 
-Configuration callbacks run once, in order, on a fresh draft before validation.
-Do not pass a nil callback: it panics. Expanding a nil or empty callback slice
-applies no changes. Builder methods return the same draft.
+For OIDC, the positional `clientID` is the required browser ID-token audience,
+its intended recipient. `ClientBuilder.Audiences` configures only
+[API verification](oidc-bearer.md#prepare-verification), not this callback check.
+PKCE starts enabled; disable it only for a provider that cannot support it.
+Apple forces it off independently of this setting.
 
-The client copies scope and audience slices when you supply them and when it
-publishes its settings. Keeping a draft does not let you change the completed
-client, but supplied services and captured values remain shared. PKCE is enabled
-by default except for the Apple preset; explicitly setting `PKCE(false)` also
-disables that protection. Disable it only for a provider that cannot support PKCE.
-`Config` is a redacted diagnostic representation, not a constructor argument
-or a settings getter.
+Use a distinct `ClientBuilder.Name` for each provider client. It prefixes state
+cookies and defaults to `arkoren.oauth`; invalid cookie names fail construction.
+Configuration callbacks run once in order, and nil callback entries panic.
+The published client copies its settings and scope/audience slices; retained
+drafts cannot change it, but services and captured application state remain shared.
 
-`ClientBuilder.Name` defaults to `arkoren.oauth` and prefixes the login cookies.
-`New` rejects a final prefix that cannot form a valid HTTP cookie name, including
-the secure `__Host-` prefix when enabled. Invalid names fail construction rather
-than allowing a redirect whose login cookie the browser cannot receive.
+## Start Discovery
 
-Use an existing `app *application.Application`
-([lifecycle setup](../application/lifecycle-and-ownership.md)). OIDC clients
-discover provider settings before serving; verification may fetch signing keys.
-Register `Start` so an unreachable provider fails startup, not the first login:
+OIDC clients must discover their endpoints before serving requests. In your
+existing [application composer](../application/lifecycle-and-ownership.md),
+register startup with `application` from `arkoren.dev/core/application`:
 
 ```go
 compose := func(composer *application.Composer) {
@@ -130,430 +96,264 @@ compose := func(composer *application.Composer) {
 }
 ```
 
-If native discovery or the native token verifier returns an error after its
-context is canceled or its deadline expires, the returned chain retains that
-native error and lets `errors.Is` identify `context.Canceled` or
-`context.DeadlineExceeded`. Configuration exits and local claim/policy denials
-are not automatically joined with context errors. This preserves error identity,
-not a guarantee that every cached check performs I/O or fails on an ended context.
-Native diagnostics can contain provider-controlled claims or response text;
-inspect causes deliberately rather than logging them indiscriminately.
+Before successful startup, OIDC handlers return `ErrNotStarted` (`503`). A
+subsequent `Start` refreshes discovered data. Plain OAuth2 clients prepare their
+configured endpoints at construction; their `Start` is a no-op. Signing keys
+can still be retrieved during OIDC token verification.
 
-The client has no `Stop` hook and does not stop its shared encrypter or event bus.
-Your application owns those services and any supplied native HTTP client. Stop
-the encryption drivers after the handlers that use them have finished.
+Keep the returned `*Client`; do not copy its atomic state. It has no `Stop`
+method and does not stop the shared encrypter or event bus. Your application
+owns those services and any supplied native HTTP client; keep encryption
+available until handlers have finished.
 
-## Logging in with a browser
+## Connect Browser Routes
 
-Use a `web` group with [session and CSRF middleware](session-login.md#setting-up).
-Share one identity between auth middleware and the browser handlers;
-`users.FromIdentity` is your mapping function, described below:
+Use an existing session-enabled, CSRF-protected browser group `web`, as in
+[Enable Login](session-login.md#enable-login). Import `auth` from
+`arkoren.dev/core/http/auth`. Your `loadUser` loads a current local `User` by
+integer ID; `mapIdentity` below returns that same ID type:
 
 ```go
-identity := auth.NewSessionIdentity(users.Load)
+identity := auth.NewSessionIdentity(loadUser)
 web.Use(auth.Middleware(identity.Authenticator()))
 web.Get("/login", client.Login())
-web.Get("/oauth/callback", client.Callback(identity, users.FromIdentity))
+web.Get("/oauth/callback", client.Callback(identity, mapIdentity))
 web.Post("/logout", client.Logout(identity))
 ```
 
-A link or button pointing to `/login` starts a login. `Login` redirects the
-browser to the provider, where the person signs in and agrees to share their
-details. The provider then sends the browser to your redirect URL, where
-`Callback` checks the answer, asks you which local user it belongs to, and
-signs that user in with [`identity.Login`](session-login.md#logging-in), exactly
-as a password login would. From then on, `identity.Authenticator()` reads the user from
-the session on every request.
+`Login` redirects to the provider. A successful callback verifies the provider
+identity, maps it, rotates the selected local session ID, and redirects to the
+saved local destination. Subsequent requests use the normal session loader.
+`Logout` removes the local identity and redirects to `/`; it does not sign the
+person out at the provider. Keep logout CSRF-protected.
 
-`Logout` signs the user out of your service with `identity.Logout`, then
-redirects to `/`. It does not sign them out at the provider, where they usually
-want to stay signed in for other services.
+Check `identity.Err()` during setup. An invalid definition or nil mapper is a
+configuration error, not a rejected credential. Callback and logout select
+exactly the identity's session slot. An absent session returns `401` before state
+consumption or provider exchange, without default-slot fallback. If you use
+[custom session selection](session-login.md#select-sessions), share its handle
+with the session middleware. Middleware still owns
+[response-time persistence](../http-capabilities/sessions.md#save-changes);
+successful callback mutation does not prove storage or old-ID retirement succeeded.
 
-Callback and logout resolve `identity.Session(ctx)` once, without default-slot
-fallback. A missing session returns 401 before cookie consumption, provider
-exchange, or mapping. Zero definitions, nil loaders, and nil mappers fail with
-configuration errors before those effects; check `identity.Err()` during setup.
-Optional [shared handles](session-login.md#custom-session-store) select
-context slots, not cookies or storage. Session middleware still owns persistence.
+## Link Local Accounts
 
-### Sending people back where they were
+Identify an external account by the pair `Issuer` and `Subject`, not by email
+or display name. Require an existing link for ordinary sign-in; create accounts
+only under your explicit registration policy. To link another provider to an
+existing account, require proof of control of that local account as a separate,
+authorized action.
 
-A person who opens a private page while signed out should land on that page
-after signing in. Pass the page as `return_to` when starting the login:
-
-```text
-/login?return_to=/invoices/7
-```
-
-The target is kept with the login and checked when it ends: only paths on your
-own site are followed, so the parameter cannot be used to send people to
-another site.
-
-### What happens during a login
-
-When a login starts, the client creates a random **state**, which ties the
-provider's answer to this browser, so an
-attacker cannot slip their own login into someone else's browser. The
-**nonce**, created for OIDC providers, ties the identity token to this login,
-so an ID token from another login is rejected. When PKCE is enabled, the
-**PKCE verifier** makes an intercepted authorization code unusable without that
-verifier. The Apple preset disables PKCE.
-
-These values, and the `return_to` target, are kept in an encrypted, HttpOnly
-cookie that lives for ten minutes and is deleted when the login completes.
-Keeping them in a cookie, rather than in the session, means a login needs no
-session until it ends, and that several logins, for example in two tabs, can
-run side by side. A missing, modified, expired, or state-mismatched cookie fails
-the callback with `400`. The browser deletes its cookie after the callback;
-the client has no server-side used-state registry. Single-use authorization
-codes are enforced by the provider, not by cookie deletion alone.
-
-For an OIDC callback, the ID token must pass signature, expiry, issuer, and
-client-ID audience checks, and its nonce must match the saved login nonce.
-The final `Identity.Subject` must be nonempty after provider-specific mapping;
-for Microsoft that is the checked `oid`, not necessarily the original `sub`.
-These checks run before your mapping function. A missing ID token or failed
-token check returns `ErrInvalidCallback` (400); no local user is signed in.
-
-A token endpoint's native `invalid_grant` rejection also becomes
-`ErrInvalidCallback` (400), retaining the `oauth2.RetrieveError` cause. This can
-mean an invalid, expired, or already-consumed code: start a fresh login rather
-than replaying it. Other exchange failures wrap `ErrProviderUnavailable` (502).
-Cookie deletion does not revoke a copied cookie before its expiry.
-
-## Mapping identities to users
-
-The callback gives your function an **identity**: the provider's name for the
-user, plus the details it shared, such as an email and a display name. Your
-function finds the matching local user, or creates one, and returns the
-identifier to store in the session. That identifier must have the same type
-as the argument accepted by your identity's loader (here `int`). The shared
-definition binds both types, so a mismatched mapper does not compile:
+With standard-library `context`, this application mapper looks up an existing
+link using `accounts.ByIdentity(ctx, issuer, subject)`, which returns the
+application's `Account` or an error:
 
 ```go
-func (users *Users) FromIdentity(ctx context.Context, id oauth.Identity) (int, error) {
-	if id.Issuer == "" || id.Subject == "" {
+mapIdentity := func(ctx context.Context, external oauth.Identity) (int, error) {
+	if external.Issuer == "" || external.Subject == "" {
 		return 0, auth.ErrUnauthenticated
 	}
-	user, err := users.upsertByIdentity(ctx, id.Issuer, id.Subject, id.Email, id.Name)
+	account, err := accounts.ByIdentity(ctx, external.Issuer, external.Subject)
 	if err != nil {
 		return 0, err
 	}
+	if account.Disabled {
+		return 0, auth.ErrUnauthenticated
+	}
 
-	return user.ID, nil
+	return account.ID, nil
 }
 ```
 
-Identify the local user by the pair of `Issuer`, the provider, and `Subject`,
-the provider's ID for the person. Providers guarantee this pair is stable and
-unique; an email address is neither, since people change it and accounts get
-recycled.
+The repository owns uniqueness of the issuer/subject link and rejection of
+unknown accounts. A mapper returning zero and nil error still stores zero as
+the login identifier; Arkoren cannot infer whether it denotes a real account.
+Mapper errors matching `auth.ErrNoCredentials` become `ErrInvalidCallback`
+(`400`); other application errors pass through unchanged.
 
 > [!WARNING]
-> Never link accounts by email alone. Providers differ in whether they check
-> that the person owns the address. An attacker could register a victim's
-> email at a provider that does not check, sign in with it, and take over the
-> victim's account. A populated `Identity.Email` does not by itself prove that
-> the address is verified.
+> Never match or merge accounts by email alone. Some providers pass through
+> unverified email claims, and even verified addresses can change. An automatic
+> email match can give an attacker another person's existing local account.
 
-Email handling depends on the selected provider:
+`Identity.Email` is optional profile data. Google filters using boolean
+`email_verified`, Microsoft using boolean `xms_edov`, and GitHub using its primary
+verified email record. Generic OIDC and Apple pass email through without that
+filter; generic OAuth2 uses whatever your user-info function returns. If an
+action needs a verified address, enforce that policy separately. Treat `Name`
+as untrusted display text and escape it when rendering.
 
-| Provider | What populates `Identity.Email` |
-| --- | --- |
-| `Google` | The email claim only when `email_verified` is boolean `true`. |
-| `Microsoft` | The email claim only when the optional `xms_edov` claim is boolean `true`; configure it in the app registration. |
-| `GitHub` | The primary verified address returned by GitHub's email API. |
-| `OIDC` and `Apple` | The email claim is passed through without an email-verification check. |
-| `OAuth2` | Whatever your `UserInfoFunc` returns; your function owns verification. |
+For browser callbacks, `Identity.Scopes` comes from the token response. If the
+response omits scopes, the client supplies an independent copy of the requested
+scopes. These are provider grants, not your local account's resource permissions.
 
-If an application action requires a verified address, enforce a provider-specific
-verification policy or verify the address yourself. Do not treat provider login
-as an automatic account-linking or email-verification policy.
+## Protect Login State
 
-For browser login, `Identity.Scopes` comes from the token response. If that
-response supplies no scopes, the callback uses an independent copy of the
-requested scopes. A mapper can edit its received slice without changing later
-logins. This is scope handling, not authorization of your application's resources.
+To return a person to an invoice after login, start the flow with a local path:
 
-Return `auth.ErrUnauthenticated` to refuse login with `401`.
-Mapper errors matching `auth.ErrNoCredentials`, including wrapped errors, become
-`ErrInvalidCallback` (400) with the cause preserved. Other errors pass through;
-nobody is signed in.
-
-## Providers
-
-Google, Microsoft, GitHub, and Apple have their own constructors, because each
-needs small adjustments to the standard flow. These selections use the shared
-`oauth` import and client wiring above; Apple's signing inputs are described in
-its [provider setup](#apple):
-
-```go
-oauth.Google(func(provider *oauth.GoogleBuilder) {
-	provider.HostedDomain("example.com") // One verified Workspace domain.
-})
-oauth.Microsoft("common")                           // or your tenant ID
-oauth.GitHub()
-oauth.Apple(teamID, keyID, appleSigning)
+```text
+/login?return_to=/invoices/42
 ```
 
-### Google
+The client validates this target before redirecting to the provider, seals it
+with the login state, and uses a safe redirect after the callback. Unsafe targets
+return `ErrInvalidLoginRequest` (`400`). Do not bypass this path by redirecting
+to another unvalidated request parameter.
 
-Choose Google for Google account or Workspace login. Register a web client with
-your callback URL and obtain its client ID and secret before creating the client.
+Each login gets random state, an OIDC nonce when applicable, and a PKCE verifier
+when enabled. State binds the callback to the browser login; nonce binds the
+ID token to that attempt. These values live in an encrypted, HttpOnly cookie
+for ten minutes, not in the application session. The client keeps room for at
+most five live login cookies, allowing parallel tabs.
 
-#### Installation
+Callbacks reject missing, tampered, expired, or mismatched state cookies. For
+OIDC they also check the ID token's signature, expiry, issuer, positional
+client-ID audience, nonempty final subject, and saved nonce before mapping.
+Plain OAuth2 relies on the authenticated user API instead of an ID token.
+Cookie deletion is browser cleanup, not a server-side replay registry: a copied
+cookie can survive until expiry. The provider must enforce one-time authorization
+codes.
 
-Use the shared [module installation and `oauth` import](#installation).
+Cookies use `Secure` and the `__Host-` prefix by default. Use HTTPS for login
+and registered callbacks. `ClientBuilder.AllowInsecure(true)` removes both
+protections for plain-HTTP development only; never enable it in production.
+Apple's cross-site cookie requires HTTPS even during development.
 
-#### Connecting
+## Google
 
-Use the [client example](#creating-a-client); handle its constructor error and register
-the `Start` hook. Construction performs no network I/O; startup discovers Google.
+Choose Google for Google account sign-in. Register a web client and the callback
+URL in Google, then use `oauth.Google()` in the shared constructor with its
+client ID and secret. Keep the startup hook for discovery and the ordinary GET
+callback.
 
-#### Configuration
+If only one Workspace domain may sign in, replace the provider argument with:
 
-The preset requests `openid`, `email`, and `profile` by default. To restrict
-Workspace login, use the `HostedDomain("example.com")` callback shown above instead
-of `oauth.Google()`.
+```go
+provider := oauth.Google(func(google *oauth.GoogleBuilder) {
+	google.HostedDomain("example.com")
+})
+```
 
-Google callbacks follow the client's once-only publication rules.
-`HostedDomain` checks the verified `hd` claim; it is not merely an account chooser
-hint. Without that restriction, the preset does not restrict Workspace domains.
+Pass `provider` to `oauth.New`. This checks the verified `hd` claim as well as
+sending the account-chooser hint; the default accepts any domain. Default scopes
+are `openid`, `email`, and `profile`. The preset normalizes the issuer to
+`https://accounts.google.com` and leaves email empty without boolean
+`email_verified: true`. Keep issuer/subject linkage even with this filter.
 
-#### Signing in
+See the [`Google` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#Google).
 
-Follow the shared [browser-login task](#logging-in-with-a-browser) to create a
-local session from the Google identity.
+## Microsoft
 
-#### Behavior and limits
+Choose Microsoft for Entra ID or Microsoft-account sign-in. Register the callback
+URL and obtain the application's client ID and secret. Replace the shared
+provider argument with a deliberately chosen tenant policy:
 
-The preset normalizes the issuer to `https://accounts.google.com`. Email is empty
-unless `email_verified` is boolean `true`; keep the shared
-[issuer-and-subject mapping policy](#mapping-identities-to-users).
+```go
+provider := oauth.Microsoft("organizations")
+```
 
-#### API references
+Pass it to `oauth.New`, keep `Start` for discovery, and use the shared browser
+routes and mapper. `organizations` rejects the reserved personal-account tenant;
+`consumers` accepts only that tenant (`9188040d-6c67-4c5b-b112-36a304b66dad`).
+`common` accepts both classes. For single-tenant use, pass the tenant ID, matched
+case-insensitively, not a domain name such as `contoso.onmicrosoft.com`.
 
-See the [`Google` and `GoogleBuilder` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
+Both callback and bearer checks enforce the verified `tid` policy and require
+`oid`. The issuer must be `https://login.microsoftonline.com/<tid>/v2.0`, and
+the final subject is `oid`. The check uses tenant context, not the home `idp`:
+a personal account invited into an organization can pass `organizations` in
+that organization's context. Add a narrower tenant allowlist in your mapper
+if the selected preset is broader than your policy.
 
-### Microsoft
+Default scopes are `openid`, `profile`, and `email`. Email remains empty unless
+the optional `xms_edov` claim is boolean true; configure that claim in the app
+registration if needed. It is still not a local-account key.
 
-Choose Microsoft for Entra ID or Microsoft account login. Register an application
-with your callback URL, obtain its client ID and secret, and choose the tenant
-policy before accepting logins.
+See the [`Microsoft` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#Microsoft).
 
-#### Installation
+## GitHub
 
-Use the shared [module installation and `oauth` import](#installation).
+Choose GitHub for plain OAuth2 sign-in. Register a GitHub OAuth application and
+the callback URL, then pass its ID/secret to the shared constructor with:
 
-#### Connecting
+```go
+provider := oauth.GitHub()
+```
 
-In the [client example](#creating-a-client), replace `oauth.Google()` with
-`oauth.Microsoft("common")` from the preset block above and use your Microsoft
-client ID and secret. Handle the constructor error and retain the `Start` hook;
-discovery happens at startup, not construction.
+Use the shared GET callback and local mapper. `Start` is a no-op because this
+adapter has configured endpoints, not discovery. Default scopes are `read:user`
+and `user:email`; PKCE remains enabled.
 
-#### Configuration
+After code exchange, the preset calls the user and email APIs. Its issuer is
+`https://github.com`, and subject is the positive numeric user ID, not the mutable
+login name. Missing, zero, or negative IDs and user/email API failures return
+`ErrProviderUnavailable` (`502`) before mapping. Email is the primary verified
+address or empty. This preset cannot verify OIDC bearer tokens.
 
-Choose the tenant argument for the accounts your application accepts:
+See the [`GitHub` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#GitHub).
 
-- `common` accepts both organizational and personal-account tenants.
-- `organizations` accepts organizational tenant contexts and rejects Microsoft's
-  reserved personal-account tenant.
-- `consumers` accepts only the personal-account tenant,
-  `9188040d-6c67-4c5b-b112-36a304b66dad`.
-- An explicit tenant ID accepts only that ID, matched case-insensitively. Tenant
-  domain names such as `contoso.onmicrosoft.com` are not supported.
+## Apple
 
-These are verified-token restrictions, not only sign-in-page filters. Both
-`Callback` and `Verify` enforce them. There is no optional provider builder.
-Default scopes are `openid`, `profile`, and `email`.
-
-#### Signing in
-
-Use the shared [browser-login task](#logging-in-with-a-browser). If your application
-allows only a subset of the tenants accepted by the preset, enforce that allowlist
-in your [mapping function](#mapping-identities-to-users).
-
-#### Behavior and limits
-
-Tokens must have `tid` and `oid`, and their issuer must equal
-`https://login.microsoftonline.com/<tid>/v2.0`; `Identity.Subject` uses `oid`.
-Tenant policy checks the verified `tid`, not the home identity provider (`idp`).
-A personal account acting as a guest in an organization therefore has an
-organizational tenant context: it can pass `organizations` or that organization's
-explicit tenant check, but not `consumers`.
-
-Email is empty unless the optional `xms_edov` claim is boolean `true`; configure
-that claim in the app registration if you need email values. Email remains
-unsuitable for account linking.
-
-#### API references
-
-See the [`Microsoft` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
-
-### GitHub
-
-Choose GitHub for GitHub account login through plain OAuth2. Register an OAuth
-application with your callback URL and obtain its client ID and secret.
-
-#### Installation
-
-Use the shared [module installation and `oauth` import](#installation).
-
-#### Connecting
-
-In the [client example](#creating-a-client), replace `oauth.Google()` with
-`oauth.GitHub()` from the preset block above and supply your GitHub credentials.
-Handle the constructor error. `Start` is a no-op for this OAuth2 preset;
-construction prepares the endpoints without contacting GitHub.
-
-#### Configuration
-
-The preset requests `read:user` and `user:email` by default. There is no optional
-provider builder. Shared client settings still apply, including PKCE enabled by
-default.
-
-#### Signing in
-
-Follow the shared [browser-login task](#logging-in-with-a-browser). After the
-code exchange, the preset calls GitHub's user and email APIs before your mapping
-function creates or selects the local user.
-
-#### Behavior and limits
-
-The issuer is `https://github.com` and the subject is the numeric user ID, not
-the changeable login name. A missing, zero, or negative ID fails the callback
-with `ErrProviderUnavailable` (502) before your mapper runs; the adapter never
-turns a missing ID into subject `"0"`. Email is the primary verified address, or
-empty if none exists. User or email API failures also fail with `502`. This
-preset has no OIDC discovery and cannot be used with `Verify`.
-
-#### API references
-
-See the [`GitHub` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
-
-### Apple
-
-Choose Apple for Sign in with Apple. Obtain a Services ID, registered HTTPS
-callback, and the signing credentials below before constructing a client.
-
-#### Installation
-
-Use the shared [module installation and `oauth` import](#installation).
-
-#### Connecting
-
-In the [client example](#creating-a-client), replace `oauth.Google()` with
-`oauth.Apple(teamID, keyID, appleSigning)` from the preset block. Use the Services
-ID as the client ID and omit `ClientSecret`. Handle `oauth.New` errors, including
-invalid signing keys, and retain the `Start` hook for discovery.
-
-#### Configuration
-
-Apple requires a Services ID, team ID, key ID, and a validated `key.Signing`
-identity loaded from Apple's PKCS #8 `.p8` file. Import
-`arkoren.dev/foundation/key`, then load it before constructing the provider:
+Choose Apple for Sign in with Apple. Register an HTTPS callback and a Services
+ID, obtain your team ID/key ID, and load the Apple-issued `.p8` signing key with
+`key.LoadSigning` from `arkoren.dev/foundation/key`. Do not generate an unrelated
+local replacement for a key registered with Apple.
 
 ```go
 appleSigning, err := key.LoadSigning("AuthKey_ABC123DEFG.p8")
 ```
 
-Do not generate a replacement locally: Apple's provisioning associates the key
-with your account. The provider signs a short-lived client secret for each exchange;
-do not configure `ClientSecret` for this preset. Its default scopes are
-`openid`, `name`, and `email`. There is no optional provider builder, and the preset
-forces PKCE off even if you enable it.
-Keep HTTPS even during Apple development: its `SameSite=None` login cookie
-requires `Secure` in modern browsers.
-
-#### Signing in
-
-Use the shared [login and logout handlers](#logging-in-with-a-browser), but replace
-the GET callback with the POST route below. Set the client's `RedirectURL` to
-`https://app.example.com/oauth/apple/callback` and register that URL with Apple.
-
-> [!WARNING]
-> Apple sends a cross-site `POST` callback, which CSRF middleware rejects.
-> Mount only this callback outside CSRF protection, while retaining the session
-> middleware; keep CSRF protection on logout and other state-changing routes.
-> Its encrypted state cookie protects the callback instead.
-
-With an `apple` client created and started using that preset, mount its callback
-on a session-enabled router outside the CSRF-protected `web` group:
+Handle that error, then construct the provider:
 
 ```go
-r.Post("/oauth/apple/callback", apple.Callback(identity, users.FromIdentity))
+provider := oauth.Apple(teamID, keyID, appleSigning)
 ```
 
-Use that exact registered redirect URL. Apple sends the name only on first
-authorization, in an unsigned form field; store it as display text, not as an
-authorization claim. Later logins may have an empty name. Email can be a private
-relay address.
+Use the Services ID as `oauth.New`'s client ID, omit `ClientSecret`, and configure
+`RedirectURL("https://app.example.com/oauth/apple/callback")`. The constructor
+rejects an invalid key. The provider signs a short-lived client secret per code
+exchange, requires discovery, requests `openid`, `name`, and `email`, and forces
+PKCE off.
 
-#### Behavior and limits
+Apple sends a cross-site POST callback. Mount only that callback outside CSRF
+protection, while retaining session middleware; keep CSRF on logout and all
+other state-changing browser routes. With `r` your session-enabled router,
+the callback is:
 
-Apple passes the email claim through without an email-verification filter; apply the
-shared [identity-mapping policy](#mapping-identities-to-users) rather than linking
-accounts by email.
+```go
+r.Post("/oauth/apple/callback", client.Callback(identity, mapIdentity))
+```
 
-#### API references
+Use an Apple-configured `client`, not the Google baseline. Its encrypted state
+cookie protects this callback and uses `SameSite=None`; HTTPS is required.
+Apple sends the name only on first authorization in an unsigned form field,
+so store it as optional display text, not an authorization claim. Email can be
+a private relay address and is not filtered for verification by this preset.
 
-See the [`Apple` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
+See the [`Apple` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#Apple).
 
-### Generic OIDC
+## Generic OIDC
 
-Choose the generic adapter for another OpenID Connect provider, such as Okta,
-Auth0, Keycloak, GitLab, or Zitadel. Register a browser client and callback URL
-with that service and obtain its issuer URL and client credentials.
+Choose this adapter for another OIDC service. Register a browser client and
+callback with the service, then configure its trusted issuer URL:
 
-#### Installation
+```go
+provider := oauth.OIDC("https://id.example.com/realms/invoices")
+```
 
-Use the shared [module installation and `oauth` import](#installation).
+Pass the provider and registered credentials to the shared constructor; keep
+discovery startup and the shared GET callback. Default scopes contain only
+`openid`. If supported and needed, use `ClientBuilder.Scopes("openid", "profile",
+"email")`. PKCE is enabled by default. No provider-specific tenant or email
+policy is inferred: implement those checks before linking the local account.
 
-#### Connecting
+See the [`OIDC` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#OIDC).
 
-In the [client example](#creating-a-client), replace `oauth.Google()` with
-`oauth.OIDC("https://id.example.com/realms/app")`, using your provider's issuer
-URL and registered credentials. Handle the constructor error and retain the `Start`
-hook: startup discovers endpoints and prepares token verification.
+## Generic OAuth2
 
-#### Configuration
-
-There is no optional provider builder. With `Scopes` unset, this adapter requests
-only `openid`. Use the shared `client.Scopes("openid", "profile", "email")`
-configuration if your provider supports those scopes and you need those claims.
-PKCE is enabled by default; disable it only for a provider that cannot support it.
-
-#### Signing in
-
-Follow the shared [browser-login task](#logging-in-with-a-browser). The callback
-verifies the ID token and nonce before calling your mapping function.
-
-#### Behavior and limits
-
-Unlike Google and Microsoft, this adapter does not filter the email claim for
-verification. Enforce your own email policy. To also accept provider-issued JWT
-access tokens, add [API audience configuration](#protecting-an-api) and follow
-the separate [OIDC bearer task](oidc-bearer.md).
-
-#### API references
-
-See the [`OIDC` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
-
-### Generic OAuth2
-
-Choose this adapter when the provider supports plain OAuth2 without OIDC.
-Register a client and callback URL, obtain its credentials and authorization/token
-endpoints, and implement a user-info function for its authenticated user API.
-
-#### Installation
-
-Use the shared [module installation and `oauth` import](#installation).
-
-#### Connecting
-
-For a plain OAuth2 provider without OIDC discovery, configure both endpoints
-and your application's `loadIdentity` (`oauth.UserInfoFunc`):
+Choose this adapter only when the provider has OAuth2 but no OIDC. Register
+your application/callback and obtain its trusted authorization and token URLs.
+Supply your own authenticated user-info function:
 
 ```go
 provider := oauth.OAuth2(oauth.Endpoint{
@@ -562,148 +362,56 @@ provider := oauth.OAuth2(oauth.Endpoint{
 }, loadIdentity)
 ```
 
-Pass `provider` to `oauth.New` using the shared [client setup](#creating-a-client)
-and your registered credentials. Handle its constructor error. Construction prepares
-the endpoints without network I/O; `Start` is a no-op.
+`loadIdentity` is `oauth.UserInfoFunc`: it receives `context.Context` and an
+authenticated `*http.Client` and returns `oauth.Identity`. It must call the
+provider's user API with that context, check status, close the response body,
+and validate a nonempty stable issuer/subject and any email policy. The generic
+adapter does not impose a provider-specific subject schema.
 
-#### Configuration
+Pass the provider and registered credentials to the shared constructor and
+use its GET callback. There are no default scopes; configure `Scopes` for the
+provider's user API. Endpoints are prepared without network I/O, and `Start`
+is a no-op. PKCE starts enabled; disable it only if unsupported. User-info
+failures become `502`, and `Verify` is unsupported because there is no OIDC
+verifier.
 
-There is no optional provider builder and no default scope list. Set
-`client.Scopes(...)` in the shared client callback to the scopes required by your
-provider's user API. PKCE is enabled by default; disable it only if unsupported.
+See the [`OAuth2` and `UserInfoFunc` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#OAuth2).
 
-#### Signing in
+## Handle Failures
 
-Use the shared [browser-login task](#logging-in-with-a-browser). After the code
-exchange, `loadIdentity` supplies the identity passed to your mapping function.
+Invalid state, failed ID-token checks, provider callback errors, and a token
+endpoint's native `invalid_grant` rejection return `ErrInvalidCallback` (`400`).
+Start a fresh login rather than replaying an invalid, expired, or consumed code.
+Other exchange failures return `ErrProviderUnavailable` (`502`). Returned errors
+retain native causes for explicit inspection; provider response text and claims
+can be sensitive, so do not dump those chains into logs.
 
-#### Behavior and limits
-
-`loadIdentity` gets an authenticated `*http.Client` and must call the provider's user API with the
-supplied context, check the HTTP status, close the response body, and return a
-stable issuer and subject. It owns email-verification policy. It does not receive
-an ID token, and this provider cannot be used with `Verify`.
-
-An exchange rejected with native `invalid_grant` returns `400`. Other exchange
-failures and user-info failures return `502` instead of signing the user in. The
-generic adapter does not enforce a provider-specific subject schema: keep the
-[issuer-and-subject mapping policy](#mapping-identities-to-users).
-
-#### API references
-
-See the [`OAuth2`, `Endpoint`, and `UserInfoFunc` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
-
-## Protecting an API
-
-Browser login creates a local session; it does not turn your application into
-an OAuth authorization server. To accept an existing provider-issued JWT access
-token, follow [OIDC Bearer Verification](oidc-bearer.md). That task needs an API
-audience and no browser routes or session middleware.
-
-If the same OIDC client handles browser login and API verification, add the API
-audience to the `*oauth.ClientBuilder` draft in the
-[client setup](#creating-a-client):
-
-```go
-client.Audiences("https://api.example.com")
-```
-
-Keep the registered browser client ID as the third argument to `oauth.New`.
-The callback still requires that client ID in the ID token's `aud`. An ID token
-addressed only to `https://api.example.com` fails with `ErrInvalidCallback` (400),
-even with a valid signature and matching nonce. `client.Verify` instead requires
-at least one token audience to match a configured API audience. Without
-`Audiences`, `Verify` returns `ErrNoAudiences`; browser login still works.
-
-Keep the [browser handlers](#logging-in-with-a-browser) and pass the same started
-client's `Verify` method to the [bearer setup](oidc-bearer.md#requiring-an-identity).
-Audience separation does not by itself prove that a bearer token is an access
-token or authorize an API action. `Verify` rejects a `nonce` claim or a payload
-`typ` claim equal to `ID`, case-insensitively, as heuristics. An unmarked JWT
-matching an accepted audience can still pass. These checks do not define a
-universal access-token profile or require every provider to issue `at+jwt`.
-Configure the audiences intended for your API, apply any additional
-[provider-specific purpose verification](oidc-bearer.md#preparing-the-verifier),
-and enforce your application's [authorization rules](../authorization/overview.md).
+Discovery errors retain native causes and context cancellation/deadline identity
+when applicable. The bearer-only [verification path](oidc-bearer.md#handle-verification)
+has additional context checks; do not assume every browser callback or local
+policy denial behaves the same way.
 
 ## Events
 
-With `oauth.ClientBuilder.Events`, the client publishes an [event](../events/overview.md)
-for successful and failed callbacks, logout, and token rejection during
-verification. Nil publishes nothing. Successful-login payloads contain issuer
-and subject, which can still identify a person; apply your privacy policy before
-retaining them. Logout has no payload and reports local session mutation, not
-provider logout or response-time persistence by session middleware.
+If you need outcome events, configure `ClientBuilder.Events` with your existing
+[event bus](../events/overview.md). Nil publishes nothing. Successful callbacks
+publish issuer and subject, which can identify a person. Logout has no payload
+and reports local mutation, not provider logout or durable session persistence.
 
-`LoginFailedEvent.Err` is only `ErrInvalidCallback`, `ErrProviderUnavailable`, or
-an opaque local-login failure classification. It has no native, mapper, or
-session-error cause. `TokenRejectedEvent.Err` is a fixed opaque rejection without
-token claims or native causes. Neither event error is the original error returned
-by `Callback` or `Verify`. Those returned errors retain their causes for explicit
-`errors.Is`/`errors.As` inspection; their native diagnostics can be sensitive.
-Do not classify opaque event errors by comparing their text.
+`LoginFailedEvent.Err` contains `ErrInvalidCallback`, `ErrProviderUnavailable`,
+or an opaque local-login classification, without the original cause.
+`ProviderError` is an untrusted, allowlisted RFC 6749 callback hint; unknown
+values and arbitrary descriptions are omitted. Configuration, not-started, and
+missing-session exits before cookie consumption do not publish callback outcomes.
+`TokenRejectedEvent.Err` is likewise a fixed opaque classification; unsupported
+providers and missing audiences return before publication. Do not classify opaque
+errors by matching their text. Returned errors retain their separate diagnostic
+chains, and event context values are not sanitized by these payload limits.
 
-`LoginFailedEvent.ProviderError` is an untrusted callback hint, not an authenticated
-provider diagnosis. It preserves only these RFC 6749 authorization-error codes:
-`invalid_request`, `unauthorized_client`, `access_denied`,
-`unsupported_response_type`, `invalid_scope`, `server_error`, and
-`temporarily_unavailable`. Absent or unknown values become empty; arbitrary
-request strings and descriptions are not published.
+Ordinary `fmt` formatting redacts owned client/draft configuration; `Config`
+formatting redacts a nonempty client secret. This is not a general serialization
+or logging guarantee: arbitrary claims, native objects, callback captures, and
+explicitly unwrapped errors remain outside that boundary.
 
-Startup failures and browser-handler not-started errors return before those
-outcome events, as do missing selected sessions and invalid identity/mapper
-configuration. For `Verify`, unsupported-provider
-and missing-audience errors return before publication, but a not-started error
-publishes a token-rejection event.
-
-These bounds describe the emitted payloads. Listeners still receive the caller's
-context; context values and custom listener logging are not sanitized by them.
-
-## Diagnostic formatting and ownership
-
-Keep the `*Client` returned by `New`; do not copy its atomic state. Its
-`fmt.Formatter` method writes `[REDACTED OAuth client]` for ordinary `%v`, `%+v`,
-and `%#v` diagnostics. A `ClientBuilder` value or pointer similarly writes
-`[REDACTED OAuth draft]`. These hooks do not traverse secrets, shared services,
-native clients, or callback captures. Separately, `Config.String`, `GoString`,
-and `LogValue` replace a nonempty `ClientSecret` with `[REDACTED]`; other fields
-are not recursively sanitized.
-
-This is a formatting boundary, not a general serialization or logging guarantee.
-It does not promise sanitization through arbitrary serialization, reflection,
-invalid `fmt` verbs, explicitly unwrapped errors, or formatting native/caller-owned
-objects themselves. Keep credential exports and application data out of diagnostics.
-
-## Local development
-
-The login cookie uses the `__Host-` prefix and the `Secure` flag, so browsers
-only accept it over HTTPS. Chrome and Firefox make an exception for
-`localhost`, so local development usually just works. Safari does not, and no
-browser makes one for `.test` domains or LAN addresses. For those, allow the
-cookie over plain HTTP in the development environment only:
-
-```go
-configure := func(client *oauth.ClientBuilder) {
-	client.AllowInsecure(app.Environment() == application.Development)
-}
-```
-
-Pass `configure` to `oauth.New` with your provider, cipher, and client ID.
-
-> [!WARNING]
-> Never enable `ClientBuilder.AllowInsecure` in production. Without the `Secure` flag,
-> the login cookie can travel over unencrypted connections.
-
-Most providers accept `http://localhost` as a redirect URL for development;
-register it as a second redirect URL next to your production one.
-
-## Limits
-
-The client covers signing in and verifying tokens. It does not refresh tokens
-on behalf of your service, sign people out at the provider, or check opaque
-tokens by asking the provider. Each client talks to one provider; to offer
-several, create one client per provider, each with its own name, login route,
-and callback route.
-
-For every function and option, see the
+For all functions and options, see the
 [`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).

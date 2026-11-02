@@ -53,12 +53,13 @@ pkg.go.dev module pages by family; do not add a parallel local API corpus.
 | Section | Group (folder) | Order | What belongs there |
 | --- | --- | --- | --- |
 | Getting Started | `about` | 10 | Introduction, contributing, release notes and upgrading. |
-| Getting Started | `first-steps` | 20 | Installation, creating a project, quickstart, configuration, project layout, deploying. |
+| Getting Started | `first-steps` | 20 | Installation and existing-project adoption, creating projects, quickstart, configuration, project layout, deployment. |
 | Getting Started | `core-concepts` | 30 | Facades and drivers, contracts, arks, common pitfalls. |
-| Getting Started | `application` | 32 | Application overview, lifecycle and ownership, typed composition with construction errors and optional features, health and readiness. |
+| Getting Started | `application` | 32 | Application overview, typed composition, lifecycle and ownership, health and readiness. |
 | Getting Started | `drivers` | 35 | Choosing a driver, writing a driver. |
-| HTTP | `http-fundamentals` | 40 | Routing, requests, responses, error handling, middleware composition, body limits, and content-type checks. |
-| HTTP | `http-capabilities` | 43 | Sessions, localization, locale detection, signed links, and receiving webhooks. Provider webhook setup belongs beside the relevant service driver. |
+| HTTP | `http-fundamentals` | 40 | Routing, requests, buffered responses, streaming responses, error handling, middleware, body limits, and content types. |
+| HTTP | `http-capabilities` | 43 | Sessions, localization including locale detection, and signed links. |
+| HTTP | `webhooks` | 44 | Receiving webhooks, provider adapters, and delivery policies. Provider-specific business reconciliation stays beside its service. |
 | HTTP | `http-networking` | 46 | Running the HTTP server and making outgoing HTTP calls. |
 | Security | `browser-security` | 52 | Overview, secure headers, CORS, and CSRF protection. |
 | Security | `abuse-prevention` | 55 | Overview, rate limiting, and CAPTCHA. |
@@ -68,35 +69,40 @@ pkg.go.dev module pages by family; do not add a parallel local API corpus.
 | Security | `keys` | 72 | Typed application keys, provisioning, and loading. |
 | Security | `encryption` | 73 | Overview, keys, storing encrypted data, drivers. |
 | Security | `secrets` | 76 | Overview, managing secrets, rotation, drivers. |
-| Data | `database` | 80 | Overview, query builder, raw SQL, schema builder, migrations, pagination, transactions, multiple databases, query monitoring, drivers. |
-| Data | `validation` | 85 | Reusable application-input schemas, rules, normalizers, conditions, and JSON Schema. HTTP request guides link here for schema configuration. |
-| Data | `cache` | 90 | Overview, counters, locks, drivers. |
-| Data | `search` | 97 | Overview, queries, deploying, drivers. |
+| Data | `database` | 80 | Facade overview, drivers, transactions, locking, batching and streaming, monitoring. |
+| Data | `queries` | 81 | Query builder, raw SQL, pagination. |
+| Data | `migrations` | 82 | Migration overview and steps, schema builder, deployment, troubleshooting. |
+| Data | `validation` | 85 | Overview, scalar rules, structs and reuse, slices and maps, conditions, normalizers, custom rules, validation errors, JSON Schema, and exact encoded JSON. |
+| Data | `cache` | 90 | Facade overview, drivers, key definitions and namespaces, counters, locks, monitoring. |
+| Data | `search` | 97 | Facade overview, drivers, indexing documents, search queries, deployment, monitoring. |
 | Data | `file-storage` | 100 | Overview, uploads and downloads, signed URLs, events and telemetry, drivers. |
 | Data | `collections` | 102 | Overview, lazy collections, fallible collections, available methods. |
 | Application | `feature-flags` | 105 | Overview, testing, drivers. |
 | Application | `events` | 110 | The in-process event bus. |
-| Application | `broadcasting` | 120 | Publishing and consuming, metadata and telemetry, drivers. |
-| Application | `mail` | 130 | Sending, configuration, events and telemetry, drivers. |
+| Application | `broadcasting` | 120 | Facade overview, drivers, message delivery, monitoring and metadata propagation. |
+| Application | `mail` | 130 | Facade overview, drivers, composing messages, sender defaults, events and telemetry. |
 | Application | `push` | 132 | Visible notifications, browser subscriptions and service workers, retention, testing, and Web Push drivers. |
-| Application | `payments` | 135 | Hosted checkout, explicit completion and refunds, provider-managed subscriptions, optional webhook wiring, testing, and drivers. |
-| Background | `queues` | 140 | Producing, consuming, metadata and telemetry, drivers. |
-| Background | `scheduled-tasks` | 150 | Scheduling, time zones and DST, errors, drivers (with their differences). |
-| Background | `workflows` | 160 | Workflows, errors, testing, the shared worker host, drivers. |
-| AI | `llm` | 165 | Overview, agents and tools, structured output, streaming, embeddings, testing, local development with Ollama, drivers. |
+| Application | `payments` | 135 | Facade overview, drivers, hosted checkout, mobile payments, refunds, recurring subscriptions, payment recovery, Mollie callbacks, testing. |
+| Background | `queues` | 140 | Facade overview, drivers, producing jobs, consuming jobs, delivery and retries, monitoring. |
+| Background | `scheduled-tasks` | 150 | Overview, drivers, calendar schedules, deferred tasks, time zones and DST, error handling. |
+| Background | `workflows` | 160 | Overview, drivers, workflow steps, signals and waiting, running workflows, worker hosts shared with Scheduling, errors, testing. Pending vendor development notes stay outside consumer navigation. |
+| AI | `llm` | 165 | Facade overview, drivers, conversation history, running agents, defining tools, structured output, streaming replies, embeddings, local development, testing. |
 | AI | `mcp` | 167 | Overview, first HTTP server through client verification, tools (definition and serving together), endpoint security, and availability/resource authorization. Keep direct Go calls in testing, after a working MCP connection. |
 | AI | `agent-skills` | 169 | Installing and using the Arkoren documentation skill and website Markdown indexes. |
-| Operations | `observability` | 170 | Telemetry, instrumented components, tracing, request logging, privacy, drivers, exposing diagnostics, diagnosing an application, and diagnostic tool lookup. |
+| Operations | `observability` | 170 | Telemetry, drivers, instrumented components, request logging, request tracing, privacy. |
+| Operations | `diagnostics` | 172 | Capture setup, application diagnosis, diagnostic tool lookup. |
 | Operations | `cli` | 175 | Overview, connecting, calling tools, waiting and following, and reference. |
 | Operations | `testing` | 180 | Overview, HTTP tests, testing auth, fakes, time, integration tests, driver conformance. |
 | Documentation | `openapi` | 190 | HTTP contract overview, operation descriptions, JSON and Swagger serving, and built-in handler annotations. |
 | Documentation | `asyncapi` | 200 | Messaging contract overview, messages and schemas, queue operations, bindings and security, and JSON serving. |
 
-A service with several real subjects gets its own group, which starts with an
-overview page and ends with a drivers page. A small service is one page in the
-group whose theme it fits, ending with a `## Drivers` section. A
-new group needs a decision; add its row here first, in an existing section
-when one fits. A new section is rare: a short subject label, never a group's name or Laravel's.
+A service with several distinct reader tasks can justify its own group. Follow
+[Category Review](page-writing.md#category-review) to decide its pages and order;
+add an overview only when it teaches a necessary mental model, and put driver
+setup where the reader needs it rather than always last. A small service can
+remain one page in the group whose theme it fits, with a `Drivers` section when
+needed. A new group needs an agreed decision; add its row here in an existing
+section when one fits. A new section is rare: use a short subject label.
 
 Organize guides by reader task, not implementation mechanism. Middleware
 composition belongs in HTTP Fundamentals; individual middleware guides belong
@@ -115,6 +121,9 @@ guide reorganizations, update links directly without adding legacy redirects.
   A group's first page is usually `overview.md`.
 - Every page has `title`, `description`, and `order`. Orders step by 10 so
   pages can be inserted.
+- Completed new or materially revised pages require `summary`; follow
+  [Page Summary](page-writing.md#page-summary) for its meaning, timing, and format.
+  Group indexes and unfinished placeholders do not need a summary.
 - The website route is the path without `.md`: `guides/cache/counters.md` is
   `/docs/guides/cache/counters`.
 - A page belongs to its source folder's group. When moving it, update every
@@ -128,43 +137,34 @@ guide reorganizations, update links directly without adding legacy redirects.
 - `title` is the page heading (the `# H1`, which must match it), the browser
   title, and the pager label. `nav` is the shorter sidebar label, set only
   when it differs from the title.
-- Use Title Case for titles, `nav` labels, and group names ("Query Builder",
-  "Signed URLs"). Headings inside a page stay in sentence case.
+- Use Title Case for titles, headings, `nav` labels, and group names ("Query
+  Builder", "Reading Data"). Preserve official names and code identifiers.
 - A label must make sense under its group name without the page open:
   "Request Tracing", not "HTTP", under Observability.
-- A page whose label is generic gets a qualified title: `nav: Overview` with
-  `title: Cache Overview`, `nav: Drivers` with `title: Cache Drivers`,
-  `nav: Counters` with `title: Cache Counters`.
-- Prefer short noun phrases (one to three words) for labels, and the full
-  name in the title when the label abbreviates it (`nav: OAuth & OpenID
-  Connect`, `title: OAuth and OpenID Connect`). Use "&" only in labels.
+- Keep titles, headings, and labels short: usually two or three words, four
+  when needed for clarity. Context-clear titles such as `Overview` or `Drivers`
+  need not repeat the category name. Qualify an ambiguous title when it helps
+  readers identify the subject; it is not a universal naming requirement.
+  Use "&" only in labels.
 - Write our own names. Laravel's docs are a model for structure and rhythm,
   but do not copy their section or page names ("Prologue", "The Basics",
   "Digging Deeper", "Directory Structure").
 
 ## Page shape
 
-Ordinary teaching guides follow this order, adapted with [Page patterns](page-patterns.md)
-and the [mandatory review's page types](revision-and-links.md#page-types). Catalogs
-may use a contract-first opening without `Introduction`; installation pages may
-lead with prerequisites. Group indexes remain metadata-only.
+Follow [Writing a Page](page-writing.md) for the mandatory authoring workflow.
+Use [Page Patterns](page-patterns.md) and the [review's page types](revision-and-links.md#page-types)
+to select a useful shape, not a list of sections to fill. Opening prose can sit
+directly below the H1. A facade overview teaches the facade; driver-specific
+setup and lifecycle belong on Drivers unless needed for the page's own task.
 
-1. `# Title`. Follow the skill's `authored_contents` setting: omit a hand-written
-   contents list unless explicitly requested. The website generates section
-   navigation; group `index.md` files remain metadata only.
-2. `## Introduction`: establish the reader's situation and problem, then explain
-   what the feature does and how it fits Arkoren (contract, facade, drivers).
-   No code unless the shape of the feature is the point.
-3. Baseline sections: focused steps for the baseline task, then common variations.
-   Headings name tasks or concepts ("Storing items", "Retrying failed jobs"),
-   are parallel among siblings, and go down to `####` at most.
-   Put choices before their implementation, prerequisites before the first
-   command that needs them, and using shipped behavior before writing extensions.
-4. Advanced and operational behavior: lifecycle, concurrency, production.
-5. Testing the feature when it applies (memory driver, fakes).
-6. A closing link to the relevant pkg.go.dev package. For a non-package guide, link the
-   immediate next task instead when useful; do not invent an API destination.
-   For a guide in `guides/queues/`:
+Keep choices before their implementation, prerequisites before use, and
+consequential constraints beside the affected action. Add testing, operations,
+or advanced sections only when they belong to this page's agreed scope.
+
+End a package guide with the relevant pkg.go.dev package. For a non-package
+guide, link the immediate next task when useful; do not invent an API destination.
+For example, in `guides/queues/`:
 
 ```markdown
 For every function and option, see [the `queue` API reference](https://pkg.go.dev/arkoren.dev/core/service/queue).
@@ -182,10 +182,10 @@ Use GitHub alerts for asides, on their own line:
 
 ## Drivers pages
 
-A group's drivers live on its `drivers.md` page (`title: <Group> Drivers`,
-`nav: Drivers`, last in the group); a single-page service in a shared group
-ends with a `## Drivers` section instead. The page opens with an
-`## Introduction` comparing when to choose each driver, then one `##` per
+A group's drivers live on its `drivers.md` page, ordered where setup serves
+the reader journey; a single-page service in a shared group can use a
+`## Drivers` section instead. The page opens by comparing when to choose each
+driver, without requiring an `Introduction` heading, then one `##` per
 driver, in-process first when available. Use the repeated provider sections in
 `cmd/arkoren/skills/arkoren/references/guides/mail/drivers.md` as the structural model, not
 as proof that every provider supports the same operations or settings.
@@ -246,11 +246,11 @@ or memory driver for navigation.
 
 ### Per-driver structure
 
-Each driver section follows this order. Use the same subsection labels across
-providers, except for task and capability headings, which name the actual work.
-Keep the headings even on short vendor sections so readers can locate the same
-information in each. For an embedded `## Drivers` section, shift provider and
-subsection headings down one level, staying within H4.
+Each driver section covers these responsibilities in reader order. Use parallel
+subsection labels across providers where they have the same needs; combine brief
+explanations or omit inapplicable headings rather than adding empty sections.
+Task and capability headings name the actual work. For an embedded `## Drivers`
+section, shift provider and subsection headings down one level, staying within H4.
 
 1. **Provider introduction:** what it is, when to choose it, and provider-side
    prerequisites such as an account, verified domain, service, or permissions.
@@ -264,8 +264,9 @@ subsection headings down one level, staying within H4.
 4. **Configuration:** show meaningful settings as code and explain their
    defaults and effects. Cover required versus optional settings, timeouts,
    retry policies, and native-client configuration/ownership when relevant.
-   A settings-free driver still gets a short explanation that no optional
-   settings exist; do not invent builder methods or a native-client escape hatch.
+   If a driver has no optional settings, omit the configuration subsection;
+   state that fact beside construction when useful. Do not invent builder
+   methods or a native-client escape hatch.
 5. **Task examples:** use an action heading such as `Sending mail`, `Creating a
    checkout`, or `Receiving notifications`, not a generic `Examples` dump.
    Establish the situation, show the smallest useful operation, and explain the
