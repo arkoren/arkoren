@@ -140,13 +140,22 @@ it is not duplicated in the Go workflow.
 
 After workflow edits run `workflow-check` (discovery/Make fixtures and actionlint), the affected shared
 recipes, and inspect real GitHub CI results. There is no local workflow emulator.
-Routine CI checks every canonical module on isolated runners (six check jobs and
+Full CI checks every canonical module on isolated runners (six check jobs and
 three integration jobs at a time, independently), plus workflow tooling checks
 and rendered docs. `scripts/ci-modules.sh` owns the bounded inventory; module
 changes must preserve its canonical paths and pass its fixtures. Compose modules
 run lint in check and full race suites in integration.
 Require both `CI gate` (all Go/tooling jobs) and the separate `website` check.
-The gate rejects failures, cancellations, missing jobs, and unexpected skips.
+PRs select owning driver/CLI modules; core, foundation, manifest, suite-marker,
+shared configuration and unknown-path changes select the full suite. The shared
+`scripts/ci-select.sh` selector validates the complete inventory before selection.
+It compares the tested PR merge tree with its exact base parent; missing or
+mismatched history selects full work. Driver/consumer CLI changes also select the
+website, which reads package metadata and embedded consumer guides. Website-only
+PRs select no Go modules. Tooling always runs. Main pushes and manual runs stay full.
+The gate rejects failures, cancellations, missing jobs, invalid plans and skips
+unless the corresponding matrix selection is empty. The required `website` job
+always reports; an unselected PR skips only its expensive validation steps.
 The tooling job also runs `make maintenance-check` (real Git/cliff/SSH and
 GitHub boundary fixtures). The native git-cliff version is owned by
 `cmd/arkoren-ci/internal/release/tool.json`; `release tool` emits that pin as JSON.

@@ -22,13 +22,37 @@ jobs:
         working-directory: website
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - name: Select website work
+        id: selection
+        working-directory: .
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_TESTED_SHA: ${{ github.sha }}
+          CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          plan=$(bash scripts/ci-select.sh)
+          jq -er 'if (.website | type) == "boolean" then "website=\(.website)" else error("invalid website selection") end' <<< "$plan" >> "$GITHUB_OUTPUT"
+          printf '## Website selection\n\n' >> "$GITHUB_STEP_SUMMARY"
+          jq . <<< "$plan" | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+      - name: No website inputs changed
+        if: steps.selection.outputs.website == 'false'
+        run: echo 'Website validation is not needed for this PR.'
       - uses: actions/setup-node@v7
+        if: steps.selection.outputs.website == 'true'
         with:
           node-version-file: website/.node-version
           cache: npm
           cache-dependency-path: website/package-lock.json
       - run: npm ci
+        if: steps.selection.outputs.website == 'true'
       - run: npx playwright install --with-deps chromium
+        if: steps.selection.outputs.website == 'true'
       - run: npm run check
+        if: steps.selection.outputs.website == 'true'
       - run: npm run build
+        if: steps.selection.outputs.website == 'true'
       - run: npm test
+        if: steps.selection.outputs.website == 'true'

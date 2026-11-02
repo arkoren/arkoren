@@ -48,8 +48,19 @@ baseline decisions; unknown command roots require a boundary review.
 
 `scripts/ci-modules.sh` owns the complete-source CI inventory, not a Go dependency planner. It lists
 core, the CLI, explicit development commands and direct driver/foundation/optional ark roots;
-Compose markers select integration suites. Routine CI checks all modules,
-workflow tooling and rendered docs. The separate scheduled/manual audit owns
+Compose markers select integration suites. `scripts/ci-select.sh` validates this
+inventory, then selects PR work from the tested merge tree against its exact base
+parent. Driver/CLI changes select owning modules; core, foundation, manifests,
+suite markers, shared configuration and unknown paths select full work. Missing
+comparison history also selects full work. Driver/consumer CLI changes select
+the website because package metadata and embedded guides are website inputs.
+Website-only PRs select no Go modules; tooling always runs. Main pushes and manual
+runs remain full. Preserve the `CI gate` and `website` names for release evidence.
+Only empty selections permit skipped matrix jobs; the website job always reports
+and skips expensive steps when unselected. Run selector and gate fixtures through
+`make workflow-check`. Selection does not add local cross-module compatibility
+coverage: standalone checks still use published dependency pins with `GOWORK=off`.
+The separate scheduled/manual audit owns
 toolchain vet, vulnerability scans and generator end-to-end
 coverage. Keep module paths aligned with Make and run `make workflow-check`
 after inventory or workflow changes.
