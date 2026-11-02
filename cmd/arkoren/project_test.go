@@ -266,9 +266,10 @@ func TestCreationYesNeverOverwritesModule(t *testing.T) {
 }
 
 // runNew drives the production command tree so scaffold tests cover framework
-// parsing and offline dispatch as well as rendering and filesystem safeguards.
+// parsing and rendering safeguards. File-only tests explicitly skip downloads;
+// the generated-project end-to-end test uses the default dependency setup.
 func runNew(ctx context.Context, args []string, env console.Environment) error {
-	return execute(ctx, append([]string{"new"}, args...), env)
+	return execute(ctx, append([]string{"new", "--skip-tidy"}, args...), env)
 }
 
 // scaffoldEnvironment isolates the filesystem and streams for offline tests.
@@ -980,7 +981,7 @@ func TestNewDirectHelp(t *testing.T) {
 
 // TestNewGeneratedOrdinaryProject builds and tests the emitted ordinary graph
 // using public versioned dependencies. It is opt-in outside short tests because
-// Go module resolution is an explicit action, never part of scaffolding.
+// dependency resolution needs access to public modules.
 func TestNewGeneratedOrdinaryProject(t *testing.T) {
 	if testing.Short() {
 		t.Skip("generated-project module setup is excluded from offline short tests")
@@ -989,6 +990,43 @@ func TestNewGeneratedOrdinaryProject(t *testing.T) {
 	t.Parallel()
 
 	testNewGeneratedProject(t)
+}
+
+// TestNewChecksumCollisionRejectsBeforeWriting protects existing dependency
+// checksums from the automatic tidy step, including with explicit approval.
+func TestNewChecksumCollisionRejectsBeforeWriting(t *testing.T) {
+	t.Parallel()
+
+	env := scaffoldEnvironment(t)
+	path := filepath.Join(env.Dir, "go.sum")
+
+	if err := os.WriteFile(path, []byte("existing checksums\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := execute(t.Context(), []string{"new", ".", "--yes"}, env)
+	requireNewUsage(t, err)
+
+	entries, err := os.ReadDir(env.Dir)
+
+	if err != nil || len(entries) != 1 || entries[0].Name() != "go.sum" {
+		t.Fatalf("checksum conflict wrote files: %v, %v", entries, err)
+	}
+}
+
+// TestNewDefaultDryRunNeedsNoGo verifies the default command previews dependency
+// files without invoking Go, even when the toolchain is unavailable.
+func TestNewDefaultDryRunNeedsNoGo(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	env := scaffoldEnvironment(t)
+
+	if err := execute(t.Context(), []string{"new", "hello", "--dry-run"}, env); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(env.Dir, "hello")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preview created destination: %v", err)
+	}
 }
 
 // testNewGeneratedProject resolves the emitted versioned dependencies unchanged.
@@ -1000,15 +1038,23 @@ func testNewGeneratedProject(t *testing.T) {
 	env := scaffoldEnvironment(t)
 	args := []string{"hello", "--module", "example.com/hello"}
 
-	if err := runNew(t.Context(), args, env); err != nil {
+	if err := execute(t.Context(), append([]string{"new"}, args...), env); err != nil {
 		t.Fatal(err)
 	}
 
 	destination := filepath.Join(env.Dir, "hello")
+	command := exec.CommandContext(t.Context(), "make", "build")
+	command.Dir = destination
+	command.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=readonly")
+
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("make build immediately after creation: %v\n%s", err, output)
+	}
+
 	writeNewRuntimeTest(t, destination)
 
 	for _, args := range [][]string{
-		{"mod", "tidy"}, {"vet", "./..."}, {"test", "-race", "-count=1", "./..."}, {"build", "./..."},
+		{"build", "-mod=readonly", "./..."}, {"vet", "./..."}, {"test", "-race", "-count=1", "./..."},
 	} {
 		command := exec.CommandContext(t.Context(), "go", args...)
 

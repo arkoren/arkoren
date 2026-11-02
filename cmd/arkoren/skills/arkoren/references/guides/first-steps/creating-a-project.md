@@ -32,8 +32,9 @@ check the available generation options:
 arkoren new --help
 ```
 
-Help and generation work offline without a running application or MCP endpoint
-configuration. [CLI Installation](../cli/overview.md#installing-arkoren) also
+Help and dry-run work offline. Creation needs no running application or MCP
+endpoint configuration, but resolves Go dependencies unless you use `--skip-tidy`.
+[CLI Installation](../cli/overview.md#installing-arkoren) also
 offers module-tool installation; use `go tool arkoren` in place of `arkoren`
 throughout this page if you choose it.
 
@@ -65,8 +66,10 @@ arkoren new hello --module example.com/hello
 ```
 
 Success produces one JSON report containing `created: true`, the absolute
-destination, module, and file count. Generation initializes neither Git nor
-application infrastructure, downloads nothing, and creates no application tests.
+destination, module, and file count. After writing, the CLI runs `go mod tidy`
+inside the project with `GOWORK=off` to download dependencies and populate
+`go.sum`. Generation initializes neither Git nor application infrastructure and
+creates no application tests.
 
 A nonempty destination, even one containing only `.git`, requires confirmation.
 The default is no; only a complete `y` or `yes` line approves it. Without an
@@ -94,15 +97,18 @@ Enter the generated project:
 cd hello
 ```
 
-Resolve its Arkoren imports and dependency files, then check the code:
+Dependencies are already resolved after successful creation. Check the code:
 
 ```sh
-go get arkoren.dev/core arkoren.dev/driver/mcp
-go mod tidy
 go vet ./...
 ```
 
-Unlike generation, these commands can download modules. The starter also declares
+For offline file creation, pass `--skip-tidy` to `arkoren new`, then run
+`go mod tidy` from the project directory when downloads are available. If automatic
+dependency setup fails, the CLI exits with an error and preserves the generated
+files. Retry `go mod tidy` there instead of rerunning `arkoren new`.
+
+The starter also declares
 godotenv for local environment loading, Tint for terminal logs, and go-isatty for
 terminal detection. They are application dependencies, not dependencies of core.
 Commit the resolved `go.mod` and `go.sum`.
