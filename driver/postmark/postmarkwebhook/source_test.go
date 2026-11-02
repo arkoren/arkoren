@@ -122,7 +122,12 @@ func TestIncorrectCredentialsReject(t *testing.T) {
 		return nil
 	})
 
-	for _, credentials := range [][2]string{{"wrong", "secret"}, {"hooks", "wrong"}, {"", ""}} {
+	for _, credentials := range [][2]string{
+		{"wrong", "secret"}, {"hooks", "wrong"}, {"", ""},
+		{"hook", "secret"}, {"hooks-extra", "secret"},
+		{"hooks", "secre"}, {"hooks", "secret-extra"},
+		{"hooks", " secret"}, {"hooks", "secret "},
+	} {
 		request := authenticated(`{"RecordType":"Delivery"}`)
 		request.SetBasicAuth(credentials[0], credentials[1])
 		recorder := httptest.NewRecorder()
@@ -130,6 +135,32 @@ func TestIncorrectCredentialsReject(t *testing.T) {
 		if err := handler(recorder, request); !errors.Is(err, webhook.ErrRejected) {
 			t.Fatalf("status=%d error=%v", recorder.Code, err)
 		}
+	}
+}
+
+// TestConcurrentAuthentication ensures request-local HMAC state can safely
+// verify simultaneous deliveries using one shared source.
+func TestConcurrentAuthentication(t *testing.T) {
+	t.Parallel()
+
+	handler := outbound(t, postmarkwebhook.Delivered, func(context.Context, webhook.Delivery[postmarkwebhook.Delivery]) error {
+		return nil
+	})
+
+	for range 16 {
+		t.Run("delivery", func(t *testing.T) {
+			t.Parallel()
+
+			recorder := httptest.NewRecorder()
+
+			if err := handler(recorder, authenticated(`{"RecordType":"Delivery"}`)); err != nil {
+				t.Fatal(err)
+			}
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d", recorder.Code)
+			}
+		})
 	}
 }
 
