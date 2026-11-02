@@ -103,18 +103,24 @@ func TestPrepareRejectsSymlink(t *testing.T) {
 	}
 }
 
-func TestNoopPublishUsesNoGitHubAccess(t *testing.T) {
+func TestNoopInspectionUsesNoWriteAccess(t *testing.T) {
 	root := checkout(t)
 	state, err := Prepare(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := github.Client{Root: root, Command: func(context.Context, string, ...string) ([]byte, error) {
-		t.Fatal("no-op requested GitHub access")
-		return nil, nil
-	}}
-	if _, err := Publish(context.Background(), client, state); err != nil {
+	client := boundary(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != "GET" {
+			t.Fatal("no-op requested write access")
+		}
+		writer.Write([]byte(`[]`))
+	})
+	needed, err := Needed(context.Background(), client, state)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if needed {
+		t.Fatal("idle import requested App credentials")
 	}
 }
 
@@ -193,7 +199,7 @@ func ownershipResponse(t *testing.T, writer http.ResponseWriter, request *http.R
 	case "/" + github.API + "/commits/head":
 		value = botCommit("head")
 	case "/" + github.API + "/compare/base...head":
-		value = map[string]any{"total_commits": total, "commits": commits, "files": files}
+		value = map[string]any{"total_commits": total, "behind_by": 0, "commits": commits, "files": files}
 	default:
 		t.Errorf("unexpected API path %s", request.URL)
 		writer.WriteHeader(500)
@@ -327,5 +333,71 @@ func TestAutoMergeUsesNativeExactHeadMergeWithoutBypass(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("native auto-merge not requested")
+	}
+}
+
+func TestEmptyImportStillReconcilesOwnedPull(t *testing.T) {
+	client := boundary(t, func(writer http.ResponseWriter, request *http.Request) {
+		ownershipResponse(t, writer, request, botPull(), []Commit{botCommit("head")}, 1, []any{})
+	})
+	needed, err := Needed(context.Background(), client, State{Base: "base"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !needed {
+		t.Fatal("existing PR abandoned because import was empty")
+	}
+}
+
+func TestCompareInspectsHistoryBeyondFirstPage(t *testing.T) {
+	pages := 0
+	client := boundary(t, func(writer http.ResponseWriter, request *http.Request) {
+		pages++
+		commits := []Commit{}
+		start, end := 0, 100
+		if request.URL.Query().Get("page") == "2" {
+			start, end = 100, 101
+		}
+		for index := start; index < end; index++ {
+			commits = append(commits, botCommit(fmt.Sprintf("commit-%d", index)))
+		}
+		data, err := json.Marshal(map[string]any{"total_commits": 101, "behind_by": 2, "commits": commits, "files": []any{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer.Write(data)
+	})
+	result, err := compare(context.Background(), client, "base", "head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages != 2 || len(result.Commits) != 101 || *result.Behind != 2 {
+		t.Fatalf("incomplete ownership history: %+v, pages=%d", result, pages)
+	}
+}
+
+func TestInspectRejectsForeignCommitOnLaterPage(t *testing.T) {
+	client := boundary(t, func(writer http.ResponseWriter, request *http.Request) {
+		if !strings.Contains(request.URL.Path, "/compare/") {
+			ownershipResponse(t, writer, request, botPull(), nil, 0, []any{})
+			return
+		}
+		commits := []Commit{}
+		for index := range 100 {
+			commits = append(commits, botCommit(fmt.Sprintf("commit-%d", index)))
+		}
+		if request.URL.Query().Get("page") == "2" {
+			foreign := botCommit("foreign")
+			foreign.Author.Login = "human"
+			commits = []Commit{foreign}
+		}
+		data, err := json.Marshal(map[string]any{"total_commits": 101, "behind_by": 0, "commits": commits, "files": []any{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer.Write(data)
+	})
+	if _, _, err := Inspect(context.Background(), client, State{Base: "base"}); err == nil {
+		t.Fatal("foreign commit beyond the first page was accepted")
 	}
 }

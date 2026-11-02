@@ -150,6 +150,7 @@ type pullRef struct {
 // comparison must be complete; truncated commits or files prohibit writes.
 type comparison struct {
 	Total   int      `json:"total_commits"`
+	Behind  *int     `json:"behind_by"`
 	Commits []Commit `json:"commits"`
 	Files   []struct {
 		Name   string `json:"filename"`
@@ -240,11 +241,24 @@ func Inspect(ctx context.Context, client github.Client, state State) (*Commit, *
 // compare rejects truncated responses and non-record edits.
 func compare(ctx context.Context, client github.Client, base, head string) (comparison, error) {
 	result := comparison{}
-	if err := client.Call(ctx, "GET", github.API+"/compare/"+base+"..."+head+"?per_page=100", nil, &result); err != nil {
+	endpoint := github.API + "/compare/" + base + "..." + head + "?per_page=100"
+	if err := client.Call(ctx, "GET", endpoint+"&page=1", nil, &result); err != nil {
 		return result, err
 	}
-	if result.Commits == nil || result.Files == nil || result.Total != len(result.Commits) || len(result.Files) >= 300 {
+	if result.Commits == nil || result.Files == nil || result.Behind == nil || *result.Behind < 0 ||
+		result.Total < 0 || result.Total > 10000 || len(result.Commits) != min(result.Total, 100) || len(result.Files) >= 300 {
 		return result, fmt.Errorf("branch history or diff exceeds ownership inspection limit")
+	}
+	for page := 2; len(result.Commits) < result.Total; page++ {
+		batch := comparison{}
+		if err := client.Call(ctx, "GET", fmt.Sprintf("%s&page=%d", endpoint, page), nil, &batch); err != nil {
+			return result, err
+		}
+		if batch.Total != result.Total || batch.Behind == nil || *batch.Behind != *result.Behind ||
+			len(batch.Commits) != min(100, result.Total-len(result.Commits)) {
+			return result, fmt.Errorf("incomplete or inconsistent branch history; writes prohibited")
+		}
+		result.Commits = append(result.Commits, batch.Commits...)
 	}
 	for _, file := range result.Files {
 		if !recordPath.MatchString(file.Name) || !slices.Contains([]string{"added", "modified"}, file.Status) {
@@ -253,6 +267,17 @@ func compare(ctx context.Context, client github.Client, base, head string) (comp
 	}
 
 	return result, nil
+}
+
+// Needed inspects even an empty import so an existing owned PR can converge.
+// An idle checkout needs no App credentials and performs no writes.
+func Needed(ctx context.Context, client github.Client, state State) (bool, error) {
+	_, pull, err := Inspect(ctx, client, state)
+	if err != nil {
+		return false, err
+	}
+
+	return len(state.Records) > 0 || pull != nil, nil
 }
 
 // Verify confirms native merge settings without changing repository protection.
