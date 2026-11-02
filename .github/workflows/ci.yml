@@ -41,11 +41,18 @@ jobs:
           GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: make workflow-check
-      - name: Install checksum-pinned git-cliff for planner fixtures
+      - name: Build Go maintenance command
+        id: maintenance
         run: |
-          python3 scripts/install-git-cliff.py "$RUNNER_TEMP/cliff-bin"
-          echo "$RUNNER_TEMP/cliff-bin" >> "$GITHUB_PATH"
-      - run: make release-preview-check
+          GOWORK=off go -C cmd/arkoren-ci build -o "$RUNNER_TEMP/arkoren-ci" .
+          echo "cliff=$("$RUNNER_TEMP/arkoren-ci" release tool | jq -r .git_cliff)" >> "$GITHUB_OUTPUT"
+      - name: Install checksum-pinned git-cliff for planner fixtures
+        uses: taiki-e/install-action@8bf69897abc26b921431feaaa8ca2b47a6c30c00
+        with:
+          tool: git-cliff@${{ steps.maintenance.outputs.cliff }}
+          checksum: 'true'
+          fallback: none
+      - run: make maintenance-check
 
   check:
     needs: discovery

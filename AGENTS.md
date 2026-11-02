@@ -6,8 +6,9 @@ and no root module. `core/` is `arkoren.dev/core`: application lifecycle,
 `<contract>test` conformance suites. `driver/<vendor>` holds one module per
 vendor; `ark/<name>` holds opt-in domain features (none yet);
 `foundation/<name>` holds stdlib-only libraries. `cmd/arkoren` is the consumer
-CLI; `scripts/` holds workflow fixtures. The committed `go.work` joins only
-imported modules for shared development. Module
+CLI; `cmd/arkoren-ci` is a separate stdlib-only development command, never a
+release or consumer dependency. `scripts/` holds workflow fixtures. The committed
+`go.work` joins imported and explicit development modules. Module
 manifests declare real dependency versions, with no local `replace` directives;
 `GOWORK=off` checks remain the independent-module authority.
 
@@ -20,10 +21,12 @@ no release tags. For an explicitly authorized release, follow Publishing in
 the `arkoren-codebase` skill. Source import authorization alone does not
 authorize a release.
 
-Release planning is dry-run only. `.github/workflows/release-preview.yml` requires
-successful `CI gate` and `website` jobs at the exact planned SHA. It writes only
-an Actions summary and a temporary plan artifact. Follow the preview policy in
-Publishing in `arkoren-codebase`; a plan does not authorize publication or pins.
+`.github/workflows/release-preview.yml` remains read-only. The separately
+authorized publisher uses reviewed main code, exact-green evidence and signed
+immutable batches. Follow Publishing in `arkoren-codebase` for provenance,
+namespace policy, phased App credentials and same-SHA recovery. Preserve signed
+v1 batch bytes. Publication never adopts dependency pins. Administrative policy
+activation is separate from the publisher and requires explicit authorization.
 
 ## Find code before reading it
 
@@ -82,7 +85,19 @@ make integration MODULE=driver/redis
 make generate
 make docs
 make workflow-check
+GOWORK=off go -C cmd/arkoren-ci run . inventory
 ```
+
+`.github/release-modules.json` is the versioned classification authority: public
+release namespaces and explicit development-only roots. CI discovers all canonical
+filesystem modules, including ignored local ones (currently 45 modules and 15
+integrations); release preparation validates only the exact committed public set
+(44). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
+The Go command owns inventory, release plans, exact-SHA evidence, publication,
+notes-PR ownership and administrative policy checks. Native gh owns auto-merge
+and prerelease creation; website TypeScript owns Markdown import/validation.
+Historical-v1 decoding is explicit recovery, not current namespace approval;
+signed canonical-v1 bytes must remain unchanged.
 
 `test` runs short tests with normal built-in vet defaults. `check` runs
 golangci-lint (including configured govet) and short race tests with test-time
@@ -132,10 +147,14 @@ changes must preserve its canonical paths and pass its fixtures. Compose modules
 run lint in check and full race suites in integration.
 Require both `CI gate` (all Go/tooling jobs) and the separate `website` check.
 The gate rejects failures, cancellations, missing jobs, and unexpected skips.
-The tooling job also runs `make release-preview-check` with checksum-pinned
-git-cliff; install it into an explicit temporary directory with
-`python3 scripts/install-git-cliff.py DIRECTORY` and set `GIT_CLIFF` to that binary
-for local planner fixtures. Python 3.9+ is required.
+The tooling job also runs `make maintenance-check` (real Git/cliff/SSH and
+GitHub boundary fixtures). The native git-cliff version is owned by
+`cmd/arkoren-ci/internal/release/tool.json`; `release tool` emits that pin as JSON.
+CI installs it with SHA-pinned install-action, checksums enabled and fallback off.
+Locally install that exact version (for example `cargo install --locked git-cliff
+--version VERSION`) and optionally set `GIT_CLIFF` to its binary. Ordinary module
+checks do not require git-cliff; `maintenance-check` explicitly runs real-tool
+fixtures and fails if it is missing or wrong. No Python runtime is required.
 The separate Monday/Thursday 03:17 UTC audit runs all-module toolchain vet and
 govulncheck and the CLI generated-project end-to-end test.
 Manual audit dispatch checks the selected ref; scheduled audits use the default

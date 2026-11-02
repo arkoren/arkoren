@@ -109,7 +109,7 @@ function drawing(card: CardText, size: CardBox): Node {
                   width: 64,
                   height: 64,
                 }),
-                el("div", { fontSize: 40, fontWeight: 600, letterSpacing: -1.5 }, "arkoren"),
+                el("div", { fontSize: 40, fontWeight: 600, letterSpacing: -1.5 }, "Arkoren"),
               ]),
               el("div", { ...mono, ...line, minWidth: 0, fontSize: 24, opacity: 0.85 }, card.label),
             ],

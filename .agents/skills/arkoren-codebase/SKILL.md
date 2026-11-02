@@ -31,6 +31,7 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 | Arks | `ark/<name>/` | one per ark, opt in with `go get` | Domain features with their own tables, routes, or flows. None yet. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
+| Development | `cmd/arkoren-ci/` | `arkoren.dev/cmd/arkoren-ci` | Repository maintenance only; standard library only, with no dependency on toolkit or consumer CLI modules. Public source and vanity resolution do not imply a supported release/install namespace. Excluded from releases and the library API catalog. |
 
 Separate modules live only under `cmd/`, `driver/`, `ark/`, and `foundation/`,
 never below a `core/` path, so core can move its folders in a new major.
@@ -40,13 +41,30 @@ Validate the exact committed tree: ignored local modules also count during local
 discovery. Keep the required `website` job in its separate workflow, without
 duplicating rendered docs in Go CI. Require both `CI gate` and `website`.
 
+`.github/release-modules.json` schema 1 classifies `public` release roots and
+explicit `development` roots. It is the sole reviewed namespace list, not a copy
+of signed publication records. New public modules require reviewed policy and
+baseline decisions; unknown command roots require a boundary review.
+
 `scripts/ci-modules.sh` owns the complete-source CI inventory, not a Go dependency planner. It lists
-core, the CLI and direct driver/foundation/optional ark roots;
+core, the CLI, explicit development commands and direct driver/foundation/optional ark roots;
 Compose markers select integration suites. Routine CI checks all modules,
 workflow tooling and rendered docs. The separate scheduled/manual audit owns
 toolchain vet, vulnerability scans and generator end-to-end
 coverage. Keep module paths aligned with Make and run `make workflow-check`
 after inventory or workflow changes.
+
+Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
+working-tree inspection, or append `--commit FULL_SHA` to validate a committed
+inventory and its same-commit policy. CI/audits currently include 45 modules and
+15 integration suites; releases include only the 44 approved public modules.
+The development command uses standard flags, JSON stdout and JSON diagnostics on
+stderr. Its focused internal packages own inventory, release planning, exact-SHA
+evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
+auto-merge and prerelease creation. TypeScript remains the only release Markdown
+importer/parser. Add no permanent wrapper framework or production planner
+fallback. `release plan --historical-v1` explicitly recomputes old signed plans
+from their original tree; normal planning still requires schema-1 approval.
 
 Place new code by asking, in order:
 
@@ -682,8 +700,8 @@ Settled; reopen only with the owner.
 
 ### Dry-run planning
 
-`Release preview (dry run)` proposes versions and notes only. Publication remains
-manual and requires separate explicit authorization. The preview has only
+`Release preview (dry run)` proposes versions and notes only. The separately
+authorized unattended publisher below owns publication. The preview has only
 `contents: read` and `actions: read`; keep tag rules and release credentials out
 of this workflow. It consumes API metadata, not upstream artifacts or caches.
 
@@ -706,9 +724,12 @@ Other modules may share a tag commit. An exact escaped tag pattern selects the
 module's baseline before git-cliff constructs its commit-keyed tag map.
 
 git-cliff owns conventional-commit parsing, version increments and release notes.
-The maintained release and upstream SHA-512 checksums are pinned in
-`scripts/install-git-cliff.py`. Update the pin and fixtures together after checking
-the upstream release assets and source. Run `make release-preview-check` using
+The version pin is `cmd/arkoren-ci/internal/release/tool.json`, embedded by the
+command alongside trusted cliff configuration. Workflows read `release tool`
+and install that version with SHA-pinned `taiki-e/install-action`, checksum
+verification enabled and `fallback: none`. Check the pinned action manifest and
+upstream release assets before updating it. Local installation is an explicit
+prerequisite, not a custom archive installer. Run `make maintenance-check` using
 that binary, plus `make workflow-check`, before merging planner changes.
 Use the [upstream release](https://github.com/orhun/git-cliff/releases),
 [bump policy](https://git-cliff.org/docs/configuration/bump/) and
@@ -743,15 +764,125 @@ no proposal. Plans do not adopt dependencies, cascade releases, query unpublishe
 proxy versions, modify manifests, write changelogs/version commits, open release
 PRs, or create tags/releases. Artifacts expire after 14 days.
 
-For local inspection, run `scripts/release_preview.py` with `python3`, `--sha`
-set to the full commit ID and `--output` outside the checkout. Set `GIT_CLIFF` to
-the checksum-pinned binary. Local plans explicitly say they have no attached CI
+For local inspection, build `cmd/arkoren-ci` and run `arkoren-ci release plan`
+with `--repo` selecting the checkout, `--sha` the full commit ID and `--output`
+outside the checkout. Set `GIT_CLIFF` to the pinned binary if needed.
+`release evidence --output FILE` validates GitHub trigger metadata and checkout
+before reading paginated workflow/job metadata with a read-only gh credential.
+Local plans explicitly say they have no attached CI
 evidence; Actions attaches exact-SHA evidence. The JSON contains every module's
 path, baseline/current/proposed version, matching commit messages/files, notes,
 SHA and skip decision. Review the Actions summary and JSON together. A nonempty
 plan is a proposal, not release authorization.
 
-### Manual publication
+### Unattended publication
+
+If the publisher is administratively paused, retain global creation protection
+without bypass until the reviewed implementation and merged-main checks pass.
+Restoration requires explicit authorization and readback of the existing exact
+App-only creation policy. A code merge alone does not authorize policy changes.
+
+`Publish modules` follows successful trusted main-push CI, using the upstream
+`head_sha`. It executes reviewed main code, independently recomputes the planner
+result and requires fresh exact-SHA `CI gate` AND `website` evidence before
+publication credentials. Recovery also requires exact-green evidence for the
+current main implementation executing the older signed plan. Manual dispatch selects an exact main SHA; it is an
+emergency retry, not a routine release approval. Missing/pending evidence has a
+bounded wait; failed/cancelled evidence blocks. No upstream artifacts or caches
+are executed. The preview remains independently read-only.
+
+The public module inventory must match `.github/release-modules.json`'s `public`
+array; `development` modules never enter plans or namespaces. New modules need
+a reviewed allowlist, baseline policy and administrative creation-ruleset update;
+the publisher cannot grant itself namespaces. Only plain directory-prefixed
+`v0.X.Y` versions are allowed. With neither a new proposal nor an incomplete batch,
+no App token, private signing-key file, tag or release is needed. Public probes
+only target already-created refs. Do not manufacture payload to test activation.
+Source imports still require their separate import/baseline policy.
+
+Publication jobs are serialized without cancellation. A fresh batch must target
+the current main tip; an older unsigned candidate stops so the latest green
+main plan covers accumulated changes since each module's tag. Once signed tags
+exist, recovery finishes their original batch even if main advances. Every tag
+annotation stores the complete original planner result, exact notes, expected
+module set, SHA and SHA-256 plan digest. Recovery verifies the signature and
+recomputes the original result in a disposable clone with only that batch's tags
+removed. Keep planner/tool changes compatible with recorded-batch recovery.
+Canonical v1 JSON retains Python `ensure_ascii=True`, sorted keys and compact
+comma/colon separators. Policy schema versions do not change signed batch schema
+or the original module records. Historical commits without classification policy
+or with the original array allowlist retain their original committed-public
+inventory during recomputation.
+
+Tags are SSH-signed annotated objects using the dedicated automation principal
+`arkoren-releases@arkoren.dev`, not an App authentication key or human key.
+`.github/release-signing.allowed-signers` pins the reviewed Ed25519 public key
+(fingerprint `SHA256:sNZGlY9u6kzYA+agDXpdk/nM5qa3tVt/RDeQPfF6UXM`). The separate
+repository secret `ARKOREN_RELEASES_TAG_SIGNING_KEY` supplies its private half.
+Each job checks the public/private match, uses private temporary files and verifies
+tags against that committed trust file. No account/global signing trust is
+modified. This proves the pinned automation signature; GitHub's web UI may not
+show a Verified badge for this identity. App authentication alone does not sign tags.
+
+The existing Arkoren Releases App (`5540931`, installation `176874315`) uses
+`ARKOREN_RELEASES_PRIVATE_KEY` with a repository-only installation token requesting
+Contents write only. Ordinary `GITHUB_TOKEN` retains Contents/Actions read for
+evidence. App releases emit `release.published` events for website notes; built-in
+write tokens would suppress that downstream automation. The App has no
+administration permission or main bypass. It creates no release PR, manifest pin,
+version constant, changelog commit, binary asset or aggregate project release.
+
+The Go command exposes explicit `release publish prepare|preflight|tags|verify|releases`
+phases. The workflow mints a tag-write token only after preparation, revokes it
+immediately after the short tag phase, then runs public verification without App
+credentials. Only after successful public builds does the official App-token
+action mint a fresh release-write token. A local same-job verification receipt
+binds the full manifest and executing code SHA; release creation revalidates it,
+source plans, exact-green evidence and remote signed objects. Receipts are not
+upstream artifacts or independent authorization. Token expiry during public
+builds cannot invalidate the later release-write credential.
+
+The publisher pushes all batch tags atomically, without a force option. A lost
+response is reconciled against exact remote tag objects and verified annotations.
+Conflicts stop; existing tags are never moved or deleted. After refs exist,
+bounded retries check the normal public Go proxy and checksum database, build
+each exact downloaded module with `GOWORK=off` and install the exact CLI version
+when released. Only then are GitHub releases created idempotently with the
+planner's exact notes, `prerelease=true` and `make_latest=false`. A complete release
+set is the durable completion checkpoint: every public build passed before any
+release in that batch was created. Missing releases resume from signed annotations
+even when the current planner sees nothing unreleased. Existing differing
+notes/flags stop instead of being overwritten. A public verification failure
+preserves versions and retries those same versions; it is not a new bump.
+
+Version-tag immutability remains non-bypassable in ruleset `26273278` (update,
+deletion and non-fast-forward). Two creation-only rulesets split its former
+creation lock: one locks global version namespaces except the reviewed canonical
+module `/v0.*` selectors; the other covers only those selectors and permits
+Integration App `5540931` alone. Root, unknown, Hatchet and v1+ creation remains
+locked. Main ruleset `26273253` is unchanged. `arkoren-ci release policy check`
+audits these selectors with existing administrative read access; add `--locked`
+when global creation is temporarily locked. The separately authorized
+`release policy activate --output NEW_SNAPSHOT_DIRECTORY` requires both existing
+creation-only rulesets to match exactly before removing only the original
+creation rule. It records before/after snapshots, requires exact-green main
+evidence and restores the global creation lock on uncertain activation.
+The publisher never invokes administrative policy changes.
+
+For emergency recovery, dispatch `release-publish.yml` on main with `sha` set to
+the original full batch SHA. It revalidates main ancestry, signatures, source plan
+and fresh exact-SHA CI evidence, completes missing publications and checks public
+consumers. For a new unsigned candidate made stale by main advancement, dispatch
+the latest exact-green main instead. Use `preflight-only=true` to validate App
+scope and sign/verify only in a disposable local repository, without remote writes.
+Do not delete/move refs or invent another version to hide a failure. Inspect the
+workflow stage and original tag annotation; resolve provenance/configuration
+conflicts through a reviewed fix. An empty-plan preflight does not prove a live
+tag push, release event or website-note PR: the first genuine payload exercises
+those operations. Website-note PRs use their own green-only native auto-merge;
+their merge triggers the normal Cloudflare website deployment, not module pins.
+
+### Module and dependency boundaries
 
 Consumer documentation uses canonical module installation commands for available
 modules. Mark unpublished integrations as pending; do not present their install
@@ -777,34 +908,16 @@ repository names follow the first path segment (`arkoren.dev/<repo>` is
 `github.com/arkoren/<repo>`). The consumer skill tree, `website/`, and `.agents/`
 hold no Go code.
 
-Releases are manual and require explicit authorization. For the approved v0.1.0
-bootstrap, publish the six foundation modules first, then core, then the 36
-committed driver modules, then the CLI. Hatchet is unpublished and excluded.
-Complete and publicly verify each wave before adopting its versions in the next
-focused PR. Later dependency adoption is explicit, not an automatic consequence
-of publishing a dependency. A contract change coordinates affected consumers,
-but dependency-ordered waves need not share one merge commit.
-
-Before publishing each module, run scoped `GOWORK=off go mod tidy` from that
-module's directory after its dependency versions are publicly available. Review
-its go.mod and generated sums, including test dependencies and legitimate
-indirect requirements; do not force a core requirement that tidy removes.
-Foundation modules remain stdlib-only. Never tidy the whole repository or use
-workspace resolution, local replacements, or disabled verification to bypass a
-missing published dependency. Keep vendor SDK upgrades out of bootstrap PRs.
-
-Merge each focused PR only after every discovered module check, integration
-suite, tooling job, website job, and aggregate gate succeeds. Validate all checks
-again on the exact post-merge SHA before signing directory-prefixed annotated
-tags at that SHA. Never move or delete a published tag. Keep tag update/deletion
-protection non-bypassable; authorize creation narrowly, without unlocking other
-module namespaces or root tags. Verify each tag's remote target and signature,
-public module-proxy/checksum resolution, and independent `GOWORK=off` use before
-the next wave. Verify the CLI's generated core and MCP pins and generated-project
-proof before its tag. GitHub release descriptions identify v0.1.0 as pre-alpha;
-the module version remains v0.1.0, without a prerelease suffix. This manual
-bootstrap adds no release automation. Routine CI and scheduled/manual audits are
-independent of publication; a successful audit does not authorize new tags.
+The manual v0.1.0 bootstrap is complete: six foundation modules, core, 36 driver
+modules and the CLI retain their immutable signed baseline tags and prereleases.
+Hatchet remains unpublished and excluded. Dependency adoption is explicit, not
+an automatic consequence of publication. A contract change coordinates affected
+consumers, but modules need not share one release version or merge commit.
+The publisher never edits manifests or runs tidy. For an intentional dependency
+update, use publicly available versions, review scoped `GOWORK=off` manifest/sum
+changes and verify every affected module independently. Foundation remains
+stdlib-only. Workspace resolution, local replacements and disabled checksum
+verification cannot substitute for a missing published dependency.
 
 ## Make a change
 

@@ -12,7 +12,7 @@ import test from "node:test";
  * assertions protect catalog completeness and landing-page discovery together.
  * All files are isolated from the working website and removed even on failure.
  */
-function assertCatalog(roots: string[], expected: string[]) {
+function assertCatalog(roots: string[], expected: string[], development: string[] = []) {
   /** Prefer the approved session temp area when running under OpenCode. */
   const temporary = existsSync(resolve(tmpdir(), "opencode"))
     ? resolve(tmpdir(), "opencode")
@@ -24,6 +24,17 @@ function assertCatalog(roots: string[], expected: string[]) {
       mkdirSync(resolve(repository, root, "fixturepkg"), { recursive: true });
       writeFileSync(resolve(repository, root, "go.mod"), `module arkoren.dev/${root}\n`);
       writeFileSync(resolve(repository, root, "fixturepkg/package.go"), "package fixturepkg\n");
+    }
+    if (development.length > 0) {
+      mkdirSync(resolve(repository, ".github"));
+      writeFileSync(
+        resolve(repository, ".github/release-modules.json"),
+        JSON.stringify({
+          schema: 1,
+          public: roots.filter((root) => !development.includes(root)),
+          development,
+        }),
+      );
     }
     /** Absolute source URLs allow discovery to run with the fixture as cwd. */
     const script = `
@@ -51,6 +62,14 @@ function assertCatalog(roots: string[], expected: string[]) {
     assert.deepEqual(result.modules, expected);
     assert.deepEqual(result.links, expected);
     for (const root of roots) {
+      if (development.includes(root)) {
+        assert.ok(
+          !result.paths.some(
+            (path) => path === `arkoren.dev/${root}` || path.startsWith(`arkoren.dev/${root}/`),
+          ),
+        );
+        continue;
+      }
       assert.ok(result.paths.includes(`arkoren.dev/${root}`), root);
       assert.ok(result.paths.includes(`arkoren.dev/${root}/fixturepkg`), root);
     }
@@ -86,5 +105,13 @@ test("the CLI publishes import paths but never becomes a library catalog entry",
   assertCatalog(
     ["foundation/fixture", "core", "driver/fixture", "cmd/arkoren"],
     ["arkoren.dev/core", "arkoren.dev/driver/fixture", "arkoren.dev/foundation/fixture"],
+  );
+});
+
+test("development policy excludes tooling from public install pages and API catalogs", () => {
+  assertCatalog(
+    ["foundation/fixture", "core", "driver/fixture", "cmd/arkoren", "cmd/arkoren-ci"],
+    ["arkoren.dev/core", "arkoren.dev/driver/fixture", "arkoren.dev/foundation/fixture"],
+    ["cmd/arkoren-ci"],
   );
 });

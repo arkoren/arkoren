@@ -105,6 +105,14 @@ unset COMPOSE_PROJECT_NAME TEST_STATUS TEST_SIGNAL CLEANUP_STATUS
 
 printf 'Make teardown fixtures\n'
 
+begin_case 'explicit development module is canonical'
+mkdir -p cmd/arkoren-ci
+touch cmd/arkoren-ci/go.mod
+expect_success make module-root MODULE=cmd/arkoren-ci
+mkdir -p cmd/unreviewed
+touch cmd/unreviewed/go.mod
+expect_failure make module-root MODULE=cmd/unreviewed
+
 begin_case 'cleanup needs neither Go nor a valid package'
 expect_success make cleanup MODULE=driver/test PKG=invalid
 if grep -q '^go ' "$TOOL_LOG"; then

@@ -69,6 +69,16 @@ test("the go command reaches the import tags before any raw-text element", () =>
   }
 });
 
+test("development modules have no generated public install pages", () => {
+  const policy: { development: string[] } = JSON.parse(
+    readFileSync(new URL("../../.github/release-modules.json", import.meta.url), "utf8"),
+  );
+  for (const directory of policy.development) {
+    assert.equal(existsSync(new URL(`../dist/${directory}.html`, import.meta.url)), false);
+  }
+  assert.ok(existsSync(new URL("../dist/cmd/arkoren.html", import.meta.url)));
+});
+
 test("only the homepage renders the navbar announcement hidden before scripts run", () => {
   for (const [page, isHidden] of [
     ["index.html", true],

@@ -222,6 +222,26 @@ override a domain-level redirect or guarantee crawler access through a WAF.
 
 ## Release notes
 
+Genuine module payload changes publish automatically after `CI gate` and
+`website` succeed at the exact main SHA. The separate **Publish modules** workflow
+reuses the read-only preview planner, signs immutable directory-prefixed `v0.X.Y`
+tags with the dedicated automation key, verifies public Go downloads and builds,
+then publishes GitHub prereleases with the planner's exact notes. Website,
+CI and contributor-only changes do not release modules. Empty plans create no
+tags or releases and need no publication credentials. Publication never changes
+dependency pins or the CLI's embedded documentation.
+
+Publication uses the repository-scoped Arkoren Releases App with Contents write
+only; its release events trigger the notes workflow below. The tag-signing
+secret `ARKOREN_RELEASES_TAG_SIGNING_KEY` is separate from App authentication.
+The reviewed public key is pinned in `../.github/release-signing.allowed-signers`;
+its signature proves that automation identity, not a GitHub UI Verified badge.
+Interrupted batches recover their exact versions and notes from signed tag
+annotations, never by moving tags or making another version. Contributor
+[publication and recovery rules](../.agents/skills/arkoren-codebase/SKILL.md#unattended-publication)
+describe same-SHA retries and the remote-write-free signing preflight. No routine
+release approval or manual release PR is required.
+
 Published module history lives only in `src/content/releases/`, not in blog posts
 or the CLI's embedded guides. The `releases` content collection loads these files
 offline. `/changelog` groups compact module entries by UTC publication date,

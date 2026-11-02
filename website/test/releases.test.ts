@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
@@ -308,6 +308,56 @@ test("committed history loads offline and covers only canonical manifests", () =
   assert.equal(
     entries.every((entry) => modules.includes(entry.data.module)),
     true,
+  );
+});
+
+test("committed public policy excludes development tooling from notes", (t) => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "release-policy-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const publicModules = ["cmd/arkoren", "core", "driver/fixture", "foundation/fixture"];
+  for (const directory of [...publicModules, "cmd/arkoren-ci"]) {
+    mkdirSync(join(root, directory), { recursive: true });
+    writeFileSync(join(root, directory, "go.mod"), `module arkoren.dev/${directory}\n`);
+  }
+  mkdirSync(join(root, ".github"));
+  writeFileSync(
+    join(root, ".github/release-modules.json"),
+    JSON.stringify({
+      schema: 1,
+      public: publicModules,
+      development: ["cmd/arkoren-ci"],
+    }),
+  );
+  execFileSync("git", ["init", "-b", "main"], { cwd: root });
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-m",
+      "ci: fixture",
+    ],
+    { cwd: root },
+  );
+  const modules = releaseModules(root);
+  assert.deepEqual(
+    modules,
+    publicModules.map((directory) => `arkoren.dev/${directory}`),
+  );
+  assert.throws(() =>
+    releaseSchema(modules).parse({
+      module: "arkoren.dev/cmd/arkoren-ci",
+      version: "v0.1.0",
+      publishedAt: "2026-11-01T00:00:00Z",
+      commit: "a".repeat(40),
+      prerelease: true,
+    }),
   );
 });
 

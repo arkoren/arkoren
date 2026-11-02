@@ -1,0 +1,122 @@
+name: Publish modules
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact green main SHA (or original signed-batch SHA to resume)
+        type: string
+        required: true
+      preflight-only:
+        description: Verify App scope and local-only tag signature without publishing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: module-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'arkoren/arkoren' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      # Execute reviewed main code, NEVER a caller-supplied SHA, PR artifact or cache.
+      # The candidate SHA is independently checked against main ancestry and exact CI.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: core/go.mod
+          cache: false
+      - name: Read maintenance tool pin
+        id: maintenance
+        run: |
+          GOWORK=off go -C cmd/arkoren-ci build -o "$RUNNER_TEMP/arkoren-ci" .
+          echo "cliff=$("$RUNNER_TEMP/arkoren-ci" release tool | jq -r .git_cliff)" >> "$GITHUB_OUTPUT"
+      - name: Install checksum-pinned planner
+        uses: taiki-e/install-action@8bf69897abc26b921431feaaa8ca2b47a6c30c00
+        with:
+          tool: git-cliff@${{ steps.maintenance.outputs.cliff }}
+          checksum: 'true'
+          fallback: none
+      - name: Require exact green SHA, namespace policy and recomputed plans
+        id: prepare
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish prepare --output "$RUNNER_TEMP/publication.json"'
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        if: steps.prepare.outputs.changed == 'true' || inputs.preflight-only == true
+        id: tag-app
+        with:
+          client-id: Iv23liUAyM9AkNIKa7tH
+          private-key: ${{ secrets.ARKOREN_RELEASES_PRIVATE_KEY }}
+          owner: arkoren
+          repositories: arkoren
+          permission-contents: write
+          # Revoke immediately after the short tag phase, not after public builds.
+          skip-token-revoke: true
+      - name: Verify dedicated signer without remote writes
+        if: inputs.preflight-only == true
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish preflight --manifest "$RUNNER_TEMP/publication.json"'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.tag-app.outputs.token }}
+          APP_SLUG: ${{ steps.tag-app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.tag-app.outputs.installation-id }}
+          SIGNING_KEY: ${{ secrets.ARKOREN_RELEASES_TAG_SIGNING_KEY }}
+      - name: Sign atomic immutable tag batches and reconcile remote objects
+        if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish tags --manifest "$RUNNER_TEMP/publication.json"'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.tag-app.outputs.token }}
+          APP_SLUG: ${{ steps.tag-app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.tag-app.outputs.installation-id }}
+          SIGNING_KEY: ${{ secrets.ARKOREN_RELEASES_TAG_SIGNING_KEY }}
+      - name: Revoke tag-phase token before any public Go build
+        if: always() && steps.tag-app.outputs.token != ''
+        run: gh api --method DELETE installation/token
+        env:
+          GH_TOKEN: ${{ steps.tag-app.outputs.token }}
+      - name: Verify exact public proxy, checksums, module builds and CLI install
+        if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish verify --manifest "$RUNNER_TEMP/publication.json" --output "$RUNNER_TEMP/public-verification.json"'
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
+        id: release-app
+        with:
+          client-id: Iv23liUAyM9AkNIKa7tH
+          private-key: ${{ secrets.ARKOREN_RELEASES_PRIVATE_KEY }}
+          owner: arkoren
+          repositories: arkoren
+          permission-contents: write
+      - name: Revalidate signed batches and publish idempotent App prereleases
+        if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
+        run: '"$RUNNER_TEMP/arkoren-ci" release publish releases --manifest "$RUNNER_TEMP/publication.json" --verification "$RUNNER_TEMP/public-verification.json"'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.release-app.outputs.token }}
+          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.release-app.outputs.installation-id }}

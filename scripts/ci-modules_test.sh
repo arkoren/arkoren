@@ -46,8 +46,10 @@ fixture() {
   rm -rf -- tree outside
   mkdir tree
   cd tree
+  mkdir .github
+  printf '%s\n' '{"schema":1,"public":["core","cmd/arkoren","driver/z","foundation/a"],"development":["cmd/arkoren-ci"]}' > .github/release-modules.json
   local module
-  for module in core cmd/arkoren driver/z foundation/a example .claude/tmp/x cmd/arkoren/skills/x; do
+  for module in core cmd/arkoren cmd/arkoren-ci driver/z foundation/a example .claude/tmp/x cmd/arkoren/skills/x; do
     mkdir -p "$module"
     printf 'module fixture\n' > "$module/go.mod"
   done
@@ -77,7 +79,7 @@ printf 'CI inventory fixtures\n'
 fixture 'canonical, sorted inventory'
 run_inventory
 printf '%s\n' \
-  'modules=["cmd/arkoren","core","driver/z","foundation/a"]' \
+  'modules=["cmd/arkoren","cmd/arkoren-ci","core","driver/z","foundation/a"]' \
   'integration=["driver/z"]' > "$scratch/expected"
 diff -u "$scratch/expected" "$scratch/output" || fail 'unexpected inventory'
 
@@ -90,7 +92,7 @@ fixture 'new canonical modules and Compose marker are included automatically'
 mkdir -p driver/new-driver foundation/new-foundation
 touch driver/new-driver/go.mod foundation/new-foundation/go.mod driver/new-driver/compose.yaml
 run_inventory
-grep -Fxq 'modules=["cmd/arkoren","core","driver/new-driver","driver/z","foundation/a","foundation/new-foundation"]' "$scratch/output" \
+grep -Fxq 'modules=["cmd/arkoren","cmd/arkoren-ci","core","driver/new-driver","driver/z","foundation/a","foundation/new-foundation"]' "$scratch/output" \
   || fail 'new modules were not included'
 grep -Fxq 'integration=["driver/new-driver","driver/z"]' "$scratch/output" \
   || fail 'new integration was not included'
@@ -166,5 +168,23 @@ expect_rejected 'invalid Compose file: driver/z/compose.yaml'
 fixture 'broken ark link'
 ln -s "$scratch/nonexistent" ark
 expect_rejected 'expected real directory: ark'
+
+fixture 'development command missing manifest'
+rm cmd/arkoren-ci/go.mod
+expect_rejected 'expected real manifest: cmd/arkoren-ci/go.mod'
+
+fixture 'unknown command needs explicit policy review'
+mkdir cmd/unreviewed
+touch cmd/unreviewed/go.mod
+expect_rejected 'unreviewed command module'
+
+fixture 'overlapping module classifications'
+printf '%s\n' '{"schema":1,"public":["core","cmd/arkoren"],"development":["cmd/arkoren"]}' > .github/release-modules.json
+expect_rejected 'invalid module policy'
+
+fixture 'missing reviewed public module'
+jq '.public += ["driver/missing"]' .github/release-modules.json > "$scratch/policy"
+mv "$scratch/policy" .github/release-modules.json
+expect_rejected 'expected real directory: driver/missing'
 
 printf 'CI inventory fixtures passed\n'
