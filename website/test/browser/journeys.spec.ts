@@ -1031,7 +1031,7 @@ test("season controls follow the local date window and return next year", async 
   await expect(desktop).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator("[data-menu-toggle]").click();
+  await page.locator("[data-mobile-nav] summary").click();
   const mobile = page.getByRole("button", { name: "Halloween mode", exact: true });
   await expect(mobile).toBeVisible();
 
@@ -1047,6 +1047,7 @@ test("season controls follow the local date window and return next year", async 
 test("season changes interpolate page surfaces and accents in both directions", async ({
   page,
 }) => {
+  await page.clock.setFixedTime(new Date(2026, 9, 31));
   await page.addInitScript(() =>
     localStorage.setItem(
       "arkoren-season",
@@ -1157,6 +1158,7 @@ test("blog banners discover new local SVGs and retain raster rendering", async (
 test("blog banner colors transition with the season and respect reduced motion", async ({
   page,
 }) => {
+  await page.clock.setFixedTime(new Date(2026, 9, 31));
   await page.addInitScript(() =>
     localStorage.setItem(
       "arkoren-season",
@@ -1227,6 +1229,7 @@ test("blog banner colors transition with the season and respect reduced motion",
 
 /** Dev asset URLs differ from bundled URLs and must still resolve to inline artwork. */
 test("development blog banners remain inline and follow the seasonal toggle", async ({ page }) => {
+  await page.clock.setFixedTime(new Date(2026, 9, 31));
   const previousBlog = process.env.ARKOREN_BLOG;
   const previousRepo = process.env.ARKOREN_REPO;
   process.env.ARKOREN_BLOG = resolve(directory, "posts");
