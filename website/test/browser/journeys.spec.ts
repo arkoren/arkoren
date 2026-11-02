@@ -415,10 +415,19 @@ test("sidebar projects rotate one at a time and respect focus and reduced motion
   const initialHeight = (await carousel.boundingBox())?.height;
   await expect(slides.filter({ visible: true })).toHaveCount(1);
   await expect(slides.first()).toBeVisible();
-  await page.clock.fastForward(8000);
+  await page.clock.runFor(1000);
+  await expect(slides.first()).toBeVisible();
+  await expect(slides.first().locator("[data-project-name]")).toHaveText(firstTitle ?? "");
+  await page.clock.fastForward(7000);
   await expect(slides.last()).toBeVisible();
   await expect(slides.last().getByRole("link")).toHaveAccessibleName(lastLabel ?? "");
   expect((await carousel.boundingBox())?.height).toBe(initialHeight);
+  await page.clock.runFor(1000);
+  await expect(slides.last()).toBeVisible();
+  await expect(slides.last().locator("[data-project-name]")).toHaveText(lastTitle ?? "");
+  await expect(slides.last().locator("[data-project-word]")).toHaveText(
+    (lastSubtitle ?? "").split(" "),
+  );
   await slides.last().getByRole("link").focus();
   await expect(slides.last().locator("[data-project-name]")).toHaveText(lastTitle ?? "");
   await expect(slides.last().locator("[data-project-word]")).toHaveText(

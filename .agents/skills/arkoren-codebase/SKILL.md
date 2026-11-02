@@ -48,8 +48,19 @@ baseline decisions; unknown command roots require a boundary review.
 
 `scripts/ci-modules.sh` owns the complete-source CI inventory, not a Go dependency planner. It lists
 core, the CLI, explicit development commands and direct driver/foundation/optional ark roots;
-Compose markers select integration suites. Routine CI checks all modules,
-workflow tooling and rendered docs. The separate scheduled/manual audit owns
+Compose markers select integration suites. `scripts/ci-select.sh` validates this
+inventory, then selects PR work from the tested merge tree against its exact base
+parent. Driver/CLI changes select owning modules; core, foundation, manifests,
+suite markers, shared configuration and unknown paths select full work. Missing
+comparison history also selects full work. Driver/consumer CLI changes select
+the website because package metadata and embedded guides are website inputs.
+Website-only PRs select no Go modules; tooling always runs. Main pushes and manual
+runs remain full. Preserve the `CI gate` and `website` names for release evidence.
+Only empty selections permit skipped matrix jobs; the website job always reports
+and skips expensive steps when unselected. Run selector and gate fixtures through
+`make workflow-check`. Selection does not add local cross-module compatibility
+coverage: standalone checks still use published dependency pins with `GOWORK=off`.
+The separate scheduled/manual audit owns
 toolchain vet, vulnerability scans and generator end-to-end
 coverage. Keep module paths aligned with Make and run `make workflow-check`
 after inventory or workflow changes.
@@ -818,14 +829,21 @@ or the original module records. Historical commits without classification policy
 or with the original array allowlist retain their original committed-public
 inventory during recomputation.
 
-Plan schema 2 renders neutral canonical release headings. Keep `DRY RUN` in
-the preview summary, outside canonical notes. Plan schema 1 uses the frozen
-`internal/release/historical.toml` template, including its original preview label.
-Recovery selects rendering from the recorded plan schema; the signed annotation
-envelope and canonical-v1 JSON encoding remain unchanged. Preserve existing
-release bodies and signed tags exactly. New schema-2 batches require a neutral
-heading before signing; tests must cover native notes, preview labeling,
-publication input, and byte-exact historical recovery.
+Plan schema 3 uses readable release titles and matching note headings: `Core v0.1.1`,
+`CLI v0.1.3`, `Driver: RabbitMQ v0.1.1`, and `Foundation: Validate v0.1.0`.
+Go tags retain directory prefixes. `internal/release/title.go` owns schema-3
+category and brand spellings; changing those spellings for existing modules
+requires a new rendering schema. git-cliff still owns note generation and version
+selection; the planner supplies the display title as native context metadata.
+Keep `DRY RUN` in the preview summary, outside canonical notes.
+Schema 2 retains tag-shaped neutral headings through frozen `neutral.toml`;
+schema 1 retains frozen `historical.toml`, including its preview label.
+Recovery selects both note rendering and GitHub release titles from the recorded
+schema; the signed annotation envelope and canonical-v1 JSON encoding remain
+unchanged. Preserve existing release names, bodies and signed tags exactly.
+New batches require their schema's canonical heading before signing; tests cover
+native notes, preview labeling, publication input, and byte-exact recovery of
+both older schemas.
 
 Tags are SSH-signed annotated objects using the dedicated automation principal
 `arkoren-releases@arkoren.dev`, not an App authentication key or human key.
@@ -894,6 +912,15 @@ conflicts through a reviewed fix. An empty-plan preflight does not prove a live
 tag push, release event or website-note PR: the first genuine payload exercises
 those operations. Website-note PRs use their own green-only native auto-merge;
 their merge triggers the normal Cloudflare website deployment, not module pins.
+The notes reconciler owns branch freshness after main pushes and release events;
+its schedule recovers missed events. Preserve signed, fast-forward-only history
+and compare ancestry as well as trees. Inspect existing PRs even for empty imports:
+close a superseded owned PR only after confirming no pending additions disappear.
+Retry with fresh isolated checkouts and imports, never stale prepared bytes. Keep
+the App token out of Git, npm and read-only inspection; only verified publication
+receives it. A successful sync requests auto-merge, not proof of an actual merge.
+Persistent failures remain blocked and visible; no bypass or merge-queue policy
+activation belongs to this reconciler.
 
 ### Module and dependency boundaries
 

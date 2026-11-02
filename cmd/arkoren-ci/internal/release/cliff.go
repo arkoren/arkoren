@@ -28,6 +28,11 @@ var configuration []byte
 //go:embed historical.toml
 var historicalConfiguration []byte
 
+// neutralConfiguration preserves schema-2 note rendering exactly.
+//
+//go:embed neutral.toml
+var neutralConfiguration []byte
+
 // Tool returns the pinned native tool specification for workflow installation.
 func Tool() (map[string]string, error) {
 	result := map[string]string{}
@@ -44,6 +49,8 @@ type cliff struct {
 	binary string
 	// config selects executable-owned temporary configuration.
 	config string
+	// schema selects immutable note presentation rules.
+	schema int
 }
 
 // newCliff materializes trusted configuration and verifies the exact version.
@@ -62,6 +69,9 @@ func newCliff(ctx context.Context, root string, schema int) (cliff, func(), erro
 	if schema == 1 {
 		data = historicalConfiguration
 	}
+	if schema == 2 {
+		data = neutralConfiguration
+	}
 	if err := os.WriteFile(config, data, 0o600); err != nil {
 		cleanup()
 
@@ -71,7 +81,7 @@ func newCliff(ctx context.Context, root string, schema int) (cliff, func(), erro
 	if binary == "" {
 		binary = "git-cliff"
 	}
-	parser := cliff{root: root, binary: binary, config: config}
+	parser := cliff{root: root, binary: binary, config: config, schema: schema}
 	version, err := parser.run(ctx, "", "--version")
 
 	if err != nil {

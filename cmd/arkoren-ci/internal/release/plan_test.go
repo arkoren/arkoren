@@ -146,13 +146,32 @@ func TestPlanNotesAreNeutralButSummaryRemainsPreview(t *testing.T) {
 	commit(t, root, "fix: repair payload", map[string]string{"core/a.go": "fix"})
 	result := plan(t, root)
 	item := entry(t, result, "core")
-	if result.SchemaVersion != 2 ||
-		!strings.HasPrefix(strings.TrimSpace(item.Notes), "## core/"+*item.NextVersion+"\n") ||
+	if result.SchemaVersion != 3 ||
+		!strings.HasPrefix(strings.TrimSpace(item.Notes), "## Core "+*item.NextVersion+"\n") ||
 		strings.Contains(item.Notes, "DRY RUN") {
 		t.Fatalf("canonical notes contain preview wording: %+v", result)
 	}
 	if !strings.HasPrefix(release.Summary(result), "# Release preview — DRY RUN\n") {
 		t.Fatal("preview report lost its safety banner")
+	}
+}
+
+// TestPlanReadableModuleHeadings exercises native rendering for each category
+// without using display labels to resolve Go versions or select payloads.
+func TestPlanReadableModuleHeadings(t *testing.T) {
+	root, _ := fixture(t)
+	commit(t, root, "fix: repair payloads", map[string]string{
+		"cmd/arkoren/main.go": "package main", "driver/example/payload.go": "package example",
+		"foundation/example/payload.go": "package example",
+	})
+	result := plan(t, root)
+	cli := entry(t, result, "cmd/arkoren")
+	driver := entry(t, result, "driver/example")
+	foundation := entry(t, result, "foundation/example")
+	if !strings.HasPrefix(strings.TrimSpace(cli.Notes), "## CLI v0.1.1\n") ||
+		!strings.HasPrefix(strings.TrimSpace(driver.Notes), "## Driver: Example v0.1.1\n") ||
+		!strings.HasPrefix(strings.TrimSpace(foundation.Notes), "## Foundation: Example v0.1.1\n") {
+		t.Fatalf("unreadable module headings: %q, %q, %q", cli.Notes, driver.Notes, foundation.Notes)
 	}
 }
 

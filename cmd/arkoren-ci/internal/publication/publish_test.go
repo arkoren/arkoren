@@ -61,10 +61,14 @@ func TestPartialPrereleaseFailureResumesOriginalVersionsIdempotently(t *testing.
 			t.Fatalf("unexpected write command %v", args)
 		}
 		name := args[2]
-		if !strings.HasPrefix(strings.TrimSpace(input), "## "+name+"\n") || strings.Contains(input, "DRY RUN") {
+		title := "Core v0.1.1"
+		if name == "driver/example/v0.1.1" {
+			title = "Driver: Example v0.1.1"
+		}
+		if !strings.HasPrefix(strings.TrimSpace(input), "## "+title+"\n") || strings.Contains(input, "DRY RUN") {
 			t.Fatalf("published notes contain preview wording: %q", input)
 		}
-		expected := []string{"release", "create", name, "--repo", github.Repository, "--verify-tag", "--prerelease", "--latest=false", "--title", name, "--notes-file", "-"}
+		expected := []string{"release", "create", name, "--repo", github.Repository, "--verify-tag", "--prerelease", "--latest=false", "--title", title, "--notes-file", "-"}
 		if !reflect.DeepEqual(args, expected) {
 			t.Fatalf("wrong native release flags: %v", args)
 		}
@@ -73,7 +77,7 @@ func TestPartialPrereleaseFailureResumesOriginalVersionsIdempotently(t *testing.
 			return nil, fmt.Errorf("lost connection")
 		}
 		writes++
-		records[name] = Release{Tag: name, Name: name, Body: input, Prerelease: true, Assets: []any{}}
+		records[name] = Release{Tag: name, Name: title, Body: input, Prerelease: true, Assets: []any{}}
 		return nil, nil
 	}}
 	if err := PublishReleases(context.Background(), client, batch); err == nil {
@@ -109,6 +113,34 @@ func TestExistingReleaseConflictNeverOverwrites(t *testing.T) {
 	}}
 	if err := PublishReleases(context.Background(), client, batch); err == nil {
 		t.Fatal("conflicting release accepted")
+	}
+}
+
+// TestExistingNeutralReleaseRetainsOriginalTitle ensures recovery does not
+// rename releases signed before readable display names were introduced.
+func TestExistingNeutralReleaseRetainsOriginalTitle(t *testing.T) {
+	version := "v0.1.1"
+	entry := release.Entry{Directory: "core", NextVersion: &version, Notes: "\n## core/v0.1.1\n"}
+	batch := Batch{Plan: release.Plan{SchemaVersion: 2, Modules: []release.Entry{entry}}}
+	client := github.Client{Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) < 4 || args[0] != "api" {
+			t.Fatalf("existing release was mutated: %v", args)
+		}
+		return json.Marshal([]Release{{Tag: "core/v0.1.1", Name: "core/v0.1.1", Body: entry.Notes, Prerelease: true}})
+	}}
+	if err := PublishReleases(t.Context(), client, batch); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReadableReleaseRejectsLegacyTitle prevents adopting an incorrectly named
+// release when its original schema requires a human-readable title.
+func TestReadableReleaseRejectsLegacyTitle(t *testing.T) {
+	version := "v0.1.1"
+	entry := release.Entry{Directory: "core", NextVersion: &version, Notes: "\n## Core v0.1.1\n"}
+	item := Release{Tag: "core/v0.1.1", Name: "core/v0.1.1", Body: entry.Notes, Prerelease: true}
+	if err := item.Check(entry, 3); err == nil {
+		t.Fatal("raw tag title adopted for a readable batch")
 	}
 }
 

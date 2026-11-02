@@ -23,10 +23,24 @@ jobs:
     outputs:
       modules: ${{ steps.matrix.outputs.modules }}
       integration: ${{ steps.matrix.outputs.integration }}
+      plan: ${{ steps.matrix.outputs.plan }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The selector compares the tested merge tree with its base parent.
+          fetch-depth: 2
       - id: matrix
-        run: bash scripts/ci-modules.sh >> "$GITHUB_OUTPUT"
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_TESTED_SHA: ${{ github.sha }}
+          CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          plan=$(bash scripts/ci-select.sh)
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
+          jq -r '"modules=\(.modules | tojson)", "integration=\(.integration | tojson)"' <<< "$plan" >> "$GITHUB_OUTPUT"
+          printf '## CI selection\n\n' >> "$GITHUB_STEP_SUMMARY"
+          jq . <<< "$plan" | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
   tooling:
     runs-on: ubuntu-latest
@@ -56,6 +70,7 @@ jobs:
 
   check:
     needs: discovery
+    if: needs.discovery.outputs.modules != '[]'
     name: check ${{ matrix.module }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -88,6 +103,7 @@ jobs:
 
   integration:
     needs: discovery
+    if: needs.discovery.outputs.integration != '[]'
     name: integration ${{ matrix.module }}
     runs-on: ubuntu-latest
     timeout-minutes: 23
@@ -132,7 +148,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - name: Require every Go and tooling job to succeed
+      - name: Require all selected Go jobs and unconditional tooling
         env:
           RESULTS: ${{ toJSON(needs) }}
+          PLAN: ${{ needs.discovery.outputs.plan }}
+          CI_TESTED_SHA: ${{ github.sha }}
         run: bash scripts/ci-gate.sh <<< "$RESULTS"
