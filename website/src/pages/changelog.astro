@@ -9,6 +9,8 @@ import { getCollection } from "astro:content";
 const releasesURL = "https://github.com/arkoren/arkoren/releases";
 
 const entries = await getCollection("releases");
+/** Offer only modules with published history. */
+const modules = [...new Set(entries.map(({ data }) => data.module))].sort();
 ---
 
 <Site
@@ -31,14 +33,70 @@ const entries = await getCollection("releases");
     </header>
 
     <div class="grid items-start gap-12 border-t-2 border-fg lg:grid-cols-main-aside lg:gap-18">
-      <section class="min-w-0" aria-labelledby="release-history">
+      <section class="min-w-0" aria-labelledby="release-history" data-release-history>
         <header class="flex flex-wrap items-baseline justify-between gap-4 border-b border-line py-6">
           <h2 id="release-history" class="text-lg font-medium">
             Release history
           </h2>
           <span class="font-mono text-2xs tracking-wide text-muted">NEWEST FIRST</span>
         </header>
+        <form
+          class="grid gap-4 border-b border-line py-6 sm:grid-cols-2"
+          role="search"
+          aria-label="Search releases"
+          action="/changelog"
+          hidden
+          data-release-controls
+        >
+          <label class="grid min-w-0 gap-2 text-xs" for="release-search">
+            Search releases
+            <span class="field">
+              <Icon name="search" size={14} />
+              <input
+                id="release-search"
+                name="q"
+                type="search"
+                placeholder="Module or version…"
+                autocomplete="off"
+              />
+            </span>
+          </label>
+          <label class="grid min-w-0 gap-2 text-xs" for="release-module">
+            Module
+            <select id="release-module" name="module" class="field w-full min-w-0">
+              <option value="">All modules</option>
+              {modules.map((module) => (
+                <option value={module}>{module}</option>
+              ))}
+            </select>
+          </label>
+          <div class="flex flex-wrap items-center justify-between gap-3 sm:col-span-2">
+            <p
+              class="text-xs text-muted"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              data-release-count
+            ></p>
+            <button
+              class="cursor-pointer text-xs underline underline-offset-4"
+              type="reset"
+              hidden
+              data-release-reset
+            >
+              Clear filters
+            </button>
+          </div>
+        </form>
+        <noscript>
+          <p class="py-4 text-muted">
+            All releases are listed below. Enable JavaScript to search or filter them.
+          </p>
+        </noscript>
         <History entries={entries} />
+        <p class="py-12 text-muted" hidden data-release-empty>
+          No releases match your filters. Try another search or module.
+        </p>
         <footer class="flex flex-wrap items-baseline justify-between gap-3 border-t border-line pt-6 text-xs text-muted">
           <span>Looking for the thinking behind a change?</span>
           <Link href="/blog" icon="arrow-up-right">
@@ -86,3 +144,7 @@ const entries = await getCollection("releases");
     </div>
   </main>
 </Site>
+
+<script>
+  import "../scripts/releases";
+</script>
