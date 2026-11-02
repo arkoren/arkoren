@@ -61,6 +61,9 @@ func TestPartialPrereleaseFailureResumesOriginalVersionsIdempotently(t *testing.
 			t.Fatalf("unexpected write command %v", args)
 		}
 		name := args[2]
+		if !strings.HasPrefix(strings.TrimSpace(input), "## "+name+"\n") || strings.Contains(input, "DRY RUN") {
+			t.Fatalf("published notes contain preview wording: %q", input)
+		}
 		expected := []string{"release", "create", name, "--repo", github.Repository, "--verify-tag", "--prerelease", "--latest=false", "--title", name, "--notes-file", "-"}
 		if !reflect.DeepEqual(args, expected) {
 			t.Fatalf("wrong native release flags: %v", args)

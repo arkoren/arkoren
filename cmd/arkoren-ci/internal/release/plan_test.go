@@ -141,6 +141,21 @@ func TestPlanSharedFortyFourBaselineIsRepeatable(t *testing.T) {
 	}
 }
 
+func TestPlanNotesAreNeutralButSummaryRemainsPreview(t *testing.T) {
+	root, _ := fixture(t)
+	commit(t, root, "fix: repair payload", map[string]string{"core/a.go": "fix"})
+	result := plan(t, root)
+	item := entry(t, result, "core")
+	if result.SchemaVersion != 2 ||
+		!strings.HasPrefix(strings.TrimSpace(item.Notes), "## core/"+*item.NextVersion+"\n") ||
+		strings.Contains(item.Notes, "DRY RUN") {
+		t.Fatalf("canonical notes contain preview wording: %+v", result)
+	}
+	if !strings.HasPrefix(release.Summary(result), "# Release preview — DRY RUN\n") {
+		t.Fatal("preview report lost its safety banner")
+	}
+}
+
 func TestPlanDevelopmentAndWebsiteNeverRelease(t *testing.T) {
 	root, modules := fixture(t)
 	policy(t, root, modules, []string{"cmd/arkoren-ci"})

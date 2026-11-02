@@ -38,6 +38,16 @@ type Batch struct {
 
 // NewBatch computes the signed-v1 plan digest without changing its wire shape.
 func NewBatch(plan release.Plan) (Batch, error) {
+	if plan.SchemaVersion != 1 && plan.SchemaVersion != 2 {
+		return Batch{}, fmt.Errorf("unsupported release plan schema: %d", plan.SchemaVersion)
+	}
+	for _, entry := range plan.Modules {
+		heading, _, _ := strings.Cut(strings.TrimSpace(entry.Notes), "\n")
+		if plan.SchemaVersion == 2 && entry.NextVersion != nil &&
+			heading != "## "+TagName(entry) {
+			return Batch{}, fmt.Errorf("release notes require a neutral canonical heading")
+		}
+	}
 	encoded, err := Canonical(plan)
 	if err != nil {
 		return Batch{}, err
@@ -223,7 +233,7 @@ func Recompute(ctx context.Context, root string, batch Batch) error {
 			return err
 		}
 	}
-	plan, err := release.PrepareHistorical(ctx, directory, batch.Plan.SHA, nil)
+	plan, err := release.PrepareRecorded(ctx, directory, batch.Plan.SHA, batch.Plan.SchemaVersion)
 	if err != nil {
 		return err
 	}

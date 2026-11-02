@@ -117,6 +117,63 @@ func (fixture fixture) push(t *testing.T, batch Batch) {
 	}
 }
 
+func TestHistoricalNotesRecoverWithoutChangingSignedBytes(t *testing.T) {
+	fixture := newFixture(t)
+	writeTest(t, fixture.root, "core/payload.go", "package core\n")
+	sha := fixture.commit(t, "fix: historical payload")
+	plan, err := release.PrepareHistorical(context.Background(), fixture.root, sha, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.SchemaVersion != 1 {
+		t.Fatal("historical schema changed")
+	}
+	for _, entry := range plan.Modules {
+		if entry.NextVersion != nil {
+			wanted := "\n## core/v0.1.1 (DRY RUN)\n\n- historical payload (" + sha + ")\n\n"
+			if entry.Notes != wanted {
+				t.Fatalf("historical note bytes changed: %q", entry.Notes)
+			}
+		}
+	}
+	batch, err := NewBatch(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := batch.Annotation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.push(t, batch)
+	recovered, err := VerifyTag(context.Background(), fixture.root, fixture.trust, "core/v0.1.1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := recovered.Annotation()
+	if err != nil || before != after {
+		t.Fatalf("signed historical annotation changed: %v", err)
+	}
+	if err := Recompute(context.Background(), fixture.root, recovered); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewBatchRejectsPreviewHeading(t *testing.T) {
+	version := "v0.1.1"
+	plan := release.Plan{SchemaVersion: 2, Modules: []release.Entry{
+		{Directory: "core", NextVersion: &version, Notes: "## core/v0.1.1 (DRY RUN)\n"},
+	}}
+	if _, err := NewBatch(plan); err == nil {
+		t.Fatal("new publication batch accepted preview heading")
+	}
+}
+
+func TestNewBatchRejectsUnknownPlanSchema(t *testing.T) {
+	if _, err := NewBatch(release.Plan{SchemaVersion: 3}); err == nil {
+		t.Fatal("unknown rendering schema accepted")
+	}
+}
+
 func TestSignedAtomicBatchPreservesOriginalPlanAfterTags(t *testing.T) {
 	fixture := newFixture(t)
 	batch := fixture.batch(t)
