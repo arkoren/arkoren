@@ -543,8 +543,9 @@ test("status matrices fit desktop columns and explain icons on hover, focus, and
       .poll(() => yes.evaluate((element) => getComputedStyle(element).color))
       .not.toBe(plainColor);
   }
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  /** Pause ahead of the installed clock; wall-clock time can already be behind it. */
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
   await yes.hover();
   const tooltip = page.getByRole("tooltip");
   await expect(tooltip).toBeHidden();
