@@ -168,8 +168,71 @@ func TestNewBatchRejectsPreviewHeading(t *testing.T) {
 	}
 }
 
+// TestNeutralNotesRecoverWithoutChangingSignedBytes freezes schema-2 output
+// while new batches use readable titles. Recovery keeps the original heading.
+func TestNeutralNotesRecoverWithoutChangingSignedBytes(t *testing.T) {
+	fixture := newFixture(t)
+	writeTest(t, fixture.root, "core/payload.go", "package core\n")
+	sha := fixture.commit(t, "fix: neutral payload")
+	plan, err := release.PrepareRecorded(t.Context(), fixture.root, sha, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range plan.Modules {
+		if entry.NextVersion != nil {
+			wanted := "\n## core/v0.1.1\n\n- neutral payload (" + sha + ")\n\n"
+			if entry.Notes != wanted {
+				t.Fatalf("neutral note bytes changed: %q", entry.Notes)
+			}
+		}
+	}
+	batch, err := NewBatch(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := batch.Annotation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.push(t, batch)
+	recovered, err := VerifyTag(t.Context(), fixture.root, fixture.trust, "core/v0.1.1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := recovered.Annotation()
+	if err != nil || before != after {
+		t.Fatalf("signed neutral annotation changed: %v", err)
+	}
+	if err := Recompute(t.Context(), fixture.root, recovered); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReadableBatchRejectsRawTagHeading binds signed notes to the new title.
+func TestReadableBatchRejectsRawTagHeading(t *testing.T) {
+	version := "v0.1.1"
+	plan := release.Plan{SchemaVersion: 3, Modules: []release.Entry{
+		{Directory: "core", NextVersion: &version, Notes: "## core/v0.1.1\n"},
+	}}
+	if _, err := NewBatch(plan); err == nil {
+		t.Fatal("readable plan accepted a raw tag heading")
+	}
+}
+
+// TestReadableBatchAcceptsMatchingHeading leaves the Go tag unchanged.
+func TestReadableBatchAcceptsMatchingHeading(t *testing.T) {
+	version := "v0.1.1"
+	entry := release.Entry{Directory: "driver/rabbitmq", NextVersion: &version, Notes: "## Driver: RabbitMQ v0.1.1\n"}
+	if _, err := NewBatch(release.Plan{SchemaVersion: 3, Modules: []release.Entry{entry}}); err != nil {
+		t.Fatal(err)
+	}
+	if TagName(entry) != "driver/rabbitmq/v0.1.1" {
+		t.Fatal("readable title changed the Go tag")
+	}
+}
+
 func TestNewBatchRejectsUnknownPlanSchema(t *testing.T) {
-	if _, err := NewBatch(release.Plan{SchemaVersion: 3}); err == nil {
+	if _, err := NewBatch(release.Plan{SchemaVersion: 4}); err == nil {
 		t.Fatal("unknown rendering schema accepted")
 	}
 }

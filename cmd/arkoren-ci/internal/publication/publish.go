@@ -23,7 +23,7 @@ type Manifest struct {
 
 // Release holds the immutable release fields checked before and after creation.
 type Release struct {
-	// Tag and Name must both be the exact module-prefixed version.
+	// Tag is the module-prefixed version; Name follows the recorded plan schema.
 	Tag  string `json:"tag_name"`
 	Name string `json:"name"`
 	// Body must equal the exact original git-cliff notes.
@@ -36,8 +36,8 @@ type Release struct {
 }
 
 // Check refuses conflicting existing releases; it never edits or adopts them.
-func (item Release) Check(entry release.Entry) error {
-	if item.Tag != TagName(entry) || item.Name != TagName(entry) || item.Body != entry.Notes || item.Draft || !item.Prerelease || len(item.Assets) != 0 {
+func (item Release) Check(entry release.Entry, schema int) error {
+	if item.Tag != TagName(entry) || item.Name != ReleaseName(entry, schema) || item.Body != entry.Notes || item.Draft || !item.Prerelease || len(item.Assets) != 0 {
 		return fmt.Errorf("existing release conflicts with immutable approved plan; never overwrite")
 	}
 
@@ -201,7 +201,7 @@ func Prepare(ctx context.Context, client github.Client, trust, sha string) (Mani
 			item, ok := known[TagName(entry)]
 			if !ok {
 				missing = true
-			} else if err := item.Check(entry); err != nil {
+			} else if err := item.Check(entry, batch.Plan.SchemaVersion); err != nil {
 				return Manifest{}, err
 			}
 		}
@@ -293,13 +293,13 @@ func PublishReleases(ctx context.Context, client github.Client, batch Batch) err
 	for _, entry := range batch.Proposals() {
 		name := TagName(entry)
 		if item, ok := existing[name]; ok {
-			if err := item.Check(entry); err != nil {
+			if err := item.Check(entry, batch.Plan.SchemaVersion); err != nil {
 				return err
 			}
 			continue
 		}
 		if _, err := client.Run(ctx, entry.Notes, "release", "create", name, "--repo", github.Repository,
-			"--verify-tag", "--prerelease", "--latest=false", "--title", name, "--notes-file", "-"); err != nil {
+			"--verify-tag", "--prerelease", "--latest=false", "--title", ReleaseName(entry, batch.Plan.SchemaVersion), "--notes-file", "-"); err != nil {
 			return err
 		}
 	}
@@ -308,7 +308,7 @@ func PublishReleases(ctx context.Context, client github.Client, batch Batch) err
 		return err
 	}
 	for _, entry := range batch.Proposals() {
-		if err := confirmed[TagName(entry)].Check(entry); err != nil {
+		if err := confirmed[TagName(entry)].Check(entry, batch.Plan.SchemaVersion); err != nil {
 			return err
 		}
 	}

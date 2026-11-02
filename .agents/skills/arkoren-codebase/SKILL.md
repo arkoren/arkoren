@@ -818,14 +818,21 @@ or the original module records. Historical commits without classification policy
 or with the original array allowlist retain their original committed-public
 inventory during recomputation.
 
-Plan schema 2 renders neutral canonical release headings. Keep `DRY RUN` in
-the preview summary, outside canonical notes. Plan schema 1 uses the frozen
-`internal/release/historical.toml` template, including its original preview label.
-Recovery selects rendering from the recorded plan schema; the signed annotation
-envelope and canonical-v1 JSON encoding remain unchanged. Preserve existing
-release bodies and signed tags exactly. New schema-2 batches require a neutral
-heading before signing; tests must cover native notes, preview labeling,
-publication input, and byte-exact historical recovery.
+Plan schema 3 uses readable release titles and matching note headings: `Core v0.1.1`,
+`CLI v0.1.3`, `Driver: RabbitMQ v0.1.1`, and `Foundation: Validate v0.1.0`.
+Go tags retain directory prefixes. `internal/release/title.go` owns schema-3
+category and brand spellings; changing those spellings for existing modules
+requires a new rendering schema. git-cliff still owns note generation and version
+selection; the planner supplies the display title as native context metadata.
+Keep `DRY RUN` in the preview summary, outside canonical notes.
+Schema 2 retains tag-shaped neutral headings through frozen `neutral.toml`;
+schema 1 retains frozen `historical.toml`, including its preview label.
+Recovery selects both note rendering and GitHub release titles from the recorded
+schema; the signed annotation envelope and canonical-v1 JSON encoding remain
+unchanged. Preserve existing release names, bodies and signed tags exactly.
+New batches require their schema's canonical heading before signing; tests cover
+native notes, preview labeling, publication input, and byte-exact recovery of
+both older schemas.
 
 Tags are SSH-signed annotated objects using the dedicated automation principal
 `arkoren-releases@arkoren.dev`, not an App authentication key or human key.
