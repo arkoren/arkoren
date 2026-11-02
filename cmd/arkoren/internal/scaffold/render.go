@@ -80,6 +80,11 @@ func Render(ctx context.Context, options Options, templates fs.FS, source fs.FS)
 		inventory = append(inventory, agents...)
 	}
 
+	if !options.SkipTidy {
+		// Reserve checksum ownership before tidy can modify an existing file.
+		inventory = append(inventory, files.File{Path: "go.sum"})
+	}
+
 	slices.SortFunc(inventory, func(left, right files.File) int {
 		// The ownership record marks a complete installation, even in a scaffold.
 		if left.Path == right.Path {
