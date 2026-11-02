@@ -1,4 +1,4 @@
-// Package scaffold owns the CLI offline application scaffold planning.
+// Package scaffold owns application scaffold planning and dependency setup.
 package scaffold
 
 import (
@@ -17,7 +17,7 @@ import (
 	"arkoren.dev/cmd/arkoren/internal/skill"
 )
 
-// Options is the complete, local-only scaffold request. folder becomes an
+// Options is the complete scaffold request. Folder becomes an
 // absolute destination before rendering.
 type Options struct {
 	// Folder selects the destination, relative to environment.Dir by default.
@@ -30,12 +30,14 @@ type Options struct {
 	NoAgentFiles bool
 	// DryRun reports the plan and collisions without prompts or writes.
 	DryRun bool
+	// SkipTidy leaves dependency resolution to the caller for offline creation.
+	SkipTidy bool
 	// Yes approves nonempty directories but never permits replacing a file.
 	Yes bool
 }
 
 // Create plans and validates every emitted byte before prompting or writing.
-// It uses no inspector settings, subprocesses, downloads, or project state.
+// It resolves dependencies after writing unless SkipTidy or DryRun is set.
 // Options carry parsed flags; help and argument counts belong to the CLI tree.
 // The caller supplies templates and the authored skill tree as read-only filesystems.
 func Create(ctx context.Context, options Options, env console.Environment, templates fs.FS, source fs.FS) error {
@@ -93,6 +95,12 @@ func Execute(ctx context.Context, options Options, inventory []files.File, env c
 
 	if err := files.Write(ctx, options.Folder, inventory); err != nil {
 		return err
+	}
+
+	if !options.SkipTidy {
+		if err := tidy(ctx, options.Folder); err != nil {
+			return err
+		}
 	}
 
 	report := map[string]any{
