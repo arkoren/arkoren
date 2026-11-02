@@ -2,6 +2,7 @@ package release
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"regexp"
@@ -130,6 +131,12 @@ func prepareEntry(ctx context.Context, root, sha string, module repository.Modul
 	if baseline == nil || next != baseline.version {
 		entry.NextVersion = &next
 		entry.SkipReason = nil
+		if parser.schema == 3 {
+			contextJSON, err = titledContext(contextJSON, Title(module.Directory, next))
+			if err != nil {
+				return Entry{}, err
+			}
+		}
 		entry.Notes, err = parser.run(ctx, contextJSON, "--from-context", "-", "--bump")
 
 		if err != nil {
@@ -138,6 +145,25 @@ func prepareEntry(ctx context.Context, root, sha string, module repository.Modul
 	}
 
 	return entry, nil
+}
+
+// titledContext supplies presentation metadata to git-cliff's native renderer.
+// Native versions, commit classification and selected payloads remain unchanged.
+func titledContext(data, title string) (string, error) {
+	contexts := []map[string]jsontext.Value{}
+	if err := json.Unmarshal([]byte(data), &contexts); err != nil {
+		return "", fmt.Errorf("invalid git-cliff context: %w", err)
+	}
+	message, err := json.Marshal(title)
+	if err != nil {
+		return "", err
+	}
+	for _, item := range contexts {
+		item["message"] = message
+	}
+	encoded, err := json.Marshal(contexts)
+
+	return string(encoded), err
 }
 
 // validateContext rejects ignore files, filters or tag-map collisions that change

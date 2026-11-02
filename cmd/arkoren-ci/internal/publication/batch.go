@@ -38,14 +38,14 @@ type Batch struct {
 
 // NewBatch computes the signed-v1 plan digest without changing its wire shape.
 func NewBatch(plan release.Plan) (Batch, error) {
-	if plan.SchemaVersion != 1 && plan.SchemaVersion != 2 {
+	if plan.SchemaVersion != 1 && plan.SchemaVersion != 2 && plan.SchemaVersion != 3 {
 		return Batch{}, fmt.Errorf("unsupported release plan schema: %d", plan.SchemaVersion)
 	}
 	for _, entry := range plan.Modules {
 		heading, _, _ := strings.Cut(strings.TrimSpace(entry.Notes), "\n")
-		if plan.SchemaVersion == 2 && entry.NextVersion != nil &&
-			heading != "## "+TagName(entry) {
-			return Batch{}, fmt.Errorf("release notes require a neutral canonical heading")
+		if plan.SchemaVersion >= 2 && entry.NextVersion != nil &&
+			heading != "## "+ReleaseName(entry, plan.SchemaVersion) {
+			return Batch{}, fmt.Errorf("release notes require the recorded schema's canonical heading")
 		}
 	}
 	encoded, err := Canonical(plan)
@@ -71,6 +71,16 @@ func (batch Batch) Proposals() []release.Entry {
 
 // TagName forms one canonical directory-prefixed immutable version ref.
 func TagName(entry release.Entry) string { return entry.Directory + "/" + *entry.NextVersion }
+
+// ReleaseName preserves recorded titles while giving new batches readable names.
+// Tags and module versions always retain their canonical Go identities.
+func ReleaseName(entry release.Entry, schema int) string {
+	if schema >= 3 {
+		return release.Title(entry.Directory, *entry.NextVersion)
+	}
+
+	return TagName(entry)
+}
 
 // Annotation returns the exact bytes signed by both historical and new code.
 func (batch Batch) Annotation() (string, error) {

@@ -2,7 +2,7 @@
 [changelog]
 header = ""
 body = """
-## {{ version }}
+## {{ message }}
 {% for commit in commits %}
 - {% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message }} ({{ commit.id }})
 {% if commit.breaking_description %}  {{ commit.breaking_description }}{% endif %}
