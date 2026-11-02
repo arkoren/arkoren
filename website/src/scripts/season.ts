@@ -198,7 +198,7 @@
     root.dataset.season = isEnabled ? "halloween" : "normal";
     for (const button of document.querySelectorAll<HTMLButtonElement>("[data-season-toggle]")) {
       button.setAttribute("aria-pressed", String(isEnabled));
-      button.hidden = false;
+      button.hidden = !inSeason;
     }
   }
 

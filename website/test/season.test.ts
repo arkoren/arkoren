@@ -80,7 +80,22 @@ test("the calendar activates only within the seasonal window", (t) => {
     const page = fixture(t, { nowAt: new Date(2026, month, day) });
     page.activate();
     assert.equal(page.root.dataset.season, expected);
+    assert.ok(page.buttons.every((button) => button.hidden === (expected === "normal")));
   }
+});
+
+test("a saved opt-in does not reveal controls outside the seasonal window", (t) => {
+  const page = fixture(t, {
+    nowAt: new Date(2026, 10, 2),
+    saved: '{"year":2026,"enabled":true}',
+  });
+  page.activate();
+  assert.ok(page.buttons.every((button) => button.hidden));
+});
+
+test("controls return during the following year's seasonal window", (t) => {
+  const page = fixture(t, { nowAt: new Date(2027, 9, 24) });
+  assert.ok(page.buttons.every((button) => !button.hidden));
 });
 
 test("manual preferences synchronize controls and survive a page load", (t) => {
