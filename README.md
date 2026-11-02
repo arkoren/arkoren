@@ -101,7 +101,10 @@ overwritten; changing system root trust is a separate, explicit action.
 
 ## Get started
 
-Requires **Go 1.27 or later**. Add core to your existing Go module:
+Requires **Go 1.27 or later**. Arkoren is **pre-1.0**: modules version
+independently, and v0 minor releases can break APIs. Read the
+[compatibility policy](cmd/arkoren/skills/arkoren/references/guides/first-steps/installation.md#compatibility-and-support)
+before adopting or upgrading a module. Add core to your existing Go module:
 
 ```sh
 go get arkoren.dev/core

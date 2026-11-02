@@ -44,9 +44,9 @@ type Entry struct {
 	SkipReason *string `json:"skip_reason"`
 }
 
-// Plan retains the existing artifact schema, not signed canonical JSON bytes.
+// Plan records proposals and their rendering schema, not canonical JSON bytes.
 type Plan struct {
-	// SchemaVersion identifies the artifact shape.
+	// SchemaVersion selects note rendering: 1 is historical, 2 is neutral.
 	SchemaVersion int `json:"schema_version"`
 	// DryRun is always true.
 	DryRun bool `json:"dry_run"`
@@ -100,17 +100,26 @@ func git(ctx context.Context, root string, args ...string) (string, error) {
 
 // Prepare calculates proposals from committed policy, history and native cliff.
 func Prepare(ctx context.Context, root, sha string, initial []string) (Plan, error) {
-	return prepare(ctx, root, sha, initial, false)
+	return prepare(ctx, root, sha, initial, false, 2)
 }
 
-// PrepareHistorical recomputes signed-v1 records whose original tree predates
-// schema-1 module policy. It grants no current namespace or publishing approval.
+// PrepareHistorical reproduces schema-1 notes and historical module inventory.
+// It grants no current namespace or publishing approval.
 func PrepareHistorical(ctx context.Context, root, sha string, initial []string) (Plan, error) {
-	return prepare(ctx, root, sha, initial, true)
+	return prepare(ctx, root, sha, initial, true, 1)
+}
+
+// PrepareRecorded reproduces the recorded schema with historical inventory
+// decoding. It grants no current namespace or publication approval.
+func PrepareRecorded(ctx context.Context, root, sha string, schema int) (Plan, error) {
+	return prepare(ctx, root, sha, nil, true, schema)
 }
 
 // prepare keeps historical decoding an explicit operation, not a policy fallback.
-func prepare(ctx context.Context, root, sha string, initial []string, historical bool) (Plan, error) {
+func prepare(ctx context.Context, root, sha string, initial []string, historical bool, schema int) (Plan, error) {
+	if schema != 1 && schema != 2 {
+		return Plan{}, fmt.Errorf("unsupported release plan schema: %d", schema)
+	}
 	if !revision.MatchString(sha) {
 		return Plan{}, fmt.Errorf("provide an exact full commit SHA")
 	}
@@ -151,7 +160,7 @@ func prepare(ctx context.Context, root, sha string, initial []string, historical
 	if err != nil {
 		return Plan{}, err
 	}
-	parser, cleanup, err := newCliff(ctx, root)
+	parser, cleanup, err := newCliff(ctx, root, schema)
 
 	if err != nil {
 		return Plan{}, err
@@ -167,7 +176,7 @@ func prepare(ctx context.Context, root, sha string, initial []string, historical
 	if err != nil {
 		return Plan{}, err
 	}
-	result := Plan{SchemaVersion: 1, DryRun: true, SHA: sha, GitCliff: pin["git_cliff"],
+	result := Plan{SchemaVersion: schema, DryRun: true, SHA: sha, GitCliff: pin["git_cliff"],
 		Validation: "local plan only; no CI evidence attached", Modules: []Entry{}}
 	for _, module := range modules {
 		if err := ctx.Err(); err != nil {

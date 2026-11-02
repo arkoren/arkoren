@@ -814,6 +814,15 @@ or the original module records. Historical commits without classification policy
 or with the original array allowlist retain their original committed-public
 inventory during recomputation.
 
+Plan schema 2 renders neutral canonical release headings. Keep `DRY RUN` in
+the preview summary, outside canonical notes. Plan schema 1 uses the frozen
+`internal/release/historical.toml` template, including its original preview label.
+Recovery selects rendering from the recorded plan schema; the signed annotation
+envelope and canonical-v1 JSON encoding remain unchanged. Preserve existing
+release bodies and signed tags exactly. New schema-2 batches require a neutral
+heading before signing; tests must cover native notes, preview labeling,
+publication input, and byte-exact historical recovery.
+
 Tags are SSH-signed annotated objects using the dedicated automation principal
 `arkoren-releases@arkoren.dev`, not an App authentication key or human key.
 `.github/release-signing.allowed-signers` pins the reviewed Ed25519 public key

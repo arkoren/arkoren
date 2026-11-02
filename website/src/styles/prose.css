@@ -111,7 +111,7 @@
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     line-height: var(--leading-relaxed);
-    margin: 0;
+    margin: 0 0 --spacing(4);
     padding: --spacing(4);
     overflow-x: auto;
     tab-size: 4;
@@ -125,6 +125,10 @@
   .prose .copyable {
     position: relative;
     margin-bottom: --spacing(4);
+  }
+
+  .prose .copyable > pre {
+    margin-bottom: 0;
   }
 
   .copyable > .copy {

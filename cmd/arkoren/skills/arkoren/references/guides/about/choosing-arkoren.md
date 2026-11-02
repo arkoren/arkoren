@@ -78,11 +78,14 @@ shows the integration.
 
 ## Try One Capability
 
-Arkoren requires Go 1.27 or later. Modules are versioned independently, so assess
-the versions of core, foundation libraries, and drivers that your application
-selects. Conformance and integration tests do not establish an API freeze,
-support window, performance guarantee, or production track record. If you require
-one of those assurances, establish it separately before committing.
+Arkoren requires Go 1.27 or later and is pre-1.0. Modules version independently,
+and v0 minor releases can break APIs. Read the
+[compatibility and support policy](../first-steps/installation.md#compatibility-and-support)
+before adopting a module: security fixes target its latest published version,
+with no guaranteed backports or fixed long-term support window. Conformance and
+integration tests do not establish an API freeze, performance guarantee, or
+production track record. If you require those assurances, establish them
+separately before committing.
 
 Start with the [existing-application installation example](../first-steps/installation.md#existing-applications)
 and add a test for the behavior you need. Before expanding adoption, test the
