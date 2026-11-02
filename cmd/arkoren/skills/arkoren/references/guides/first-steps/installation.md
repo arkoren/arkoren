@@ -4,6 +4,7 @@ description: Choose Arkoren modules and add a capability to an existing Go appli
 order: 10
 summary:
   - Check the Go requirement and select the module that owns your dependency.
+  - Plan upgrades around pre-1.0 compatibility and latest-version security fixes.
   - Install core, independent foundation libraries, or vendor integrations as needed.
   - Adopt a cache without replacing your router, entry point, or dependency wiring.
 ---
@@ -33,6 +34,29 @@ directory with `go mod init example.com/your-app`, using your intended module pa
 Core has no external-service prerequisite. Vendor integrations can require a
 running backend, credentials, or native dependencies; follow the relevant
 [driver guide](../drivers/choosing-a-driver.md) before connecting one.
+
+## Compatibility and Support
+
+Arkoren is pre-1.0. Each module versions independently: core, a foundation
+library, and a driver do not need matching version numbers. Go resolves the
+dependency versions declared by the modules your application uses.
+
+During v0, breaking API changes use a minor release, such as `v0.1.x` to
+`v0.2.0`; patch releases are intended to remain compatible within that minor
+line. A minor release can also add features without breaking existing callers.
+Review the [release notes](https://arkoren.dev/changelog) before upgrading, commit
+your resolved `go.mod` and `go.sum`, and run your application's tests against the
+backends you deploy. Pre-1.0 APIs are not frozen.
+
+Security fixes target the latest published version of each affected module.
+Older versions have no guaranteed security backports, so receiving a fix can
+require an upgrade to a newer minor release. There is no fixed long-term support
+window or guaranteed response or resolution time. Use the
+[security policy](https://github.com/arkoren/arkoren/security/policy) to report
+suspected vulnerabilities privately.
+
+GitHub's prerelease label does not change Go version selection: a plain `v0.X.Y`
+tag is not a Go prerelease version and can be selected by `@latest`.
 
 ## Choosing Modules
 

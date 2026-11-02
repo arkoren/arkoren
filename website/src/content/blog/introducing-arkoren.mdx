@@ -373,15 +373,20 @@ go install arkoren.dev/cmd/arkoren@latest
 arkoren new hello --module example.com/hello
 ```
 
-Generation writes a project; it does not resolve its dependencies. Follow
+The starter wires an HTTP service with configuration, health probes, and
+lifecycle management. It creates no application tests and does not resolve its
+dependencies. Follow
 [Creating Projects](/docs/guides/first-steps/creating-a-project#resolving-dependencies)
 before building, then use the [quickstart](/docs/guides/first-steps/quickstart) to
 run the service and add a route, a cache counter, and a checked error response.
 
-Arkoren modules are versioned independently. Commit your resolved `go.mod` and
-`go.sum`, review upgrades, and run your application's tests before deploying.
-Start with a capability you need, then decide whether another piece earns its
-place.
+Arkoren is pre-1.0. Modules version independently, and v0 minor releases can
+break APIs. Security fixes target the latest version of each affected module,
+without guaranteed backports. Read the
+[compatibility and support policy](/docs/guides/first-steps/installation#compatibility-and-support),
+commit your resolved `go.mod` and `go.sum`, and run your application's tests
+before deploying an upgrade. Start with a capability you need, then decide
+whether another piece earns its place.
 
 ## What Comes Next
 
