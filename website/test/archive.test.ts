@@ -39,7 +39,7 @@ test("archive notices derive sizes from fixture pages and preserve their order v
     indexURL: "https://example.test/index",
     pages,
   });
-  assert.ok(archive.includes("https://example.test/index"));
+  assert.equal(required(archive.match(/\[[^\]]+\]\(([^)]+)\)/))[1], "https://example.test/index");
   assert.ok(archive.includes(`${Buffer.byteLength(body)} UTF-8 bytes`));
   assert.ok(archive.includes(`approximately ${Math.ceil(body.length / 4)} tokens`));
   assert.ok(archive.includes("2 pages"));
