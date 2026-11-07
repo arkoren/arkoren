@@ -169,11 +169,15 @@ govulncheck and the CLI generated-project end-to-end test.
 Manual audit dispatch checks the selected ref; scheduled audits use the default
 branch. Audit summaries record the resolved SHA, tools, and all failing modules.
 Vulnerability scans are audit-only, not a dependency-PR merge gate.
-Dependabot covers GitHub Actions and website npm only (never Go modules) and
-groups minor/patch bumps weekly. `dependabot-auto-merge.yml` requests native
-squash auto-merge for non-major updates through the required checks; it uses
-`pull_request_target` and must never check out PR code. Majors stay manual.
-Its `GITHUB_TOKEN` merges do not trigger main-push CI or publication.
+Dependabot groups weekly minor/patch version updates for GitHub Actions and
+website npm. Go modules get security updates only: version updates stay off
+because a library's go.mod raises consumers' minimum versions. Website
+`overrides` pin satori's exact `fflate` to a patched version; remove it when
+satori ships the fix. `dependabot-auto-merge.yml` requests native squash
+auto-merge for every non-major Dependabot PR through the required checks; it
+uses `pull_request_target` and must never check out PR code. Majors stay manual.
+Its `GITHUB_TOKEN` merges do not trigger main-push CI, so a merged Go security
+fix enters release planning with the next maintainer-triggered main CI run.
 
 Answer plans, proposals, comparisons and findings in the conversation. Write
 them to a file only when requested, under `.claude/tmp/` (temporary, gitignored,
