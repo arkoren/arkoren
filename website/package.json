@@ -53,5 +53,10 @@
     "pagefind": "^1.6.0",
     "typescript": "^6.0.3",
     "wrangler": "^4.157.0"
+  },
+  "overrides": {
+    "satori": {
+      "fflate": "0.7.5"
+    }
   }
 }
