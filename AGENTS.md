@@ -169,6 +169,11 @@ govulncheck and the CLI generated-project end-to-end test.
 Manual audit dispatch checks the selected ref; scheduled audits use the default
 branch. Audit summaries record the resolved SHA, tools, and all failing modules.
 Vulnerability scans are audit-only, not a dependency-PR merge gate.
+Dependabot covers GitHub Actions and website npm only (never Go modules) and
+groups minor/patch bumps weekly. `dependabot-auto-merge.yml` requests native
+squash auto-merge for non-major updates through the required checks; it uses
+`pull_request_target` and must never check out PR code. Majors stay manual.
+Its `GITHUB_TOKEN` merges do not trigger main-push CI or publication.
 
 Answer plans, proposals, comparisons and findings in the conversation. Write
 them to a file only when requested, under `.claude/tmp/` (temporary, gitignored,
