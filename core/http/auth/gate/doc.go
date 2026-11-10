@@ -6,6 +6,11 @@
 // There are no combinators and no registry: compose rules with ordinary Go
 // if and ||.
 //
+// [Bind] adapts rules to a context-only availability check, such as tool
+// availability, that reports false instead of an error for anonymous callers.
+// [HasScopes] is a rule for any user type implementing [auth.Scoped], including
+// the OAuth identity.
+//
 // The free functions publish nothing. To observe denials, build a [Gate]
 // with [New] and [Builder.Events] and call its [Gate.Authorize] and
 // [Gate.Require] methods, which behave the same.

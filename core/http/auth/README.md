@@ -21,7 +21,9 @@ to 401 with a Bearer challenge; `Builder.ErrorResponse` can replace the response
 ## Browser sessions and resource access
 
 Install session middleware and CSRF protection before cookie authentication.
-Share one `auth.NewSessionIdentity(loadUser)` across authentication, login, and
+Your user type reports its identifier with `AuthID() K`, which must match the
+loader's `K`; `identity.Login(sess, user)` stores it. Share one
+`auth.NewSessionIdentity(loadUser)` across authentication, login, and
 logout. Check its `Err` during setup and handle login/logout mutation errors.
 Rotation does not prove persistence succeeded; session middleware owns saving,
 renewal, and retirement. Handles select context slots, not separate authorization

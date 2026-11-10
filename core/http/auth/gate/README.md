@@ -22,6 +22,10 @@ if err := gate.Authorize(ctx, policy.CanEdit(postID)); err != nil {
 }
 ```
 
+Outside a request, `gate.Bind(rules...)` adapts rules to a `func(ctx) (bool, error)`
+availability check that reports `false` for anonymous callers, and
+`gate.HasScopes[U](scopes...)` is a rule for users implementing `auth.Scoped`.
+
 No user returns `auth.ErrUnauthenticated` (401), a denied rule returns
 `gate.ErrForbidden` (403), and a rule error is returned as is. Row-level
 access belongs in query scopes and invariants in conditional writes; see the

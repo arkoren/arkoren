@@ -33,7 +33,7 @@ func verifyToken(_ context.Context, token string) (user, error) {
 		return user{}, errors.New("unknown token")
 	}
 
-	return user{"u"}, nil
+	return user{Name: "u"}, nil
 }
 
 // TestBearerConformance runs the authenticator suite against Bearer.

@@ -20,8 +20,30 @@ const sessionKey = "arkoren:auth:user"
 //	}
 var ErrInvalidSessionIdentity = errors.New("auth: invalid session identity")
 
+// Identifiable is implemented by user types that report their own login
+// identifier. [SessionIdentity] needs both directions: the loader maps K to the
+// user and AuthID maps the user back to K, so [SessionIdentity.Login] can take
+// the user and [SessionIdentity.Subject] can derive a stable reference for
+// packages that do not know the application's types. The compiler ties the K
+// returned here to the K the loader accepts.
+//
+// AuthID must return the same value the loader accepts, must not change for the
+// life of the user, and should be implemented on the type used as U (a pointer
+// receiver requires a pointer U). It is called on a possibly zero user, so it
+// must not depend on loaded state.
+//
+// Example:
+//
+//	type User struct{ ID int64 }
+//
+//	func (user User) AuthID() int64 { return user.ID }
+type Identifiable[K any] interface {
+	AuthID() K
+}
+
 // SessionIdentity binds the login identifier K, user loader U and session bridge
-// in one immutable definition. Zero is invalid. Copies share functions and their
+// in one immutable definition. U reports its identifier through [Identifiable].
+// Zero is invalid. Copies share functions and their
 // captures, not mutable construction drafts. All definitions use the existing
 // arkoren:auth:user slot: a physical session supports one identity, and another
 // definition using the same K can still mix realms. Compatible persisted JSON
@@ -31,7 +53,7 @@ var ErrInvalidSessionIdentity = errors.New("auth: invalid session identity")
 //
 //	identity := auth.NewSessionIdentity(loadUser)
 //	r.Use(auth.Middleware(identity.Authenticator()))
-type SessionIdentity[K, U any] struct {
+type SessionIdentity[K any, U Identifiable[K]] struct {
 	// load resolves a correctly typed stored identifier; nil marks invalidity.
 	load func(context.Context, K) (U, error)
 
@@ -43,6 +65,10 @@ type SessionIdentity[K, U any] struct {
 // load. A nil loader is invalid, but construction callbacks still run once in
 // order. Nil callback entries panic. Retained drafts cannot change the result;
 // function captures remain caller-owned. Check Err during application setup.
+// Both type arguments are inferred from load when U implements [Identifiable]
+// for K. Err checks only the loader: an unsupported K (see
+// [SessionIdentity.Subject]) still works for sessions and fails only where a
+// subject is needed.
 //
 // Example:
 //
@@ -51,7 +77,7 @@ type SessionIdentity[K, U any] struct {
 //		return err
 //	}
 //	r.Use(auth.Middleware(identity.Authenticator()))
-func NewSessionIdentity[K, U any](
+func NewSessionIdentity[K any, U Identifiable[K]](
 	load func(ctx context.Context, id K) (U, error),
 	configure ...SessionBuilderFunc,
 ) SessionIdentity[K, U] {

@@ -226,3 +226,118 @@ func TestRequirePanicsWithoutRules(t *testing.T) {
 	}()
 	gate.Require[user]()
 }
+
+// scoped is a test user carrying granted scopes.
+type scoped struct{ scopes []string }
+
+// AuthScopes reports the granted scopes.
+func (user scoped) AuthScopes() []string { return user.scopes }
+
+// TestBindWithoutUserIsUnavailable verifies an anonymous context is hidden
+// without an error and without running any rule.
+func TestBindWithoutUserIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	available := gate.Bind(func(context.Context, string) (bool, error) {
+		t.Fatal("rule ran without a user")
+
+		return true, nil
+	})
+
+	if ok, err := available(t.Context()); ok || err != nil {
+		t.Fatalf("available = %v, error = %v", ok, err)
+	}
+}
+
+// TestBindRunsRulesInOrder verifies allow, deny and error outcomes and that a
+// denial skips later rules.
+func TestBindRunsRulesInOrder(t *testing.T) {
+	t.Parallel()
+
+	ctx := auth.NewContext(t.Context(), "reader")
+	allow := func(context.Context, string) (bool, error) { return true, nil }
+	deny := func(context.Context, string) (bool, error) { return false, nil }
+	fail := errors.New("policy backend down")
+
+	if ok, err := gate.Bind(allow, allow)(ctx); !ok || err != nil {
+		t.Fatalf("allowed = %v, error = %v", ok, err)
+	}
+
+	if ok, err := gate.Bind(allow, deny, func(context.Context, string) (bool, error) {
+		t.Fatal("rule ran after denial")
+
+		return true, nil
+	})(ctx); ok || err != nil {
+		t.Fatalf("denied = %v, error = %v", ok, err)
+	}
+
+	if ok, err := gate.Bind(allow, func(context.Context, string) (bool, error) {
+		return true, fail
+	})(ctx); ok || !errors.Is(err, fail) {
+		t.Fatalf("failed = %v, error = %v", ok, err)
+	}
+}
+
+// TestBindSnapshotsRuleSlice verifies replacing a caller-owned entry cannot
+// change the availability decision.
+func TestBindSnapshotsRuleSlice(t *testing.T) {
+	t.Parallel()
+
+	rules := []func(context.Context, string) (bool, error){
+		func(context.Context, string) (bool, error) { return false, nil },
+	}
+	available := gate.Bind(rules...)
+	rules[0] = func(context.Context, string) (bool, error) { return true, nil }
+
+	if ok, err := available(auth.NewContext(t.Context(), "reader")); ok || err != nil {
+		t.Fatalf("available = %v, error = %v", ok, err)
+	}
+}
+
+// TestBindWithoutRulesPanics verifies the same misuse rule as Require.
+func TestBindWithoutRulesPanics(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Bind without rules did not panic")
+		}
+	}()
+
+	gate.Bind[string]()
+}
+
+// TestHasScopesRequiresAll verifies every required scope must be granted and
+// that no requirement allows any user.
+func TestHasScopesRequiresAll(t *testing.T) {
+	t.Parallel()
+
+	user := scoped{[]string{"read", "write"}}
+
+	for required, want := range map[string]bool{"read": true, "admin": false} {
+		if ok, err := gate.HasScopes[scoped](required)(t.Context(), user); ok != want || err != nil {
+			t.Fatalf("scope %q = %v, error = %v", required, ok, err)
+		}
+	}
+
+	if ok, _ := gate.HasScopes[scoped]("read", "admin")(t.Context(), user); ok {
+		t.Fatal("partial scopes allowed")
+	}
+
+	if ok, _ := gate.HasScopes[scoped]()(t.Context(), scoped{}); !ok {
+		t.Fatal("empty requirement denied")
+	}
+}
+
+// TestHasScopesCopiesRequired verifies later caller edits cannot weaken the rule.
+func TestHasScopesCopiesRequired(t *testing.T) {
+	t.Parallel()
+
+	required := []string{"admin"}
+	rule := gate.HasScopes[scoped](required...)
+	required[0] = "read"
+
+	if ok, _ := rule(t.Context(), scoped{[]string{"read"}}); ok {
+		t.Fatal("rule followed caller edit")
+	}
+}

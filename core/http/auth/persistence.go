@@ -2,20 +2,21 @@ package auth
 
 import "arkoren.dev/core/http/session"
 
-// Login stores the user identifier in current and regenerates the session ID to
+// Login stores user.AuthID() in current and regenerates the session ID to
 // prevent session fixation. Call it after verifying the credentials. A failed
 // field write is returned before rotating the ID; callers must stop login.
 // Invalid definitions fail before mutation; nil sessions return ErrNoSession.
 // The explicit session is not checked against the definition's handle. Other
-// data, creation time and expiry remain unchanged.
+// data, creation time and expiry remain unchanged. The user is not reloaded or
+// verified; only its identifier is stored, and a nil pointer U panics in AuthID.
 //
 // Example:
 //
 //	sess := request.MustSession(r)
-//	if err := identity.Login(sess, user.ID); err != nil {
+//	if err := identity.Login(sess, user); err != nil {
 //		return err
 //	}
-func (identity SessionIdentity[K, U]) Login(current *session.Session, id K) error {
+func (identity SessionIdentity[K, U]) Login(current *session.Session, user U) error {
 	if err := identity.Err(); err != nil {
 		return err
 	}
@@ -24,7 +25,7 @@ func (identity SessionIdentity[K, U]) Login(current *session.Session, id K) erro
 		return session.ErrNoSession
 	}
 
-	if err := current.Put(session.NewField[K](sessionKey), id); err != nil {
+	if err := current.Put(session.NewField[K](sessionKey), user.AuthID()); err != nil {
 		return err
 	}
 

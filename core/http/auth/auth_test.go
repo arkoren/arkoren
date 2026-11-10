@@ -49,6 +49,23 @@ func TestMiddlewareSnapshotsAuthenticatorSlice(t *testing.T) {
 type user struct {
 	// Name identifies the authenticated test user recorded by the handler.
 	Name string
+
+	// ID is the login identifier reported by AuthID.
+	ID int
+}
+
+// AuthID reports the login identifier accepted by loadByID.
+func (user user) AuthID() int {
+	return user.ID
+}
+
+// wide is a test user identified by a 64-bit integer, to prove exact decoding
+// of identifiers beyond float64 precision.
+type wide int64
+
+// AuthID reports the wide user's own value as its identifier.
+func (id wide) AuthID() int64 {
+	return int64(id)
 }
 
 // ok is a handler that records the user it sees in seen.
@@ -69,9 +86,7 @@ func ok(seen *[]string) router.Handler {
 // returns builds an authenticator returning name and err.
 func returns(name string, err error) auth.Authenticator[user] {
 	return func(*http.Request) (user, error) {
-		return user{
-			name,
-		}, err
+		return user{Name: name}, err
 	}
 }
 
@@ -187,9 +202,7 @@ func loadByID(_ context.Context, id int) (user, error) {
 		return user{}, errors.New("db down")
 	}
 
-	return user{
-		"u",
-	}, nil
+	return user{Name: "u", ID: id}, nil
 }
 
 // TestSessionLoadsLoggedInUser verifies Login then Session resolves the user.
@@ -200,7 +213,7 @@ func TestSessionLoadsLoggedInUser(t *testing.T) {
 	before := sess.ID()
 	identity := auth.NewSessionIdentity(loadByID)
 
-	if err := identity.Login(sess, 7); err != nil {
+	if err := identity.Login(sess, user{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,7 +250,7 @@ func TestSessionPassesLoadResults(t *testing.T) {
 	deleted := session.New(time.Now().Add(time.Hour), map[string]any{})
 	identity := auth.NewSessionIdentity(loadByID)
 
-	if err := identity.Login(deleted, 0); err != nil {
+	if err := identity.Login(deleted, user{ID: 0}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,7 +260,7 @@ func TestSessionPassesLoadResults(t *testing.T) {
 
 	sess := session.New(time.Now().Add(time.Hour), map[string]any{})
 
-	if err := identity.Login(sess, -1); err != nil {
+	if err := identity.Login(sess, user{ID: -1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -267,7 +280,7 @@ func TestSessionHonoursHandle(t *testing.T) {
 
 	sess := session.New(time.Now().Add(time.Hour), map[string]any{})
 
-	if err := identity.Login(sess, 7); err != nil {
+	if err := identity.Login(sess, user{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -286,7 +299,7 @@ func TestLogoutRemovesUserAndRegenerates(t *testing.T) {
 	sess := session.New(time.Now().Add(time.Hour), map[string]any{})
 	identity := auth.NewSessionIdentity(loadByID)
 
-	if err := identity.Login(sess, 7); err != nil {
+	if err := identity.Login(sess, user{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -324,9 +337,7 @@ func bearerVerify(_ context.Context, token string) (user, error) {
 		return user{}, auth.ErrNoCredentials
 	}
 
-	return user{
-		token,
-	}, nil
+	return user{Name: token}, nil
 }
 
 // checkBearerUser sends a request with the given Authorization values through
