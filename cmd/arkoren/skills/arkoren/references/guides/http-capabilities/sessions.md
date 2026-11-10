@@ -189,10 +189,10 @@ login, use the same `auth.SessionIdentity` as your authentication middleware;
 [Session Login](../authentication/session-login.md) owns the user loader,
 credential checks, and complete identity setup.
 
-After credentials succeed, with the configured `identity` and typed loaded `user`:
+After credentials succeed, with the configured `identity` and the loaded `user` (which reports its identifier through `AuthID`):
 
 ```go
-if err := identity.Login(request.MustSession(r), user.ID); err != nil {
+if err := identity.Login(request.MustSession(r), user); err != nil {
 	return err
 }
 ```

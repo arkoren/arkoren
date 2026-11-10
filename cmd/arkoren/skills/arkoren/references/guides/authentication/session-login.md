@@ -3,7 +3,7 @@ title: Session Login
 description: Check application-owned credentials, rotate the browser session, and revoke account sessions.
 order: 20
 summary:
-  - Load current accounts from typed session identifiers and reject deleted or disabled accounts.
+  - Report each user's identifier, load current accounts from it, and reject deleted or disabled accounts.
   - Check passwords without revealing account existence and rotate the session after verified login.
   - End local logins, revoke older account sessions, and select the intended session context.
 ---
@@ -26,13 +26,17 @@ packages, `csrf` from `arkoren.dev/core/http/middleware/csrf`, and standard-libr
 
 Keep the session small: store an account ID, not a snapshot of permissions.
 The loader can then reject a deleted or disabled account on the next request.
-This application separates the handler identity from its password record:
+This application separates the handler identity from its password record. The
+user reports its identifier through `AuthID`, which `Login` stores and the
+loader below accepts:
 
 ```go
 type User struct {
 	ID   int
 	Name string
 }
+
+func (user User) AuthID() int { return user.ID }
 
 type Account struct {
 	User
@@ -44,13 +48,14 @@ type Account struct {
 
 Here `accounts.ByID(ctx, id)` returns `Account`; the application sentinel
 `ErrAccountNotFound` means absence, while other errors retain storage failures.
-Bind the loader to the identifier type `int`:
+Bind the loader to the identifier type `int`. The compiler checks that the
+identifier `User.AuthID` returns is the one the loader accepts:
 
 ```go
 loadUser := func(ctx context.Context, id int) (User, error) {
 	account, err := accounts.ByID(ctx, id)
 	if errors.Is(err, ErrAccountNotFound) {
-		return User{}, auth.ErrNoCredentials
+		return User{}, auth.ErrNotFound
 	}
 	if err != nil {
 		return User{}, err
@@ -64,7 +69,10 @@ loadUser := func(ctx context.Context, id int) (User, error) {
 ```
 
 The loader runs on every request with a usable stored identifier. Absence and
-disabled status become anonymous requests; a storage outage instead stops the
+disabled status become anonymous requests; `auth.ErrNotFound` wraps
+`auth.ErrNoCredentials`, so both are anonymous, but only `ErrNotFound` tells code
+that cleans up after deleted users that the account is gone. Return plain
+`ErrNoCredentials` for a disabled account so its data is never swept. A storage outage instead stops the
 request. Returning a zero user with nil error would authenticate it, so do not
 use that result for absence. If you cache accounts, your invalidation policy
 determines how quickly account changes take effect.
@@ -154,14 +162,14 @@ write that avoids overwriting a concurrent password reset.
 ## Start Sessions
 
 After the credential checks succeed, resolve the identity's selected session and
-store the verified account ID. Do both before writing response headers:
+store the verified user's identifier. Do both before writing response headers:
 
 ```go
 current, err := identity.Session(r.Context())
 if err != nil {
 	return err
 }
-if err := identity.Login(current, account.ID); err != nil {
+if err := identity.Login(current, account.User); err != nil {
 	return err
 }
 
@@ -219,6 +227,16 @@ type SessionUser struct {
 }
 ```
 
+Move `SessionVersion` from `Account` to the embedded `User` (the loader can still
+read it as `account.SessionVersion`) and report it from `AuthID`, which now
+returns `SessionUser`:
+
+```go
+func (user User) AuthID() SessionUser {
+	return SessionUser{ID: user.ID, Version: user.SessionVersion}
+}
+```
+
 Change your loader to `func(context.Context, SessionUser) (User, error)`.
 After loading the account and handling absence or storage errors as above,
 reject a stale version:
@@ -231,16 +249,18 @@ return account.User, nil
 ```
 
 Here `saved` is the loader's `SessionUser` argument. Reconstruct the definition
-with that loader and supply both values after successful credential checks:
+with that loader; `Login` now stores both values from the user after successful
+credential checks:
 
 ```go
-if err := identity.Login(current, SessionUser{
-	ID:      account.ID,
-	Version: account.SessionVersion,
-}); err != nil {
+if err := identity.Login(current, account.User); err != nil {
 	return err
 }
 ```
+
+A struct identifier works for sessions but cannot be converted to a subject text
+reference, which packages that attach data to users require; see
+[`auth` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth).
 
 Increment the persisted `SessionVersion` to invalidate older versions on each
 device's next account lookup. No session enumeration is required. Existing

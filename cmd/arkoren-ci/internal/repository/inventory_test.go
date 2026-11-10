@@ -203,7 +203,7 @@ func TestFullRepositoryUsesOnePublicPolicy(t *testing.T) {
 		}
 	}
 	slices.Sort(policy.Public)
-	if !slices.Equal(public, policy.Public) || len(public) != 44 || len(result.Modules) != 45 || len(result.Integration) != 15 {
+	if !slices.Equal(public, policy.Public) || len(public) != 45 || len(result.Modules) != 46 || len(result.Integration) != 15 {
 		t.Fatalf("unexpected complete inventory: %+v", result)
 	}
 	// Every non-standard dependency must belong to this development module.

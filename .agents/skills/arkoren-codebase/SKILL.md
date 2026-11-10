@@ -67,8 +67,8 @@ after inventory or workflow changes.
 
 Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
 working-tree inspection, or append `--commit FULL_SHA` to validate a committed
-inventory and its same-commit policy. CI/audits currently include 45 modules and
-15 integration suites; releases include only the 44 approved public modules.
+inventory and its same-commit policy. CI/audits currently include 46 modules and
+15 integration suites; releases include only the 45 approved public modules.
 The development command uses standard flags, JSON stdout and JSON diagnostics on
 stderr. Its focused internal packages own inventory, release planning, exact-SHA
 evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
@@ -249,7 +249,8 @@ when wrapping `ToolError`. Keep SDK imports in adapter/composition and authentic
 outer HTTP with `auth.Middleware(auth.Bearer(verifyAccessToken))` followed by
 `auth.Require[User]()` before `routes.Mount("/mcp", endpoint)`; use the same
 concrete application user type in the verifier and policy lookups. Optional
-`gate.Require(canUseMCP)` controls endpoint admission, not resource access.
+`gate.Require(canUseMCP)` controls endpoint admission, not resource access;
+`gate.Bind(rules...)` adapts the same rules to a context-only `Available`.
 For an ark client without app permissions, wrap its typed operation
 in an app-owned authorized handler, then build the tool; see the shipped guide
 for optional hypothetical ark factories. OAuth metadata/challenges need separate setup, not a driver
@@ -313,15 +314,16 @@ captures remain shared. HTTP construction also uses dedicated builders, includin
 telemetry's server middleware and outgoing transport. Client retry construction
 composes completed propagation settings through one internal telemetry callback,
 never replaying user policies. Session middleware owns cookie/persistence policy;
-auth.NewSessionIdentity owns the loader/ID binding and SessionBuilder.Handle;
+auth.NewSessionIdentity owns the loader/ID binding (the user implements
+auth.Identifiable[K]; Subject/Load/Directory give arks a text view) and SessionBuilder.Handle;
 request lookup owns per-call WithSessionHandle. Share one session.NewHandle()
 across those roles; zero selects the default context slot. Handles do not isolate
-cookies, cache records, or authorization. OAuth Callback(identity, mapper) and
+cookies, cache records, or authorization. OAuth Callback(identity, mapper), where the mapper returns the user U, and
 Logout(identity) resolve the selected session once before protocol effects, with
 no default fallback. Session data uses
 shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns
-renewal and absolute lifetime. SessionIdentity binds login and loader types, not
+renewal and absolute lifetime. SessionIdentity binds login and loader types (Login takes the user), not
 separate stored identities: preserve arkoren:auth:user and its raw JSON. Validate
 identity configuration before credentials; mutation success is not durable save.
 Broadcast, cache,
@@ -423,7 +425,7 @@ store. Before changing these paths, read the consumer TLS Certificates and
 Certificate Commands guides for supported formats, platforms, and recovery.
 
 **Foundation modules** (`foundation/certificate`, `collection`, `key`, `problem`, `query`,
-`validate`) use the standard library only and know nothing of `arkoren.dev`.
+`validate`, `totp`) use the standard library only and know nothing of `arkoren.dev`.
 Query publishes immutable `Query` values from mutable root and restricted
 predicate callbacks; only published statements compile or execute. Keep concrete
 Query checks in database row-return guards, telemetry, and pagination in sync.
