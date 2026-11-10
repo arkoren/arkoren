@@ -44,6 +44,7 @@
     "foundation/key",
     "foundation/problem",
     "foundation/query",
+    "foundation/totp",
     "foundation/validate"
   ],
   "development": ["cmd/arkoren-ci"]

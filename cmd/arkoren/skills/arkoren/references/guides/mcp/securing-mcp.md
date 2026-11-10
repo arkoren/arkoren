@@ -66,8 +66,9 @@ credentials fail authentication. Configure middleware before `Mount` and serve
 the router through your existing HTTP lifecycle.
 
 The mount and adapter preserve request context for policies and handlers.
-`auth.FromContext[User]` must use the exact concrete type stored at admission:
-`User` and `*User` occupy different slots. Mismatched lookups fail closed.
+`auth.FromContext[User]` (and `gate.Bind`, which uses it) must use the exact
+concrete type stored at admission: `User` and `*User` occupy different slots.
+Mismatched lookups fail closed.
 
 If existing `net/http` middleware already verifies callers, retain it. Reject
 anonymous requests and inject the verified identity with `auth.NewContext`
