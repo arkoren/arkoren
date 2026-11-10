@@ -1,10 +1,5 @@
 package oauthauth
 
-import (
-	"context"
-	"slices"
-)
-
 // Identity represents an authenticated subject.
 // OIDC verification requires a nonempty final Subject after provider-specific
 // mapping. Claims and optional profile data remain provider-controlled; they are
@@ -64,7 +59,7 @@ type Identity struct {
 	// Example:
 	//
 	//	identity := oauth.Identity{Scopes: []string{"posts:write"}}
-	//	allowed, err := oauth.HasScopes("posts:write")(ctx, identity)
+	//	allowed, err := gate.HasScopes[oauth.Identity]("posts:write")(ctx, identity)
 	//	if err != nil {
 	//		return err
 	//	}
@@ -82,20 +77,27 @@ type Identity struct {
 	Claims map[string]any `json:"claims"`
 }
 
-// HasScopes returns a rule that allows an identity holding all required
-// scopes. It copies required before capturing it; later caller edits cannot
-// change authorization. Empty requirements allow any identity. Use the rule
-// with gate.Require or gate.Authorize; it does not authenticate a request.
+// AuthID returns the identity itself, so an application without local users can
+// use Identity as both the user and its session identifier.
+// [auth.SessionIdentity.Subject] refuses it because the identity is a struct;
+// such applications use sessions only.
 //
 // Example:
 //
-//	r.With(gate.Require(oauth.HasScopes("posts:write"))).Post("/posts", create)
-func HasScopes(required ...string) func(context.Context, Identity) (bool, error) {
-	required = slices.Clone(required)
+//	identity := auth.NewSessionIdentity(func(_ context.Context, stored oauthauth.Identity) (oauthauth.Identity, error) {
+//		return stored, nil
+//	})
+func (identity Identity) AuthID() Identity {
+	return identity
+}
 
-	return func(_ context.Context, identity Identity) (bool, error) {
-		return !slices.ContainsFunc(required, func(scope string) bool {
-			return !slices.Contains(identity.Scopes, scope)
-		}), nil
-	}
+// AuthScopes returns the granted scopes so [Identity] satisfies [auth.Scoped]
+// and works with gate.HasScopes. The slice is the identity's own and must not
+// be modified.
+//
+// Example:
+//
+//	r.With(gate.Require(gate.HasScopes[oauthauth.Identity]("posts:write"))).Post("/posts", create)
+func (identity Identity) AuthScopes() []string {
+	return identity.Scopes
 }

@@ -21,7 +21,7 @@ func TestLogoutClearsLoginAndRedirects(t *testing.T) {
 	client := newClient(t, OIDC(newTestProvider(t).server.URL))
 	sess := newSession()
 
-	if err := localIdentity.Login(sess, "user-1"); err != nil {
+	if err := localIdentity.Login(sess, localUser("user-1")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,7 +79,7 @@ func TestCallbackInvalidIdentityHasNoEffects(t *testing.T) {
 	r := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	w := httptest.NewRecorder()
 
-	err := client.Callback(auth.SessionIdentity[string, string]{}, func(context.Context, Identity) (string, error) {
+	err := client.Callback(auth.SessionIdentity[string, localUser]{}, func(context.Context, Identity) (localUser, error) {
 		t.Fatal("invalid definition reached mapper")
 
 		return "", nil
@@ -152,8 +152,8 @@ func TestCallbackMissingSelectedSessionDoesNotFallback(t *testing.T) {
 	query := login(t, client, jar)
 
 	handle := session.NewHandle()
-	identity := auth.NewSessionIdentity(func(_ context.Context, id string) (string, error) {
-		return id, nil
+	identity := auth.NewSessionIdentity(func(_ context.Context, id string) (localUser, error) {
+		return localUser(id), nil
 	}, func(authenticator *auth.SessionBuilder) {
 		authenticator.Handle(handle)
 	})
@@ -180,18 +180,18 @@ func TestLogoutSelectsCustomSession(t *testing.T) {
 
 	client := newClient(t, OIDC(newTestProvider(t).server.URL))
 	handle := session.NewHandle()
-	identity := auth.NewSessionIdentity(func(_ context.Context, id string) (string, error) {
-		return id, nil
+	identity := auth.NewSessionIdentity(func(_ context.Context, id string) (localUser, error) {
+		return localUser(id), nil
 	}, func(authenticator *auth.SessionBuilder) {
 		authenticator.Handle(handle)
 	})
 	selected, defaultSession := newSession(), newSession()
 
-	if err := identity.Login(selected, "selected"); err != nil {
+	if err := identity.Login(selected, localUser("selected")); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := localIdentity.Login(defaultSession, "default"); err != nil {
+	if err := localIdentity.Login(defaultSession, localUser("default")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -252,7 +252,7 @@ func TestLogoutInvalidIdentityHasNoEffects(t *testing.T) {
 	r = r.WithContext(bridgeContext{Context: r.Context(), lookups: &lookups})
 	w := httptest.NewRecorder()
 
-	err := client.Logout(auth.SessionIdentity[string, string]{})(w, r)
+	err := client.Logout(auth.SessionIdentity[string, localUser]{})(w, r)
 
 	if !errors.Is(err, auth.ErrInvalidSessionIdentity) || lookups.Load() != 0 {
 		t.Fatalf("error = %v, lookups = %d", err, lookups.Load())

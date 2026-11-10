@@ -52,8 +52,10 @@ compose.Startup(client.Start)
 
 ## Browser login
 
-Supply your own `login` callback (`func(context.Context, oauth.Identity) (int,
-error)`) to map a verified identity to your application's user ID. Match by
+Supply your own `login` callback (`func(context.Context, oauth.Identity) (User,
+error)`) to map a verified identity to your application's user. `User` implements
+`auth.Identifiable` (`AuthID() K`, the identifier your session loader accepts);
+the callback stores that identifier with `identity.Login`. Match by
 issuer and subject, never by email alone; see [Identity mapping](#identity-mapping).
 Given an existing `r` router, `store` cache, and your `users.Find` session loader,
 register the browser routes:
@@ -104,14 +106,14 @@ bearer := func(ctx context.Context, token string) (User, error) {
 ```
 
 Add `auth.Bearer(bearer)` to the authentication middleware and protect local-user
-routes with `auth.Require[User]()`. The `oauth.HasScopes` rule instead needs an
-`oauth.Identity` in the context; it cannot authorize the mapped `User` above.
+routes with `auth.Require[User]()`. The `gate.HasScopes[oauth.Identity]` rule instead
+needs an `oauth.Identity` in the context; it cannot authorize the mapped `User` above.
 For an API that works directly with verified identities, use a separate group
 and your `createPost` handler:
 
 ```go
 api := r.With(auth.Middleware(auth.Bearer(verifier.Verify)))
-api.With(gate.Require(oauth.HasScopes("posts:write"))).Post("/posts", createPost)
+api.With(gate.Require(gate.HasScopes[oauth.Identity]("posts:write"))).Post("/posts", createPost)
 ```
 
 ## API
@@ -119,7 +121,7 @@ api.With(gate.Require(oauth.HasScopes("posts:write"))).Post("/posts", createPost
 - `oauth.New(provider, cipher, clientID, configure...)`: pure constructor; `client.Start(ctx)` runs OIDC discovery (no-op for OAuth2).
 - `oauth.OIDC(issuerURL)`, `oauth.OAuth2(endpoint, userInfo)`: providers.
 - `client.Login()`, `client.Callback(identity, login)`, `client.Logout(identity)`: browser flow handlers. `login` maps the external
-  identity to the app's user ID. Mapper errors matching `auth.ErrNoCredentials`
+  identity to the app's user. Mapper errors matching `auth.ErrNoCredentials`
   become `ErrInvalidCallback` while retaining their causes; other mapper errors
   pass through. Returning `auth.ErrUnauthenticated` refuses login with 401.
 - Callback and logout select the identity's session once, without default-slot
@@ -129,7 +131,7 @@ api.With(gate.Require(oauth.HasScopes("posts:write"))).Post("/posts", createPost
   depends on session middleware for response-time persistence.
 - `client.Verify(ctx, token)`: verifies a JWT access token; use as `auth.Bearer(client.Verify)`. OIDC only; needs `ClientBuilder.Audiences`
   (`ErrNoAudiences` otherwise).
-- `oauth.HasScopes(scopes...)`: gate rule requiring all scopes.
+- `oauth.Identity` implements `auth.Identifiable` and `auth.Scoped`, so `gate.HasScopes[oauth.Identity](scopes...)` requires all scopes.
   It captures a copy of the requirements; caller slice edits cannot weaken it.
 - Errors: `ErrInvalidLoginRequest`, `ErrInvalidCallback`, `ErrProviderUnavailable`, `ErrNotStarted`, `ErrUnsupported`, `ErrNoAudiences`.
 

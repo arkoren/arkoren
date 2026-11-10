@@ -7,7 +7,8 @@
 // and [Client.Callback] run the browser Authorization Code flow with PKCE
 // and store the user with auth.SessionIdentity.Login; [Client.Logout] ends it;
 // [Client.Verify] verifies JWT access tokens and fits auth.Bearer directly.
-// Authorization is done with gate rules such as [HasScopes].
+// Authorization is done with gate rules such as gate.HasScopes; [Identity]
+// implements auth.Scoped and auth.Identifiable.
 //
 // The login state (state, nonce, PKCE verifier, return target) lives in a
 // short-lived, encrypted, HttpOnly cookie per login, not in the session, so
@@ -49,13 +50,12 @@
 //	compose.Startup(client.Start)
 //
 //	// Find or create the local user of an external identity.
-//	login := func(ctx context.Context, identity oauth.Identity) (int, error) {
-//		user, err := users.UpsertByIdentity(ctx, identity.Issuer, identity.Subject, identity.Email)
-//
-//		return user.ID, err
+//	login := func(ctx context.Context, identity oauth.Identity) (User, error) {
+//		return users.UpsertByIdentity(ctx, identity.Issuer, identity.Subject, identity.Email)
 //	}
 //
-//	// Browser routes: the session holds the local user ID.
+//	// Browser routes: User implements auth.Identifiable and the session holds
+//	// its identifier.
 //	identity := auth.NewSessionIdentity(users.Find)
 //	compose.Require(identity.Err())
 //	web := r.With(
@@ -73,7 +73,7 @@
 //	// API routes: the user is the verified token identity, so scope rules apply.
 //	// The construction callback configures the API's accepted audience above.
 //	api := r.With(auth.Middleware(auth.Bearer(client.Verify)))
-//	api.With(gate.Require(oauth.HasScopes("posts:write"))).Post("/posts", create)
+//	api.With(gate.Require(gate.HasScopes[oauth.Identity]("posts:write"))).Post("/posts", create)
 //
 // # Identity mapping
 //
@@ -82,8 +82,10 @@
 // default fallback. Invalid identities and nil mappers are configuration errors;
 // mapper errors matching auth.ErrNoCredentials become ErrInvalidCallback, while
 // other mapper errors pass through. Explicit identity.Login calls do not check
-// the session against its handle. A physical session has one identity slot, and
-// same-K definitions or compatible persisted JSON do not enforce realm isolation.
+// the session against its handle. Callback records auth.MethodFederated as the
+// session's only factor. A physical session has one identity slot per
+// auth.SessionBuilder.Realm; same-realm, same-K definitions and compatible
+// persisted JSON do not enforce isolation.
 // Handles do not isolate cookies, storage or user context (still keyed by U).
 //
 // Match local users on the pair Issuer + Subject, which the provider guarantees
