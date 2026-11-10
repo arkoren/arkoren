@@ -60,8 +60,8 @@ func TestIdentityReadsPhysicalLegacyRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		identity := auth.NewSessionIdentity(func(_ context.Context, key int64) (int64, error) {
-			return key, nil
+		identity := auth.NewSessionIdentity(func(_ context.Context, key int64) (wide, error) {
+			return wide(key), nil
 		})
 
 		handler := session.Middleware(cache.New(driver))(router.Handler(func(_ http.ResponseWriter, r *http.Request) error {
@@ -99,8 +99,8 @@ func TestIdentityLoginPersistsExistingMember(t *testing.T) {
 	t.Parallel()
 
 	driver := memorycache.New()
-	identity := auth.NewSessionIdentity(func(_ context.Context, key int64) (int64, error) {
-		return key, nil
+	identity := auth.NewSessionIdentity(func(_ context.Context, key int64) (wide, error) {
+		return wide(key), nil
 	})
 
 	var id string
@@ -111,7 +111,7 @@ func TestIdentityLoginPersistsExistingMember(t *testing.T) {
 			return err
 		}
 
-		if err := identity.Login(current, 9007199254740993); err != nil {
+		if err := identity.Login(current, wide(9007199254740993)); err != nil {
 			return err
 		}
 

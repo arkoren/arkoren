@@ -42,7 +42,7 @@ func checkInvalidIdentity(t *testing.T, identity auth.SessionIdentity[int, user]
 	id := current.ID()
 
 	for _, value := range []*session.Session{nil, current} {
-		if err := identity.Login(value, 9); !errors.Is(err, auth.ErrInvalidSessionIdentity) {
+		if err := identity.Login(value, user{ID: 9}); !errors.Is(err, auth.ErrInvalidSessionIdentity) {
 			t.Fatal(err)
 		}
 
@@ -125,7 +125,7 @@ func TestIdentityNilSessionsAreAbsent(t *testing.T) {
 
 	identity := auth.NewSessionIdentity(loadByID)
 
-	if err := identity.Login(nil, 7); !errors.Is(err, session.ErrNoSession) {
+	if err := identity.Login(nil, user{ID: 7}); !errors.Is(err, session.ErrNoSession) {
 		t.Fatal(err)
 	}
 
@@ -180,10 +180,10 @@ func TestIdentitySessionOnlySelectsBridge(t *testing.T) {
 func TestIdentityRejectsRuntimeJSONIdentifier(t *testing.T) {
 	t.Parallel()
 
-	identity := auth.NewSessionIdentity(func(_ context.Context, id int64) (int64, error) {
+	identity := auth.NewSessionIdentity(func(_ context.Context, id int64) (wide, error) {
 		t.Fatal("runtime JSON identifier reached loader")
 
-		return id, nil
+		return wide(id), nil
 	})
 
 	current := session.New(time.Now().Add(time.Hour), map[string]any{
@@ -206,7 +206,7 @@ func TestIdentityLoginPreservesLifetimeAndUnrelatedState(t *testing.T) {
 	current := session.New(time.Now().Add(time.Hour), map[string]any{"theme": "dark"})
 	createdAt, expiresAt, originalID := current.CreatedAt(), current.ExpiresAt(), current.ID()
 
-	if err := identity.Login(current, 7); err != nil {
+	if err := identity.Login(current, user{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,6 +254,20 @@ func TestIdentityWrongLoginTypeDoesNotCompile(t *testing.T) {
 	}
 }
 
+// TestIdentityMismatchedIdentifierDoesNotCompile verifies the compiler ties the
+// identifier a user reports to the identifier its loader accepts.
+func TestIdentityMismatchedIdentifierDoesNotCompile(t *testing.T) {
+	t.Parallel()
+
+	command := exec.CommandContext(t.Context(), "go", "test", "./testdata/mismatch")
+
+	output, err := command.CombinedOutput()
+
+	if err == nil || !strings.Contains(string(output), "does not satisfy") {
+		t.Fatalf("mismatched identifier compilation: %v\n%s", err, output)
+	}
+}
+
 // TestIdentityLoaderCaptureAndError verifies construction does not invoke the
 // loader, function captures stay shared, and loader errors retain their cause.
 func TestIdentityLoaderCaptureAndError(t *testing.T) {
@@ -273,7 +287,7 @@ func TestIdentityLoaderCaptureAndError(t *testing.T) {
 
 	current := session.New(time.Now().Add(time.Hour), map[string]any{})
 
-	if err := identity.Login(current, 7); err != nil {
+	if err := identity.Login(current, user{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 

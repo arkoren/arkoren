@@ -38,7 +38,7 @@ func TestSessionCallbacksPublishIndependentHandle(t *testing.T) {
 
 	current := session.New(time.Now().Add(time.Hour), map[string]any{})
 
-	if err := identity.Login(current, 7); err != nil {
+	if err := identity.Login(current, user{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -64,7 +64,7 @@ func TestSessionZeroHandleRestoresDefault(t *testing.T) {
 
 	current := session.New(time.Now().Add(time.Hour), map[string]any{})
 
-	if err := identity.Login(current, 7); err != nil {
+	if err := identity.Login(current, user{ID: 7}); err != nil {
 		t.Fatal(err)
 	}
 
