@@ -315,7 +315,8 @@ telemetry's server middleware and outgoing transport. Client retry construction
 composes completed propagation settings through one internal telemetry callback,
 never replaying user policies. Session middleware owns cookie/persistence policy;
 auth.NewSessionIdentity owns the loader/ID binding (the user implements
-auth.Identifiable[K]; Subject/Load/Directory give arks a text view) and SessionBuilder.Handle;
+auth.Identifiable[K]; Subject/Load/Directory give arks a text view), SessionBuilder.Handle/Realm/ChallengeTTL, and the
+session-only assurance state (arkoren:auth:state factors+version, :pending challenge; Authenticator reads only the user slot);
 request lookup owns per-call WithSessionHandle. Share one session.NewHandle()
 across those roles; zero selects the default context slot. Handles do not isolate
 cookies, cache records, or authorization. OAuth Callback(identity, mapper), where the mapper returns the user U, and
@@ -324,7 +325,7 @@ no default fallback. Session data uses
 shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns
 renewal and absolute lifetime. SessionIdentity binds login and loader types (Login takes the user), not
-separate stored identities: preserve arkoren:auth:user and its raw JSON. Validate
+separate stored identities: preserve arkoren:auth:user (unsuffixed for the empty realm) and its raw JSON. Validate
 identity configuration before credentials; mutation success is not durable save.
 Broadcast, cache,
 crypto, database/migrator, feature, mail and storage facades and configurable

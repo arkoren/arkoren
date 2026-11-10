@@ -15,8 +15,9 @@
 // run once in order. A later zero handle restores default lookup. Loaders are
 // not invoked during construction. Invalid identities stop middleware fallback.
 // Handles do not isolate cookies, storage or user contexts (keyed only by U).
-// One physical session has one identity slot. Definitions with the same K can
-// still mix realms, and compatible persisted JSON may decode across types.
+// One physical session has one identity slot per [SessionBuilder.Realm].
+// Definitions with the same realm and K can still mix users, and compatible
+// persisted JSON may decode across types.
 //
 // # Wiring
 //
@@ -100,7 +101,7 @@
 //		if !found || !ok {
 //			return auth.ErrUnauthenticated
 //		}
-//		if err := identity.Login(request.MustSession(r), user); err != nil {
+//		if err := identity.Login(request.MustSession(r), user, auth.MethodPassword); err != nil {
 //			return err
 //		}
 //
@@ -113,6 +114,37 @@
 //		} // or Destroy() to drop all data
 //		return response.Status(w, http.StatusNoContent)
 //	}
+//
+// # Two-factor login and step-up
+//
+// Login records the [Method]s you verified and when. For a second factor, call
+// [SessionIdentity.Challenge] after the first instead of Login: the session
+// stays anonymous (the authenticator and [Middleware] see no user) until the
+// further factor verifies and [SessionIdentity.Complete] logs the user in,
+// once, with both methods. [SessionIdentity.Pending] returns the waiting user to
+// the route verifying the factor; a challenge lasts [SessionBuilder.ChallengeTTL]
+// (five minutes by default). Every transition rotates the session ID.
+//
+//	if !enrolled {
+//		return identity.Login(current, user, auth.MethodPassword)
+//	}
+//	return identity.Challenge(current, user, auth.MethodPassword)
+//
+//	// in the verification route, after checking the code for pending:
+//	pending, err := identity.Pending(r.Context(), current)
+//	return identity.Complete(r.Context(), current, auth.MethodOTP)
+//
+// [SessionIdentity.RequireMethods] and [SessionIdentity.RequireFresh] guard
+// sensitive routes and return [ErrStepUpRequired] (403) when the session lacks
+// the methods or has none proved recently; [SessionIdentity.Confirm] records a
+// fresh proof and [SessionIdentity.State] reads the record. Bearer-authenticated
+// requests and sessions created before methods existed fail these checks.
+// Arkoren verifies no factor itself and the pending state is not rate limited:
+// limit attempts on the verification route.
+//
+// A user type that implements [Versioned] also ends its other sessions when
+// AuthVersion changes: Login stores a digest, and the authenticator compares it
+// with the loaded user's on every request.
 //
 // # Cookie authentication needs CSRF protection
 //

@@ -131,15 +131,21 @@ func TestIdentityLoginPersistsExistingMember(t *testing.T) {
 	}
 
 	var stored struct {
-		// Storage retains the physical JSON object without numeric conversion.
-		Storage jsontext.Value `json:"storage"`
+		// Storage retains each physical JSON member without numeric conversion.
+		Storage map[string]jsontext.Value `json:"storage"`
 	}
 
 	if err := json.Unmarshal(raw, &stored); err != nil {
 		t.Fatal(err)
 	}
 
-	if string(stored.Storage) != `{"arkoren:auth:user":9007199254740993}` {
-		t.Fatalf("stored identity = %s", stored.Storage)
+	// Login also writes the sibling arkoren:auth:state member, so the identifier
+	// member is compared exactly instead of the whole object.
+	if string(stored.Storage["arkoren:auth:user"]) != `9007199254740993` {
+		t.Fatalf("stored identity = %s", stored.Storage["arkoren:auth:user"])
+	}
+
+	if len(stored.Storage) != 2 || stored.Storage["arkoren:auth:state"] == nil {
+		t.Fatalf("stored members = %v", stored.Storage)
 	}
 }

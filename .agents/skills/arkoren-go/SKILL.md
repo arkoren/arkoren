@@ -423,7 +423,10 @@ delivery, and lifecycle protocols explicit.
   or replay user callbacks through delegating constructors. Share immutable
   auth.NewSessionIdentity(load) across Authenticator, Login, and Logout; it binds
   the ID type to the loader, and the user type implements auth.Identifiable[K]
-  (AuthID() K) so Login takes the user. Subject, Load and Directory convert K to
+  (AuthID() K) so Login takes the user and the verified auth.Methods. Challenge/Pending/Complete hold
+  a login until a further factor passes (anonymous meanwhile, single use, SessionBuilder.ChallengeTTL),
+  Confirm refreshes a factor, RequireMethods/RequireFresh return the 403 ErrStepUpRequired and fail closed
+  without session state, and an optional Versioned user type ends other sessions. Subject, Load and Directory convert K to
   a 1-255 byte printable ASCII text subject for packages that do not know U. Zero definitions and nil loaders fail first with
   plain ErrInvalidSessionIdentity, never credential fallback. Check mutation
   errors before continuing; explicit nil sessions return session.ErrNoSession.
@@ -802,8 +805,8 @@ in attributes (`arkoren.<component>.<field>`).
   Fields do not own TTL: middleware owns session renewal and absolute lifetime,
   independently of the cache namespace's write TTL. Shared field definitions
   do not isolate identity slots: auth.SessionIdentity binds login and loader ID
-  types (the user reports K through AuthID), but definitions still share the fixed arkoren:auth:user entry in a
-  physical session. Login writes then rotates; Logout deletes then rotates,
+  types (the user reports K through AuthID), but definitions with the same SessionBuilder.Realm still share the arkoren:auth:user (and :state, :pending)
+  entries in a physical session. Login writes then rotates; Logout deletes all three then rotates,
   retaining unrelated fields. Preserve raw persisted JSON and middleware TTL.
 
 Optional `secret.Namespace[T]`, `feature.Namespace[T Primitive]`, and

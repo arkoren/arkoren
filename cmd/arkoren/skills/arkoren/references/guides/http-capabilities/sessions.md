@@ -113,7 +113,8 @@ Field names are literal: no trimming, normalization, or automatic prefixing.
 Different declarations with the same name address the same entry, even with
 different types; they do not create a storage schema. `Name()` reveals the name,
 while ordinary formatting and structured logging redact it. Keep the reserved
-`arkoren:auth:user` name for authentication.
+`arkoren:auth:` prefix for authentication; it uses `arkoren:auth:user`, `:state`
+and `:pending`, each with an optional realm suffix.
 
 ### Value Ownership
 
@@ -192,12 +193,14 @@ credential checks, and complete identity setup.
 After credentials succeed, with the configured `identity` and the loaded `user` (which reports its identifier through `AuthID`):
 
 ```go
-if err := identity.Login(request.MustSession(r), user); err != nil {
+if err := identity.Login(request.MustSession(r), user, auth.MethodPassword); err != nil {
 	return err
 }
 ```
 
-Login stores the identifier, then regenerates the ID only if that write succeeds.
+Login stores the identifier and the verified methods, then regenerates the ID only
+if those writes succeed. See [Two-Factor Login](../authentication/two-factor.md)
+for holding a login until a second factor passes.
 For other privilege changes, call `current.Regenerate()` after successfully
 changing the authentication-related session state. Regeneration keeps the fields
 and original creation time; it does not log the visitor out.
@@ -210,7 +213,8 @@ if err := identity.Logout(request.MustSession(r)); err != nil {
 }
 ```
 
-Logout removes even a stale, wrongly typed identifier and rotates the ID. To end
+Logout removes even a stale, wrongly typed identifier, the recorded methods and
+any pending challenge, and rotates the ID. To end
 the entire session instead, call `current.Destroy()` before response headers.
 Destroy discards later changes. `Clear` only clears fields; it neither rotates
 nor retires the ID.
