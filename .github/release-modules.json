@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "public": [
+    "ark/twofactor",
     "cmd/arkoren",
     "core",
     "driver/aes",

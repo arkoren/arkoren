@@ -52,9 +52,9 @@ tests add backend-specific evidence; your deployment still needs its own tests.
 
 You also retain responsibility for credentials, resource startup and cleanup,
 schema migrations, and authorization policy. Installing a module does not
-configure those responsibilities. There are no built-in [arks](../core-concepts/arks.md),
-the optional domain features intended to combine services with product-specific
-rules; do not assume signup or another complete business flow is included.
+configure those responsibilities. The only [ark](../core-concepts/arks.md), an optional domain feature that combines
+services with product-specific rules, is two-factor authentication; do not assume
+signup or another complete business flow is included.
 
 Core's Go dependencies are Arkoren's standard-library-only foundation modules,
 not third-party libraries. Vendor modules do bring external dependencies.

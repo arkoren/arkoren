@@ -16,6 +16,7 @@ export function apiModules() {
   return [
     { id: "core", title: "Core", prefix: "arkoren.dev/core" },
     { id: "foundation", title: "Foundation", prefix: "arkoren.dev/foundation/" },
+    { id: "arks", title: "Arks", prefix: "arkoren.dev/ark/" },
     { id: "drivers", title: "Vendor drivers", prefix: "arkoren.dev/driver/" },
   ]
     .map((group) => ({

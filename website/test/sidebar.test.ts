@@ -36,11 +36,11 @@ const repository = new URL("../../", import.meta.url);
 /**
  * List library module paths from the module directories in the checkout.
  * Before the Go modules are published the checkout has none, so the list is
- * empty; afterwards it names core and every foundation and driver module.
+ * empty; afterwards it names core and every foundation, ark and driver module.
  * @returns Sorted module paths such as `arkoren.dev/driver/redis`.
  */
 function checkoutModules(): string[] {
-  const areas = ["foundation", "driver"].filter((area) =>
+  const areas = ["foundation", "ark", "driver"].filter((area) =>
     existsSync(new URL(`${area}/`, repository)),
   );
   const roots = [
@@ -59,6 +59,7 @@ test("the reference catalog contains library module roots, never packages or too
   const patterns: Record<string, RegExp> = {
     core: /^arkoren\.dev\/core$/,
     foundation: /^arkoren\.dev\/foundation\/[^/]+$/,
+    arks: /^arkoren\.dev\/ark\/[^/]+$/,
     drivers: /^arkoren\.dev\/driver\/[^/]+$/,
   };
   assert.deepEqual(

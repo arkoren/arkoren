@@ -64,8 +64,8 @@ const modulePath = (gomod: string) => readFileSync(gomod, "utf8").match(/^module
 
 /**
  * Read library module declarations without loading packages or source files.
- * The repository's library boundary is core plus direct foundation and vendor
- * modules; command and private tooling modules are intentionally excluded.
+ * The repository's library boundary is core plus direct foundation, ark and
+ * vendor modules; command and private tooling modules are intentionally excluded.
  * Module areas absent from the checkout contribute no entries, so the website
  * can publish before the Go modules do. A present module directory with a
  * missing or malformed declaration fails the build instead of hiding an entry.
@@ -76,7 +76,7 @@ export function libraryModules(): string[] {
   /** Module locations follow the repository's existing module boundaries. */
   const directories = [
     ...(existsSync(join(REPO_ROOT, "core")) ? ["core"] : []),
-    ...["foundation", "driver"]
+    ...["foundation", "ark", "driver"]
       .filter((area) => existsSync(join(REPO_ROOT, area)))
       .flatMap((area) =>
         readdirSync(join(REPO_ROOT, area), { withFileTypes: true })

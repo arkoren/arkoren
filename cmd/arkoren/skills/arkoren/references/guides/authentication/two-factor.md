@@ -83,7 +83,8 @@ return identity.Complete(r.Context(), current, auth.MethodOTP)
 `verifyCode` is your check, for example with
 [`foundation/totp`](https://pkg.go.dev/arkoren.dev/foundation/totp). Reject a
 code whose time step you already accepted for that user, since a six-digit code
-stays valid for its whole period. `Pending` does not consume the challenge, so
+stays valid for its whole period. The [two-factor ark](#use-the-two-factor-ark)
+does this, with recovery codes, for you. `Pending` does not consume the challenge, so
 a wrong code can be retried; apply a [rate limit](../abuse-prevention/rate-limiting.md)
 to this route, because a pending login is a login in progress. Use the same
 `ErrUnauthenticated` for every failure so responses do not reveal which part
@@ -93,6 +94,68 @@ was wrong.
 the factors, so a second call returns `ErrUnauthenticated`. If the user was
 deleted meanwhile, the loader's error is returned and nobody is logged in.
 `Login` also discards a pending challenge.
+
+## Use the Two-Factor Ark
+
+`arkoren.dev/ark/twofactor` implements the second step with TOTP. It is
+pending its first release, so there is no install command yet. It takes the same
+`identity` and keeps three things of its own: an encrypted secret per user,
+hashed recovery codes, and the last accepted time step per user. Create it with
+the database, a `crypto.Encrypter` for the secrets and a `hash.Hasher` for
+recovery codes, and run its migrations before use:
+
+```go
+factors, err := twofactor.New(identity, db, cipher, hasher, func(ark *twofactor.Builder) {
+	ark.Issuer("Example")
+})
+if err != nil {
+	return err
+}
+if err := migrator.Add(factors.Migrations()...); err != nil {
+	return err
+}
+```
+
+`Migrations()` creates `twofactor_secrets` and `twofactor_recovery_codes`; the ark
+never creates tables itself, and `factors.Ping` is a readiness check that names
+`Migrations()` when they are missing. A second `Instance(name)` gives a separate
+pair of tables, for a second [realm](#separate-realms).
+
+Mount the enrollment routes for a signed-in user. Enrollment returns the secret
+and the `otpauth://` URI for a QR code; `Confirm` verifies the first code and
+returns ten recovery codes, once. Guard enrollment and removal with
+`RequireFresh`, so a stolen session cannot swap authenticators:
+
+```go
+fresh := identity.RequireFresh(10 * time.Minute)
+
+web.With(fresh).Post("/two-factor/enroll", factors.Enroll())
+web.Post("/two-factor/confirm", factors.Confirm())
+web.With(fresh).Delete("/two-factor", factors.Disable())
+```
+
+Then choose between `Login` and `Challenge` after the password with
+`factors.Enrolled(ctx, subject)`, where `identity.Subject(user)` gives the
+subject, and mount the second step. `Verify` and `Recover` read `{"code": "..."}`,
+complete the pending login with `auth.MethodOTP` or `auth.MethodRecovery`, and
+return `204`:
+
+```go
+web.Post("/two-factor/verify", factors.Verify(identity))
+web.Post("/two-factor/recover", factors.Recover(identity))
+```
+
+A code is accepted once: its time step must be later than the last accepted one,
+and the check is a single atomic update, so concurrent submissions cannot both
+pass. A wrong code, a replayed code, a spent recovery code and a user who never
+enrolled all return the same `401` `twofactor.ErrInvalidCode`. The ark does not
+count failures: put a [rate limit](../abuse-prevention/rate-limiting.md) keyed by
+session ID on both routes.
+
+When you delete a user, call `factors.Forget(ctx, subject)` in the same
+transaction, and schedule `factors.Sweep(when)` (for example nightly) to repair
+a missed call; it forgets only subjects whose loader returns `auth.ErrNotFound`,
+so return that for deleted users and a different error for suspended ones.
 
 ## Require Methods
 

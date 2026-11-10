@@ -3,7 +3,7 @@ title: Arks
 description: Distinguish reusable domain features from service mechanisms, backend drivers, and application policy.
 order: 25
 summary:
-  - Understand arks as optional domain features, with no built-in arks currently available.
+  - Understand arks as optional domain features, and find the one Arkoren ships, two-factor authentication.
   - Separate reusable domain rules from service operations and backend communication.
   - Keep deployment choices and explicit feature integration under application ownership.
 ---
@@ -17,8 +17,19 @@ with those concepts and rules.
 
 ## Current Availability
 
-Arkoren has no built-in arks yet. The feature below illustrates the boundary;
-it is not an installable integration or a promised API.
+Arkoren ships one ark, `arkoren.dev/ark/twofactor`: TOTP enrollment,
+verification and single-use recovery codes for a
+[session login](../authentication/two-factor.md#use-the-two-factor-ark). Its
+first release is pending, so it has no `go get` command yet. The report-delivery
+feature below is a separate illustration of the boundary; it is not an
+installable integration or a promised API.
+
+An ark that stores a row per user never learns your user type. You pass it the
+shared session identity, and it keeps each user as a text *subject* (the user ID
+as 1 to 255 ASCII bytes) in a `user_id` column compared bytewise. Its tables come
+from `Migrations()`, which your migrator runs; the ark never runs DDL. It also
+provides `Forget` for the transaction that deletes a user and a scheduled sweep
+that repairs a missed call.
 
 An ark is an ordinary Go module that an application explicitly chooses and
 connects. It is not an automatically discovered plugin. You can use Arkoren's
