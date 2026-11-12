@@ -444,7 +444,7 @@ func TestMicrosoftPolicyOrganizationsRejectsPersonalCallback(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	response := httptest.NewRecorder()
 
-	err := client.Callback(localIdentity, func(_ context.Context, _ Identity) (string, error) {
+	err := client.Callback(localIdentity, func(_ context.Context, _ Identity) (localUser, error) {
 		t.Fatal("Callback invoked the mapper for a rejected personal account")
 
 		return "", nil
@@ -479,7 +479,7 @@ func TestMicrosoftPolicyConsumersRejectsOrganizationCallback(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	response := httptest.NewRecorder()
 
-	err := client.Callback(localIdentity, func(_ context.Context, _ Identity) (string, error) {
+	err := client.Callback(localIdentity, func(_ context.Context, _ Identity) (localUser, error) {
 		t.Fatal("Callback invoked the mapper for a rejected organizational account")
 
 		return "", nil

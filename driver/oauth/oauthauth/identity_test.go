@@ -2,58 +2,31 @@ package oauthauth
 
 import (
 	"testing"
+
+	"arkoren.dev/core/http/auth"
 )
 
-// requireHasScopes verifies HasScopes(required...) allows an identity with the
-// scopes "read" and "write" exactly when want is set.
-func requireHasScopes(t *testing.T, required []string, want bool) {
-	t.Helper()
+// TestIdentityIsIdentifiable verifies an application without local users can
+// use Identity as its own session identifier.
+func TestIdentityIsIdentifiable(t *testing.T) {
+	t.Parallel()
 
-	identity := Identity{
-		Scopes: []string{"read", "write"},
-	}
+	var _ auth.Identifiable[Identity] = Identity{}
 
-	got, err := HasScopes(required...)(t.Context(), identity)
+	identity := Identity{Issuer: "https://id.example.com", Subject: "user-42"}
 
-	if err != nil || got != want {
-		t.Errorf("HasScopes(%v) = %v, %v; want %v", required, got, err, want)
+	if got := identity.AuthID(); got.Issuer != identity.Issuer || got.Subject != identity.Subject {
+		t.Fatalf("AuthID = %+v", got)
 	}
 }
 
-// TestHasScopesAllPresent verifies a rule is met when every required scope is present.
-func TestHasScopesAllPresent(t *testing.T) {
+// TestIdentityIsScoped verifies the granted scopes are exposed for scope rules.
+func TestIdentityIsScoped(t *testing.T) {
 	t.Parallel()
 
-	requireHasScopes(t, []string{"read", "write"}, true)
-}
+	var _ auth.Scoped = Identity{}
 
-// TestHasScopesNone verifies a rule without required scopes is always met.
-func TestHasScopesNone(t *testing.T) {
-	t.Parallel()
-
-	requireHasScopes(t, nil, true)
-}
-
-// TestHasScopesMissing verifies a rule is unmet when one required scope is missing.
-func TestHasScopesMissing(t *testing.T) {
-	t.Parallel()
-
-	requireHasScopes(t, []string{"read", "admin"}, false)
-}
-
-// TestHasScopesOwnsRequirements keeps caller edits from weakening an already
-// constructed authorization rule. Only the public rule result is observed.
-func TestHasScopesOwnsRequirements(t *testing.T) {
-	t.Parallel()
-
-	required := []string{"admin"}
-	rule := HasScopes(required...)
-
-	required[0] = "read"
-
-	allowed, err := rule(t.Context(), Identity{Scopes: []string{"read"}})
-
-	if err != nil || allowed {
-		t.Fatalf("rule after caller mutation = %t, %v; want false, nil", allowed, err)
+	if got := (Identity{Scopes: []string{"read", "write"}}).AuthScopes(); len(got) != 2 || got[0] != "read" || got[1] != "write" {
+		t.Fatalf("AuthScopes = %v", got)
 	}
 }

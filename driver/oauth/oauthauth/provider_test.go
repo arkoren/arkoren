@@ -296,15 +296,24 @@ func newSession() *session.Session {
 	return session.New(time.Now().Add(time.Hour), map[string]any{})
 }
 
+// localUser is the application user shared by string-ID login handlers. It is
+// identified by its own value.
+type localUser string
+
+// AuthID reports the user's string identifier.
+func (user localUser) AuthID() string {
+	return string(user)
+}
+
 // idLogin maps the identity subject to the user identifier.
-func idLogin(_ context.Context, identity Identity) (string, error) {
-	return identity.Subject, nil
+func idLogin(_ context.Context, identity Identity) (localUser, error) {
+	return localUser(identity.Subject), nil
 }
 
 // localIdentity is the application identity shared by string-ID login handlers
 // and authenticators. Its loader has no I/O and preserves the subject exactly.
-var localIdentity = auth.NewSessionIdentity(func(_ context.Context, id string) (string, error) {
-	return id, nil
+var localIdentity = auth.NewSessionIdentity(func(_ context.Context, id string) (localUser, error) {
+	return localUser(id), nil
 })
 
 // externalIdentity keeps provider identities directly in the existing session
@@ -314,7 +323,7 @@ var externalIdentity = auth.NewSessionIdentity(func(_ context.Context, id Identi
 })
 
 // userOf returns the user id stored in the session of request.
-func userOf(request *http.Request) (string, error) {
+func userOf(request *http.Request) (localUser, error) {
 	return localIdentity.Authenticator()(request)
 }
 

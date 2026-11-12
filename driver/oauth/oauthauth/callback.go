@@ -18,9 +18,15 @@ import (
 // Callback completes a login. It accepts the provider's GET redirect or POST
 // form, finds and deletes the login cookie, exchanges the code and verifies
 // the user (an ID token for OIDC, the user info function for OAuth2). It
-// then calls login to map the external [Identity] to the application's user
-// identifier K, stores K with identity.Login, which regenerates the session,
-// and redirects to the validated return_to target.
+// then calls login to map the external [Identity] to the application's user U,
+// stores the user's identifier with identity.Login, recording
+// auth.MethodFederated as the only factor, which regenerates the session, and
+// redirects to the validated return_to target.
+//
+// The login is complete: Callback never starts a second-factor challenge, so a
+// user who must also pass a local factor needs a handler of your own that calls
+// identity.Challenge instead. The recorded federated factor still satisfies
+// identity.RequireFresh, and identity.RequireMethods(auth.MethodFederated).
 //
 // With [ClientBuilder.Events] a completed login publishes [LoginSucceeded] and a
 // rejected callback publishes [LoginFailed].
@@ -36,16 +42,15 @@ import (
 // mapper must be valid before any side effects. A missing selected session
 // returns auth.ErrUnauthenticated before consuming state; no default fallback
 // occurs. Configuration errors are not credential or callback failures. A valid
-// handler still requires Start. Apps without local users may use Identity as K.
+// handler still requires Start. Apps without local users may use [Identity] as
+// both the user and its identifier, because it implements [auth.Identifiable].
 //
 // Example:
 //
-//	r.Get("/oauth/callback", client.Callback(identity, func(ctx context.Context, external oauthauth.Identity) (int, error) {
-//		user, err := users.UpsertBySubject(ctx, external.Issuer, external.Subject, external.Email)
-//
-//		return user.ID, err
+//	r.Get("/oauth/callback", client.Callback(identity, func(ctx context.Context, external oauthauth.Identity) (User, error) {
+//		return users.UpsertBySubject(ctx, external.Issuer, external.Subject, external.Email)
 //	}))
-func (client *Client) Callback[K, U any](identity auth.SessionIdentity[K, U], login func(context.Context, Identity) (K, error)) router.Handler {
+func (client *Client) Callback[K any, U auth.Identifiable[K]](identity auth.SessionIdentity[K, U], login func(context.Context, Identity) (U, error)) router.Handler {
 	configurationErr := identity.Err()
 
 	if configurationErr == nil && login == nil {
@@ -87,13 +92,13 @@ func (client *Client) Callback[K, U any](identity auth.SessionIdentity[K, U], lo
 			return client.loginFailed(httpRequest, err)
 		}
 
-		id, err := login(httpRequest.Context(), external)
+		user, err := login(httpRequest.Context(), external)
 
 		if err != nil {
 			return client.loginFailed(httpRequest, callbackMapperError(err))
 		}
 
-		if err := identity.Login(current, id); err != nil {
+		if err := identity.Login(current, user, auth.MethodFederated); err != nil {
 			return client.loginFailed(httpRequest, err)
 		}
 

@@ -241,7 +241,7 @@ func TestGitHubCallbackRejectsMissingID(t *testing.T) {
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 	called := false
 
-	response := client.Callback(localIdentity, func(context.Context, Identity) (string, error) {
+	response := client.Callback(localIdentity, func(context.Context, Identity) (localUser, error) {
 		called = true
 
 		return "mapped", nil

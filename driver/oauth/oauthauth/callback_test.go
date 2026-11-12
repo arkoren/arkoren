@@ -16,6 +16,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"arkoren.dev/core/http/auth"
+	"arkoren.dev/core/http/auth/gate"
 	"arkoren.dev/core/http/request"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/foundation/problem"
@@ -38,8 +39,8 @@ func TestOIDCLoginSelectsSessionHandle(t *testing.T) {
 	defaultID := defaultSession.ID()
 
 	handle := session.NewHandle()
-	identity := auth.NewSessionIdentity(func(_ context.Context, id string) (string, error) {
-		return id, nil
+	identity := auth.NewSessionIdentity(func(_ context.Context, id string) (localUser, error) {
+		return localUser(id), nil
 	}, func(authenticator *auth.SessionBuilder) {
 		authenticator.Handle(handle)
 	})
@@ -65,6 +66,12 @@ func TestOIDCLoginSelectsSessionHandle(t *testing.T) {
 
 	if err != nil || id != "user-1" {
 		t.Fatalf("user = %q, err = %v", id, err)
+	}
+
+	state, err := identity.State(current)
+
+	if err != nil || len(state.Factors) != 1 || state.Factors[0].Method != auth.MethodFederated {
+		t.Fatalf("state = %+v, err = %v", state, err)
 	}
 
 	if current.ID() == before || defaultSession.ID() != defaultID || defaultSession.HasChanged() {
@@ -104,16 +111,16 @@ func TestOIDCFlow(t *testing.T) {
 	before := sess.ID()
 	httpRequest := callbackRequest(http.MethodGet, jar, sess, query.Get("state"), query.Get("nonce"))
 
-	response := client.Callback(localIdentity, func(_ context.Context, identity Identity) (string, error) {
+	response := client.Callback(localIdentity, func(_ context.Context, identity Identity) (localUser, error) {
 		if identity.Name != "Ada" || identity.Issuer == "" {
 			t.Errorf("identity = %+v", identity)
 		}
 
-		if ok, _ := HasScopes("openid", "read")(t.Context(), identity); !ok {
+		if ok, _ := gate.HasScopes[Identity]("openid", "read")(t.Context(), identity); !ok {
 			t.Errorf("scopes = %v", identity.Scopes)
 		}
 
-		return identity.Subject, nil
+		return localUser(identity.Subject), nil
 	}).Record(httpRequest)
 
 	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/dash" {
@@ -378,7 +385,7 @@ func requireLoginErrorMapped(t *testing.T, mapperErr, want error) {
 
 	httpRequest := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 
-	err := client.Callback(localIdentity, func(context.Context, Identity) (string, error) {
+	err := client.Callback(localIdentity, func(context.Context, Identity) (localUser, error) {
 		return "", mapperErr
 	})(httptest.NewRecorder(), httpRequest)
 
@@ -578,10 +585,10 @@ func TestCallbackOwnsFallbackScopes(t *testing.T) {
 	})
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 
-	response := client.Callback(localIdentity, func(_ context.Context, identity Identity) (string, error) {
+	response := client.Callback(localIdentity, func(_ context.Context, identity Identity) (localUser, error) {
 		identity.Scopes[0] = "admin"
 
-		return identity.Subject, nil
+		return localUser(identity.Subject), nil
 	}).Record(request)
 
 	if response.StatusCode != http.StatusFound {

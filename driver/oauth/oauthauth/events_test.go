@@ -121,7 +121,7 @@ func TestLoginFailedDoesNotPublishMapperCause(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 	cause := errors.New("synthetic-private-mapper-detail")
 
-	err := client.Callback(localIdentity, func(context.Context, Identity) (string, error) {
+	err := client.Callback(localIdentity, func(context.Context, Identity) (localUser, error) {
 		return "", cause
 	})(httptest.NewRecorder(), request)
 

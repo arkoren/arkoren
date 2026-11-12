@@ -14,7 +14,7 @@ import (
 // loginSession resolves exactly the identity's selected bridge once, mapping
 // only missing sessions to the browser handlers' existing unauthorized error.
 // Invalid definitions remain ordinary configuration errors.
-func loginSession[K, U any](ctx context.Context, identity auth.SessionIdentity[K, U]) (*session.Session, error) {
+func loginSession[K any, U auth.Identifiable[K]](ctx context.Context, identity auth.SessionIdentity[K, U]) (*session.Session, error) {
 	current, err := identity.Session(ctx)
 
 	if errors.Is(err, session.ErrNoSession) {
@@ -32,7 +32,7 @@ func loginSession[K, U any](ctx context.Context, identity auth.SessionIdentity[K
 // Example:
 //
 //	r.Post("/logout", client.Logout(identity))
-func (client *Client) Logout[K, U any](identity auth.SessionIdentity[K, U]) router.Handler {
+func (client *Client) Logout[K any, U auth.Identifiable[K]](identity auth.SessionIdentity[K, U]) router.Handler {
 	return func(writer http.ResponseWriter, httpRequest *http.Request) error {
 		current, err := loginSession(httpRequest.Context(), identity)
 
