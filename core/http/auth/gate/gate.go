@@ -190,3 +190,64 @@ func Require[U any](rules ...func(context.Context, U) (bool, error)) router.Midd
 		}
 	}
 }
+
+// Bind adapts rules for U to a context-only availability check, the shape taken
+// by features such as tool or action availability that have no user parameter.
+// The returned function looks up the user of type U with [auth.FromContext] and
+// runs the rules in order. It returns (false, nil) when there is no user, which
+// hides the feature from anonymous callers without an error, (false, nil) at
+// the first rule that denies, and (false, err) at the first rule that fails.
+// Like [Require], it panics when no rule is given and copies the rule slice;
+// functions and their captures remain shared.
+//
+// Example:
+//
+//	tool := mcp.NewTool("report", report, func(action *mcp.ToolBuilder[In, Out]) {
+//		tool.Available(gate.Bind(isAnalyst))
+//	})
+func Bind[U any](rules ...func(context.Context, U) (bool, error)) func(context.Context) (bool, error) {
+	if len(rules) == 0 {
+		panic("gate: Bind needs at least one rule")
+	}
+
+	rules = slices.Clone(rules)
+
+	return func(ctx context.Context) (bool, error) {
+		user, ok := auth.FromContext[U](ctx)
+
+		if !ok {
+			return false, nil
+		}
+
+		for _, rule := range rules {
+			allowed, err := rule(ctx, user)
+
+			if err != nil || !allowed {
+				return false, err
+			}
+		}
+
+		return true, nil
+	}
+}
+
+// HasScopes returns a rule that allows a user holding every required scope,
+// read through [auth.Scoped.AuthScopes]. It copies required before capturing
+// it, so later caller edits cannot change authorization. Empty requirements
+// allow any user. Use the rule with [Require], [Authorize] or [Bind]; it does
+// not authenticate a request.
+//
+// Example:
+//
+//	r.With(gate.Require(gate.HasScopes[Token]("posts:write"))).Post("/posts", create)
+func HasScopes[U auth.Scoped](required ...string) func(context.Context, U) (bool, error) {
+	required = slices.Clone(required)
+
+	return func(_ context.Context, user U) (bool, error) {
+		granted := user.AuthScopes()
+
+		return !slices.ContainsFunc(required, func(scope string) bool {
+			return !slices.Contains(granted, scope)
+		}), nil
+	}
+}

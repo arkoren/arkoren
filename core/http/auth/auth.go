@@ -57,6 +57,21 @@ var ErrUnauthenticated = problem.New(func(details *problem.Builder) {
 //	r.Use(auth.Middleware(authenticate), auth.Require[User]())
 type Authenticator[U any] func(r *http.Request) (U, error)
 
+// Scoped is implemented by user types that carry granted OAuth-style scopes, such
+// as an access-token identity. It lets scope rules such as gate.HasScopes work
+// on any user type without knowing it.
+//
+// Example:
+//
+//	type Token struct{ Scopes []string }
+//
+//	func (token Token) AuthScopes() []string { return token.Scopes }
+type Scoped interface {
+	// AuthScopes returns the scopes granted to the user. Callers must not modify
+	// the returned slice; implementations may return their internal storage.
+	AuthScopes() []string
+}
+
 // contextKey is the context key under which a user of type U is stored.
 type contextKey[U any] struct{}
 

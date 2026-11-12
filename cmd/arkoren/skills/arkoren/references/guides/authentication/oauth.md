@@ -111,8 +111,7 @@ available until handlers have finished.
 Use an existing session-enabled, CSRF-protected browser group `web`, as in
 [Enable Login](session-login.md#enable-login). Import `auth` from
 `arkoren.dev/core/http/auth`. Your `loadUser` loads a current local `User` by
-integer ID, and `User.AuthID` reports that ID; `mapIdentity` below returns the
-local `User`, whose identifier the callback stores with `identity.Login`:
+integer ID; `mapIdentity` below returns that same ID type:
 
 ```go
 identity := auth.NewSessionIdentity(loadUser)
@@ -150,25 +149,25 @@ link using `accounts.ByIdentity(ctx, issuer, subject)`, which returns the
 application's `Account` or an error:
 
 ```go
-mapIdentity := func(ctx context.Context, external oauth.Identity) (User, error) {
+mapIdentity := func(ctx context.Context, external oauth.Identity) (int, error) {
 	if external.Issuer == "" || external.Subject == "" {
-		return User{}, auth.ErrUnauthenticated
+		return 0, auth.ErrUnauthenticated
 	}
 	account, err := accounts.ByIdentity(ctx, external.Issuer, external.Subject)
 	if err != nil {
-		return User{}, err
+		return 0, err
 	}
 	if account.Disabled {
-		return User{}, auth.ErrUnauthenticated
+		return 0, auth.ErrUnauthenticated
 	}
 
-	return account.User, nil
+	return account.ID, nil
 }
 ```
 
 The repository owns uniqueness of the issuer/subject link and rejection of
-unknown accounts. A mapper returning a zero user and nil error still stores the zero user's
-identifier as the login; Arkoren cannot infer whether it denotes a real account.
+unknown accounts. A mapper returning zero and nil error still stores zero as
+the login identifier; Arkoren cannot infer whether it denotes a real account.
 Mapper errors matching `auth.ErrNoCredentials` become `ErrInvalidCallback`
 (`400`); other application errors pass through unchanged.
 

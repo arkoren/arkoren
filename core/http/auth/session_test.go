@@ -24,7 +24,7 @@ func TestSessionConformance(t *testing.T) {
 	loggedIn := func(*testing.T) *http.Request {
 		sess := session.New(time.Now().Add(time.Hour), map[string]any{})
 
-		if err := auth.NewSessionIdentity(loadByID).Login(sess, 1); err != nil {
+		if err := auth.NewSessionIdentity(loadByID).Login(sess, user{ID: 1}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -46,10 +46,10 @@ func TestSessionWrongLoginTypeFailsClosed(t *testing.T) {
 	}
 
 	called := false
-	identity := auth.NewSessionIdentity(func(context.Context, int) (string, error) {
+	identity := auth.NewSessionIdentity(func(context.Context, int) (user, error) {
 		called = true
 
-		return "unexpected", nil
+		return user{}, nil
 	})
 
 	_, err := identity.Authenticator()(sessionRequest(current))
@@ -67,10 +67,10 @@ func TestSessionPersistedIdentifierMismatchFailsClosed(t *testing.T) {
 	current := session.New(time.Now().Add(time.Hour), map[string]any{
 		"arkoren:auth:user": jsontext.Value(`"private-user"`),
 	})
-	identity := auth.NewSessionIdentity(func(context.Context, int) (string, error) {
+	identity := auth.NewSessionIdentity(func(context.Context, int) (user, error) {
 		t.Fatal("loader called for invalid persisted identifier")
 
-		return "", nil
+		return user{}, nil
 	})
 
 	_, err := identity.Authenticator()(sessionRequest(current))

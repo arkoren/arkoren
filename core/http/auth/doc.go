@@ -8,6 +8,9 @@
 // Anonymous requests continue without a user; [Require] rejects them.
 // Require uses [Builder] construction policies; session authentication uses
 // immutable [SessionIdentity] to bind identifier type, loader and session.Handle.
+// The user type implements [Identifiable] so the definition can map in both
+// directions: the loader turns the stored identifier into the user and AuthID
+// turns the user back into the identifier that [SessionIdentity.Login] stores.
 // Zero definitions and nil loaders are invalid configuration; callbacks still
 // run once in order. A later zero handle restores default lookup. Loaders are
 // not invoked during construction. Invalid identities stop middleware fallback.
@@ -45,14 +48,16 @@
 //	private.Get("/me", me)
 //	r.With(gate.Require(isAdmin)).Delete("/users/{id}", deleteUser)
 //
-// Where loadUser resolves the stored identifier:
+// Where User reports its identifier and loadUser resolves it:
+//
+//	func (user User) AuthID() int { return user.ID }
 //
 //	func loadUser(ctx context.Context, id int) (User, error) {
 //		user, err := db.Find[User](ctx, query.Table("users", func(statement *query.Builder) {
 //			statement.Where("id", id)
 //		}))
 //		if errors.Is(err, database.ErrNoRows) {
-//			return User{}, auth.ErrNoCredentials // deleted user: anonymous
+//			return User{}, auth.ErrNotFound // deleted user: anonymous
 //		}
 //		return user, err
 //	}
@@ -95,7 +100,7 @@
 //		if !found || !ok {
 //			return auth.ErrUnauthenticated
 //		}
-//		if err := identity.Login(request.MustSession(r), user.ID); err != nil {
+//		if err := identity.Login(request.MustSession(r), user); err != nil {
 //			return err
 //		}
 //
@@ -116,9 +121,33 @@
 //
 // # Deleted users
 //
-// Sessions outlive accounts. Return [ErrNoCredentials] from the load
-// function when the user no longer exists; the request becomes anonymous
-// instead of failing with a 500.
+// Sessions outlive accounts. Return [ErrNotFound] from the load function when
+// the user no longer exists; the request becomes anonymous instead of failing
+// with a 500. [ErrNotFound] wraps [ErrNoCredentials], so session authentication
+// treats both the same. Return plain [ErrNoCredentials] for a user that exists
+// but is disabled: code that cleans up after deleted users acts only on
+// [ErrNotFound].
+//
+// # Subjects
+//
+// Packages that attach data to users without knowing your user type refer to
+// them by subject, a text form of the identifier: a string as is, an integer as
+// decimal digits, or the text form of a [encoding.TextMarshaler] such as a UUID.
+// A subject is 1 to 255 printable ASCII bytes without spaces. [SessionIdentity.Subject]
+// and [SessionIdentity.Load] convert in both directions, and
+// [SessionIdentity.Directory] returns a non-generic [Directory] to hand to such
+// packages. Identifier types that are none of these (structs, for example) still
+// work for sessions and fail only when a subject is requested with
+// [ErrInvalidSubject].
+//
+//	subject, err := identity.Subject(user)
+//	directory, err := identity.Directory()
+//	err = directory.Exists(ctx, subject) // nil, auth.ErrNotFound, or another error
+//
+// # Scopes
+//
+// A user type that carries granted scopes implements [Scoped], which lets
+// gate.HasScopes check them on any user type.
 //
 // # API keys
 //
@@ -168,7 +197,7 @@
 //		auth.Bearer(client.Verify),
 //		identity.Authenticator(),
 //	))
-//	r.Get("/oauth/callback", client.Callback(identity, mapIdentityToUserID))
+//	r.Get("/oauth/callback", client.Callback(identity, mapIdentityToUser))
 //
 // See the package documentation of arkoren.dev/driver/oauth/oauthauth for the
 // full setup.
