@@ -1,14 +1,13 @@
 package auth
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"time"
 
 	"arkoren.dev/core/http/session"
 )
-
-// sessionKey is the session key holding the user's identifier.
-const sessionKey = "arkoren:auth:user"
 
 // ErrInvalidSessionIdentity reports a zero definition or nil loader. It is a
 // configuration error, not a credential rejection, so middleware fails closed.
@@ -44,10 +43,12 @@ type Identifiable[K any] interface {
 // SessionIdentity binds the login identifier K, user loader U and session bridge
 // in one immutable definition. U reports its identifier through [Identifiable].
 // Zero is invalid. Copies share functions and their
-// captures, not mutable construction drafts. All definitions use the existing
-// arkoren:auth:user slot: a physical session supports one identity, and another
-// definition using the same K can still mix realms. Compatible persisted JSON
-// may decode across types; incompatible in-memory types fail closed.
+// captures, not mutable construction drafts. A definition keeps its identifier
+// in arkoren:auth:user, and its factors and pending login in sibling fields; all
+// carry the [SessionBuilder.Realm] suffix. Definitions with the same realm and K
+// share one slot and can mix users: give each a distinct realm. Compatible
+// persisted JSON may decode across types; incompatible in-memory types fail
+// closed.
 //
 // Example:
 //
@@ -59,6 +60,12 @@ type SessionIdentity[K any, U Identifiable[K]] struct {
 
 	// handle selects exactly one context bridge, without default fallback.
 	handle session.Handle
+
+	// realm suffixes every session key; empty keeps the unsuffixed keys.
+	realm string
+
+	// challengeTTL is how long a pending login is accepted; always positive.
+	challengeTTL time.Duration
 }
 
 // NewSessionIdentity publishes an immutable identity definition without calling
@@ -88,8 +95,10 @@ func NewSessionIdentity[K any, U Identifiable[K]](
 	}
 
 	return SessionIdentity[K, U]{
-		load:   load,
-		handle: authenticator.handle,
+		load:         load,
+		handle:       authenticator.handle,
+		realm:        authenticator.realm,
+		challengeTTL: cmp.Or(max(authenticator.challengeTTL, 0), defaultChallengeTTL),
 	}
 }
 

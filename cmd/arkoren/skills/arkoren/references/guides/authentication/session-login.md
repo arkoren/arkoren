@@ -5,7 +5,7 @@ order: 20
 summary:
   - Report each user's identifier, load current accounts from it, and reject deleted or disabled accounts.
   - Check passwords without revealing account existence and rotate the session after verified login.
-  - End local logins, revoke older account sessions, and select the intended session context.
+  - End local logins, revoke older account sessions, and select the intended session context and realm.
 ---
 
 # Session Login
@@ -169,14 +169,16 @@ current, err := identity.Session(r.Context())
 if err != nil {
 	return err
 }
-if err := identity.Login(current, account.User); err != nil {
+if err := identity.Login(current, account.User, auth.MethodPassword); err != nil {
 	return err
 }
 
 return response.Status(w, http.StatusNoContent)
 ```
 
-`Login` writes the identifier and then regenerates the session ID. Rotation
+`Login` writes the identifier and the methods you verified (here, the password),
+then regenerates the session ID. For accounts with a second factor, call
+`Challenge` instead; see [Two-Factor Login](two-factor.md). Rotation
 protects against **session fixation**, where an attacker knows an ID planted
 before the victim signs in. If the field write fails, no rotation occurs and
 you must not report success. Login preserves other session values, creation
@@ -216,56 +218,24 @@ old ID valid.
 
 ## Revoke Account Sessions
 
-To end sessions across devices after a password change or compromise, store an
-account version with the ID. This is an alternative identity definition, not
-an additional identity entry:
+To end sessions across devices after a password change or compromise, have the
+user type report a credential version. Add `AuthVersion` to `User`, returning a
+value that changes with the credentials; here `PasswordChangedAt` is a field
+you update on every password reset:
 
 ```go
-type SessionUser struct {
-	ID      int
-	Version int
+func (user User) AuthVersion() string {
+	return strconv.FormatInt(user.PasswordChangedAt.UnixNano(), 10)
 }
 ```
 
-Move `SessionVersion` from `Account` to the embedded `User` (the loader can still
-read it as `account.SessionVersion`) and report it from `AuthID`, which now
-returns `SessionUser`:
-
-```go
-func (user User) AuthID() SessionUser {
-	return SessionUser{ID: user.ID, Version: user.SessionVersion}
-}
-```
-
-Change your loader to `func(context.Context, SessionUser) (User, error)`.
-After loading the account and handling absence or storage errors as above,
-reject a stale version:
-
-```go
-if account.Disabled || account.SessionVersion != saved.Version {
-	return User{}, auth.ErrNoCredentials
-}
-return account.User, nil
-```
-
-Here `saved` is the loader's `SessionUser` argument. Reconstruct the definition
-with that loader; `Login` now stores both values from the user after successful
-credential checks:
-
-```go
-if err := identity.Login(current, account.User); err != nil {
-	return err
-}
-```
-
-A struct identifier works for sessions but cannot be converted to a subject text
-reference, which packages that attach data to users require; see
-[`auth` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth).
-
-Increment the persisted `SessionVersion` to invalidate older versions on each
-device's next account lookup. No session enumeration is required. Existing
-in-flight requests are not retroactively canceled, and account caching can
-delay the effect.
+`Login` stores a hash of the value, and the authenticator compares it with the
+loaded user's on every request; a mismatch, or a session created before
+versioning, is anonymous. Nothing else changes in the loader. Existing in-flight
+requests are not retroactively canceled, and account caching can delay the
+effect. Enabling this ends sessions created before it. See
+[Two-Factor Login](two-factor.md#end-other-sessions) for refreshing the current
+session after a password change.
 
 ## Select Sessions
 
@@ -289,9 +259,11 @@ handle selects the default. Explicit `Login` and `Logout` arguments are not
 checked against the handle, so use `identity.Session` to select them consistently.
 
 A handle is not cookie or storage isolation. Definitions writing to the same
-physical session share `arkoren:auth:user`: the last login replaces the identity,
-and logout removes it. Independent browser sessions also need distinct cookie
-and storage configuration in [Sessions](../http-capabilities/sessions.md).
+physical session and realm share `arkoren:auth:user`: the last login replaces the
+identity, and logout removes it. Give a second login its own
+[realm](two-factor.md#separate-realms) and user type to keep both. Independent
+browser sessions also need distinct cookie and storage configuration in
+[Sessions](../http-capabilities/sessions.md).
 For authentication tests, combine [direct identity tests](../testing/auth-tests.md)
 with a real cookie-based login/logout test that exercises persistence.
 

@@ -22,12 +22,15 @@ to 401 with a Bearer challenge; `Builder.ErrorResponse` can replace the response
 
 Install session middleware and CSRF protection before cookie authentication.
 Your user type reports its identifier with `AuthID() K`, which must match the
-loader's `K`; `identity.Login(sess, user)` stores it. Share one
+loader's `K`; `identity.Login(sess, user, auth.MethodPassword)` stores it and the verified
+methods. Use `Challenge`, `Pending` and `Complete` to hold a login until a
+second factor passes, `RequireMethods` and `RequireFresh` for step-up, and
+`SessionBuilder.Realm` to keep independent logins apart. Share one
 `auth.NewSessionIdentity(loadUser)` across authentication, login, and
 logout. Check its `Err` during setup and handle login/logout mutation errors.
 Rotation does not prove persistence succeeded; session middleware owns saving,
 renewal, and retirement. Handles select context slots, not separate authorization
-realms or physical identity fields.
+realms or physical identity fields; use `Realm` for the latter.
 
 Use [gate](https://pkg.go.dev/arkoren.dev/core/http/auth/gate) for permission
 checks after authentication. Route admission does not authorize every resource:

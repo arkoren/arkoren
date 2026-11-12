@@ -17,9 +17,10 @@ user table, registration flow, or login screen. [Authorization](../authorization
 then decides what that identity may do.
 
 Use [Session Login](session-login.md) for passwords and browser sessions,
+[Two-Factor Login](two-factor.md) for second factors and step-up checks,
 [API Tokens](api-tokens.md) for application-issued keys, [OAuth Login](oauth.md)
 for external browser sign-in, or [OIDC Tokens](oidc-bearer.md) for provider-issued
-JWTs. All four use the same request identity model.
+JWTs. All of them use the same request identity model.
 
 Focused snippets keep error results visible but omit routine propagation.
 Checks remain where failure changes authentication or access. Handle all errors

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/subtle"
 	"errors"
 	"net/http"
 
@@ -11,6 +12,12 @@ import (
 // and incompatible stored types yield ErrNoCredentials. Loader errors pass
 // through unchanged. Invalid definitions instead return the configuration error
 // before lookup, preventing middleware credential fallback.
+//
+// It reads only the logged-in user's slot: a login waiting for a further factor
+// (see [SessionIdentity.Challenge]) is anonymous. If the loaded user implements
+// [Versioned], the version stored at login must match the user's current one,
+// otherwise the result is ErrNoCredentials. Sessions without factors, created
+// before they existed, stay logged in unless the user is [Versioned].
 //
 // Example:
 //
@@ -27,7 +34,7 @@ func (identity SessionIdentity[K, U]) Authenticator() Authenticator[U] {
 			return user, err
 		}
 
-		id, err := current.Get(session.NewField[K](sessionKey))
+		id, err := current.Get(field[K](identity.realm, userKey))
 
 		if errors.Is(err, session.ErrKeyNotFound) || errors.Is(err, session.ErrInvalidValueType) {
 			return user, ErrNoCredentials
@@ -37,6 +44,32 @@ func (identity SessionIdentity[K, U]) Authenticator() Authenticator[U] {
 			return user, err
 		}
 
-		return identity.load(r.Context(), id)
+		user, err = identity.load(r.Context(), id)
+
+		if err != nil {
+			return user, err
+		}
+
+		credentials := version(user)
+
+		if credentials == "" {
+			return user, nil
+		}
+
+		saved, err := current.Get(field[storedState](identity.realm, stateKey))
+
+		if errors.Is(err, session.ErrKeyNotFound) || errors.Is(err, session.ErrInvalidValueType) {
+			return user, ErrNoCredentials
+		}
+
+		if err != nil {
+			return user, err
+		}
+
+		if subtle.ConstantTimeCompare([]byte(saved.Version), []byte(credentials)) != 1 {
+			return user, ErrNoCredentials
+		}
+
+		return user, nil
 	}
 }
