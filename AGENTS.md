@@ -4,7 +4,7 @@ Modular Go 1.27 toolkit (`github.com/arkoren/arkoren`) with independent modules
 and no root module. `core/` is `arkoren.dev/core`: application lifecycle,
 `http/` request handling, and `service/` contracts, memory drivers and
 `<contract>test` conformance suites. `driver/<vendor>` holds one module per
-vendor; `ark/<name>` holds opt-in domain features (none yet);
+vendor; `ark/<name>` holds opt-in domain features (`twofactor`);
 `foundation/<name>` holds stdlib-only libraries. `cmd/arkoren` is the consumer
 CLI; `cmd/arkoren-ci` is a separate stdlib-only development command, never a
 release or consumer dependency. `scripts/` holds workflow fixtures. The committed
@@ -90,9 +90,9 @@ GOWORK=off go -C cmd/arkoren-ci run . inventory
 
 `.github/release-modules.json` is the versioned classification authority: public
 release namespaces and explicit development-only roots. CI discovers all canonical
-filesystem modules, including ignored local ones (currently 46 modules and 15
+filesystem modules, including ignored local ones (currently 47 modules and 16
 integrations); release preparation validates only the exact committed public set
-(45). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
+(46). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
 The Go command owns inventory, release plans, exact-SHA evidence, publication,
 notes-PR ownership and administrative policy checks. Native gh owns auto-merge
 and prerelease creation; website TypeScript owns Markdown import/validation.

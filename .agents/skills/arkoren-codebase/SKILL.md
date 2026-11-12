@@ -28,7 +28,7 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
 | Drivers | `driver/<vendor>/` | one per vendor | Vendor implementations of core contracts, and HTTP protocol adapters that have no `Driver` (`oauth` plugs into `http/auth`; `mcp/mcpserver` serves `core/mcp.Tool`; a provider webhook adapter would return a `webhook.Source` and publish `webhook.Event` definitions). |
-| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Domain features with their own tables, routes, or flows. None yet. |
+| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Domain features with their own tables, routes, or flows. `ark/twofactor` is the first. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
 | Development | `cmd/arkoren-ci/` | `arkoren.dev/cmd/arkoren-ci` | Repository maintenance only; standard library only, with no dependency on toolkit or consumer CLI modules. Public source and vanity resolution do not imply a supported release/install namespace. Excluded from releases and the library API catalog. |
@@ -67,8 +67,8 @@ after inventory or workflow changes.
 
 Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
 working-tree inspection, or append `--commit FULL_SHA` to validate a committed
-inventory and its same-commit policy. CI/audits currently include 46 modules and
-15 integration suites; releases include only the 45 approved public modules.
+inventory and its same-commit policy. CI/audits currently include 47 modules and
+16 integration suites; releases include only the 46 approved public modules.
 The development command uses standard flags, JSON stdout and JSON diagnostics on
 stderr. Its focused internal packages own inventory, release planning, exact-SHA
 evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
@@ -714,6 +714,58 @@ Settled; reopen only with the owner.
     exist, read-only, and fails with the contract's `ErrNotFound`, naming
     `Migrations()`. It never creates them.
 
+- **Arks reference users by subject, never by the application's types.** An ark
+  never knows the user type `U` or the ID type `K`; the rules below apply to
+  every ark table or API that refers to a user (`ark/twofactor` is the
+  reference implementation).
+  - Column: `user_id varchar(255)` holding the identity's text subject
+    (`auth.SessionIdentity.Subject`: a string kind as is, an integer kind as
+    decimal digits, a text-marshaling type such as UUID/xid/ULID as its text;
+    1-255 printable ASCII bytes without spaces). It is compared bytewise on every
+    dialect: PostgreSQL `COLLATE "C"`, MySQL `CHARACTER SET ascii COLLATE
+    ascii_bin` (the default collation equates `abc` and `ABC`), SQLite's default.
+    Render the type from `db.Dialect()` when building `Migrations()`. Never choose
+    the column type per ark or per key type, and add no foreign key to the
+    application's users table: that stays an optional, application-owned
+    migration, and cascading is the wrong policy for retained data.
+  - Construction: `New(identity, db, ...dependencies, configure...)` is generic
+    over `[K any, U auth.Identifiable[K]]` and takes the `auth.SessionIdentity`,
+    so the application writes no type arguments and cannot pass the wrong user
+    type. Inside, keep only the non-generic `identity.Directory()`
+    (`Subject(ctx)` for the current request, `Exists(ctx, subject)` for
+    cleanup) and fail `New` with the ark's `ErrInvalidConfig` when it errors.
+    Login-flow handlers (`Verify(identity)`, `Recover(identity)`) are generic
+    methods that take the identity per call, as `oauthauth.Client.Callback` does.
+    An ark that needs more than the subject declares its own constraint on `U`
+    or takes a narrow function; it never imports another ark.
+  - Deleting users: Arkoren has no user model or events, so every ark that
+    stores user references provides `Forget(ctx, subject) error` (idempotent,
+    runs through the ark's `*database.Database` so it joins the caller's
+    `WithTransaction`; the ark chooses delete, anonymize or mark per table) and
+    a `Sweep(when schedule.Spec) schedule.Entry`. The entry pages through the
+    ark's distinct subjects in bytewise order (keyset, not offset), calls
+    `Directory.Exists`, and forgets only subjects whose error satisfies
+    `errors.Is(err, auth.ErrNotFound)`. Any other error (a suspended user's
+    `auth.ErrNoCredentials`, a database failure) keeps the rows, lets the sweep
+    continue, and is returned joined so the run reports failure. It never deletes
+    on a read path. Entry names are `<ark>-sweep` or `<ark>-<instance>-sweep`
+    with `_` written as `-`, so instances cannot collide.
+  - Durable external effects (cancel a subscription, revoke a token at a
+    provider) are not done in `Forget`'s caller or in `AfterCommit`, which is not
+    durable: `Forget` writes a pending row in the same transaction and the sweep
+    performs the call and clears the row. An ark without external effects says so
+    in its `Forget` documentation instead of inventing pending rows.
+  - The ark's `ErrNotFound` (wrapped by `Ping`, naming `Migrations()`) is its own
+    sentinel; it is never `auth.ErrNotFound`, which means "user deleted" and wraps
+    `auth.ErrNoCredentials`. `Instance` names are `[a-z0-9_]` and must not start
+    with a digit when the ark builds SQL with `query.Table`, and short enough that
+    the longest table name stays within PostgreSQL's 63 bytes.
+  - Failures a client can cause (wrong code, replay, unknown credential) return
+    one `problem.Details` sentinel so responses do not reveal which check failed,
+    with a `tag:arkoren.dev,2026-11:ark/<name>:<package>:<kebab>` type. Atomic
+    single-use checks (replayed time steps, spent recovery codes) are one
+    conditional `UPDATE` whose affected-row count must be 1, never read-then-write.
+
 ## Publishing
 
 ### Dry-run planning
@@ -978,7 +1030,7 @@ on pkg.go.dev; the website's API catalog links modules rather than copying them.
 | Add a vendor module | As above, plus `driver/<vendor>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, and `driver/<vendor>/compose.yaml` when tests need services (fixed `127.0.0.1` ports not used by another module). Verify with `GOWORK=off`; never require another driver module or add local replaces. |
 | Add a core package or middleware | Follow the boundary rules above; include `doc.go`, public examples and relevant consumer guides. Middleware takes `Middleware(required..., configure...)`. |
 | Change a public API | Update Go doc comments/examples, all callers, relevant consumer guides and affected contributor rules. Keep matching public `BuilderFunc` aliases consistent with drafts and callback signatures. |
-| Add an ark | `ark/<name>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, package docs/examples and relevant guides. Verify with `GOWORK=off`; use no local replaces. It may not import `core/internal` or another ark. Update the Arks guide's availability statement and the website module catalog when the first ark ships. |
+| Add an ark | `ark/<name>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, package docs/examples and relevant guides. Verify with `GOWORK=off`; use no local replaces. It may not import `core/internal` or another ark. Follow the ark rules under Decisions (subject column, `New(identity, db, ...)`, `Forget`, `Sweep`, `Migrations`, `Ping`). The website module catalog (`libraryModules`, `apiModules`) already lists `ark/` modules; add the ark to the Arks guide and, when it has a user flow, its own guide. Compose services need fixed `127.0.0.1` ports unused by other modules. |
 | Add a driver or package that needs tables | Ship `Migrations()` with stable groups and short ids; validate `Builder.Instance`; use read-only readiness checks returning `ErrNotFound` and naming `Migrations()`. Tests must execute migrations before use and exercise two instances. Document application-owned migration execution in package docs and driver guides. Preserve existing group identities and test actual behavior rather than just source spelling. |
 | Add diagnostic MCP tools to a package | `MCPTools(prefix)` on the owner, direct tool/adapter tests, Go doc examples and diagnostic guides. Composition selects and authorizes tools. |
 | Change MCP CLI metadata or safe failures | The `cmd/arkoren` decoding and renderers, its end-to-end MCP tests, and the `guides/cli/` pages. |

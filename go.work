@@ -1,6 +1,7 @@
 go 1.27
 
 use (
+	./ark/twofactor
 	./cmd/arkoren
 	./cmd/arkoren-ci
 	./core

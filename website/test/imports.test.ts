@@ -94,6 +94,18 @@ test("foundation and core are discoverable without any vendor drivers", () => {
   );
 });
 
+test("arks are library modules between foundation and drivers", () => {
+  assertCatalog(
+    ["foundation/fixture", "core", "ark/fixture", "driver/fixture"],
+    [
+      "arkoren.dev/ark/fixture",
+      "arkoren.dev/core",
+      "arkoren.dev/driver/fixture",
+      "arkoren.dev/foundation/fixture",
+    ],
+  );
+});
+
 test("selected drivers add their links without requiring the other vendors or CLI", () => {
   assertCatalog(
     ["foundation/fixture", "core", "driver/fixture"],
