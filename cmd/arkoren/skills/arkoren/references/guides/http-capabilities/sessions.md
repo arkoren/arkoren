@@ -279,7 +279,9 @@ routes.Use(session.Middleware(store, func(cookies *session.Builder) {
 ```
 
 A positive maximum caps initial expiry, renewal, and `Session.Extend` at the
-original creation time plus that maximum. Regeneration does not reset it. The
+original creation time plus that maximum. Regeneration does not reset it. If you
+use [`auth.Login`](../authentication/session-login.md#devices), give it the same
+value with `SessionLifetime` so its login records expire with the sessions. The
 cookie expiry and record TTL use the cap; capping unused state alone does not
 create a record or cookie.
 

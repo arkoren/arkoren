@@ -49,20 +49,26 @@ type Login struct {
 	// provider finds users at begin, completion and on every request.
 	provider *UserProvider
 
-	// store is the shared cache, kept for login records. It is not used until
-	// login records exist.
+	// store is the shared cache that holds the login records.
 	store *cache.Cache
+
+	// records names the entry of each subject's login records, with the session
+	// lifetime as its TTL.
+	records cache.Namespace[[]LoginRecord]
 
 	// settings are the completed construction settings.
 	settings loginSettings
 }
 
 // NewLogin returns a [Login] over provider. store is the cache the application
-// also gives to [session.Middleware]; it is validated and kept for login
-// records (listing and revoking devices) and is not used yet. It returns an
-// error when provider or store is nil, when [LoginBuilder.ChallengeTTL] or
-// [LoginBuilder.MaxAttempts] is not positive, or when a second-factor check is
-// nil. Construction does no I/O and the callbacks run once, in order.
+// also gives to [session.Middleware]; it keeps each user's login records (see
+// [Login.Logins]). NewLogin registers [Login.RevokeAll] with
+// [UserProvider.OnForget], so forgetting a user ends their sessions. It returns
+// an error when provider or store is nil, when [LoginBuilder.ChallengeTTL],
+// [LoginBuilder.MaxAttempts], [LoginBuilder.MaxLogins] or
+// [LoginBuilder.SessionLifetime] is not positive, or when a second-factor check
+// or [LoginBuilder.ClientIP] is nil. Construction does no I/O and the callbacks
+// run once, in order.
 //
 // Example:
 //
@@ -93,9 +99,27 @@ func NewLogin(provider *UserProvider, store *cache.Cache, configure ...LoginBuil
 		return nil, errors.New("auth: nil second-factor check")
 	}
 
+	if settings.MaxLogins <= 0 {
+		return nil, errors.New("auth: login max logins must be positive")
+	}
+
+	if settings.SessionLifetime <= 0 {
+		return nil, errors.New("auth: login session lifetime must be positive")
+	}
+
+	if settings.ClientIP == nil {
+		return nil, errors.New("auth: nil client IP function")
+	}
+
 	settings.SecondFactors = slices.Clone(settings.SecondFactors)
 
-	return &Login{provider: provider, store: store, settings: settings}, nil
+	login := &Login{provider: provider, store: store, settings: settings, records: cache.NewNamespace[[]LoginRecord]("arkoren:auth:logins", func(space *cache.NamespaceBuilder) {
+		space.TTL(settings.SessionLifetime)
+	})}
+
+	provider.OnForget(login.RevokeAll)
+
+	return login, nil
 }
 
 // session resolves the request's session through the configured handle.
@@ -120,11 +144,42 @@ func missing(err error) bool {
 	return errors.Is(err, session.ErrKeyNotFound) || errors.Is(err, session.ErrInvalidValueType)
 }
 
-// start logs the user in with factors: it stores the session record, drops any
-// pending login and regenerates the session ID. Writes precede regeneration so a
-// failed write leaves the ID unchanged.
-func (login *Login) start(current *session.Session, user UserRecord, factors []Factor) error {
-	record := sessionRecord{Subject: user.Subject, Factors: factors, Version: hashVersion(user.Version)}
+// release removes the login record of the logged-in user of current, if any, so
+// replacing or ending a login leaves no phantom device behind.
+func (login *Login) release(ctx context.Context, current *session.Session) error {
+	stored, err := current.Get(sessionField)
+
+	if missing(err) {
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if stored.LoginID == "" {
+		return nil
+	}
+
+	return login.Revoke(ctx, stored.Subject, stored.LoginID)
+}
+
+// start logs the user in with factors: it replaces the login record of any
+// previous login with a new one, stores the session record, drops any pending
+// login and regenerates the session ID. Writes precede regeneration so a failed
+// write leaves the ID unchanged.
+func (login *Login) start(r *http.Request, current *session.Session, user UserRecord, factors []Factor) error {
+	if err := login.release(r.Context(), current); err != nil {
+		return err
+	}
+
+	id, err := login.open(r, user.Subject)
+
+	if err != nil {
+		return err
+	}
+
+	record := sessionRecord{Subject: user.Subject, Factors: factors, Version: hashVersion(user.Version), LoginID: id}
 
 	if err := current.Put(sessionField, record); err != nil {
 		return err
@@ -146,10 +201,14 @@ func (login *Login) start(current *session.Session, user UserRecord, factors []F
 // provider's [UserRecord], so [UserFromContext] returns its Value.
 //
 // A missing session, an absent or unreadable record, a deleted or disabled user
-// ([ErrUserNotFound], [ErrUserDisabled]) and a credential version that no longer
-// matches [UserRecord.Version] all return [ErrNoCredentials], which makes the
+// ([ErrUserNotFound], [ErrUserDisabled]), a credential version that no longer
+// matches [UserRecord.Version] and a login record that was revoked, expired or
+// dropped (see [Login.Revoke]) all return [ErrNoCredentials], which makes the
 // request anonymous. The version comparison is constant time. Other provider
-// errors pass through and stop the chain.
+// errors and errors reading the login records from the store pass through and
+// stop the chain. The check costs one cache read per request; when the record's
+// SeenAt is older than five minutes the authenticator also tries to refresh it,
+// ignoring a failed write.
 //
 // Example:
 //
@@ -186,6 +245,16 @@ func (login *Login) Authenticator() Authenticator {
 			return Identity{}, ErrNoCredentials
 		}
 
+		active, err := login.seen(r.Context(), stored.Subject, stored.LoginID)
+
+		if err != nil {
+			return Identity{}, err
+		}
+
+		if !active {
+			return Identity{}, ErrNoCredentials
+		}
+
 		return NewIdentity(stored.Subject, func(principal *IdentityBuilder) {
 			principal.Factors(stored.Factors...)
 			principal.Record(user)
@@ -206,6 +275,11 @@ func (login *Login) Authenticator() Authenticator {
 // false: the request stays anonymous until [Login.Complete]. The caller then
 // asks for the second factor. A check error fails the login with that error and
 // changes nothing.
+//
+// Logging in creates a [LoginRecord] for the device (see [Login.Logins]) and
+// removes the record of the login the session replaces, so Begin can also return
+// the cache or lock errors of the record store; the session is then unchanged.
+// A login that is parked creates its record at [Login.Complete].
 //
 // Begin does not verify the credential: call it only after it checked out.
 //
@@ -253,10 +327,14 @@ func (login *Login) Begin(r *http.Request, subject string, factor Factor) (compl
 	factors := withFactor(nil, factor, now)
 
 	if !needed {
-		return true, login.start(current, user, factors)
+		return true, login.start(r, current, user, factors)
 	}
 
 	waiting := pendingLogin{Subject: user.Subject, Factors: factors, Version: hashVersion(user.Version), Expires: now.Add(login.settings.ChallengeTTL).UTC()}
+
+	if err := login.release(r.Context(), current); err != nil {
+		return false, err
+	}
 
 	if err := current.Delete(sessionField); err != nil {
 		return false, err
@@ -353,9 +431,11 @@ func (login *Login) Pending(r *http.Request) (UserRecord, error) {
 
 // Complete finishes a pending login after the second factor verified: it logs
 // the user in with the factors verified at [Login.Begin] plus factor (a zero
-// factor.At means now), regenerates the session ID and consumes the pending
-// login, so a second call returns [ErrUnauthenticated]. The errors are those of
-// [Login.Pending]; on any error nothing is logged in.
+// factor.At means now), creates the [LoginRecord] of the device as [Login.Begin]
+// does, regenerates the session ID and consumes the pending login, so a second
+// call returns [ErrUnauthenticated]. The errors are those of [Login.Pending]
+// plus the cache and lock errors of the record store; on any error nothing is
+// logged in.
 //
 // Complete does not verify the factor: call it only after it checked out.
 //
@@ -381,7 +461,7 @@ func (login *Login) Complete(r *http.Request, factor Factor) error {
 		return err
 	}
 
-	return login.start(current, user, withFactor(waiting.Factors, factor, time.Now()))
+	return login.start(r, current, user, withFactor(waiting.Factors, factor, time.Now()))
 }
 
 // Fail counts one wrong second-factor attempt on the pending login and
@@ -472,8 +552,8 @@ func (login *Login) Confirm(r *http.Request, factor Factor) error {
 	return nil
 }
 
-// Logout removes the logged-in session record and any pending login, even stale
-// or unreadable ones, and regenerates the session ID. Other session data and its
+// Logout removes the logged-in session record, its login record and any pending
+// login, even stale or unreadable ones, and regenerates the session ID. Other session data and its
 // lifetime stay; use [session.Session.Destroy] to remove the whole session.
 //
 // Example:
@@ -485,6 +565,10 @@ func (login *Login) Logout(r *http.Request) error {
 	current, err := login.session(r)
 
 	if err != nil {
+		return err
+	}
+
+	if err := login.release(r.Context(), current); err != nil {
 		return err
 	}
 
