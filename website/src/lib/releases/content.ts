@@ -24,11 +24,12 @@ export function releaseModules(repo = RELEASE_REPO): string[] {
       schema: z.literal(1),
       public: z.array(z.string().regex(MODULE)).min(1),
       development: z.array(z.literal("cmd/arkoren-ci")),
+      retired: z.array(z.string().regex(MODULE)).default([]),
     })
     .refine(
       (value) =>
-        new Set([...value.public, ...value.development]).size ===
-        value.public.length + value.development.length,
+        new Set([...value.public, ...value.development, ...value.retired]).size ===
+        value.public.length + value.development.length + value.retired.length,
       "duplicate module classification",
     )
     .parse(
