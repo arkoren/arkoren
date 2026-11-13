@@ -8,6 +8,8 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"log/slog"
 )
 
@@ -24,8 +26,10 @@ import (
 //	public := identity.PublicKey()
 //	_ = public
 type Signing struct {
-	// scalar owns a validated P-256 scalar independently of native inputs.
-	scalar string
+	// scalar owns a validated P-256 scalar independently of native inputs. It is
+	// a pointer so fmt and slog print an address, not the bytes, when the
+	// identity sits in an unexported field. The pointee is never mutated.
+	scalar *string
 }
 
 // NewSigning validates and snapshots a native ECDSA P-256 private key. It
@@ -73,7 +77,9 @@ func NewSigning(private *ecdsa.PrivateKey) (identity Signing, err error) {
 		return Signing{}, ErrInvalid
 	}
 
-	return Signing{scalar: string(raw)}, nil
+	scalar := string(raw)
+
+	return Signing{scalar: &scalar}, nil
 }
 
 // GenerateSigning provisions an independent ECDSA P-256 signing identity
@@ -158,7 +164,7 @@ func LoadSigning(path string) (Signing, error) {
 //		fmt.Println("configure a signing identity")
 //	}
 func (identity Signing) Err() error {
-	if identity.scalar == "" {
+	if identity.scalar == nil {
 		return ErrInvalid
 	}
 
@@ -181,7 +187,7 @@ func (identity Signing) PrivateKey() *ecdsa.PrivateKey {
 		return nil
 	}
 
-	private, _ := ecdsa.ParseRawPrivateKey(elliptic.P256(), []byte(identity.scalar))
+	private, _ := ecdsa.ParseRawPrivateKey(elliptic.P256(), []byte(*identity.scalar))
 
 	// Only validated scalars reach this parser, so it cannot fail.
 	return private
@@ -282,6 +288,20 @@ func (identity Signing) VAPIDPublicKey() string {
 //	fmt.Println(key.Signing{}.String()) // [REDACTED signing key]
 func (identity Signing) String() string {
 	return "[REDACTED signing key]"
+}
+
+// Format writes the same constant redaction marker as String for every verb,
+// including %d, %x and %q, which would otherwise print the underlying value.
+// Verbs, flags, width and precision never change the output, and it never
+// includes material, even for a zero value. Redaction also holds when the
+// value sits in an unexported struct field, because the material is held
+// behind a pointer that reflection-based printing reports as an address.
+//
+// Example:
+//
+//	fmt.Printf("%x", key.Signing{}) // [REDACTED signing key]
+func (identity Signing) Format(state fmt.State, verb rune) {
+	_, _ = io.WriteString(state, identity.String())
 }
 
 // GoString redacts the identity for Go-syntax formatting, including zero
