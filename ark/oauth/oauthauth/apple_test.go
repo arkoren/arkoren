@@ -121,7 +121,7 @@ func TestAppleNewRejectsBadKey(t *testing.T) {
 func requireAppleFormPostName(t *testing.T, user, want string) {
 	t.Helper()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	_, pemKey := appleKey(t)
 	identity, err := key.ParseSigning(pemKey)
@@ -159,7 +159,7 @@ func requireAppleFormPostName(t *testing.T, user, want string) {
 
 	var external Identity
 
-	if status := client.Callback(signin, func(_ context.Context, identity Identity) (string, error) {
+	if status := client.Callback(guard, func(_ context.Context, identity Identity) (string, error) {
 		external = identity
 
 		return "user-1", nil

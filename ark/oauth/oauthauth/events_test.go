@@ -63,7 +63,7 @@ func recordEvents(t *testing.T) (*event.Bus, *[]string) {
 func TestCallbackPublishesLoginEvents(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	bus, seen := recordEvents(t)
 	client := newClient(t, OIDC(newTestProvider(t).server.URL), func(client *ClientBuilder) {
@@ -73,14 +73,14 @@ func TestCallbackPublishesLoginEvents(t *testing.T) {
 
 	query := login(t, client, jar)
 
-	response := client.Callback(signin, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
+	response := client.Callback(guard, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
 
 	if response.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302", response.StatusCode)
 	}
 
 	jar.apply(response)
-	client.Callback(signin, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
+	client.Callback(guard, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
 
 	if len(*seen) != 2 || (*seen)[0] != "succeeded:user-1" || (*seen)[1] != "failed" {
 		t.Fatalf("events = %v, want a success then a failure", *seen)
@@ -110,7 +110,7 @@ func TestVerifyPublishesTokenRejected(t *testing.T) {
 func TestLoginFailedDoesNotPublishMapperCause(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	bus := event.New()
 	var observed LoginFailedEvent
@@ -133,7 +133,7 @@ func TestLoginFailedDoesNotPublishMapperCause(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 	cause := errors.New("synthetic-private-mapper-detail")
 
-	err := client.Callback(signin, func(context.Context, Identity) (string, error) {
+	err := client.Callback(guard, func(context.Context, Identity) (string, error) {
 		return "", cause
 	})(httptest.NewRecorder(), request)
 
@@ -151,7 +151,7 @@ func TestLoginFailedDoesNotPublishMapperCause(t *testing.T) {
 func TestLoginFailedBoundsProviderError(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	bus := event.New()
 	var observed LoginFailedEvent
@@ -176,7 +176,7 @@ func TestLoginFailedBoundsProviderError(t *testing.T) {
 	parameters.Set("error", "synthetic-private-request-content")
 	request.URL.RawQuery = parameters.Encode()
 
-	err := client.Callback(signin, idLogin)(httptest.NewRecorder(), request)
+	err := client.Callback(guard, idLogin)(httptest.NewRecorder(), request)
 
 	if !errors.Is(err, ErrInvalidCallback) || observed.ProviderError != "" {
 		t.Fatalf("untrusted provider hint published: %+v, %v", observed, err)
@@ -188,7 +188,7 @@ func TestLoginFailedBoundsProviderError(t *testing.T) {
 func TestLoginFailedKeepsStandardProviderHint(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	bus := event.New()
 	var observed LoginFailedEvent
@@ -213,7 +213,7 @@ func TestLoginFailedKeepsStandardProviderHint(t *testing.T) {
 	parameters.Set("error", "access_denied")
 	request.URL.RawQuery = parameters.Encode()
 
-	err := client.Callback(signin, idLogin)(httptest.NewRecorder(), request)
+	err := client.Callback(guard, idLogin)(httptest.NewRecorder(), request)
 
 	if !errors.Is(err, ErrInvalidCallback) || observed.ProviderError != "access_denied" {
 		t.Fatalf("standard provider hint lost: %+v, %v", observed, err)

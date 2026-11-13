@@ -80,7 +80,7 @@ func TestGitHubIdentityUnverifiedIgnoredLoginFallback(t *testing.T) {
 func TestGitHubFlow(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +119,7 @@ func TestGitHubFlow(t *testing.T) {
 
 	var identity Identity
 
-	if status := client.Callback(signin, func(_ context.Context, external Identity) (string, error) {
+	if status := client.Callback(guard, func(_ context.Context, external Identity) (string, error) {
 		identity = external
 
 		return external.Subject, nil
@@ -127,7 +127,7 @@ func TestGitHubFlow(t *testing.T) {
 		t.Fatalf("status = %d, want 302", status)
 	}
 
-	if subject, err := userOf(signin, request); err != nil || subject != "42" {
+	if subject, err := userOf(guard, request); err != nil || subject != "42" {
 		t.Fatalf("user = %q, %v", subject, err)
 	}
 
@@ -182,7 +182,7 @@ func TestGitHubAPIErrorEmails(t *testing.T) {
 func TestGitHubCleanupIsBestEffort(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	client := newClient(t, GitHub())
 	jar := cookieJar{}
@@ -205,7 +205,7 @@ func TestGitHubCleanupIsBestEffort(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), "code")
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 
-	response := client.Callback(signin, idLogin).Record(request)
+	response := client.Callback(guard, idLogin).Record(request)
 
 	if response.StatusCode != http.StatusFound || closed != 3 {
 		t.Fatalf("cleanup changed callback: status %d, closes %d", response.StatusCode, closed)
@@ -233,7 +233,7 @@ func (body *closingBody) Close() error {
 func TestGitHubCallbackRejectsMissingID(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	client := newClient(t, GitHub())
 	jar := cookieJar{}
@@ -253,7 +253,7 @@ func TestGitHubCallbackRejectsMissingID(t *testing.T) {
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 	called := false
 
-	response := client.Callback(signin, func(context.Context, Identity) (string, error) {
+	response := client.Callback(guard, func(context.Context, Identity) (string, error) {
 		called = true
 
 		return "mapped", nil

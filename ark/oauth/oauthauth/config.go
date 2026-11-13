@@ -226,7 +226,7 @@ func (client *ClientBuilder) Audiences(audiences ...string) *ClientBuilder {
 
 // ChallengeURL sets the local path Callback redirects to when the login needs
 // a second factor, and returns the same draft. The path serves the second-factor
-// form and finishes the login with auth.Login.Complete. Empty, the default,
+// form and finishes the login with auth.Guard.Complete. Empty, the default,
 // makes a callback that needs a second factor fail with [ErrNoChallengeURL].
 // New rejects a target that response.ValidateRedirectTarget refuses.
 //

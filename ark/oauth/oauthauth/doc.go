@@ -5,8 +5,8 @@
 //
 // It builds on [arkoren.dev/core/auth]: [Client.Login] and [Client.Callback]
 // run the browser Authorization Code flow with PKCE and log the user in through
-// auth.Login.Begin with a federated factor, so a registered second factor is
-// honored; [Client.Logout] ends the login; [Client.Verify] verifies JWT access
+// auth.Guard.Begin with a federated factor, so a registered second factor is
+// honored; auth.Guard.LogoutHandler ends the login; [Client.Verify] verifies JWT access
 // tokens and returns the external [Identity], which the application maps to its
 // own subject for auth.Bearer. Authorization is done with gate rules such as
 // gate.HasScopes.
@@ -61,8 +61,8 @@
 //		return driver.Subject(user) // the application's typed user driver
 //	}
 //
-//	// One login serves every login method; it shares the session middleware's cache.
-//	login := compose.Must(auth.NewLogin(provider, store))
+//	// One guard serves every login method; it shares the session middleware's cache.
+//	guard := compose.Must(auth.NewGuard(provider, store))
 //
 //	// Browser routes: the session holds the subject.
 //	web := r.With(
@@ -70,11 +70,13 @@
 //			cookies.Name(session.HostPrefix + "app.session")
 //		}),
 //
-//		auth.Middleware(login.Authenticator()),
+//		auth.Middleware(guard.Authenticator()),
 //	)
 //	web.Get("/login", client.Login()) // supports ?return_to=/local/path
-//	web.Get("/oauth/callback", client.Callback(login, resolve))
-//	web.Post("/logout", client.Logout(login))
+//	web.Get("/oauth/callback", client.Callback(guard, resolve))
+//	web.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
+//		logout.Redirect("/")
+//	}))
 //	web.With(auth.Require()).Get("/me", me)
 //
 //	// API routes: wrap Verify so the token maps to the application's subject.
@@ -99,17 +101,17 @@
 //
 // # Second factors
 //
-// A login that needs a second factor is parked as pending by auth.Login.Begin.
+// A login that needs a second factor is parked as pending by auth.Guard.Begin.
 // Callback then redirects to [ClientBuilder.ChallengeURL] and publishes no
 // [LoginSucceeded]; return_to is not carried over. The challenge page verifies
-// the factor and calls auth.Login.Complete. Without a challenge URL Callback ends
+// the factor and calls auth.Guard.Complete. Without a challenge URL Callback ends
 // the pending login and fails with [ErrNoChallengeURL]; it never logs in
 // without the second factor.
 //
 // # Identity mapping
 //
 // Callback checks the session before side effects: a request without one
-// returns auth.ErrUnauthenticated without consuming state. A nil login or
+// returns auth.ErrUnauthenticated without consuming state. A nil guard or
 // resolver is a configuration error. Resolver errors matching
 // auth.ErrNoCredentials become ErrInvalidCallback, while other resolver errors
 // pass through. A subject the user provider does not know or has disabled is
@@ -153,7 +155,7 @@
 //
 // With [ClientBuilder.Events], [Client.Callback] publishes [LoginSucceeded]
 // ("oauth.login.succeeded") with the subject and issuer, or [LoginFailed]
-// ("oauth.login.failed"); [Client.Logout] publishes [LoggedOut]
+// ("oauth.login.failed"); deprecated Client.Logout publishes [LoggedOut]
 // ("oauth.logged-out"); and [Client.Verify] publishes [TokenRejected]
 // ("oauth.token.rejected"). Payloads never carry tokens, claims, or email.
 // LoginFailed.Err is ErrInvalidCallback, ErrProviderUnavailable, or a fixed opaque
