@@ -421,21 +421,25 @@ delivery, and lifecycle protocols explicit.
   recommended defaults versus later normalization, especially explicit empty
   security headers. Store request hooks; do not invoke them during construction
   or replay user callbacks through delegating constructors. Share immutable
-  auth.NewSessionIdentity(load) across Authenticator, Login, and Logout; it binds
-  the ID type to the loader. The ID type must be a string, integer or text type
-  because it becomes the non-generic auth.Identity subject (this bridge goes
-  away with the session login redesign). Authenticators, Middleware, Require and
-  Bearer are non-generic over auth.Identity; the application user rides in
-  Record().Value and is read with auth.UserFromContext[U] or request.User[U]. Zero definitions and nil loaders fail first with
-  plain ErrInvalidSessionIdentity, never credential fallback. Check mutation
-  errors before continuing; explicit nil sessions return session.ErrNoSession.
+  one auth.NewLogin(provider, store) across Authenticator, Begin, Pending,
+  Complete, Fail, Confirm and Logout. Login owns session state: one session
+  record under arkoren:auth:session, a pending login under arkoren:auth:pending,
+  every transition regenerating the ID, and the provider asked on every request
+  (not found or disabled is ErrNoCredentials, a changed UserRecord.Version too).
+  Second factors are plain LoginBuilder.SecondFactor functions so core never
+  imports an ark. RequireLevel and RequireFresh read the Identity from the
+  context, so tokens with factors work; ErrStepUpRequired is 403. Authenticators,
+  Middleware, Require and Bearer are non-generic over auth.Identity; the
+  application user rides in Record().Value and is read with
+  auth.UserFromContext[U] or request.User[U]. Check mutation errors before
+  continuing; a request without a session returns session.ErrNoSession.
   Default session wiring stays handle-free. Custom context slots share one
-  session.NewHandle() through session.Builder.Handle, auth.SessionBuilder.Handle,
+  session.NewHandle() through session.Builder.Handle, auth.LoginBuilder.Handle,
   and request.WithSessionHandle. Zero Handle restores the default slot; copies
   keep identity, separate allocations differ. NewContextFor/FromContextFor are
   typed low-level forms. Handles do not isolate cookies, storage, or authorization.
-  OAuth Callback(identity, mapper) and Logout(identity) select that session once
-  before cookie consumption, exchange, or mapping, with no default fallback.
+  The driver/oauth module still targets the former SessionIdentity until its own
+  phase moves it to Login.Begin.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
   preserve the first definition error; nil conversion is a domain error, not
@@ -803,10 +807,11 @@ in attributes (`arkoren.<component>.<field>`).
   them through JSON. Preserve physical field names and the persisted format.
   Fields do not own TTL: middleware owns session renewal and absolute lifetime,
   independently of the cache namespace's write TTL. Shared field definitions
-  do not isolate identity slots: auth.SessionIdentity binds login and loader ID
-  types, but definitions still share the fixed arkoren:auth:user entry in a
-  physical session. Login writes then rotates; Logout deletes then rotates,
-  retaining unrelated fields. Preserve raw persisted JSON and middleware TTL.
+  do not isolate identity slots: every auth.Login on one physical session shares
+  the fixed arkoren:auth:session and arkoren:auth:pending entries. Login writes
+  then rotates; Logout deletes then rotates, retaining unrelated fields.
+  Preserve raw persisted JSON and middleware TTL; the exact-bytes persistence
+  test guards the session record shape.
 
 Optional `secret.Namespace[T]`, `feature.Namespace[T Primitive]`, and
 `session.Namespace[T]` compose ordinary definitions, not namespace-bound stores.

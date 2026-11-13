@@ -30,17 +30,9 @@
 // [Bearer] adapts a token verifier. [Require] uses [MiddlewareBuilder]
 // construction policies.
 //
-// Session authentication uses the temporary [SessionIdentity] bridge: it binds
-// the identifier type K, the user loader and a session.Handle, stores the raw
-// K in the session and builds an identity whose subject is K as text and whose
-// record holds the loaded user. K must be a string, an integer or a text type
-// (see below); [SessionIdentity.Err] reports anything else. Zero definitions
-// and nil loaders are invalid configuration; callbacks still run once in order.
-// A later zero handle restores default lookup. Loaders are not invoked during
-// construction. Invalid definitions stop middleware fallback. Handles do not
-// isolate cookies, storage or users. One physical session has one identity
-// slot ("arkoren:auth:user"), so definitions with the same K can still mix
-// realms, and compatible persisted JSON may decode across types.
+// Browser sessions use [Login], described below. Its [Login.Authenticator]
+// reads the session record, asks the [UserProvider] on every request and builds
+// an identity with the stored factors and the provider's [UserRecord].
 //
 // # Wiring
 //
@@ -48,13 +40,21 @@
 // the identity (rate limits keyed by user, routes).
 //
 //	r := router.New()
-//	identity := auth.NewSessionIdentity(loadUser)
-//	if err := identity.Err(); err != nil {
+//	driver, err := auth.NewUserDriver(loadUser, userID)
+//	if err != nil {
+//		return err
+//	}
+//	users, err := auth.NewUserProvider(driver)
+//	if err != nil {
+//		return err
+//	}
+//	login, err := auth.NewLogin(users, store)
+//	if err != nil {
 //		return err
 //	}
 //	r.Use(session.Middleware(store))
 //	r.Use(csrf.Middleware())
-//	r.Use(auth.Middleware(identity.Authenticator(), auth.Bearer(verifyKey)))
+//	r.Use(auth.Middleware(login.Authenticator(), auth.Bearer(verifyKey)))
 //	r.Use(ratelimit.Middleware(store, func(limiter *ratelimit.Builder) {
 //		limiter.KeyFunc(func(r *http.Request) string {
 //			if current, err := request.Identity(r); err == nil {
@@ -65,26 +65,40 @@
 //		})
 //	}))
 //
-//	r.Post("/login", login)
-//	r.Post("/logout", logout)
+//	r.Post("/login", signIn)
+//	r.Post("/logout", signOut)
 //
 //	private := r.With(auth.Require())
 //	private.Get("/me", me)
 //	r.With(gate.Require(isAdmin)).Delete("/users/{id}", deleteUser)
 //
-// Where loadUser resolves the stored identifier:
+// # Login, levels and step-up
 //
-//	func loadUser(ctx context.Context, id int) (User, error) {
-//		user, err := db.Find[User](ctx, query.Table("users", func(statement *query.Builder) {
-//			statement.Where("id", id)
-//		}))
-//		if errors.Is(err, database.ErrNoRows) {
-//			return User{}, auth.ErrNoCredentials // deleted user: anonymous
-//		}
-//		return user, err
-//	}
+// [Login] turns "this person proved X" into a logged-in session. Every login
+// method (password, OAuth, SAML, passkey) verifies its own credential and then
+// calls [Login.Begin] with the subject and the verified [Factor]. Begin looks
+// the user up with the provider (a deleted or disabled user is
+// [ErrUnauthenticated]) and asks each check registered with
+// [LoginBuilder.SecondFactor], so core never imports the package that knows
+// whether a user is enrolled. If none says yes the user is logged in and Begin
+// returns true. Otherwise the login is parked as pending and the request stays
+// anonymous: the handler asks for the second factor, reads the user with
+// [Login.Pending], reports a wrong code with [Login.Fail] (the pending login is
+// discarded after [LoginBuilder.MaxAttempts]) and finishes with [Login.Complete],
+// which is single use. [LoginBuilder.ChallengeTTL] bounds the wait.
+// [Login.Confirm] records a fresh factor on a logged-in session, such as a
+// re-entered password. Every transition regenerates the session ID.
 //
-// # Login and logout
+// The session holds one record (subject, factors, a hash of the user's
+// [UserRecord.Version] and a login-record ID) under one key, and a pending login
+// under another. The authenticator compares the version in constant time, so
+// changing the version ends every other session of the user. Sessions written
+// before this layout, under "arkoren:auth:user", are anonymous.
+//
+// [RequireLevel] and [RequireFresh] guard routes by the factors of the identity
+// in the context, so they also work for tokens that carry factors. Too weak or
+// too old is [ErrStepUpRequired] (403); no identity is rejected like [Require].
+// A factor dated in the future is not fresh.
 //
 // Hash passwords with the hash package. Precompute dummyHash at startup with
 // the same hasher and cost as real passwords. Checking it for unknown emails
@@ -94,7 +108,7 @@
 // JSON v2 matches field names case-sensitively, so tag the lower-case request
 // members:
 //
-//	func login(w http.ResponseWriter, r *http.Request) error {
+//	func signIn(w http.ResponseWriter, r *http.Request) error {
 //		in, err := request.JSON[struct {
 //			Email    string `json:"email"`
 //			Password string `json:"password"`
@@ -122,30 +136,44 @@
 //		if !found || !ok {
 //			return auth.ErrUnauthenticated
 //		}
-//		if err := identity.Login(request.MustSession(r), user.ID); err != nil {
+//
+//		subject, err := driver.Subject(user) // the user driver of the wiring above
+//		if err != nil {
 //			return err
+//		}
+//
+//		factor := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
+//		complete, err := login.Begin(r, subject, factor)
+//		if err != nil {
+//			return err
+//		}
+//		if !complete {
+//			return response.Status(w, http.StatusAccepted) // ask for the second factor
 //		}
 //
 //		return response.Status(w, http.StatusNoContent)
 //	}
 //
-//	func logout(w http.ResponseWriter, r *http.Request) error {
-//		if err := identity.Logout(request.MustSession(r)); err != nil {
+//	func signOut(w http.ResponseWriter, r *http.Request) error {
+//		if err := login.Logout(r); err != nil {
 //			return err
 //		} // or Destroy() to drop all data
 //		return response.Status(w, http.StatusNoContent)
 //	}
 //
+//	r.With(auth.RequireLevel(auth.LevelMulti)).Post("/payouts", payout)
+//	r.With(auth.RequireFresh(10 * time.Minute)).Delete("/account", destroy)
+//
 // # Cookie authentication needs CSRF protection
 //
 // Browsers send session cookies on cross-site requests, so install
-// csrf.Middleware whenever [SessionIdentity] authenticates browser cookies.
+// csrf.Middleware whenever [Login] authenticates browser cookies.
 //
 // # Deleted users
 //
-// Sessions outlive accounts. Return [ErrNoCredentials] from the load
-// function when the user no longer exists; the request becomes anonymous
-// instead of failing with a 500.
+// Sessions outlive accounts. [Login.Authenticator] asks the provider on every
+// request, and a user that is deleted ([ErrUserNotFound]) or disabled
+// ([ErrUserDisabled]) becomes anonymous instead of failing with a 500.
 //
 // # API keys
 //

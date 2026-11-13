@@ -191,7 +191,7 @@ func RunUserDriver(t *testing.T, newDriver func(t *testing.T, users []User) auth
 // authenticator rejects, such as an expired or forged token. It enables the
 // check that rejected credentials yield [auth.ErrUnauthenticated]. Leave it
 // out for authenticators without a notion of invalid credentials, such as
-// [auth.SessionIdentity.Authenticator]. It only affects [Run].
+// [auth.Login.Authenticator]. It only affects [Run].
 //
 // Example:
 //

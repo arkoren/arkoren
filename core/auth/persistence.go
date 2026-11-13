@@ -1,62 +1,85 @@
 package auth
 
-import "arkoren.dev/core/http/session"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"slices"
+	"time"
 
-// Login stores the user identifier in current and regenerates the session ID to
-// prevent session fixation. Call it after verifying the credentials. A failed
-// field write is returned before rotating the ID; callers must stop login.
-// Invalid definitions fail before mutation; nil sessions return ErrNoSession.
-// The explicit session is not checked against the definition's handle. Other
-// data, creation time and expiry remain unchanged.
-//
-// Example:
-//
-//	sess := request.MustSession(r)
-//	if err := identity.Login(sess, user.ID); err != nil {
-//		return err
-//	}
-func (identity SessionIdentity[K, U]) Login(current *session.Session, id K) error {
-	if err := identity.Err(); err != nil {
-		return err
-	}
+	"arkoren.dev/core/http/session"
+)
 
-	if current == nil {
-		return session.ErrNoSession
-	}
+// Session fields written by [Login]. The logged-in user and the pending login
+// live under separate keys so the authenticator never reads a half-finished
+// login. Sessions written under the former "arkoren:auth:user" key are not read
+// and are anonymous.
+var (
+	// sessionField holds the [sessionRecord] of the logged-in user.
+	sessionField = session.NewField[sessionRecord]("arkoren:auth:session")
 
-	if err := current.Put(session.NewField[K](sessionKey), id); err != nil {
-		return err
-	}
+	// pendingField holds the [pendingLogin] waiting for a second factor.
+	pendingField = session.NewField[pendingLogin]("arkoren:auth:pending")
+)
 
-	current.Regenerate()
+// sessionRecord is everything a logged-in session stores, as one value under one
+// key so that subject, factors and version can never be written apart.
+type sessionRecord struct {
+	// Subject is the logged-in user's subject.
+	Subject string `json:"subject"`
 
-	return nil
+	// Factors are the verified factors, one per [Method], with the time each was
+	// last verified.
+	Factors []Factor `json:"factors"`
+
+	// Version is the hex SHA-256 of [UserRecord.Version] at login. The
+	// authenticator ends the session when the user's version no longer hashes to
+	// it. The hash keeps the raw value out of session storage.
+	Version string `json:"version"`
+
+	// LoginID identifies the session's login record. It is empty until login
+	// records exist.
+	LoginID string `json:"login_id,omitempty"`
 }
 
-// Logout removes even a stale, wrongly typed identifier and rotates the session
-// ID. Other data and lifetime remain unchanged; use current.Destroy for full
-// removal. Invalid definitions fail before mutation, nil returns ErrNoSession,
-// and deletion errors precede rotation. Explicit sessions are not handle-checked.
-//
-// Example:
-//
-//	if err := identity.Logout(request.MustSession(r)); err != nil {
-//		return err
-//	}
-func (identity SessionIdentity[K, U]) Logout(current *session.Session) error {
-	if err := identity.Err(); err != nil {
-		return err
+// pendingLogin is a login whose first factor passed and whose second is awaited.
+type pendingLogin struct {
+	// Subject is the user awaiting the second factor.
+	Subject string `json:"subject"`
+
+	// Factors are the factors verified so far.
+	Factors []Factor `json:"factors"`
+
+	// Expires is when the pending login stops being accepted.
+	Expires time.Time `json:"expires"`
+
+	// Attempts counts the wrong second factors reported by [Login.Fail].
+	Attempts int `json:"attempts"`
+}
+
+// hashVersion returns the hex SHA-256 of a [UserRecord.Version]. All hashes have
+// the same length, which keeps the comparison in the authenticator constant time.
+func hashVersion(version string) string {
+	sum := sha256.Sum256([]byte(version))
+
+	return hex.EncodeToString(sum[:])
+}
+
+// withFactor returns a copy of factors in which factor replaces the factor of
+// the same method, or is appended, so each method appears once with its latest
+// time. A zero At becomes now, in UTC. It never modifies factors.
+func withFactor(factors []Factor, factor Factor, now time.Time) []Factor {
+	if factor.At.IsZero() {
+		factor.At = now
 	}
 
-	if current == nil {
-		return session.ErrNoSession
+	factor.At = factor.At.UTC()
+	factors = slices.Clone(factors)
+
+	if i := slices.IndexFunc(factors, func(existing Factor) bool { return existing.Method == factor.Method }); i >= 0 {
+		factors[i] = factor
+
+		return factors
 	}
 
-	if err := current.Delete(session.NewField[any](sessionKey)); err != nil {
-		return err
-	}
-
-	current.Regenerate()
-
-	return nil
+	return append(factors, factor)
 }

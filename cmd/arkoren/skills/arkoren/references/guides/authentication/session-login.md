@@ -3,100 +3,108 @@ title: Session Login
 description: Check application-owned credentials, rotate the browser session, and revoke account sessions.
 order: 20
 summary:
-  - Load current accounts from typed session identifiers and reject deleted or disabled accounts.
-  - Check passwords without revealing account existence and rotate the session after verified login.
+  - Find current accounts through a user provider and reject deleted or disabled accounts.
+  - Check passwords without revealing account existence and log in through one entry point that rotates the session.
   - End local logins, revoke older account sessions, and select the intended session context.
 ---
 
 # Session Login
 
-A browser login checks credentials once, then stores an account identifier in
-the session. On later requests, `auth.SessionIdentity` loads the current account
-from that identifier and publishes an `auth.Identity` whose subject is the
-identifier as text and whose user record holds the loaded account, so
-`request.User[User]` returns it. You own the accounts, password checks, and account-status
-policy; [Sessions](../http-capabilities/sessions.md#enable-sessions) owns cookie
-configuration, storage, and response-time persistence.
+A browser login checks credentials once, then stores the account's subject in
+the session. On later requests, `auth.Login` asks your **user provider** whether
+that subject still exists and publishes an `auth.Identity` whose subject is the
+stored one, whose factors say how the user logged in and whose user record holds
+the loaded account, so `request.User[Account]` returns it. You own the accounts,
+password checks, and account-status policy; [Sessions](../http-capabilities/sessions.md#enable-sessions)
+owns cookie configuration, storage, and response-time persistence.
 
-The examples assume an existing router `web`, session store `store`, configured
-[`hash.Hasher`](../hashing/overview.md), and application repository `accounts`.
-Import `auth`, `session`, and `response` from their `arkoren.dev/core/http/`
-packages, `csrf` from `arkoren.dev/core/http/middleware/csrf`, and standard-library
-`context`, `errors`, and `net/http` where used.
+The examples assume an existing router `web`, session store `store` (a
+`*cache.Cache`), configured [`hash.Hasher`](../hashing/overview.md), and
+application repository `accounts`. Import `auth` from `arkoren.dev/core/auth`,
+`session` and `response` from `arkoren.dev/core/http/`, `csrf` from
+`arkoren.dev/core/http/middleware/csrf`, and standard-library `context`,
+`errors`, and `net/http` where used.
 
 ## Load Accounts
 
-Keep the session small: store an account ID, not a snapshot of permissions.
-The loader can then reject a deleted or disabled account on the next request.
-This application separates the handler identity from its password record:
+Keep the session small: store a subject, not a snapshot of permissions. The
+provider can then reject a deleted or disabled account on the next request. This
+application keeps its account in one type:
 
 ```go
-type User struct {
-	ID   int
-	Name string
-}
-
 type Account struct {
-	User
-	PasswordHash   []byte
-	Disabled       bool
-	SessionVersion int
+	ID               int
+	Name             string
+	PasswordHash     []byte
+	Disabled         bool
+	CredentialsStamp string
 }
 ```
 
 Here `accounts.ByID(ctx, id)` returns `Account`; the application sentinel
 `ErrAccountNotFound` means absence, while other errors retain storage failures.
-Bind the loader to the identifier type `int`:
+Wrap the loader in a user driver and the driver in a provider. The identifier
+type (`int`) must be a string, an integer or a text type, because it becomes the
+subject:
 
 ```go
-loadUser := func(ctx context.Context, id int) (User, error) {
-	account, err := accounts.ByID(ctx, id)
-	if errors.Is(err, ErrAccountNotFound) {
-		return User{}, auth.ErrNoCredentials
-	}
-	if err != nil {
-		return User{}, err
-	}
-	if account.Disabled {
-		return User{}, auth.ErrNoCredentials
-	}
+driver, err := auth.NewUserDriver(
+	func(ctx context.Context, id int) (Account, error) {
+		account, err := accounts.ByID(ctx, id)
+		if errors.Is(err, ErrAccountNotFound) {
+			return Account{}, auth.ErrUserNotFound
+		}
 
-	return account.User, nil
+		return account, err
+	},
+	func(account Account) int { return account.ID },
+	func(driver *auth.UserDriverBuilder[Account]) {
+		driver.Disabled(func(account Account) bool { return account.Disabled })
+		driver.Version(func(account Account) string { return account.CredentialsStamp })
+	},
+)
+if err != nil {
+	return err
+}
+
+provider, err := auth.NewUserProvider(driver)
+if err != nil {
+	return err
 }
 ```
 
-The loader runs on every request with a usable stored identifier. Absence and
-disabled status become anonymous requests; a storage outage instead stops the
-request. Returning a zero user with nil error would authenticate it, so do not
-use that result for absence. If you cache accounts, your invalidation policy
-determines how quickly account changes take effect.
+The provider runs on every request with a usable stored subject. Absence
+(`auth.ErrUserNotFound`) and disabled status (`auth.ErrUserDisabled`) become
+anonymous requests; a storage outage instead stops the request. If you cache
+accounts, your invalidation policy determines how quickly account changes take
+effect. The record's `Value` is the loaded `Account`, hash included, so read only
+the fields a handler needs and never render the whole value in a response.
 
 ## Enable Login
 
-Construct one identity definition and share it between middleware and handlers:
+Construct one login and share it between middleware and handlers:
 
 ```go
-identity := auth.NewSessionIdentity(loadUser)
+login, err := auth.NewLogin(provider, store)
+if err != nil {
+	return err
+}
+
 web.Use(session.Middleware(store))
 web.Use(csrf.Middleware())
-web.Use(auth.Middleware(identity.Authenticator()))
+web.Use(auth.Middleware(login.Authenticator()))
 ```
 
 Session middleware must run first. Keep [CSRF protection](../browser-security/csrf-protection.md)
 on login, logout, and other state-changing browser routes: browsers send session
 cookies automatically, including on requests another site can initiate. Add
-`auth.Require()` only to routes requiring a signed-in account, not to the
-login route itself.
+`auth.Require()` only to routes requiring a signed-in account, not to the login
+route itself.
 
-Construction does not call the loader. Check `identity.Err()` during setup
-when configuration is assembled dynamically; a zero definition, a nil loader, or
-an identifier type that is not a string, an integer, or a text type (it must
-become a subject) returns `auth.ErrInvalidSessionIdentity`, not an anonymous
-result. A stored identifier that does not format as a valid subject, such as an
-empty string, also fails the request instead of falling back to anonymous. Missing
-sessions, missing identity fields, and incompatible stored types are anonymous.
-Persisted JSON that remains compatible can still decode after an identifier
-type change; a type change is not a revocation mechanism.
+`NewLogin` does no I/O. It returns an error for a nil provider or store and for a
+non-positive pending-login lifetime or attempt limit. Missing sessions, absent
+session records, records of another shape and sessions written by earlier
+versions (under `arkoren:auth:user`) are anonymous requests, not errors.
 
 ## Check Passwords
 
@@ -158,130 +166,111 @@ write that avoids overwriting a concurrent password reset.
 
 ## Start Sessions
 
-After the credential checks succeed, resolve the identity's selected session and
-store the verified account ID. Do both before writing response headers:
+After the credential checks succeed, call `Begin` with the account's subject and
+the factor you verified. Do it before writing response headers:
 
 ```go
-current, err := identity.Session(r.Context())
+subject, err := driver.Subject(account)
 if err != nil {
 	return err
 }
-if err := identity.Login(current, account.ID); err != nil {
+
+factor := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
+complete, err := login.Begin(r, subject, factor)
+if err != nil {
 	return err
+}
+if !complete {
+	return response.Status(w, http.StatusAccepted) // a second factor is needed
 }
 
 return response.Status(w, http.StatusNoContent)
 ```
 
-`Login` writes the identifier and then regenerates the session ID. Rotation
-protects against **session fixation**, where an attacker knows an ID planted
-before the victim signs in. If the field write fails, no rotation occurs and
-you must not report success. Login preserves other session values, creation
-time, and expiry; configure idle and absolute limits in
+`Begin` is the single entry for every login method, including OAuth, SAML and
+passkeys. It looks the account up through the provider (a deleted or disabled
+account is `auth.ErrUnauthenticated`), writes one session record with the
+subject, factors and credential version, and then regenerates the session ID.
+Rotation protects against **session fixation**, where an attacker knows an ID
+planted before the victim signs in. If a write fails, no rotation occurs and you
+must not report success. Begin preserves other session values, creation time and
+expiry; configure idle and absolute limits in
 [session lifetimes](../http-capabilities/sessions.md#set-lifetimes).
+
+Without a registered second-factor check `Begin` always returns `true`. See
+[Two-Factor Login](two-factor.md) for the pending state, levels and step-up
+middleware.
 
 This call changes the request's session, not persistent storage. On a non-5xx
 response, session middleware saves changes and retires the old ID before
 committing the response. Failed persistence or retirement can leave an old ID
 usable; configure and monitor the middleware's error handling rather than
-treating `Login` success as proof of durable revocation. See
+treating `Begin` success as proof of durable revocation. See
 [Save Changes](../http-capabilities/sessions.md#save-changes) for the commit and
 concurrency boundaries.
 
 ## End Sessions
 
-Mount logout as a CSRF-protected `POST`, not a `GET`. Resolve the same identity's
-session and remove its login before sending a response:
+Mount logout as a CSRF-protected `POST`, not a `GET`, and remove the login before
+sending a response:
 
 ```go
-current, err := identity.Session(r.Context())
-if err != nil {
-	return err
-}
-if err := identity.Logout(current); err != nil {
+if err := login.Logout(r); err != nil {
 	return err
 }
 
 return response.Status(w, http.StatusNoContent)
 ```
 
-Logout removes even a stale, wrongly typed identifier and rotates the ID after
-successful deletion. Other values, such as a language preference, remain.
-Use `current.Destroy()` instead when the whole session must end. Both paths
-still depend on response-time persistence; a failed retirement can leave the
-old ID valid.
+Logout removes the session record and any pending login, even stale or unreadable
+ones, and rotates the ID after successful deletion. Other values, such as a
+language preference, remain. Use `request.MustSession(r).Destroy()` instead when
+the whole session must end. Both paths still depend on response-time
+persistence; a failed retirement can leave the old ID valid.
 
 ## Revoke Account Sessions
 
-To end sessions across devices after a password change or compromise, store an
-account version next to the ID. The identifier stays the plain account ID, because
-it becomes the identity's stable subject, so keep the version in its own session
-field:
+To end sessions across devices after a password change or compromise, give the
+account a credentials stamp that changes with its password, as `Version` above
+does with `CredentialsStamp`. `Begin` stores a hash of the version in the session
+record, and the authenticator compares it in constant time with the provider's
+current value on every request. A mismatch makes the session anonymous on that
+device's next request; no session enumeration is required. This includes the
+device that changed the password, which must log in again. Calling `Begin` there
+instead would re-run the second-factor checks and start the factors over, so an
+enrolled user would be parked as pending.
 
-```go
-var sessionVersion = session.NewField[int]("account:version")
-```
-
-The loader reads the session from its context, which session middleware filled
-before authentication. After loading the account and handling absence or storage
-errors as above, reject a missing or stale version:
-
-```go
-current, ok := session.FromContext(ctx)
-if !ok {
-	return User{}, auth.ErrNoCredentials
-}
-saved, err := current.Get(sessionVersion)
-if err != nil || account.Disabled || account.SessionVersion != saved {
-	return User{}, auth.ErrNoCredentials
-}
-return account.User, nil
-```
-
-Here `ctx` is the loader's context. Supply both values after successful
-credential checks:
-
-```go
-if err := identity.Login(current, account.ID); err != nil {
-	return err
-}
-if err := current.Put(sessionVersion, account.SessionVersion); err != nil {
-	return err
-}
-```
-
-Increment the persisted `SessionVersion` to invalidate older versions on each
-device's next account lookup. No session enumeration is required. Existing
-in-flight requests are not retroactively canceled, and account caching can
-delay the effect.
+Existing in-flight requests are not retroactively canceled, and account caching
+can delay the effect. A provider that leaves `Version` empty never ends sessions
+this way. Only disabling or deleting the account does.
 
 ## Select Sessions
 
 If you configured a nondefault session context slot, share one handle between
-the middleware and the identity:
+the middleware and the login:
 
 ```go
 handle := session.NewHandle()
-identity := auth.NewSessionIdentity(loadUser, func(binding *auth.SessionBuilder) {
-	binding.Handle(handle)
+login, err := auth.NewLogin(provider, store, func(policy *auth.LoginBuilder) {
+	policy.Handle(handle)
 })
 web.Use(session.Middleware(store, func(cookies *session.Builder) {
 	cookies.Handle(handle)
 }))
 ```
 
-Register CSRF and authentication after this session middleware as before.
-`identity.Session(ctx)` selects only this slot and returns `session.ErrNoSession`
-for an absent or nil session; it never falls back to the default slot. A zero
-handle selects the default. Explicit `Login` and `Logout` arguments are not
-checked against the handle, so use `identity.Session` to select them consistently.
+Register CSRF and authentication after this session middleware as before. Every
+`Login` method selects only this slot and returns `session.ErrNoSession` for an
+absent one (the authenticator returns `auth.ErrNoCredentials`); it never falls
+back to the default slot. A zero handle selects the default.
 
-A handle is not cookie or storage isolation. Definitions writing to the same
-physical session share `arkoren:auth:user`: the last login replaces the identity,
-and logout removes it. Independent browser sessions also need distinct cookie
-and storage configuration in [Sessions](../http-capabilities/sessions.md).
-For authentication tests, combine [direct identity tests](../testing/auth-tests.md)
-with a real cookie-based login/logout test that exercises persistence.
+A handle is not cookie or storage isolation. Logins writing to the same physical
+session share `arkoren:auth:session` and `arkoren:auth:pending`: the last login
+replaces the other's record, and logout removes it. Independent browser sessions
+also need distinct cookie and storage configuration in
+[Sessions](../http-capabilities/sessions.md). For authentication tests, combine
+[direct identity tests](../testing/auth-tests.md) with a real cookie-based
+login/logout test that exercises persistence.
 
 For all functions and options, see the
 [`auth` API reference](https://pkg.go.dev/arkoren.dev/core/auth).

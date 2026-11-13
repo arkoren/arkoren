@@ -29,10 +29,14 @@ holding another type is reported as absent.
 ## Browser sessions and resource access
 
 Install session middleware and CSRF protection before cookie authentication.
-Share one `auth.NewSessionIdentity(loadUser)` across authentication, login, and
-logout. Its identifier type must be a string, an integer, or a text type, because
-the identifier becomes the identity's subject. Check its `Err` during setup and
-handle login/logout mutation errors.
+Create one `auth.NewLogin(provider, store)` and share it across authentication,
+login, and logout. Every login method calls `Begin` with the subject and the
+factor it verified; `Begin` logs the user in, or parks a pending login when a
+registered `SecondFactor` check says a second factor is needed (finish with
+`Pending`, `Fail` and `Complete`). `Confirm` records a fresh factor on a
+logged-in session. `RequireLevel` and `RequireFresh` guard routes by the factors
+of the identity, so they also work for tokens. The provider is asked on every
+request, so a deleted or disabled user is anonymous. Handle mutation errors.
 Rotation does not prove persistence succeeded; session middleware owns saving,
 renewal, and retirement. Handles select context slots, not separate authorization
 realms or physical identity fields.
