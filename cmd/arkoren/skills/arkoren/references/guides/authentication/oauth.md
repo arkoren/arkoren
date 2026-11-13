@@ -108,6 +108,11 @@ available until handlers have finished.
 
 ## Connect Browser Routes
 
+> The routes below target the `SessionIdentity` API of the `driver/oauth`
+> release that pins core v0.1.0. Core now logs browser sessions in with
+> `auth.Login`; the OAuth driver moves to `Login.Begin` in a later release, so
+> follow [Session Login](session-login.md) for current core.
+
 Use an existing session-enabled, CSRF-protected browser group `web`, as in
 [Enable Login](session-login.md#enable-login). Import `auth` from
 `arkoren.dev/core/auth`. Your `loadUser` loads a current local `User` by

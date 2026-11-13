@@ -20,7 +20,7 @@ r.Use(session.Middleware(store, func(cookies *session.Builder) {
 
 The default middleware needs no context-selection settings. For a custom context
 slot, allocate one `session.NewHandle()` and share it through
-`session.Builder.Handle`, `auth.SessionBuilder.Handle`, and
+`session.Builder.Handle`, `auth.LoginBuilder.Handle`, and
 `request.WithSessionHandle`. Copies select the same slot; separate constructor
 calls select different slots. The zero handle selects the default slot. Handles
 do not isolate cookies, cache records, or authorization; independent sessions also
@@ -31,8 +31,8 @@ for coordinated middleware, identity, and handler wiring.
 The default cookie is `__Host-arkoren.session` (plain `arkoren.session` with `Builder.AllowInsecure`, a
 domain, or a non-`/` path); upgrading from the old default logs existing sessions out once.
 
-Use a shared `auth.NewSessionIdentity(loadUser)` for authentication: its checked
-`Login` and `Logout` methods rotate automatically while retaining unrelated data.
+Use an `auth.Login` for authentication: its checked `Begin`, `Complete`, `Fail`,
+`Confirm` and `Logout` methods rotate automatically while retaining unrelated data.
 Call `Session.Regenerate` for other privilege changes to prevent session
 fixation. Call `Session.Destroy` to remove all data and retire the old ID. Persistence
 occurs before response headers, not when these methods return; monitor

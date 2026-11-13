@@ -69,15 +69,12 @@ authenticator handles. A presented invalid bearer token must return a different
 error. Do not trust a client-supplied user ID or header as proof of identity.
 
 For routes accepting both browser sessions and API keys, use your existing
-`loadUser` (`func(context.Context, int) (User, error)`) and `verifyToken`
-(`func(context.Context, string) (auth.Identity, error)`). The session identifier
-type must be a string, an integer, or a text type, because it becomes the
-identity's subject:
+`login` (an `*auth.Login`, see [Enable Login](session-login.md#enable-login)) and
+`verifyToken` (`func(context.Context, string) (auth.Identity, error)`):
 
 ```go
-identity := auth.NewSessionIdentity(loadUser)
 r.Use(auth.Middleware(
-	identity.Authenticator(),
+	login.Authenticator(),
 	auth.Bearer(verifyToken),
 ))
 ```

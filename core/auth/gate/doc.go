@@ -26,10 +26,10 @@
 //	r := router.New()
 //	r.Use(session.Middleware(store))
 //	r.Use(csrf.Middleware())
-//	identity := auth.NewSessionIdentity(loadUser)
-//	r.Use(auth.Middleware(identity.Authenticator()))
+//	login, _ := auth.NewLogin(users, store)
+//	r.Use(auth.Middleware(login.Authenticator()))
 //
-//	r.Post("/login", login) // see package auth
+//	r.Post("/login", signIn) // see package auth
 //	r.With(auth.Require()).Get("/me", me)
 //
 //	policy := &Policy{db: db}

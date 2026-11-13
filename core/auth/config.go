@@ -1,7 +1,11 @@
 package auth
 
 import (
+	"context"
+	"time"
+
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/http/session"
 	"arkoren.dev/foundation/problem"
 )
 
@@ -100,4 +104,133 @@ func newMiddlewareSettings(configure ...MiddlewareBuilderFunc) middlewareSetting
 	}
 
 	return authenticator.settings
+}
+
+// Defaults of [LoginBuilder].
+const (
+	// defaultChallengeTTL is how long a pending login waits for its second factor.
+	defaultChallengeTTL = 5 * time.Minute
+
+	// defaultMaxAttempts is how many wrong second factors discard a pending login.
+	defaultMaxAttempts = 5
+)
+
+// loginSettings configures a [Login].
+type loginSettings struct {
+	// Handle selects the session bridge; zero selects the default.
+	Handle session.Handle
+
+	// ChallengeTTL is how long a pending login is accepted.
+	ChallengeTTL time.Duration
+
+	// MaxAttempts is the number of [Login.Fail] calls that discard a pending login.
+	MaxAttempts int
+
+	// SecondFactors are the checks that decide whether a user needs a second factor.
+	SecondFactors []func(ctx context.Context, subject string) (bool, error)
+}
+
+// LoginBuilder configures [NewLogin] before publication. Callbacks run
+// directly once, synchronously in order on one fresh draft; nil entries panic.
+// Methods return the same draft, and retaining it cannot change a published
+// login.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.ChallengeTTL(10 * time.Minute).MaxAttempts(3)
+//	})
+type LoginBuilder struct {
+	// settings holds the private construction values until publication.
+	settings loginSettings
+}
+
+// LoginBuilderFunc configures a [LoginBuilder].
+//
+// Example:
+//
+//	policy := auth.LoginBuilderFunc(func(policy *auth.LoginBuilder) {
+//		policy.MaxAttempts(3)
+//	})
+//	login, err := auth.NewLogin(users, store, policy)
+type LoginBuilderFunc = func(*LoginBuilder)
+
+// Handle selects the request session bridge shared with [session.Middleware],
+// so one application can run several independent sessions. Zero, the default,
+// selects the default bridge. It changes neither cookie nor storage policy. The
+// setting replaces the previous value on this draft.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.Handle(adminSession)
+//	})
+func (policy *LoginBuilder) Handle(handle session.Handle) *LoginBuilder {
+	policy.settings.Handle = handle
+
+	return policy
+}
+
+// ChallengeTTL sets how long a pending login (see [Login.Begin]) accepts its
+// second factor. The default is five minutes. [NewLogin] rejects a value of
+// zero or less. The setting replaces the previous value on this draft.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.ChallengeTTL(10 * time.Minute)
+//	})
+func (policy *LoginBuilder) ChallengeTTL(ttl time.Duration) *LoginBuilder {
+	policy.settings.ChallengeTTL = ttl
+
+	return policy
+}
+
+// MaxAttempts sets how many calls to [Login.Fail] discard a pending login. The
+// default is five. [NewLogin] rejects a value of zero or less. The setting
+// replaces the previous value on this draft.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.MaxAttempts(3)
+//	})
+func (policy *LoginBuilder) MaxAttempts(attempts int) *LoginBuilder {
+	policy.settings.MaxAttempts = attempts
+
+	return policy
+}
+
+// SecondFactor registers a check that reports whether subject must present a
+// second factor before [Login.Begin] logs them in, for example an
+// "is two-factor enrolled" lookup of an ark. Core receives plain functions, so it
+// never imports the package that owns the answer. It may be called several
+// times: one yes from any check is enough to require a second factor, and the
+// first error stops the login and is returned by Begin. A nil check makes
+// [NewLogin] fail.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.SecondFactor(factors.Enrolled)
+//	})
+func (policy *LoginBuilder) SecondFactor(check func(ctx context.Context, subject string) (bool, error)) *LoginBuilder {
+	policy.settings.SecondFactors = append(policy.settings.SecondFactors, check)
+
+	return policy
+}
+
+// newLoginSettings applies the callbacks once on a draft holding the defaults
+// and returns the completed settings. The check slice is owned by the result.
+func newLoginSettings(configure ...LoginBuilderFunc) loginSettings {
+	policy := &LoginBuilder{settings: loginSettings{
+		ChallengeTTL: defaultChallengeTTL,
+		MaxAttempts:  defaultMaxAttempts,
+	}}
+
+	for _, configure := range configure {
+		configure(policy)
+	}
+
+	return policy.settings
 }

@@ -327,17 +327,17 @@ captures remain shared. HTTP construction also uses dedicated builders, includin
 telemetry's server middleware and outgoing transport. Client retry construction
 composes completed propagation settings through one internal telemetry callback,
 never replaying user policies. Session middleware owns cookie/persistence policy;
-auth.NewSessionIdentity owns the loader/ID binding and SessionBuilder.Handle;
+auth.NewLogin owns the session login state machine and LoginBuilder.Handle;
 request lookup owns per-call WithSessionHandle. Share one session.NewHandle()
 across those roles; zero selects the default context slot. Handles do not isolate
 cookies, cache records, or authorization. OAuth Callback(identity, mapper) and
-Logout(identity) resolve the selected session once before protocol effects, with
-no default fallback. Session data uses
+Logout(identity) in driver/oauth still target the former SessionIdentity until
+that module moves to Login.Begin. Session data uses
 shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns
-renewal and absolute lifetime. SessionIdentity binds login and loader types, not
-separate stored identities: preserve arkoren:auth:user and its raw JSON. Validate
-identity configuration before credentials; mutation success is not durable save.
+renewal and absolute lifetime. Login keeps one session record (arkoren:auth:session) and a pending login
+(arkoren:auth:pending), not separate stored identities: preserve their raw JSON.
+Old arkoren:auth:user sessions are anonymous. Mutation success is not durable save.
 Broadcast, cache,
 crypto, database/migrator, feature, mail and storage facades and configurable
 memorybroadcast/cache/queue/secret/storage and slogmail use direct construction

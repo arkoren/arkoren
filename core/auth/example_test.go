@@ -4,10 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"time"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/auth/memoryauth"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/http/router"
+	"arkoren.dev/core/http/session"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
 )
 
 // exampleUser is the application user of the examples.
@@ -305,4 +312,272 @@ func ExampleUserDriverBuilderFunc() {
 
 	fmt.Println(driver != nil, err)
 	// Output: true <nil>
+}
+
+// exampleLogin returns a login over exampleDriver; policy callbacks configure it.
+func exampleLogin(configure ...auth.LoginBuilderFunc) *auth.Login {
+	users, err := auth.NewUserProvider(exampleDriver())
+
+	if err != nil {
+		panic(err)
+	}
+
+	login, err := auth.NewLogin(users, cache.New(memorycache.New()), configure...)
+
+	if err != nil {
+		panic(err)
+	}
+
+	return login
+}
+
+// exampleRequest returns a request with a fresh session.
+func exampleRequest() *http.Request {
+	return sessionRequest(session.New(time.Now().Add(time.Hour), map[string]any{}))
+}
+
+// needsSecondFactor is a second-factor check that every user needs.
+func needsSecondFactor(context.Context, string) (bool, error) {
+	return true, nil
+}
+
+func ExampleNewLogin() {
+	users, err := auth.NewUserProvider(exampleDriver())
+
+	if err != nil {
+		panic(err)
+	}
+
+	login, err := auth.NewLogin(users, cache.New(memorycache.New()), func(policy *auth.LoginBuilder) {
+		policy.ChallengeTTL(10 * time.Minute)
+	})
+
+	fmt.Println(login != nil, err)
+	// Output: true <nil>
+}
+
+func ExampleLogin() {
+	login := exampleLogin()
+	r := exampleRequest()
+
+	complete, err := login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	identity, _ := login.Authenticator()(r)
+
+	fmt.Println(complete, err, identity.Subject(), identity.Level() == auth.LevelSingle)
+	// Output: true <nil> 1 true
+}
+
+func ExampleLogin_Authenticator() {
+	login := exampleLogin()
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	handler := auth.Middleware(login.Authenticator())(func(_ http.ResponseWriter, r *http.Request) error {
+		user, _ := auth.UserFromContext[exampleUser](r.Context())
+		fmt.Println(user.Role)
+
+		return nil
+	})
+
+	_ = handler(httptest.NewRecorder(), r)
+	// Output: admin
+}
+
+func ExampleLogin_Begin() {
+	login := exampleLogin()
+	r := exampleRequest()
+
+	complete, err := login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	fmt.Println(complete, err)
+
+	_, err = login.Begin(r, "2", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
+	// Output:
+	// true <nil>
+	// true
+}
+
+func ExampleLogin_Pending() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.SecondFactor(needsSecondFactor)
+	})
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	user, err := login.Pending(r)
+
+	fmt.Println(user.Subject, err)
+	// Output: 1 <nil>
+}
+
+func ExampleLogin_Complete() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.SecondFactor(needsSecondFactor)
+	})
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	err := login.Complete(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
+	identity, _ := login.Authenticator()(r)
+
+	fmt.Println(err, identity.Level() == auth.LevelMulti)
+	// Output: <nil> true
+}
+
+func ExampleLogin_Fail() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.SecondFactor(needsSecondFactor)
+		policy.MaxAttempts(1)
+	})
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	fmt.Println(login.Fail(r))
+
+	_, err := login.Pending(r)
+	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
+	// Output:
+	// <nil>
+	// true
+}
+
+func ExampleLogin_Confirm() {
+	login := exampleLogin()
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	err := login.Confirm(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
+	identity, _ := login.Authenticator()(r)
+
+	fmt.Println(err, len(identity.Factors()))
+	// Output: <nil> 2
+}
+
+func ExampleLogin_Logout() {
+	login := exampleLogin()
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	fmt.Println(login.Logout(r))
+
+	_, err := login.Authenticator()(r)
+	fmt.Println(errors.Is(err, auth.ErrNoCredentials))
+	// Output:
+	// <nil>
+	// true
+}
+
+func ExampleLoginBuilder() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.ChallengeTTL(time.Minute).MaxAttempts(3).SecondFactor(needsSecondFactor)
+	})
+
+	complete, err := login.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	fmt.Println(complete, err)
+	// Output: false <nil>
+}
+
+func ExampleLoginBuilder_Handle() {
+	handle := session.NewHandle()
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.Handle(handle)
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(session.NewContextFor(r.Context(), handle, session.New(time.Now().Add(time.Hour), map[string]any{})))
+
+	complete, err := login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	fmt.Println(complete, err)
+	// Output: true <nil>
+}
+
+func ExampleLoginBuilder_ChallengeTTL() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.SecondFactor(needsSecondFactor).ChallengeTTL(10 * time.Minute)
+	})
+	r := exampleRequest()
+
+	complete, err := login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	fmt.Println(complete, err)
+	// Output: false <nil>
+}
+
+func ExampleLoginBuilder_MaxAttempts() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.SecondFactor(needsSecondFactor).MaxAttempts(2)
+	})
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	_ = login.Fail(r)
+	_, err := login.Pending(r)
+	fmt.Println(err)
+
+	_ = login.Fail(r)
+	_, err = login.Pending(r)
+	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
+	// Output:
+	// <nil>
+	// true
+}
+
+func ExampleLoginBuilder_SecondFactor() {
+	enrolled := map[string]bool{"1": true}
+
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.SecondFactor(func(_ context.Context, subject string) (bool, error) {
+			return enrolled[subject], nil
+		})
+	})
+
+	complete, err := login.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	fmt.Println(complete, err)
+	// Output: false <nil>
+}
+
+func ExampleLoginBuilderFunc() {
+	policy := auth.LoginBuilderFunc(func(policy *auth.LoginBuilder) {
+		policy.MaxAttempts(3)
+	})
+
+	fmt.Println(exampleLogin(policy) != nil)
+	// Output: true
+}
+
+func ExampleRequireLevel() {
+	handler := auth.RequireLevel(auth.LevelMulti)(router.Handler(func(http.ResponseWriter, *http.Request) error {
+		return nil
+	}))
+
+	identity := auth.NewIdentity("1", func(principal *auth.IdentityBuilder) {
+		principal.Factors(auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	err := handler(httptest.NewRecorder(), r.WithContext(auth.NewContext(r.Context(), identity)))
+
+	fmt.Println(errors.Is(err, auth.ErrStepUpRequired))
+	// Output: true
+}
+
+func ExampleRequireFresh() {
+	handler := auth.RequireFresh(10 * time.Minute)(router.Handler(func(http.ResponseWriter, *http.Request) error {
+		return nil
+	}))
+
+	identity := auth.NewIdentity("1", func(principal *auth.IdentityBuilder) {
+		principal.Factors(auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge, At: time.Now()})
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	fmt.Println(handler(httptest.NewRecorder(), r.WithContext(auth.NewContext(r.Context(), identity))))
+	// Output: <nil>
+}
+
+func ExampleErrStepUpRequired() {
+	fmt.Println(auth.ErrStepUpRequired.Status())
+	// Output: 403
 }
