@@ -107,8 +107,9 @@
 // The authenticator reads the entry on every request and treats a missing record
 // as [ErrNoCredentials], so a revoked device cannot list or revoke devices
 // either; it refreshes [LoginRecord.SeenAt] at most every five minutes, ignoring
-// a failed write. At most [LoginBuilder.MaxLogins] records are kept and the oldest is
-// dropped, which logs that device out. [Login.Logout] removes its record and
+// a failed write. Records older than the session lifetime are never listed and
+// the next write removes them. At most [LoginBuilder.MaxLogins] records are kept
+// and the oldest is dropped, which logs that device out. [Login.Logout] removes its record and
 // [NewLogin] registers [Login.RevokeAll] with [UserProvider.OnForget].
 //
 // Records hold the user agent (cut to 255 bytes) and client address, which are

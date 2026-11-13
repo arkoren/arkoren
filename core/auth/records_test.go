@@ -527,6 +527,68 @@ func TestRecordsExpireWithSessionLifetime(t *testing.T) {
 	})
 }
 
+// TestExpiredRecordsAreHiddenAndPruned verifies a record older than the session
+// lifetime disappears from every read and is removed from storage by the next
+// write, while a younger record stays.
+func TestExpiredRecordsAreHiddenAndPruned(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		provider, _ := newDirectory(t)
+		store := cache.New(memorycache.New())
+		login, err := auth.NewLogin(provider, store, func(policy *auth.LoginBuilder) { policy.SessionLifetime(time.Hour) })
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		old, _ := device(t, login, "7", "old")
+		oldID := loginsOf(t, login, "7")[0].ID
+
+		time.Sleep(30 * time.Minute)
+
+		young, youngRequest := device(t, login, "7", "young")
+
+		// The entry's TTL restarts with each write, so only the age of the record
+		// can remove the old one.
+		time.Sleep(40 * time.Minute)
+
+		stored, err := store.Driver().Get(t.Context(), "arkoren:auth:logins:7")
+
+		if err != nil || !strings.Contains(string(stored), oldID) {
+			t.Fatalf("old record is not stored before pruning: %s, %v", stored, err)
+		}
+
+		records, err := login.Logins(youngRequest)
+
+		if err != nil || len(records) != 1 || records[0].UserAgent != "young" {
+			t.Fatalf("Logins = %+v, %v", records, err)
+		}
+
+		if len(loginsOf(t, login, "7")) != 1 {
+			t.Fatal("LoginsOf lists the expired record")
+		}
+
+		if _, err := authenticate(login, old); !errors.Is(err, auth.ErrNoCredentials) {
+			t.Fatalf("expired device: %v", err)
+		}
+
+		if _, err := authenticate(login, young); err != nil {
+			t.Fatalf("live device: %v", err)
+		}
+
+		if err := login.Revoke(t.Context(), "7", "unknown"); err != nil {
+			t.Fatal(err)
+		}
+
+		stored, err = store.Driver().Get(t.Context(), "arkoren:auth:logins:7")
+
+		if err != nil || strings.Contains(string(stored), oldID) || !strings.Contains(string(stored), "young") {
+			t.Fatalf("stored after write = %s, %v", stored, err)
+		}
+	})
+}
+
 // TestForgetRevokesAllLogins verifies forgetting a user ends their sessions.
 func TestForgetRevokesAllLogins(t *testing.T) {
 	t.Parallel()

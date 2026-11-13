@@ -96,8 +96,9 @@ func deviceField(value string) string {
 // It holds the cache lock of the subject so that concurrent logins queue instead
 // of racing, and still compares and puts the exact bytes it read, which guards
 // against a lock that expired mid-edit and against [Login.RevokeAll]. A list
-// with no records is not created. change receives a list it may modify and
-// return; it may run several times.
+// with no records is not created. change receives only the live records (see
+// live), so every write also drops the dead ones; it may modify and return the
+// list and may run several times.
 func (login *Login) edit(ctx context.Context, subject string, change func([]LoginRecord) []LoginRecord) error {
 	key := login.records.Key(subject)
 
@@ -107,6 +108,8 @@ func (login *Login) edit(ctx context.Context, subject string, change func([]Logi
 		return err
 	}
 
+	// The edit is already stored or failed; a failed unlock only delays the next
+	// writer until the lease expires, so its error cannot change the outcome.
 	defer func() { _ = lease.Unlock(context.WithoutCancel(ctx)) }()
 
 	for range maxEditAttempts {
@@ -142,7 +145,7 @@ func (login *Login) edit(ctx context.Context, subject string, change func([]Logi
 			return err
 		}
 
-		applied, err := login.store.CompareAndPut(ctx, cache.Match{Key: key.Name(), Value: raw}, key, change(current))
+		applied, err := login.store.CompareAndPut(ctx, cache.Match{Key: key.Name(), Value: raw}, key, change(login.live(current)))
 
 		if err != nil {
 			return err
@@ -177,7 +180,19 @@ func (login *Login) open(r *http.Request, subject string) (string, error) {
 	return record.ID, err
 }
 
-// list returns the stored records of subject, oldest first; none is a nil list.
+// live removes the records created at least [LoginBuilder.SessionLifetime] ago
+// from records and returns the rest. Sessions have an absolute lifetime, so such
+// a record cannot belong to a live session: its device is already logged out and
+// listing it would show a phantom device. It modifies records in place, so pass
+// a freshly decoded list.
+func (login *Login) live(records []LoginRecord) []LoginRecord {
+	return slices.DeleteFunc(records, func(record LoginRecord) bool {
+		return time.Since(record.CreatedAt) >= login.settings.SessionLifetime
+	})
+}
+
+// list returns the stored records of subject that are still live, oldest first;
+// none is a nil list.
 func (login *Login) list(ctx context.Context, subject string) ([]LoginRecord, error) {
 	current, err := login.store.Get(ctx, login.records.Key(subject))
 
@@ -185,7 +200,7 @@ func (login *Login) list(ctx context.Context, subject string) ([]LoginRecord, er
 		return nil, nil
 	}
 
-	return current, err
+	return login.live(current), err
 }
 
 // seen reports whether the record id of subject still exists and refreshes its

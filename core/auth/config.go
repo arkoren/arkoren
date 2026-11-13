@@ -292,7 +292,8 @@ func (policy *LoginBuilder) MaxLogins(limit int) *LoginBuilder {
 // SessionLifetime tells the login the maximum session lifetime configured on
 // [session.Middleware] with [session.Builder.MaxLifetime], which the session
 // package does not expose to other packages. A user's list of login records
-// lives that long after its last write, so no record outlives its sessions. The
+// lives that long after its last write, and a record older than it is never
+// listed and is removed by the next write, so no record outlives its sessions. The
 // default is [session.DefaultMaxLifetime]; set it when the middleware uses
 // another value. [NewLogin] rejects a value of zero or less. The setting
 // replaces the previous value on this draft.

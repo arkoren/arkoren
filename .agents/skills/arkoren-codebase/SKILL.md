@@ -337,6 +337,9 @@ shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns
 renewal and absolute lifetime. Login keeps one session record (arkoren:auth:session) and a pending login
 (arkoren:auth:pending), not separate stored identities: preserve their raw JSON.
+Login records (`core/auth/records.go`) keep one cache entry per subject under
+arkoren:auth:logins, independent of the session middleware's namespace, with
+`LoginBuilder.SessionLifetime` as TTL because session settings are not exposed.
 Old arkoren:auth:user sessions are anonymous. Mutation success is not durable save.
 Broadcast, cache,
 crypto, database/migrator, feature, mail and storage facades and configurable
