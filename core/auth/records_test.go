@@ -342,7 +342,7 @@ func TestLoginAgainReplacesRecord(t *testing.T) {
 }
 
 // TestParkingLoginReleasesRecord verifies a logged-in session that starts a
-// second-factor login loses its record.
+// second-factor login for another subject loses its record.
 func TestParkingLoginReleasesRecord(t *testing.T) {
 	t.Parallel()
 
@@ -362,7 +362,7 @@ func TestParkingLoginReleasesRecord(t *testing.T) {
 
 	_, r := device(t, plain, "7", "Firefox")
 
-	if begin(t, strict, r, "7") {
+	if begin(t, strict, r, "9") {
 		t.Fatal("login completed without second factor")
 	}
 

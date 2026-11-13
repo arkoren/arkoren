@@ -318,6 +318,87 @@ func TestBeginReplacesLoggedInUserWithPending(t *testing.T) {
 	}
 }
 
+// TestBeginSameSubjectAddsFactorAndSkipsSecondFactor verifies the v0.6.0
+// behavior change: a session already logged in as the subject keeps its factors
+// (pwd, otp), gains the new one, is not parked as pending and keeps one record.
+// Shipped v0.5.0 replaced the factors and challenged the user again.
+func TestBeginSameSubjectAddsFactorAndSkipsSecondFactor(t *testing.T) {
+	t.Parallel()
+
+	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	current := newSession()
+	r := sessionRequest(current)
+	begin(t, login, r, "7")
+
+	if err := login.Complete(r, otp); err != nil {
+		t.Fatal(err)
+	}
+
+	before := current.ID()
+	complete, err := login.Begin(r, "7", federated)
+
+	if err != nil || !complete {
+		t.Fatalf("begin = %v, %v", complete, err)
+	}
+
+	identity, err := authenticate(login, current)
+	factors := identity.Factors()
+
+	if err != nil || len(factors) != 3 || factors[0].Method != auth.MethodPassword || factors[1].Method != auth.MethodOTP || factors[2].Method != auth.MethodFederated {
+		t.Fatalf("identity = %+v, %v", factors, err)
+	}
+
+	if current.ID() == before {
+		t.Fatal("begin did not rotate the session")
+	}
+
+	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("pending login exists: %v", err)
+	}
+
+	if len(loginsOf(t, login, "7")) != 1 {
+		t.Fatal("login record was not kept")
+	}
+}
+
+// TestBeginDifferentSubjectKeepsReplacing verifies another subject still
+// replaces the login and goes through the second-factor checks.
+func TestBeginDifferentSubjectKeepsReplacing(t *testing.T) {
+	t.Parallel()
+
+	login, _ := newLogin(t, withChecks(func(_ context.Context, subject string) (bool, error) {
+		return subject == "7", nil
+	}))
+	current := newSession()
+	r := sessionRequest(current)
+	begin(t, login, r, "9")
+
+	if begin(t, login, r, "7") {
+		t.Fatal("different subject skipped its second factor")
+	}
+
+	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+		t.Fatalf("previous login survived: %v", err)
+	}
+}
+
+// TestBeginAnonymousSessionUnchanged verifies an anonymous session logs in with
+// the single factor and is parked when a second factor is enrolled.
+func TestBeginAnonymousSessionUnchanged(t *testing.T) {
+	t.Parallel()
+
+	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	r := sessionRequest(newSession())
+
+	if complete, err := login.Begin(r, "7", federated); err != nil || complete {
+		t.Fatalf("begin = %v, %v", complete, err)
+	}
+
+	if _, err := login.Pending(r); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestBeginDropsOlderPendingLogin verifies a direct login discards a pending one.
 func TestBeginDropsOlderPendingLogin(t *testing.T) {
 	t.Parallel()

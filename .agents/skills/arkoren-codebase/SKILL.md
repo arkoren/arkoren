@@ -346,7 +346,7 @@ request lookup owns per-call WithSessionHandle. Share one session.NewHandle()
 across those roles; zero selects the default context slot. Handles do not isolate
 cookies, cache records, or authorization. ark/oauth Callback(login, resolve)
 returns a subject string to Login.Begin (federated factor; ChallengeURL on a
-pending second factor) and Logout(login) calls Login.Logout; Verify returns the
+pending second factor) and auth.Logout(login) owns the logout route (Client.Logout is deprecated); Verify returns the
 external Identity, which the application maps for auth.Bearer. Session data uses
 shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns

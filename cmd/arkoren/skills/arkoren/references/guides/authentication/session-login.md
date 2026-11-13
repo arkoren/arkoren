@@ -197,6 +197,14 @@ must not report success. Begin preserves other session values, creation time and
 expiry; configure idle and absolute limits in
 [session lifetimes](../http-capabilities/sessions.md#set-lifetimes).
 
+If the session is already logged in as that subject, `Begin` adds the factor to
+the existing login instead, as `Confirm` does: it keeps the other factors and the
+login record, skips the second-factor checks, rotates the ID and returns `true`.
+A user who connects a provider or re-authenticates through one is therefore never
+challenged again. This changed in core v0.6.0: earlier versions replaced the
+factors and, for an enrolled user, parked the login as pending. A different
+subject and an anonymous session behave as described above.
+
 Without a registered second-factor check `Begin` always returns `true`. See
 [Two-Factor Login](two-factor.md) for the pending state, levels and step-up
 middleware.
@@ -211,18 +219,32 @@ concurrency boundaries.
 
 ## End Sessions
 
-Mount logout as a CSRF-protected `POST`, not a `GET`, and remove the login before
-sending a response:
+`auth.Logout` owns the logout route. Register it as a CSRF-protected `POST`, not a
+`GET`, behind the same session and authentication middleware as the other
+routes:
 
 ```go
-if err := login.Logout(r); err != nil {
-	return err
-}
-
-return response.Status(w, http.StatusNoContent)
+web.Post("/logout", auth.Logout(login))
 ```
 
-Logout removes the session record, its [login record](#devices) and any pending
+It answers `204`. A server-rendered application redirects instead, with `303 See
+Other`; the target must be a safe relative path, and an unsafe one is a
+configuration error returned on every request:
+
+```go
+web.Post("/logout", auth.Logout(login, func(logout *auth.LogoutBuilder) {
+	logout.Redirect("/")
+}))
+```
+
+Logging out a session with no logged-in user succeeds, and a request without a
+session returns `session.ErrNoSession` (`500`, a missing `session.Middleware`).
+With `LogoutBuilder.Events`, a logout of a logged-in user publishes `auth.LoggedOut`
+(see [built-in events](../events/built-in-events.md)). Token clients log out on
+their own route, since a bearer token is a different credential. To log out in
+your own handler, call `login.Logout(r)` and check its error.
+
+`auth.Logout` calls `Login.Logout`, which removes the session record, its [login record](#devices) and any pending
 login, even stale or unreadable ones, and rotates the ID after successful
 deletion. Other values, such as a
 language preference, remain. Use `request.MustSession(r).Destroy()` instead when
@@ -241,6 +263,11 @@ device that changed the password, which must log in again; a login waiting for
 its second factor when the version changes is discarded too. Calling `Begin` there
 instead would re-run the second-factor checks and start the factors over, so an
 enrolled user would be parked as pending.
+
+To let a user change their own password without logging out their current device,
+leave `Version` unchanged in that change and call `login.RevokeOthers(r)`, which
+keeps the caller and ends every other device. A password reset changes `Version`
+and ends everything, or calls `login.RevokeAll`.
 
 Existing in-flight requests are not retroactively canceled, and account caching
 can delay the effect. A provider that leaves `Version` empty never ends sessions

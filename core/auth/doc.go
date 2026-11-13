@@ -66,7 +66,7 @@
 //	}))
 //
 //	r.Post("/login", signIn)
-//	r.Post("/logout", signOut)
+//	r.Post("/logout", auth.Logout(login))
 //
 //	private := r.With(auth.Require())
 //	private.Get("/me", me)
@@ -88,6 +88,14 @@
 // which is single use. [LoginBuilder.ChallengeTTL] bounds the wait.
 // [Login.Confirm] records a fresh factor on a logged-in session, such as a
 // re-entered password. Every transition regenerates the session ID.
+//
+// A session that is already logged in as the subject keeps its login: Begin
+// then adds the factor like Confirm and skips the second-factor checks, so a
+// logged-in user who connects a provider or re-authenticates through one is not
+// challenged again and keeps the factors they have. Releases before v0.6.0
+// replaced the factors and parked the login instead. [Logout] is the handler
+// of the logout route: it ends the login with [Login.Logout], publishes
+// [LoggedOut] and answers 204, or 303 with [LogoutBuilder.Redirect].
 //
 // The session holds one record (subject, factors, a hash of the user's
 // [UserRecord.Version] and a login-record ID) under one key, and a pending login
@@ -180,13 +188,6 @@
 //		return response.Status(w, http.StatusNoContent)
 //	}
 //
-//	func signOut(w http.ResponseWriter, r *http.Request) error {
-//		if err := login.Logout(r); err != nil {
-//			return err
-//		} // or Destroy() to drop all data
-//		return response.Status(w, http.StatusNoContent)
-//	}
-//
 //	r.With(auth.RequireLevel(auth.LevelMulti)).Post("/payouts", payout)
 //	r.With(auth.RequireFresh(10 * time.Minute)).Delete("/account", destroy)
 //
@@ -243,9 +244,10 @@
 //
 // # OAuth2 and OIDC
 //
-// The driver/oauth/oauthauth package plugs into auth without auth importing it.
-// See its package documentation for the setup; it is updated for the
-// non-generic [Authenticator] in a later release.
+// The arkoren.dev/ark/oauth/oauthauth package logs users in through
+// [Login.Begin] with a federated factor and verifies OIDC bearer tokens; auth
+// does not import it. arkoren.dev/ark/federation maps its external identities
+// to local subjects.
 //
 // # Subjects
 //
@@ -286,6 +288,10 @@
 // query, or cause. Event contexts still retain request context values;
 // listeners must select safe attributes. These payload limits do not change
 // HTTP problem instance rendering.
+//
+// [Logout], built with [LogoutBuilder.Events], publishes [LoggedOut]
+// ("auth.user.logged-out") after a logged-in user logged out. It carries only
+// the subject.
 //
 // [UserForgotten] ("auth.user.forgotten") carries only the subject. It means
 // the forget hooks completed, not that a surrounding transaction committed.

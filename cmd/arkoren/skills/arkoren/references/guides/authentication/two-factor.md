@@ -70,6 +70,12 @@ says yes. Otherwise it parks a pending login, rotates the session ID and returns
 `false`. Until the login completes, the request is anonymous: the authenticator
 and `auth.Middleware` see no user, so `auth.Require` rejects it.
 
+The checks do not run when the session is already logged in as that subject:
+`Begin` then adds the factor to the existing login, like `Confirm`, and returns
+`true`. A logged-in user who re-authenticates through a provider keeps their
+factors and is not challenged again. This changed in core v0.6.0; earlier
+versions replaced the factors and parked the login.
+
 ```go
 if !complete {
 	return response.Status(w, http.StatusAccepted)
@@ -176,7 +182,8 @@ hash of it and the authenticator compares it in constant time with the provider'
 current value on every request. A mismatch makes the session anonymous,
 including the device that made the change; that device logs in again, passing
 the second factor again if the user is enrolled. There is no list of a user's
-sessions to revoke individually.
+sessions to revoke individually. To keep the device that changed the password,
+leave `Version` unchanged and call `login.RevokeOthers(r)`.
 
 For all functions and options, see the
 [`auth` API reference](https://pkg.go.dev/arkoren.dev/core/auth).

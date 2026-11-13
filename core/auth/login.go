@@ -268,7 +268,17 @@ func (login *Login) Authenticator() Authenticator {
 // is [ErrUnauthenticated], and other provider errors, including
 // [ErrInvalidSubject], are returned unchanged.
 //
-// It then asks each [LoginBuilder.SecondFactor] check. When none says yes it
+// When the session is already logged in as subject, Begin behaves like
+// [Login.Confirm]: it adds factor to the logged-in session (a factor of the same
+// [Method] replaces the older one), keeps the login record, skips the
+// second-factor checks, regenerates the session ID and returns true. The user
+// already passed every check, so a logged-in user who connects a provider or
+// re-authenticates keeps the factors they have and is never challenged again.
+// Before v0.6.0 Begin replaced the factors in this case, and parked the login
+// when a second factor was enrolled. A different subject, an anonymous session
+// and a pending login keep the behavior below.
+//
+// Otherwise it asks each [LoginBuilder.SecondFactor] check. When none says yes it
 // logs the user in with factor, regenerates the session ID and returns true.
 // Otherwise it replaces any logged-in user with a pending login that expires
 // after [LoginBuilder.ChallengeTTL], regenerates the session ID and returns
@@ -306,6 +316,18 @@ func (login *Login) Begin(r *http.Request, subject string, factor Factor) (compl
 	}
 
 	if err != nil {
+		return false, err
+	}
+
+	// A session already logged in as this subject passed every check for it, so
+	// the new factor joins the existing login like Confirm instead of replacing it.
+	identity, err := login.Authenticator()(r)
+
+	if err == nil && identity.Subject() == user.Subject {
+		return true, login.Confirm(r, factor)
+	}
+
+	if err != nil && !errors.Is(err, ErrNoCredentials) {
 		return false, err
 	}
 

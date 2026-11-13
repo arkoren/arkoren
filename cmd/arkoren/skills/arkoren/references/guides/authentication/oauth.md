@@ -118,15 +118,22 @@ account's subject:
 ```go
 web.Get("/login", client.Login())
 web.Get("/oauth/callback", client.Callback(login, mapIdentity))
-web.Post("/logout", client.Logout(login))
+web.Post("/logout", auth.Logout(login, func(logout *auth.LogoutBuilder) {
+	logout.Redirect("/")
+}))
 ```
 
 `Login` redirects to the provider. A successful callback verifies the provider
 identity, maps it to a subject, calls `login.Begin` with a federated factor,
 rotates the session ID, and redirects to the saved local destination. Subsequent
-requests use the normal authenticator. `Logout` calls `login.Logout`, which also
+requests use the normal authenticator. `auth.Logout` from core owns the logout route: it calls `login.Logout`, which also
 ends a pending second-factor login, and redirects to `/`; it does not sign the
-person out at the provider. Keep logout CSRF-protected.
+person out at the provider. Keep logout CSRF-protected. `client.Logout(login)`
+still works but is deprecated in favor of `auth.Logout`.
+
+If a user who is already logged in as the mapped subject signs in through the
+provider (to connect it or to refresh their proof), `Begin` adds the federated
+factor to their session and does not ask for a second factor again.
 
 A nil login or mapper is a configuration error, not a rejected credential. A
 request without a session returns `401` before state consumption or provider
@@ -421,8 +428,9 @@ policy denial behaves the same way.
 If you need outcome events, configure `ClientBuilder.Events` with your existing
 [event bus](../events/overview.md). Nil publishes nothing. Completed logins
 publish issuer and subject, which can identify a person; a login held for a second
-factor publishes nothing until your challenge page completes it. Logout has no payload
-and reports local mutation, not provider logout or durable session persistence.
+factor publishes nothing until your challenge page completes it. `auth.Logout` publishes `auth.LoggedOut` with the subject when configured with
+`LogoutBuilder.Events`; it reports local mutation, not provider logout or durable
+session persistence.
 
 `LoginFailedEvent.Err` contains `ErrInvalidCallback`, `ErrProviderUnavailable`,
 or an opaque local-login classification, without the original cause.
