@@ -45,5 +45,6 @@ use (
 	./foundation/key
 	./foundation/problem
 	./foundation/query
+	./foundation/totp
 	./foundation/validate
 )
