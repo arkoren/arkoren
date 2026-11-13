@@ -7,7 +7,7 @@
 // draft. Nil entries panic; expanded nil/empty slices supply none. Cookie and
 // persistence settings detach at publication; cache and event services stay
 // shared. A retained draft cannot change published middleware. Configure a
-// shared [Handle] with [Builder.Handle], auth.LoginBuilder.Handle, and
+// shared [Handle] with [Builder.Handle], auth.GuardBuilder.Handle, and
 // request.WithSessionHandle; a later zero restores default lookup. Handles are
 // comparable opaque selectors, not cookie or storage isolation. Use NewContextFor
 // and FromContextFor for explicit bridges; raw context keys do not populate them.

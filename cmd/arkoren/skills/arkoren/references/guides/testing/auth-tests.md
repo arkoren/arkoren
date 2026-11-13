@@ -75,7 +75,7 @@ For an authenticated user without permission, assert your application's authoriz
 
 Keep a test that submits valid credentials to the real login route, carries its session cookie to a protected route, logs out, and verifies subsequent rejection. [Multi-request HTTP tests](http-tests.md#continue-flows) explains cookie transfer and when to use a test server. Include invalid credentials and session persistence failure cases relevant to your application.
 
-Share the production `auth.NewLogin(provider, store)` between authentication, login, and logout. Check errors from `login.Begin`, `login.Logout`, and session field mutations before asserting state; see [Session Login](../authentication/session-login.md) and [Save Changes](../http-capabilities/sessions.md#save-changes).
+Share the production `auth.NewGuard(provider, store)` between authentication, login, and logout. Check errors from `guard.Begin`, `guard.Logout`, and session field mutations before asserting state; see [Session Login](../authentication/session-login.md) and [Save Changes](../http-capabilities/sessions.md#save-changes).
 
 For a focused session-state test, `session.New(expiresAt, values)` creates a low-level session. Initial values must already have the exact Go types expected by your [typed fields](../http-capabilities/sessions.md#store-values); this initializer does not round-trip values through JSON. It does not test cookies, storage, or middleware persistence. A nil session pointer is absent, not usable state.
 

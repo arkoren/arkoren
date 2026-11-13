@@ -56,7 +56,7 @@ func stepUp(satisfied func(Identity) bool, configure []MiddlewareBuilderFunc) ro
 // identity that is too weak gets [ErrStepUpRequired], for example a
 // single-factor session on a route that needs [LevelMulti]. Install it after
 // [Middleware]. It reads the identity from the context, so it also works for
-// authenticators other than [Login.Authenticator], such as tokens that carry
+// authenticators other than [Guard.Authenticator], such as tokens that carry
 // factors.
 //
 // Example:
@@ -70,7 +70,7 @@ func RequireLevel(level Level, configure ...MiddlewareBuilderFunc) router.Middle
 
 // RequireFresh returns middleware that admits a request only when one of its
 // identity's factors was verified within maxAge, so a long-lived session cannot
-// delete an account without a recent password or second factor; [Login.Confirm]
+// delete an account without a recent password or second factor; [Guard.Confirm]
 // records such a factor. A factor with an unknown (zero) or future time is not
 // fresh. A maxAge of zero or less admits nothing. Anonymous requests and
 // failures are those of [RequireLevel].

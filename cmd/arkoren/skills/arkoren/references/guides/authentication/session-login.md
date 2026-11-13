@@ -11,7 +11,7 @@ summary:
 # Session Login
 
 A browser login checks credentials once, then stores the account's subject in
-the session. On later requests, `auth.Login` asks your **user provider** whether
+the session. On later requests, `auth.Guard` asks your **user provider** whether
 that subject still exists and publishes an `auth.Identity` whose subject is the
 stored one, whose factors say how the user logged in and whose user record holds
 the loaded account, so `request.User[Account]` returns it. You own the accounts,
@@ -82,17 +82,17 @@ the fields a handler needs and never render the whole value in a response.
 
 ## Enable Login
 
-Construct one login and share it between middleware and handlers:
+Construct one `auth.Guard` and share it between middleware and handlers:
 
 ```go
-login, err := auth.NewLogin(provider, store)
+guard, err := auth.NewGuard(provider, store)
 if err != nil {
 	return err
 }
 
 web.Use(session.Middleware(store))
 web.Use(csrf.Middleware())
-web.Use(auth.Middleware(login.Authenticator()))
+web.Use(auth.Middleware(guard.Authenticator()))
 ```
 
 Session middleware must run first. Keep [CSRF protection](../browser-security/csrf-protection.md)
@@ -101,8 +101,10 @@ cookies automatically, including on requests another site can initiate. Add
 `auth.Require()` only to routes requiring a signed-in account, not to the login
 route itself.
 
-`NewLogin` does no I/O. It returns an error for a nil provider or store and for a
-non-positive pending-login lifetime or attempt limit. Missing sessions, absent
+`NewGuard` does no I/O. It returns an error for a nil provider or store and for a
+non-positive pending-login lifetime or attempt limit. The guard turns a verified
+credential into a logged-in session; `Require`, `RequireLevel` and `RequireFresh`
+protect routes with the identity it produces. Missing sessions, absent
 session records, records of another shape and sessions written by earlier
 versions (under `arkoren:auth:user`) are anonymous requests, not errors.
 
@@ -176,7 +178,7 @@ if err != nil {
 }
 
 factor := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
-complete, err := login.Begin(r, subject, factor)
+complete, err := guard.Begin(r, subject, factor)
 if err != nil {
 	return err
 }
@@ -219,12 +221,12 @@ concurrency boundaries.
 
 ## End Sessions
 
-`auth.Logout` owns the logout route. Register it as a CSRF-protected `POST`, not a
+`guard.LogoutHandler` owns the logout route. Register it as a CSRF-protected `POST`, not a
 `GET`, behind the same session and authentication middleware as the other
 routes:
 
 ```go
-web.Post("/logout", auth.Logout(login))
+web.Post("/logout", guard.LogoutHandler())
 ```
 
 It answers `204`. A server-rendered application redirects instead, with `303 See
@@ -232,7 +234,7 @@ Other`; the target must be a safe relative path, and an unsafe one is a
 configuration error returned on every request:
 
 ```go
-web.Post("/logout", auth.Logout(login, func(logout *auth.LogoutBuilder) {
+web.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 	logout.Redirect("/")
 }))
 ```
@@ -242,9 +244,9 @@ session returns `session.ErrNoSession` (`500`, a missing `session.Middleware`).
 With `LogoutBuilder.Events`, a logout of a logged-in user publishes `auth.LoggedOut`
 (see [built-in events](../events/built-in-events.md)). Token clients log out on
 their own route, since a bearer token is a different credential. To log out in
-your own handler, call `login.Logout(r)` and check its error.
+your own handler, call `guard.Logout(r)` and check its error.
 
-`auth.Logout` calls `Login.Logout`, which removes the session record, its [login record](#devices) and any pending
+`guard.LogoutHandler` calls `Guard.Logout`, which removes the session record, its [login record](#devices) and any pending
 login, even stale or unreadable ones, and rotates the ID after successful
 deletion. Other values, such as a
 language preference, remain. Use `request.MustSession(r).Destroy()` instead when
@@ -265,9 +267,9 @@ instead would re-run the second-factor checks and start the factors over, so an
 enrolled user would be parked as pending.
 
 To let a user change their own password without logging out their current device,
-leave `Version` unchanged in that change and call `login.RevokeOthers(r)`, which
+leave `Version` unchanged in that change and call `guard.RevokeOthers(r)`, which
 keeps the caller and ends every other device. A password reset changes `Version`
-and ends everything, or calls `login.RevokeAll`.
+and ends everything, or calls `guard.RevokeAll`.
 
 Existing in-flight requests are not retroactively canceled, and account caching
 can delay the effect. A provider that leaves `Version` empty never ends sessions
@@ -277,7 +279,7 @@ this way. Only disabling or deleting the account does.
 
 Every login creates a login record: a random ID, the creation and last-seen
 times, the user agent and the client address. All records of a user live in one
-entry of the `store` you gave `auth.NewLogin`, and the session stores only the
+entry of the `store` you gave `auth.NewGuard`, and the session stores only the
 record's ID, which stays the same when the session ID rotates. The authenticator
 reads the entry on every request (one extra cache read), and a session whose
 record is gone is anonymous, so revoking a record logs that device out on its
@@ -285,7 +287,7 @@ next request.
 
 ```go
 web.Get("/devices", func(w http.ResponseWriter, r *http.Request) error {
-	records, err := login.Logins(r) // Current marks this browser.
+	records, err := guard.Logins(r) // Current marks this browser.
 	if err != nil {
 		return err
 	}
@@ -294,7 +296,7 @@ web.Get("/devices", func(w http.ResponseWriter, r *http.Request) error {
 })
 
 web.Post("/devices/revoke-others", func(w http.ResponseWriter, r *http.Request) error {
-	if err := login.RevokeOthers(r); err != nil {
+	if err := guard.RevokeOthers(r); err != nil {
 		return err
 	}
 
@@ -302,8 +304,8 @@ web.Post("/devices/revoke-others", func(w http.ResponseWriter, r *http.Request) 
 })
 ```
 
-Use `login.Revoke(ctx, subject, ids...)` to log out chosen devices,
-`login.RevokeAll(ctx, subject)` for all of them and `login.LoginsOf(ctx, subject)`
+Use `guard.Revoke(ctx, subject, ids...)` to log out chosen devices,
+`guard.RevokeAll(ctx, subject)` for all of them and `guard.LoginsOf(ctx, subject)`
 for an administrator's view. Mount the revoking routes as CSRF-protected `POST`s.
 `Logout` removes the current record, and forgetting a user with
 `UserProvider.Forget` revokes all of theirs.
@@ -311,7 +313,7 @@ for an administrator's view. Mount the revoking routes as CSRF-protected `POST`s
 Behavior to know:
 
 - Records live as long as the maximum session lifetime. `session.Middleware`
-  does not expose it, so tell the login with `policy.SessionLifetime(d)` if you
+  does not expose it, so tell the guard with `policy.SessionLifetime(d)` if you
   changed `MaxLifetime` from the 24-hour default (see
   [Sessions](../http-capabilities/sessions.md)); the two must match.
 - `SeenAt` is refreshed at most once every five minutes, on a best-effort basis:
@@ -339,11 +341,11 @@ Behavior to know:
 ## Select Sessions
 
 If you configured a nondefault session context slot, share one handle between
-the middleware and the login:
+the middleware and the guard:
 
 ```go
 handle := session.NewHandle()
-login, err := auth.NewLogin(provider, store, func(policy *auth.LoginBuilder) {
+guard, err := auth.NewGuard(provider, store, func(policy *auth.GuardBuilder) {
 	policy.Handle(handle)
 })
 web.Use(session.Middleware(store, func(cookies *session.Builder) {
@@ -352,11 +354,11 @@ web.Use(session.Middleware(store, func(cookies *session.Builder) {
 ```
 
 Register CSRF and authentication after this session middleware as before. Every
-`Login` method selects only this slot and returns `session.ErrNoSession` for an
+`Guard` method selects only this slot and returns `session.ErrNoSession` for an
 absent one (the authenticator returns `auth.ErrNoCredentials`); it never falls
 back to the default slot. A zero handle selects the default.
 
-A handle is not cookie or storage isolation. Logins writing to the same physical
+A handle is not cookie or storage isolation. Guards writing to the same physical
 session share `arkoren:auth:session` and `arkoren:auth:pending`: the last login
 replaces the other's record, and logout removes it. Independent browser sessions
 also need distinct cookie and storage configuration in

@@ -24,7 +24,7 @@
 // listener never changes the outcome of the operation it observes. Listeners
 // run synchronously on the caller's goroutine with its context: keep them
 // short, and hand slow work to a queue. Free functions such as
-// auth.Login.Begin publish nothing; their caller emits its own events.
+// auth.Guard.Begin publish nothing; their caller emits its own events.
 //
 // A signal is a topic without data: [NewSignal] declares it and
 // [Bus.Signal] publishes it. Event signals are unrelated to workflow signals,

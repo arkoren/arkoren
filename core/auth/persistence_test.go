@@ -54,32 +54,32 @@ func TestLoginSurvivesReload(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		driver := memorycache.New()
-		login, _ := newLogin(t, func(policy *auth.LoginBuilder) {
+		guard, _ := newGuard(t, func(policy *auth.GuardBuilder) {
 			policy.SecondFactor(secondFactor(true, nil))
 		})
 
 		id := runStep(t, driver, "", func(r *http.Request) {
-			if complete, err := login.Begin(r, "7", password); err != nil || complete {
+			if complete, err := guard.Begin(r, "7", password); err != nil || complete {
 				t.Fatalf("complete = %v, err = %v", complete, err)
 			}
 		})
 
 		id = runStep(t, driver, id, func(r *http.Request) {
-			if _, err := login.Authenticator()(r); err == nil {
+			if _, err := guard.Authenticator()(r); err == nil {
 				t.Fatal("pending login authenticated after reload")
 			}
 
-			if waiting, err := login.Pending(r); err != nil || waiting.Subject != "7" {
+			if waiting, err := guard.Pending(r); err != nil || waiting.Subject != "7" {
 				t.Fatalf("pending = %+v, %v", waiting, err)
 			}
 
-			if err := login.Complete(r, otp); err != nil {
+			if err := guard.Complete(r, otp); err != nil {
 				t.Fatal(err)
 			}
 		})
 
 		runStep(t, driver, id, func(r *http.Request) {
-			identity, err := login.Authenticator()(r)
+			identity, err := guard.Authenticator()(r)
 
 			if err != nil || identity.Subject() != "7" || identity.Level() != auth.LevelMulti || len(identity.Factors()) != 2 {
 				t.Fatalf("identity = %q, %v, %v", identity.Subject(), identity.Level(), err)
@@ -97,10 +97,10 @@ func TestLoginPersistsOneRecord(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		driver := memorycache.New()
-		login, _ := newLogin(t)
+		guard, _ := newGuard(t)
 
 		id := runStep(t, driver, "", func(r *http.Request) {
-			if _, err := login.Begin(r, "7", password); err != nil {
+			if _, err := guard.Begin(r, "7", password); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -137,7 +137,7 @@ func TestLoginIgnoresLegacyRecord(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		driver := memorycache.New()
-		login, _ := newLogin(t)
+		guard, _ := newGuard(t)
 
 		const id = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 		const fixture = `{"id":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","created_at":"2000-01-01T00:00:00Z","expires_at":"2000-01-01T02:00:00Z","storage":{"arkoren:auth:user":7,"theme":"dark"}}`
@@ -147,7 +147,7 @@ func TestLoginIgnoresLegacyRecord(t *testing.T) {
 		}
 
 		runStep(t, driver, id, func(r *http.Request) {
-			if _, err := login.Authenticator()(r); err == nil {
+			if _, err := guard.Authenticator()(r); err == nil {
 				t.Fatal("legacy session authenticated")
 			}
 		})

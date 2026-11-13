@@ -35,13 +35,13 @@ const (
 var errRecordsBusy = errors.New("auth: login records are too busy to update")
 
 // LoginRecord is one login of one user on one device, as listed by
-// [Login.Logins] and [Login.LoginsOf]. It holds personal data (user agent and
+// [Guard.Logins] and [Guard.LoginsOf]. It holds personal data (user agent and
 // address): show it to its owner and administrators only, and never put it in
 // telemetry or events.
 //
 // Example:
 //
-//	records, err := login.Logins(r)
+//	records, err := guard.Logins(r)
 //	if err != nil {
 //		return err
 //	}
@@ -50,7 +50,7 @@ var errRecordsBusy = errors.New("auth: login records are too busy to update")
 //	}
 type LoginRecord struct {
 	// ID identifies the login. It is random, stays the same when the session ID
-	// rotates and is what [Login.Revoke] takes.
+	// rotates and is what [Guard.Revoke] takes.
 	ID string `json:"id"`
 
 	// CreatedAt is when the user logged in, in UTC.
@@ -62,20 +62,20 @@ type LoginRecord struct {
 	SeenAt time.Time `json:"seen_at"`
 
 	// UserAgent is the User-Agent request header at login, truncated to 255
-	// bytes. It is empty when [LoginBuilder.Devices] is false.
+	// bytes. It is empty when [GuardBuilder.Devices] is false.
 	UserAgent string `json:"user_agent,omitzero"`
 
-	// IP is the client address at login, from [LoginBuilder.ClientIP], cut to 255
-	// bytes. It is empty when [LoginBuilder.Devices] is false.
+	// IP is the client address at login, from [GuardBuilder.ClientIP], cut to 255
+	// bytes. It is empty when [GuardBuilder.Devices] is false.
 	IP string `json:"ip,omitzero"`
 
 	// Current is true for the record of the request's own login. Only
-	// [Login.Logins] sets it; it is never stored, so it appears in JSON only
+	// [Guard.Logins] sets it; it is never stored, so it appears in JSON only
 	// when true.
 	Current bool `json:"current,omitzero"`
 }
 
-// remoteHost is the default [LoginBuilder.ClientIP]: the host of r.RemoteAddr.
+// remoteHost is the default [GuardBuilder.ClientIP]: the host of r.RemoteAddr.
 func remoteHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 
@@ -95,14 +95,14 @@ func deviceField(value string) string {
 // edit applies change to the subject's list of records and stores the result.
 // It holds the cache lock of the subject so that concurrent logins queue instead
 // of racing, and still compares and puts the exact bytes it read, which guards
-// against a lock that expired mid-edit and against [Login.RevokeAll]. A list
+// against a lock that expired mid-edit and against [Guard.RevokeAll]. A list
 // with no records is not created. change receives only the live records (see
 // live), so every write also drops the dead ones; it may modify and return the
 // list and may run several times.
-func (login *Login) edit(ctx context.Context, subject string, change func([]LoginRecord) []LoginRecord) error {
-	key := login.records.Key(subject)
+func (guard *Guard) edit(ctx context.Context, subject string, change func([]LoginRecord) []LoginRecord) error {
+	key := guard.records.Key(subject)
 
-	lease, err := login.store.Lock(ctx, "arkoren:auth:logins:lock:"+subject, lockTTL)
+	lease, err := guard.store.Lock(ctx, "arkoren:auth:logins:lock:"+subject, lockTTL)
 
 	if err != nil {
 		return err
@@ -113,7 +113,7 @@ func (login *Login) edit(ctx context.Context, subject string, change func([]Logi
 	defer func() { _ = lease.Unlock(context.WithoutCancel(ctx)) }()
 
 	for range maxEditAttempts {
-		raw, err := login.store.Driver().Get(ctx, key.Name())
+		raw, err := guard.store.Driver().Get(ctx, key.Name())
 
 		if errors.Is(err, cache.ErrNotFound) {
 			next := change(nil)
@@ -122,7 +122,7 @@ func (login *Login) edit(ctx context.Context, subject string, change func([]Logi
 				return nil
 			}
 
-			added, err := login.store.Add(ctx, key, next)
+			added, err := guard.store.Add(ctx, key, next)
 
 			if err != nil {
 				return err
@@ -145,7 +145,7 @@ func (login *Login) edit(ctx context.Context, subject string, change func([]Logi
 			return err
 		}
 
-		applied, err := login.store.CompareAndPut(ctx, cache.Match{Key: key.Name(), Value: raw}, key, change(login.live(current)))
+		applied, err := guard.store.CompareAndPut(ctx, cache.Match{Key: key.Name(), Value: raw}, key, change(guard.live(current)))
 
 		if err != nil {
 			return err
@@ -160,54 +160,54 @@ func (login *Login) edit(ctx context.Context, subject string, change func([]Logi
 }
 
 // open adds a record for a login of subject made by r and returns its ID. The
-// oldest records beyond [LoginBuilder.MaxLogins] are dropped, which logs those
+// oldest records beyond [GuardBuilder.MaxLogins] are dropped, which logs those
 // devices out.
-func (login *Login) open(r *http.Request, subject string) (string, error) {
+func (guard *Guard) open(r *http.Request, subject string) (string, error) {
 	now := time.Now().UTC()
 	record := LoginRecord{ID: rand.Text(), CreatedAt: now, SeenAt: now}
 
-	if login.settings.Devices {
+	if guard.settings.Devices {
 		record.UserAgent = deviceField(r.UserAgent())
-		record.IP = deviceField(login.settings.ClientIP(r))
+		record.IP = deviceField(guard.settings.ClientIP(r))
 	}
 
-	err := login.edit(r.Context(), subject, func(current []LoginRecord) []LoginRecord {
+	err := guard.edit(r.Context(), subject, func(current []LoginRecord) []LoginRecord {
 		current = append(current, record)
 
-		return current[max(0, len(current)-login.settings.MaxLogins):]
+		return current[max(0, len(current)-guard.settings.MaxLogins):]
 	})
 
 	return record.ID, err
 }
 
-// live removes the records created at least [LoginBuilder.SessionLifetime] ago
+// live removes the records created at least [GuardBuilder.SessionLifetime] ago
 // from records and returns the rest. Sessions have an absolute lifetime, so such
 // a record cannot belong to a live session: its device is already logged out and
 // listing it would show a phantom device. It modifies records in place, so pass
 // a freshly decoded list.
-func (login *Login) live(records []LoginRecord) []LoginRecord {
+func (guard *Guard) live(records []LoginRecord) []LoginRecord {
 	return slices.DeleteFunc(records, func(record LoginRecord) bool {
-		return time.Since(record.CreatedAt) >= login.settings.SessionLifetime
+		return time.Since(record.CreatedAt) >= guard.settings.SessionLifetime
 	})
 }
 
 // list returns the stored records of subject that are still live, oldest first;
 // none is a nil list.
-func (login *Login) list(ctx context.Context, subject string) ([]LoginRecord, error) {
-	current, err := login.store.Get(ctx, login.records.Key(subject))
+func (guard *Guard) list(ctx context.Context, subject string) ([]LoginRecord, error) {
+	current, err := guard.store.Get(ctx, guard.records.Key(subject))
 
 	if errors.Is(err, cache.ErrNotFound) {
 		return nil, nil
 	}
 
-	return login.live(current), err
+	return guard.live(current), err
 }
 
 // seen reports whether the record id of subject still exists and refreshes its
 // SeenAt when it is older than five minutes. The common case is one read. Only
 // the read can fail; see the refresh below.
-func (login *Login) seen(ctx context.Context, subject, id string) (bool, error) {
-	current, err := login.list(ctx, subject)
+func (guard *Guard) seen(ctx context.Context, subject, id string) (bool, error) {
+	current, err := guard.list(ctx, subject)
 
 	if err != nil {
 		return false, err
@@ -226,7 +226,7 @@ func (login *Login) seen(ctx context.Context, subject, id string) (bool, error) 
 	// The refresh is best effort: the record exists, so a failed write (lock
 	// contention, cache error) only leaves SeenAt stale and must not fail a
 	// request that is otherwise authenticated. The next request retries.
-	_ = login.edit(ctx, subject, func(current []LoginRecord) []LoginRecord {
+	_ = guard.edit(ctx, subject, func(current []LoginRecord) []LoginRecord {
 		for i := range current {
 			if current[i].ID == id && time.Since(current[i].SeenAt) >= seenInterval {
 				current[i].SeenAt = time.Now().UTC()
@@ -247,13 +247,13 @@ func (login *Login) seen(ctx context.Context, subject, id string) (bool, error) 
 //
 // Example:
 //
-//	records, err := login.Logins(r)
+//	records, err := guard.Logins(r)
 //	if err != nil {
 //		return err
 //	}
 //	return response.JSON(w, http.StatusOK, records)
-func (login *Login) Logins(r *http.Request) ([]LoginRecord, error) {
-	current, err := login.session(r)
+func (guard *Guard) Logins(r *http.Request) ([]LoginRecord, error) {
+	current, err := guard.session(r)
 
 	if err != nil {
 		return nil, err
@@ -269,7 +269,7 @@ func (login *Login) Logins(r *http.Request) ([]LoginRecord, error) {
 		return nil, err
 	}
 
-	records, err := login.LoginsOf(r.Context(), stored.Subject)
+	records, err := guard.LoginsOf(r.Context(), stored.Subject)
 
 	if err != nil {
 		return nil, err
@@ -294,17 +294,17 @@ func (login *Login) Logins(r *http.Request) ([]LoginRecord, error) {
 //
 // Example:
 //
-//	records, err := login.LoginsOf(ctx, subject)
+//	records, err := guard.LoginsOf(ctx, subject)
 //	if err != nil {
 //		return err
 //	}
 //	fmt.Println(len(records), "devices")
-func (login *Login) LoginsOf(ctx context.Context, subject string) ([]LoginRecord, error) {
+func (guard *Guard) LoginsOf(ctx context.Context, subject string) ([]LoginRecord, error) {
 	if err := ValidateSubject(subject); err != nil {
 		return nil, err
 	}
 
-	return login.list(ctx, subject)
+	return guard.list(ctx, subject)
 }
 
 // Revoke logs the devices with the given record IDs out: each device's next
@@ -315,15 +315,15 @@ func (login *Login) LoginsOf(ctx context.Context, subject string) ([]LoginRecord
 //
 // Example:
 //
-//	if err := login.Revoke(r.Context(), subject, r.PathValue("id")); err != nil {
+//	if err := guard.Revoke(r.Context(), subject, r.PathValue("id")); err != nil {
 //		return err
 //	}
-func (login *Login) Revoke(ctx context.Context, subject string, ids ...string) error {
+func (guard *Guard) Revoke(ctx context.Context, subject string, ids ...string) error {
 	if err := ValidateSubject(subject); err != nil {
 		return err
 	}
 
-	return login.edit(ctx, subject, func(current []LoginRecord) []LoginRecord {
+	return guard.edit(ctx, subject, func(current []LoginRecord) []LoginRecord {
 		return slices.DeleteFunc(current, func(record LoginRecord) bool { return slices.Contains(ids, record.ID) })
 	})
 }
@@ -335,11 +335,11 @@ func (login *Login) Revoke(ctx context.Context, subject string, ids ...string) e
 //
 // Example:
 //
-//	if err := login.RevokeOthers(r); err != nil {
+//	if err := guard.RevokeOthers(r); err != nil {
 //		return err
 //	}
-func (login *Login) RevokeOthers(r *http.Request) error {
-	current, err := login.session(r)
+func (guard *Guard) RevokeOthers(r *http.Request) error {
+	current, err := guard.session(r)
 
 	if err != nil {
 		return err
@@ -357,7 +357,7 @@ func (login *Login) RevokeOthers(r *http.Request) error {
 
 	own := func(record LoginRecord) bool { return record.ID == stored.LoginID }
 
-	records, err := login.list(r.Context(), stored.Subject)
+	records, err := guard.list(r.Context(), stored.Subject)
 
 	if err != nil {
 		return err
@@ -367,7 +367,7 @@ func (login *Login) RevokeOthers(r *http.Request) error {
 		return ErrUnauthenticated
 	}
 
-	return login.edit(r.Context(), stored.Subject, func(records []LoginRecord) []LoginRecord {
+	return guard.edit(r.Context(), stored.Subject, func(records []LoginRecord) []LoginRecord {
 		// A revocation between the check and the edit must not wipe the list.
 		if !slices.ContainsFunc(records, own) {
 			return records
@@ -379,18 +379,18 @@ func (login *Login) RevokeOthers(r *http.Request) error {
 
 // RevokeAll logs every device of subject out by deleting the subject's record
 // list. It returns an error wrapping [ErrInvalidSubject] for an invalid subject.
-// [NewLogin] registers it with [UserProvider.OnForget], so forgetting a user
+// [NewGuard] registers it with [UserProvider.OnForget], so forgetting a user
 // ends their sessions.
 //
 // Example:
 //
-//	if err := login.RevokeAll(ctx, subject); err != nil {
+//	if err := guard.RevokeAll(ctx, subject); err != nil {
 //		return err
 //	}
-func (login *Login) RevokeAll(ctx context.Context, subject string) error {
+func (guard *Guard) RevokeAll(ctx context.Context, subject string) error {
 	if err := ValidateSubject(subject); err != nil {
 		return err
 	}
 
-	return login.store.Delete(ctx, login.records.Key(subject))
+	return guard.store.Delete(ctx, guard.records.Key(subject))
 }

@@ -15,10 +15,10 @@ import (
 	"arkoren.dev/core/http/session"
 )
 
-// logoutHandler wraps auth.Logout in the authentication middleware of login, as
+// logoutHandler wraps Guard.LogoutHandler in the authentication middleware of login, as
 // an application wires it.
-func logoutHandler(login *auth.Login, configure ...auth.LogoutBuilderFunc) router.Handler {
-	return auth.Middleware(login.Authenticator())(auth.Logout(login, configure...))
+func logoutHandler(guard *auth.Guard, configure ...auth.LogoutBuilderFunc) router.Handler {
+	return auth.Middleware(guard.Authenticator())(guard.LogoutHandler(configure...))
 }
 
 // listenLoggedOut returns the payloads published on bus so far.
@@ -43,14 +43,14 @@ func listenLoggedOut(t *testing.T, bus *event.Bus) *[]auth.LoggedOutEvent {
 func TestLogoutEndsLoginAndPublishesOnce(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	bus := event.New()
 	got := listenLoggedOut(t, bus)
-	current, r := device(t, login, "7", "Firefox")
+	current, r := device(t, guard, "7", "Firefox")
 	before := current.ID()
 	w := httptest.NewRecorder()
 
-	err := logoutHandler(login, func(logout *auth.LogoutBuilder) { logout.Events(bus) })(w, r)
+	err := logoutHandler(guard, func(logout *auth.LogoutBuilder) { logout.Events(bus) })(w, r)
 
 	if err != nil || w.Code != http.StatusNoContent {
 		t.Fatalf("logout = %v, %d", err, w.Code)
@@ -60,11 +60,11 @@ func TestLogoutEndsLoginAndPublishesOnce(t *testing.T) {
 		t.Fatal("session ID was not regenerated")
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("still logged in: %v", err)
 	}
 
-	if len(loginsOf(t, login, "7")) != 0 {
+	if len(loginsOf(t, guard, "7")) != 0 {
 		t.Fatal("login record survived")
 	}
 
@@ -78,12 +78,12 @@ func TestLogoutEndsLoginAndPublishesOnce(t *testing.T) {
 func TestLogoutAnonymousSucceedsWithoutEvent(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	bus := event.New()
 	got := listenLoggedOut(t, bus)
 	w := httptest.NewRecorder()
 
-	err := logoutHandler(login, func(logout *auth.LogoutBuilder) { logout.Events(bus) })(w, sessionRequest(newSession()))
+	err := logoutHandler(guard, func(logout *auth.LogoutBuilder) { logout.Events(bus) })(w, sessionRequest(newSession()))
 
 	if err != nil || w.Code != http.StatusNoContent || len(*got) != 0 {
 		t.Fatalf("logout = %v, %d, events %+v", err, w.Code, *got)
@@ -95,22 +95,22 @@ func TestLogoutAnonymousSucceedsWithoutEvent(t *testing.T) {
 func TestLogoutClearsPendingLogin(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	bus := event.New()
 	got := listenLoggedOut(t, bus)
 	r := sessionRequest(newSession())
 
-	if begin(t, login, r, "7") {
+	if begin(t, guard, r, "7") {
 		t.Fatal("login completed without its second factor")
 	}
 
-	err := logoutHandler(login, func(logout *auth.LogoutBuilder) { logout.Events(bus) })(httptest.NewRecorder(), r)
+	err := logoutHandler(guard, func(logout *auth.LogoutBuilder) { logout.Events(bus) })(httptest.NewRecorder(), r)
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending login survived: %v", err)
 	}
 
@@ -124,10 +124,10 @@ func TestLogoutClearsPendingLogin(t *testing.T) {
 func TestLogoutWithoutSessionIsWiringError(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
 
-	err := auth.Logout(login)(httptest.NewRecorder(), r)
+	err := guard.LogoutHandler()(httptest.NewRecorder(), r)
 
 	if !errors.Is(err, session.ErrNoSession) {
 		t.Fatalf("error = %v", err)
@@ -138,11 +138,11 @@ func TestLogoutWithoutSessionIsWiringError(t *testing.T) {
 func TestLogoutRedirectAnswersSeeOther(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	_, r := device(t, login, "7", "Firefox")
+	guard, _ := newGuard(t)
+	_, r := device(t, guard, "7", "Firefox")
 	w := httptest.NewRecorder()
 
-	err := logoutHandler(login, func(logout *auth.LogoutBuilder) { logout.Redirect("/") })(w, r)
+	err := logoutHandler(guard, func(logout *auth.LogoutBuilder) { logout.Redirect("/") })(w, r)
 
 	if err != nil || w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
 		t.Fatalf("logout = %v, %d, %q", err, w.Code, w.Header().Get("Location"))
@@ -154,16 +154,16 @@ func TestLogoutRedirectAnswersSeeOther(t *testing.T) {
 func TestLogoutUnsafeRedirectIsConfigurationError(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	current, r := device(t, login, "7", "Firefox")
+	guard, _ := newGuard(t)
+	current, r := device(t, guard, "7", "Firefox")
 
-	err := logoutHandler(login, func(logout *auth.LogoutBuilder) { logout.Redirect("https://evil.example") })(httptest.NewRecorder(), r)
+	err := logoutHandler(guard, func(logout *auth.LogoutBuilder) { logout.Redirect("https://evil.example") })(httptest.NewRecorder(), r)
 
 	if !errors.Is(err, response.ErrUnsafeRedirect) {
 		t.Fatalf("error = %v", err)
 	}
 
-	if _, err := authenticate(login, current); err != nil {
+	if _, err := authenticate(guard, current); err != nil {
 		t.Fatalf("session changed: %v", err)
 	}
 }
@@ -173,7 +173,7 @@ func TestLogoutUnsafeRedirectIsConfigurationError(t *testing.T) {
 func TestLogoutNilLoginIsConfigurationError(t *testing.T) {
 	t.Parallel()
 
-	handler := auth.Logout(nil)
+	handler := (*auth.Guard)(nil).LogoutHandler()
 
 	for range 2 {
 		if err := handler(httptest.NewRecorder(), sessionRequest(newSession())); err == nil {
@@ -186,31 +186,31 @@ func TestLogoutNilLoginIsConfigurationError(t *testing.T) {
 func TestLogoutWithoutBusPublishesNothing(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	_, r := device(t, login, "7", "Firefox")
+	guard, _ := newGuard(t)
+	_, r := device(t, guard, "7", "Firefox")
 	w := httptest.NewRecorder()
 
-	if err := logoutHandler(login)(w, r); err != nil || w.Code != http.StatusNoContent {
+	if err := logoutHandler(guard)(w, r); err != nil || w.Code != http.StatusNoContent {
 		t.Fatalf("logout = %v, %d", err, w.Code)
 	}
 }
 
-func ExampleLogout() {
-	login := exampleLogin()
+func ExampleGuard_LogoutHandler() {
+	guard := exampleGuard()
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 	w := httptest.NewRecorder()
 
-	err := auth.Middleware(login.Authenticator())(auth.Logout(login))(w, r)
-	_, authErr := login.Authenticator()(r)
+	err := auth.Middleware(guard.Authenticator())(guard.LogoutHandler())(w, r)
+	_, authErr := guard.Authenticator()(r)
 
 	fmt.Println(err, w.Code, errors.Is(authErr, auth.ErrNoCredentials))
 	// Output: <nil> 204 true
 }
 
 func ExampleLogoutBuilder() {
-	login := exampleLogin()
-	handler := auth.Logout(login, func(logout *auth.LogoutBuilder) {
+	guard := exampleGuard()
+	handler := guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 		logout.Redirect("/").Events(event.New())
 	})
 	w := httptest.NewRecorder()
@@ -222,7 +222,7 @@ func ExampleLogoutBuilder() {
 }
 
 func ExampleLogoutBuilder_Redirect() {
-	handler := auth.Logout(exampleLogin(), func(logout *auth.LogoutBuilder) {
+	handler := exampleGuard().LogoutHandler(func(logout *auth.LogoutBuilder) {
 		logout.Redirect("/goodbye")
 	})
 	w := httptest.NewRecorder()
@@ -240,11 +240,11 @@ func ExampleLogoutBuilder_Events() {
 
 		return nil
 	})
-	login := exampleLogin()
+	guard := exampleGuard()
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	handler := auth.Middleware(login.Authenticator())(auth.Logout(login, func(logout *auth.LogoutBuilder) {
+	handler := auth.Middleware(guard.Authenticator())(guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 		logout.Events(bus)
 	}))
 	_ = handler(httptest.NewRecorder(), r)
@@ -257,7 +257,7 @@ func ExampleLogoutBuilderFunc() {
 	})
 	w := httptest.NewRecorder()
 
-	err := auth.Logout(exampleLogin(), policy)(w, exampleRequest())
+	err := exampleGuard().LogoutHandler(policy)(w, exampleRequest())
 
 	fmt.Println(err, w.Code)
 	// Output: <nil> 303

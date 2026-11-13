@@ -341,20 +341,20 @@ captures remain shared. HTTP construction also uses dedicated builders, includin
 telemetry's server middleware and outgoing transport. Client retry construction
 composes completed propagation settings through one internal telemetry callback,
 never replaying user policies. Session middleware owns cookie/persistence policy;
-auth.NewLogin owns the session login state machine and LoginBuilder.Handle;
+auth.NewGuard owns the session login state machine (type Guard, renamed from Login in core v0.7.0) and GuardBuilder.Handle;
 request lookup owns per-call WithSessionHandle. Share one session.NewHandle()
 across those roles; zero selects the default context slot. Handles do not isolate
-cookies, cache records, or authorization. ark/oauth Callback(login, resolve)
-returns a subject string to Login.Begin (federated factor; ChallengeURL on a
-pending second factor) and auth.Logout(login) owns the logout route (Client.Logout is deprecated); Verify returns the
+cookies, cache records, or authorization. ark/oauth Callback(guard, resolve)
+returns a subject string to Guard.Begin (federated factor; ChallengeURL on a
+pending second factor) and guard.LogoutHandler() owns the logout route (Client.Logout is deprecated); Verify returns the
 external Identity, which the application maps for auth.Bearer. Session data uses
 shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns
-renewal and absolute lifetime. Login keeps one session record (arkoren:auth:session) and a pending login
+renewal and absolute lifetime. Guard keeps one session record (arkoren:auth:session) and a pending login
 (arkoren:auth:pending), not separate stored identities: preserve their raw JSON.
 Login records (`core/auth/records.go`) keep one cache entry per subject under
 arkoren:auth:logins, independent of the session middleware's namespace, with
-`LoginBuilder.SessionLifetime` as TTL because session settings are not exposed.
+`GuardBuilder.SessionLifetime` as TTL because session settings are not exposed.
 Old arkoren:auth:user sessions are anonymous. Mutation success is not durable save.
 Broadcast, cache,
 crypto, database/migrator, feature, mail and storage facades and configurable

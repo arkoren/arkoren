@@ -3,7 +3,7 @@ title: OAuth Login
 description: Complete external browser sign-in and map the provider identity to a local account safely.
 order: 40
 summary:
-  - Configure an external provider and complete browser login through the shared login.
+  - Configure an external provider and complete browser login through the shared guard.
   - Link local accounts by issuer and subject, return their subject, and hand a second factor to its challenge page.
   - Apply each provider's callback and identity requirements and handle bounded outcome events.
 ---
@@ -17,7 +17,7 @@ through an authenticated user API. `oauthauth` supports both paths.
 
 You still own local accounts and external-account linkage. The adapter completes
 the provider flow, calls your mapper, and logs the returned account subject in
-through the shared [Session Login](session-login.md) login, so a registered
+through the shared [Session Login](session-login.md) guard, so a registered
 [second factor](two-factor.md) still applies. It is not an authorization server and
 does not acquire API tokens for arbitrary clients or refresh tokens for your
 service. To accept an existing JWT at an API, use [OIDC Tokens](oidc-bearer.md).
@@ -110,35 +110,35 @@ available until handlers have finished.
 ## Connect Browser Routes
 
 Use an existing session-enabled, CSRF-protected browser group `web` and the
-`login` from [Enable Login](session-login.md#enable-login), which already runs
-`auth.Middleware(login.Authenticator())`. Import `auth` from
+`guard` from [Enable Login](session-login.md#enable-login), which already runs
+`auth.Middleware(guard.Authenticator())`. Import `auth` from
 `arkoren.dev/core/auth`. The mapper `mapIdentity` below returns the local
 account's subject:
 
 ```go
 web.Get("/login", client.Login())
-web.Get("/oauth/callback", client.Callback(login, mapIdentity))
-web.Post("/logout", auth.Logout(login, func(logout *auth.LogoutBuilder) {
+web.Get("/oauth/callback", client.Callback(guard, mapIdentity))
+web.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 	logout.Redirect("/")
 }))
 ```
 
 `Login` redirects to the provider. A successful callback verifies the provider
-identity, maps it to a subject, calls `login.Begin` with a federated factor,
+identity, maps it to a subject, calls `guard.Begin` with a federated factor,
 rotates the session ID, and redirects to the saved local destination. Subsequent
-requests use the normal authenticator. `auth.Logout` from core owns the logout route: it calls `login.Logout`, which also
+requests use the normal authenticator. `guard.LogoutHandler` from core owns the logout route: it calls `guard.Logout`, which also
 ends a pending second-factor login, and redirects to `/`; it does not sign the
-person out at the provider. Keep logout CSRF-protected. `client.Logout(login)`
-still works but is deprecated in favor of `auth.Logout`.
+person out at the provider. Keep logout CSRF-protected. `client.Logout(guard)`
+still works but is deprecated in favor of `guard.LogoutHandler`.
 
 If a user who is already logged in as the mapped subject signs in through the
 provider (to connect it or to refresh their proof), `Begin` adds the federated
 factor to their session and does not ask for a second factor again.
 
-A nil login or mapper is a configuration error, not a rejected credential. A
+A nil guard or mapper is a configuration error, not a rejected credential. A
 request without a session returns `401` before state consumption or provider
 exchange. If you use [custom session selection](session-login.md#select-sessions),
-build the login with the same handle as the session middleware. Middleware still
+build the guard with the same handle as the session middleware. Middleware still
 owns [response-time persistence](../http-capabilities/sessions.md#save-changes);
 successful callback mutation does not prove storage or old-ID retirement succeeded.
 
@@ -196,7 +196,7 @@ scopes. These are provider grants, not your local account's resource permissions
 
 ## Second Factors
 
-If the `login` has a registered [second-factor check](two-factor.md#hold-a-login)
+If the `guard` has a registered [second-factor check](two-factor.md#hold-a-login)
 for the mapped account, `Begin` holds the login as pending and the request stays
 anonymous. Set the page that asks for the second factor with
 `ClientBuilder.ChallengeURL`, a local path:
@@ -213,7 +213,7 @@ client, err := oauth.New(oauth.Google(), cipher, clientID,
 
 The callback then redirects to that path without publishing `LoginSucceeded`; the
 `return_to` target is not carried over, so your challenge page chooses the
-destination once `login.Complete` succeeds. New rejects a challenge URL that is not
+destination once `guard.Complete` succeeds. New rejects a challenge URL that is not
 a safe local path. Without a challenge URL the callback ends the pending login and
 fails with `ErrNoChallengeURL` (`500`); it never signs the person in without
 the second factor. A federated login counts as one factor and never as
@@ -428,7 +428,7 @@ policy denial behaves the same way.
 If you need outcome events, configure `ClientBuilder.Events` with your existing
 [event bus](../events/overview.md). Nil publishes nothing. Completed logins
 publish issuer and subject, which can identify a person; a login held for a second
-factor publishes nothing until your challenge page completes it. `auth.Logout` publishes `auth.LoggedOut` with the subject when configured with
+factor publishes nothing until your challenge page completes it. `guard.LogoutHandler` publishes `auth.LoggedOut` with the subject when configured with
 `LogoutBuilder.Events`; it reports local mutation, not provider logout or durable
 session persistence.
 

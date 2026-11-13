@@ -30,7 +30,7 @@
 // [Bearer] adapts a token verifier. [Require] uses [MiddlewareBuilder]
 // construction policies.
 //
-// Browser sessions use [Login], described below. Its [Login.Authenticator]
+// Browser sessions use [Guard], described below. Its [Guard.Authenticator]
 // reads the session record, asks the [UserProvider] on every request and builds
 // an identity with the stored factors and the provider's [UserRecord].
 //
@@ -48,13 +48,13 @@
 //	if err != nil {
 //		return err
 //	}
-//	login, err := auth.NewLogin(users, store)
+//	guard, err := auth.NewGuard(users, store)
 //	if err != nil {
 //		return err
 //	}
 //	r.Use(session.Middleware(store))
 //	r.Use(csrf.Middleware())
-//	r.Use(auth.Middleware(login.Authenticator(), auth.Bearer(verifyKey)))
+//	r.Use(auth.Middleware(guard.Authenticator(), auth.Bearer(verifyKey)))
 //	r.Use(ratelimit.Middleware(store, func(limiter *ratelimit.Builder) {
 //		limiter.KeyFunc(func(r *http.Request) string {
 //			if current, err := request.Identity(r); err == nil {
@@ -66,36 +66,37 @@
 //	}))
 //
 //	r.Post("/login", signIn)
-//	r.Post("/logout", auth.Logout(login))
+//	r.Post("/logout", guard.LogoutHandler())
 //
 //	private := r.With(auth.Require())
 //	private.Get("/me", me)
 //	r.With(gate.Require(isAdmin)).Delete("/users/{id}", deleteUser)
 //
-// # Login, levels and step-up
+// # Guard, levels and step-up
 //
-// [Login] turns "this person proved X" into a logged-in session. Every login
+// [Guard] turns "this person proved X" into a logged-in session. Every login
 // method (password, OAuth, SAML, passkey) verifies its own credential and then
-// calls [Login.Begin] with the subject and the verified [Factor]. Begin looks
+// calls [Guard.Begin] with the subject and the verified [Factor]. Begin looks
 // the user up with the provider (a deleted or disabled user is
 // [ErrUnauthenticated]) and asks each check registered with
-// [LoginBuilder.SecondFactor], so core never imports the package that knows
+// [GuardBuilder.SecondFactor], so core never imports the package that knows
 // whether a user is enrolled. If none says yes the user is logged in and Begin
 // returns true. Otherwise the login is parked as pending and the request stays
 // anonymous: the handler asks for the second factor, reads the user with
-// [Login.Pending], reports a wrong code with [Login.Fail] (the pending login is
-// discarded after [LoginBuilder.MaxAttempts]) and finishes with [Login.Complete],
-// which is single use. [LoginBuilder.ChallengeTTL] bounds the wait.
-// [Login.Confirm] records a fresh factor on a logged-in session, such as a
+// [Guard.Pending], reports a wrong code with [Guard.Fail] (the pending login is
+// discarded after [GuardBuilder.MaxAttempts]) and finishes with [Guard.Complete],
+// which is single use. [GuardBuilder.ChallengeTTL] bounds the wait.
+// [Guard.Confirm] records a fresh factor on a logged-in session, such as a
 // re-entered password. Every transition regenerates the session ID.
 //
 // A session that is already logged in as the subject keeps its login: Begin
 // then adds the factor like Confirm and skips the second-factor checks, so a
 // logged-in user who connects a provider or re-authenticates through one is not
 // challenged again and keeps the factors they have. Releases before v0.6.0
-// replaced the factors and parked the login instead. [Logout] is the handler
-// of the logout route: it ends the login with [Login.Logout], publishes
-// [LoggedOut] and answers 204, or 303 with [LogoutBuilder.Redirect].
+// replaced the factors and parked the login instead. [Guard.LogoutHandler]
+// returns the handler of the logout route: it ends the login with
+// [Guard.Logout], publishes [LoggedOut] and answers 204, or 303 with
+// [LogoutBuilder.Redirect].
 //
 // The session holds one record (subject, factors, a hash of the user's
 // [UserRecord.Version] and a login-record ID) under one key, and a pending login
@@ -107,29 +108,29 @@
 //
 // Every login (Begin without a second factor, and Complete) creates a
 // [LoginRecord] with a random ID that survives session ID rotation. All records
-// of a user live in one entry of the cache given to [NewLogin], under
-// "arkoren:auth:logins", whose lifetime is [LoginBuilder.SessionLifetime] (set it
-// to the session middleware's maximum lifetime). [Login.Logins] lists them and
-// flags the current one, [Login.Revoke], [Login.RevokeOthers] and
-// [Login.RevokeAll] log devices out, and [Login.LoginsOf] serves administrators.
+// of a user live in one entry of the cache given to [NewGuard], under
+// "arkoren:auth:logins", whose lifetime is [GuardBuilder.SessionLifetime] (set it
+// to the session middleware's maximum lifetime). [Guard.Logins] lists them and
+// flags the current one, [Guard.Revoke], [Guard.RevokeOthers] and
+// [Guard.RevokeAll] log devices out, and [Guard.LoginsOf] serves administrators.
 // The authenticator reads the entry on every request and treats a missing record
 // as [ErrNoCredentials], so a revoked device cannot list or revoke devices
 // either; it refreshes [LoginRecord.SeenAt] at most every five minutes, ignoring
 // a failed write. Records older than the session lifetime are never listed and
-// the next write removes them. At most [LoginBuilder.MaxLogins] records are kept
-// and the oldest is dropped, which logs that device out. [Login.Logout] removes its record and
-// [NewLogin] registers [Login.RevokeAll] with [UserProvider.OnForget].
+// the next write removes them. At most [GuardBuilder.MaxLogins] records are kept
+// and the oldest is dropped, which logs that device out. [Guard.Logout] removes its record and
+// [NewGuard] registers [Guard.RevokeAll] with [UserProvider.OnForget].
 //
 // Records hold the user agent (cut to 255 bytes) and client address, which are
-// personal data: [LoginBuilder.Devices] turns them off, and they never enter
+// personal data: [GuardBuilder.Devices] turns them off, and they never enter
 // telemetry or events. The address is the host of r.RemoteAddr unless
-// [LoginBuilder.ClientIP] says otherwise; behind a reverse proxy pass
+// [GuardBuilder.ClientIP] says otherwise; behind a reverse proxy pass
 // ratelimit.TrustedProxyKey from core/http/middleware/ratelimit with your proxy
 // prefixes (it reports IPv6 addresses as their /64 prefix). Writes take a per-user cache lock and compare-and-put with a bounded
 // retry. A flushed cache logs everyone out, and each authenticated session
 // request costs one extra cache read.
 //
-// [RequireLevel] and [RequireFresh] guard routes by the factors of the identity
+// [RequireLevel] and [RequireFresh] protect routes by the factors of the identity
 // in the context, so they also work for tokens that carry factors. Too weak or
 // too old is [ErrStepUpRequired] (403); no identity is rejected like [Require].
 // A factor dated in the future is not fresh.
@@ -177,7 +178,7 @@
 //		}
 //
 //		factor := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
-//		complete, err := login.Begin(r, subject, factor)
+//		complete, err := guard.Begin(r, subject, factor)
 //		if err != nil {
 //			return err
 //		}
@@ -194,11 +195,11 @@
 // # Cookie authentication needs CSRF protection
 //
 // Browsers send session cookies on cross-site requests, so install
-// csrf.Middleware whenever [Login] authenticates browser cookies.
+// csrf.Middleware whenever [Guard] authenticates browser cookies.
 //
 // # Deleted users
 //
-// Sessions outlive accounts. [Login.Authenticator] asks the provider on every
+// Sessions outlive accounts. [Guard.Authenticator] asks the provider on every
 // request, and a user that is deleted ([ErrUserNotFound]) or disabled
 // ([ErrUserDisabled]) becomes anonymous instead of failing with a 500.
 //
@@ -245,7 +246,7 @@
 // # OAuth2 and OIDC
 //
 // The arkoren.dev/ark/oauth/oauthauth package logs users in through
-// [Login.Begin] with a federated factor and verifies OIDC bearer tokens; auth
+// [Guard.Begin] with a federated factor and verifies OIDC bearer tokens; auth
 // does not import it. arkoren.dev/ark/federation maps its external identities
 // to local subjects.
 //
@@ -289,7 +290,7 @@
 // listeners must select safe attributes. These payload limits do not change
 // HTTP problem instance rendering.
 //
-// [Logout], built with [LogoutBuilder.Events], publishes [LoggedOut]
+// [Guard.LogoutHandler], built with [LogoutBuilder.Events], publishes [LoggedOut]
 // ("auth.user.logged-out") after a logged-in user logged out. It carries only
 // the subject.
 //

@@ -15,20 +15,20 @@ account. The session records which **factors** the user proved (password,
 one-time code, security key) and when. A login that still needs a factor is held
 **pending**, and step-up middleware checks the recorded factors before sensitive
 routes. Arkoren checks none of the factors itself: you verify the password, code
-or key, then tell `auth.Login` which factor succeeded.
+or key, then tell `auth.Guard` which factor succeeded.
 
 The examples extend [Session Login](session-login.md): they use its shared
-`login` (an `*auth.Login`), `Account` and router `web`, with session, CSRF and
+`guard` (an `*auth.Guard`), `Account` and router `web`, with session, CSRF and
 authentication middleware installed. Import `auth` from `arkoren.dev/core/auth`.
 
 ## Record Factors
 
-Every login method ends in `login.Begin` with the subject and the factor it
+Every login method ends in `guard.Begin` with the subject and the factor it
 verified:
 
 ```go
 factor := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
-complete, err := login.Begin(r, subject, factor)
+complete, err := guard.Begin(r, subject, factor)
 ```
 
 A factor has a `Method` (how it was verified), a `Kind` (what it proves) and a
@@ -54,12 +54,12 @@ password, because Arkoren cannot see which factors the provider required.
 
 ## Hold a Login
 
-Tell the login which users need a second factor by registering checks. A check
+Tell the guard which users need a second factor by registering checks. A check
 is a plain function, so core never imports the package that knows the answer;
 pass an enrollment lookup such as an ark's `Enrolled`:
 
 ```go
-login, err := auth.NewLogin(provider, store, func(policy *auth.LoginBuilder) {
+guard, err := auth.NewGuard(provider, store, func(policy *auth.GuardBuilder) {
 	policy.SecondFactor(enrolled) // func(ctx context.Context, subject string) (bool, error)
 })
 ```
@@ -92,12 +92,12 @@ can look up their secret. After the code verifies, `Complete` signs them in with
 the first factor plus the new one:
 
 ```go
-user, err := login.Pending(r)
+user, err := guard.Pending(r)
 if err != nil {
 	return err // auth.ErrUnauthenticated: no pending login, or it expired
 }
 if !verifyCode(user.Subject, in.Code) {
-	if err := login.Fail(r); err != nil {
+	if err := guard.Fail(r); err != nil {
 		return err
 	}
 
@@ -106,7 +106,7 @@ if !verifyCode(user.Subject, in.Code) {
 
 otp := auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession}
 
-return login.Complete(r, otp)
+return guard.Complete(r, otp)
 ```
 
 `verifyCode` is your check, for example with
@@ -156,7 +156,7 @@ ID:
 
 ```go
 password := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
-if err := login.Confirm(r, password); err != nil {
+if err := guard.Confirm(r, password); err != nil {
 	return err
 }
 ```
@@ -183,7 +183,7 @@ current value on every request. A mismatch makes the session anonymous,
 including the device that made the change; that device logs in again, passing
 the second factor again if the user is enrolled. There is no list of a user's
 sessions to revoke individually. To keep the device that changed the password,
-leave `Version` unchanged and call `login.RevokeOthers(r)`.
+leave `Version` unchanged and call `guard.RevokeOthers(r)`.
 
 For all functions and options, see the
 [`auth` API reference](https://pkg.go.dev/arkoren.dev/core/auth).
