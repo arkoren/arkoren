@@ -339,7 +339,7 @@ test("the API catalog is indexed without local declarations or Markdown alternat
   for (const url of urls) {
     assert.match(
       url,
-      /^https:\/\/pkg\.go\.dev\/arkoren\.dev\/(?:core|(?:foundation|driver)\/[^/]+)$/,
+      /^https:\/\/pkg\.go\.dev\/arkoren\.dev\/(?:core|(?:foundation|driver|ark)\/[^/]+)$/,
     );
     assert.ok(root.includes(url), url);
   }
