@@ -256,7 +256,7 @@ func (login *Login) Begin(r *http.Request, subject string, factor Factor) (compl
 		return true, login.start(current, user, factors)
 	}
 
-	waiting := pendingLogin{Subject: user.Subject, Factors: factors, Expires: now.Add(login.settings.ChallengeTTL).UTC()}
+	waiting := pendingLogin{Subject: user.Subject, Factors: factors, Version: hashVersion(user.Version), Expires: now.Add(login.settings.ChallengeTTL).UTC()}
 
 	if err := current.Delete(sessionField); err != nil {
 		return false, err
@@ -297,8 +297,9 @@ func (login *Login) pending(current *session.Session) (pendingLogin, error) {
 }
 
 // pendingUser returns the pending login of current and its user, loaded from the
-// provider. A user deleted or disabled during the challenge discards the pending
-// login and is [ErrUnauthenticated].
+// provider. A user deleted or disabled during the challenge, or whose
+// [UserRecord.Version] differs from the one seen at [Login.Begin] (compared in
+// constant time), discards the pending login and is [ErrUnauthenticated].
 func (login *Login) pendingUser(r *http.Request, current *session.Session) (pendingLogin, UserRecord, error) {
 	waiting, err := login.pending(current)
 
@@ -308,7 +309,11 @@ func (login *Login) pendingUser(r *http.Request, current *session.Session) (pend
 
 	user, err := login.provider.Find(r.Context(), waiting.Subject)
 
-	if gone(err) {
+	if err != nil && !gone(err) {
+		return waiting, UserRecord{}, err
+	}
+
+	if gone(err) || subtle.ConstantTimeCompare([]byte(waiting.Version), []byte(hashVersion(user.Version))) != 1 {
 		if err := current.Delete(pendingField); err != nil {
 			return waiting, UserRecord{}, err
 		}
@@ -316,12 +321,13 @@ func (login *Login) pendingUser(r *http.Request, current *session.Session) (pend
 		return waiting, UserRecord{}, ErrUnauthenticated
 	}
 
-	return waiting, user, err
+	return waiting, user, nil
 }
 
 // Pending returns the user waiting for a second factor, as parked by
 // [Login.Begin]. It returns [ErrUnauthenticated] when there is no pending login,
-// it expired (which also clears it) or the user was deleted or disabled in the
+// it expired (which also clears it) or the user was deleted, disabled or had its
+// [UserRecord.Version] changed, for example by a password change, in the
 // meantime (which discards it). Other provider errors pass through. Pending does
 // not consume the login, so a handler can read the user, check a code and report
 // a wrong one with [Login.Fail].

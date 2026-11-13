@@ -116,7 +116,9 @@ response does not reveal which part was wrong.
 
 `Complete` is single use: it consumes the pending login and rotates the ID, so a
 second call returns `ErrUnauthenticated`. A user deleted or disabled meanwhile
-also returns it and discards the pending login. Every `Begin`, `Complete`,
+also returns it and discards the pending login, and so does a changed
+`UserRecord.Version`: if the password changes while the user is on the second
+step, they must start the login again. `Pending` applies the same check. Every `Begin`, `Complete`,
 `Fail`, `Confirm` and `Logout` regenerates the session ID.
 
 ## Require a Level

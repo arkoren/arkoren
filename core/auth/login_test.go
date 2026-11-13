@@ -910,3 +910,76 @@ func TestLoginConformance(t *testing.T) {
 		return r
 	})
 }
+
+// TestCompleteFailsWhenVersionChangedDuringChallenge verifies a credential
+// change between Begin and Complete rejects the login and clears the pending
+// login.
+func TestCompleteFailsWhenVersionChangedDuringChallenge(t *testing.T) {
+	t.Parallel()
+
+	login, driver := newLogin(t, withChecks(secondFactor(true, nil)))
+	current := newSession()
+	r := sessionRequest(current)
+	begin(t, login, r, "7")
+
+	if err := driver.Put(auth.UserRecord{Subject: "7", Version: "v2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := login.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("complete = %v", err)
+	}
+
+	if _, ok := current.All()["arkoren:auth:pending"]; ok {
+		t.Fatal("pending login survived a version change")
+	}
+
+	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+		t.Fatalf("logged in despite version change: %v", err)
+	}
+}
+
+// TestPendingFailsWhenVersionChanged verifies Pending rejects and clears a
+// pending login whose user version changed.
+func TestPendingFailsWhenVersionChanged(t *testing.T) {
+	t.Parallel()
+
+	login, driver := newLogin(t, withChecks(secondFactor(true, nil)))
+	r := sessionRequest(newSession())
+	begin(t, login, r, "7")
+
+	if err := driver.Put(auth.UserRecord{Subject: "7", Version: "v2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("pending = %v", err)
+	}
+
+	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("pending survived = %v", err)
+	}
+}
+
+// TestCompleteSucceedsWhenVersionUnchanged verifies a user whose version is
+// unchanged completes even if other fields of the record changed.
+func TestCompleteSucceedsWhenVersionUnchanged(t *testing.T) {
+	t.Parallel()
+
+	login, driver := newLogin(t, withChecks(secondFactor(true, nil)))
+	current := newSession()
+	r := sessionRequest(current)
+	begin(t, login, r, "7")
+
+	if err := driver.Put(auth.UserRecord{Subject: "7", Version: "v1", Value: user{"renamed"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := login.Complete(r, otp); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := authenticate(login, current); err != nil {
+		t.Fatal(err)
+	}
+}

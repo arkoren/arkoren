@@ -236,7 +236,8 @@ does with `CredentialsStamp`. `Begin` stores a hash of the version in the sessio
 record, and the authenticator compares it in constant time with the provider's
 current value on every request. A mismatch makes the session anonymous on that
 device's next request; no session enumeration is required. This includes the
-device that changed the password, which must log in again. Calling `Begin` there
+device that changed the password, which must log in again; a login waiting for
+its second factor when the version changes is discarded too. Calling `Begin` there
 instead would re-run the second-factor checks and start the factors over, so an
 enrolled user would be parked as pending.
 

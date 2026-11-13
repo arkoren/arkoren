@@ -52,6 +52,10 @@ type pendingLogin struct {
 	// Expires is when the pending login stops being accepted.
 	Expires time.Time `json:"expires"`
 
+	// Version is the hex SHA-256 of [UserRecord.Version] seen at [Login.Begin].
+	// The pending login is discarded when the user's version no longer matches.
+	Version string `json:"version"`
+
 	// Attempts counts the wrong second factors reported by [Login.Fail].
 	Attempts int `json:"attempts"`
 }
