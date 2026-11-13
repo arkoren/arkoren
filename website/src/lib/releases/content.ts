@@ -17,7 +17,10 @@ const MODULE = /^(core|cmd\/arkoren|(?:driver|foundation|ark)\/[a-z0-9][a-z0-9-]
 /** Normal pre-1.0 versions; prerelease status belongs to GitHub metadata. */
 const VERSION = /^v0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
-/** Read committed manifests only; ignored local modules cannot enter history. */
+/**
+ * Read committed manifests only; ignored local modules cannot enter history.
+ * Retired namespaces are appended so their historical release notes still validate.
+ */
 export function releaseModules(repo = RELEASE_REPO): string[] {
   const policy = z
     .strictObject({
@@ -51,8 +54,9 @@ export function releaseModules(repo = RELEASE_REPO): string[] {
   if (JSON.stringify(directories) !== JSON.stringify([...policy.public].sort())) {
     throw new Error("committed public inventory differs from module policy");
   }
-  return directories
-    .map((directory) => {
+  // Retired namespaces keep their published release notes valid but have no manifest.
+  return [
+    ...directories.map((directory) => {
       const file = `${directory}/go.mod`;
       const manifest = execFileSync("git", ["show", `HEAD:${file}`], {
         cwd: repo,
@@ -62,8 +66,9 @@ export function releaseModules(repo = RELEASE_REPO): string[] {
         throw new Error(`noncanonical module declaration: ${directory}`);
       }
       return `arkoren.dev/${directory}`;
-    })
-    .sort();
+    }),
+    ...policy.retired.map((directory) => `arkoren.dev/${directory}`),
+  ].sort();
 }
 
 /** Validate exact source metadata without coercing timestamps or booleans. */
