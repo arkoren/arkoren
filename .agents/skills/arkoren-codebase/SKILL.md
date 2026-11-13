@@ -27,7 +27,7 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 | Tier | Path | Modules | Holds |
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
-| Drivers | `driver/<vendor>/` | one per vendor | Vendor implementations of core contracts, and HTTP protocol adapters that have no `Driver` (`oauth` plugs into `core/auth`; `mcp/mcpserver` serves `core/mcp.Tool`; a provider webhook adapter would return a `webhook.Source` and publish `webhook.Event` definitions). |
+| Drivers | `driver/<vendor>/` | one per vendor | Vendor implementations of core contracts, and HTTP protocol adapters that have no `Driver` (`mcp/mcpserver` serves `core/mcp.Tool`; a provider webhook adapter would return a `webhook.Source` and publish `webhook.Event` definitions). |
 | Arks | `ark/<name>/` | one per ark, opt in with `go get` | Domain features with their own tables, routes, or flows. None yet. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
@@ -335,9 +335,10 @@ never replaying user policies. Session middleware owns cookie/persistence policy
 auth.NewLogin owns the session login state machine and LoginBuilder.Handle;
 request lookup owns per-call WithSessionHandle. Share one session.NewHandle()
 across those roles; zero selects the default context slot. Handles do not isolate
-cookies, cache records, or authorization. OAuth Callback(identity, mapper) and
-Logout(identity) in driver/oauth still target the former SessionIdentity until
-that module moves to Login.Begin. Session data uses
+cookies, cache records, or authorization. ark/oauth Callback(login, resolve)
+returns a subject string to Login.Begin (federated factor; ChallengeURL on a
+pending second factor) and Logout(login) calls Login.Logout; Verify returns the
+external Identity, which the application maps for auth.Bearer. Session data uses
 shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns
 renewal and absolute lifetime. Login keeps one session record (arkoren:auth:session) and a pending login

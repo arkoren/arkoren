@@ -1,4 +1,4 @@
-# Services for the integration tests of arkoren.dev/driver/oauth. Start them
+# Services for the integration tests of arkoren.dev/ark/oauth. Start them
 # from this directory with: docker compose up -d --wait
 services:
   keycloak:

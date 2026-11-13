@@ -3,8 +3,8 @@ title: OAuth Login
 description: Complete external browser sign-in and map the provider identity to a local account safely.
 order: 40
 summary:
-  - Configure an external provider and complete browser login through a shared session identity.
-  - Link local accounts by issuer and subject while preserving state, nonce, and redirect checks.
+  - Configure an external provider and complete browser login through the shared login.
+  - Link local accounts by issuer and subject, return their subject, and hand a second factor to its challenge page.
   - Apply each provider's callback and identity requirements and handle bounded outcome events.
 ---
 
@@ -16,8 +16,9 @@ OAuth 2 authorization flow; plain OAuth2 providers instead supply identity
 through an authenticated user API. `oauthauth` supports both paths.
 
 You still own local accounts and external-account linkage. The adapter completes
-the provider flow, calls your mapper, and stores its returned account identifier
-with [Session Login](session-login.md). It is not an authorization server and
+the provider flow, calls your mapper, and logs the returned account subject in
+through the shared [Session Login](session-login.md) login, so a registered
+[second factor](two-factor.md) still applies. It is not an authorization server and
 does not acquire API tokens for arbitrary clients or refresh tokens for your
 service. To accept an existing JWT at an API, use [OIDC Tokens](oidc-bearer.md).
 
@@ -49,7 +50,7 @@ Register an application and exact callback URL with your provider. Obtain its
 client ID and required credentials, then install the adapter in your module:
 
 ```sh
-go get arkoren.dev/driver/oauth
+go get arkoren.dev/ark/oauth
 ```
 
 Import it as `oauth`. The example uses an existing `cipher *crypto.Encrypter`
@@ -57,7 +58,7 @@ from [Encryption](../encryption/overview.md), plus `clientID` and `clientSecret`
 loaded from your configuration/secret provider:
 
 ```go
-import oauth "arkoren.dev/driver/oauth/oauthauth"
+import oauth "arkoren.dev/ark/oauth/oauthauth"
 
 client, err := oauth.New(oauth.Google(), cipher, clientID,
 	func(login *oauth.ClientBuilder) {
@@ -108,37 +109,30 @@ available until handlers have finished.
 
 ## Connect Browser Routes
 
-> The routes below target the `SessionIdentity` API of the `driver/oauth`
-> release that pins core v0.1.0. Core now logs browser sessions in with
-> `auth.Login`; the OAuth driver moves to `Login.Begin` in a later release, so
-> follow [Session Login](session-login.md) for current core.
-
-Use an existing session-enabled, CSRF-protected browser group `web`, as in
-[Enable Login](session-login.md#enable-login). Import `auth` from
-`arkoren.dev/core/auth`. Your `loadUser` loads a current local `User` by
-integer ID; `mapIdentity` below returns that same ID type:
+Use an existing session-enabled, CSRF-protected browser group `web` and the
+`login` from [Enable Login](session-login.md#enable-login), which already runs
+`auth.Middleware(login.Authenticator())`. Import `auth` from
+`arkoren.dev/core/auth`. The mapper `mapIdentity` below returns the local
+account's subject:
 
 ```go
-identity := auth.NewSessionIdentity(loadUser)
-web.Use(auth.Middleware(identity.Authenticator()))
 web.Get("/login", client.Login())
-web.Get("/oauth/callback", client.Callback(identity, mapIdentity))
-web.Post("/logout", client.Logout(identity))
+web.Get("/oauth/callback", client.Callback(login, mapIdentity))
+web.Post("/logout", client.Logout(login))
 ```
 
 `Login` redirects to the provider. A successful callback verifies the provider
-identity, maps it, rotates the selected local session ID, and redirects to the
-saved local destination. Subsequent requests use the normal session loader.
-`Logout` removes the local identity and redirects to `/`; it does not sign the
+identity, maps it to a subject, calls `login.Begin` with a federated factor,
+rotates the session ID, and redirects to the saved local destination. Subsequent
+requests use the normal authenticator. `Logout` calls `login.Logout`, which also
+ends a pending second-factor login, and redirects to `/`; it does not sign the
 person out at the provider. Keep logout CSRF-protected.
 
-Check `identity.Err()` during setup. An invalid definition or nil mapper is a
-configuration error, not a rejected credential. Callback and logout select
-exactly the identity's session slot. An absent session returns `401` before state
-consumption or provider exchange, without default-slot fallback. If you use
-[custom session selection](session-login.md#select-sessions), share its handle
-with the session middleware. Middleware still owns
-[response-time persistence](../http-capabilities/sessions.md#save-changes);
+A nil login or mapper is a configuration error, not a rejected credential. A
+request without a session returns `401` before state consumption or provider
+exchange. If you use [custom session selection](session-login.md#select-sessions),
+build the login with the same handle as the session middleware. Middleware still
+owns [response-time persistence](../http-capabilities/sessions.md#save-changes);
 successful callback mutation does not prove storage or old-ID retirement succeeded.
 
 ## Link Local Accounts
@@ -151,28 +145,29 @@ authorized action.
 
 With standard-library `context`, this application mapper looks up an existing
 link using `accounts.ByIdentity(ctx, issuer, subject)`, which returns the
-application's `Account` or an error:
+application's `Account` or an error, and converts the account to its subject with
+the user `driver` from [Session Login](session-login.md#load-accounts):
 
 ```go
-mapIdentity := func(ctx context.Context, external oauth.Identity) (int, error) {
+mapIdentity := func(ctx context.Context, external oauth.Identity) (string, error) {
 	if external.Issuer == "" || external.Subject == "" {
-		return 0, auth.ErrUnauthenticated
+		return "", auth.ErrUnauthenticated
 	}
 	account, err := accounts.ByIdentity(ctx, external.Issuer, external.Subject)
 	if err != nil {
-		return 0, err
-	}
-	if account.Disabled {
-		return 0, auth.ErrUnauthenticated
+		return "", err
 	}
 
-	return account.ID, nil
+	return driver.Subject(account)
 }
 ```
 
 The repository owns uniqueness of the issuer/subject link and rejection of
-unknown accounts. A mapper returning zero and nil error still stores zero as
-the login identifier; Arkoren cannot infer whether it denotes a real account.
+unknown accounts. The callback never uses the provider's `Subject` as the
+login subject: it is the provider's identifier, not your account's. The user
+provider checks the returned subject on `Begin`: an unknown or disabled account
+is `auth.ErrUnauthenticated` (`401`) and an invalid subject returns
+`auth.ErrInvalidSubject`, so a disabled account needs no check in the mapper.
 Mapper errors matching `auth.ErrNoCredentials` become `ErrInvalidCallback`
 (`400`); other application errors pass through unchanged.
 
@@ -191,6 +186,31 @@ as untrusted display text and escape it when rendering.
 For browser callbacks, `Identity.Scopes` comes from the token response. If the
 response omits scopes, the client supplies an independent copy of the requested
 scopes. These are provider grants, not your local account's resource permissions.
+
+## Second Factors
+
+If the `login` has a registered [second-factor check](two-factor.md#hold-a-login)
+for the mapped account, `Begin` holds the login as pending and the request stays
+anonymous. Set the page that asks for the second factor with
+`ClientBuilder.ChallengeURL`, a local path:
+
+```go
+client, err := oauth.New(oauth.Google(), cipher, clientID,
+	func(login *oauth.ClientBuilder) {
+		login.ClientSecret(clientSecret)
+		login.RedirectURL("https://app.example.com/oauth/callback")
+		login.ChallengeURL("/login/challenge")
+	},
+)
+```
+
+The callback then redirects to that path without publishing `LoginSucceeded`; the
+`return_to` target is not carried over, so your challenge page chooses the
+destination once `login.Complete` succeeds. New rejects a challenge URL that is not
+a safe local path. Without a challenge URL the callback ends the pending login and
+fails with `ErrNoChallengeURL` (`500`); it never signs the person in without
+the second factor. A federated login counts as one factor and never as
+multi-factor on its own.
 
 ## Protect Login State
 
@@ -245,7 +265,7 @@ are `openid`, `email`, and `profile`. The preset normalizes the issuer to
 `https://accounts.google.com` and leaves email empty without boolean
 `email_verified: true`. Keep issuer/subject linkage even with this filter.
 
-See the [`Google` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#Google).
+See the [`Google` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#Google).
 
 ## Microsoft
 
@@ -274,7 +294,7 @@ Default scopes are `openid`, `profile`, and `email`. Email remains empty unless
 the optional `xms_edov` claim is boolean true; configure that claim in the app
 registration if needed. It is still not a local-account key.
 
-See the [`Microsoft` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#Microsoft).
+See the [`Microsoft` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#Microsoft).
 
 ## GitHub
 
@@ -295,7 +315,7 @@ login name. Missing, zero, or negative IDs and user/email API failures return
 `ErrProviderUnavailable` (`502`) before mapping. Email is the primary verified
 address or empty. This preset cannot verify OIDC bearer tokens.
 
-See the [`GitHub` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#GitHub).
+See the [`GitHub` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#GitHub).
 
 ## Apple
 
@@ -335,7 +355,7 @@ Apple sends the name only on first authorization in an unsigned form field,
 so store it as optional display text, not an authorization claim. Email can be
 a private relay address and is not filtered for verification by this preset.
 
-See the [`Apple` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#Apple).
+See the [`Apple` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#Apple).
 
 ## Generic OIDC
 
@@ -352,7 +372,7 @@ discovery startup and the shared GET callback. Default scopes contain only
 "email")`. PKCE is enabled by default. No provider-specific tenant or email
 policy is inferred: implement those checks before linking the local account.
 
-See the [`OIDC` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#OIDC).
+See the [`OIDC` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#OIDC).
 
 ## Generic OAuth2
 
@@ -380,7 +400,7 @@ is a no-op. PKCE starts enabled; disable it only if unsupported. User-info
 failures become `502`, and `Verify` is unsupported because there is no OIDC
 verifier.
 
-See the [`OAuth2` and `UserInfoFunc` API](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth#OAuth2).
+See the [`OAuth2` and `UserInfoFunc` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#OAuth2).
 
 ## Handle Failures
 
@@ -399,8 +419,9 @@ policy denial behaves the same way.
 ## Events
 
 If you need outcome events, configure `ClientBuilder.Events` with your existing
-[event bus](../events/overview.md). Nil publishes nothing. Successful callbacks
-publish issuer and subject, which can identify a person. Logout has no payload
+[event bus](../events/overview.md). Nil publishes nothing. Completed logins
+publish issuer and subject, which can identify a person; a login held for a second
+factor publishes nothing until your challenge page completes it. Logout has no payload
 and reports local mutation, not provider logout or durable session persistence.
 
 `LoginFailedEvent.Err` contains `ErrInvalidCallback`, `ErrProviderUnavailable`,
@@ -419,4 +440,4 @@ or logging guarantee: arbitrary claims, native objects, callback captures, and
 explicitly unwrapped errors remain outside that boundary.
 
 For all functions and options, see the
-[`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
+[`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth).

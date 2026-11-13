@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"arkoren.dev/driver/oauth/oauthauth/internal/provider"
+	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
 	"arkoren.dev/foundation/key"
 )
 

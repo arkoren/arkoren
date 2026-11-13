@@ -1,7 +1,7 @@
 package oauthauth
 
 import (
-	"arkoren.dev/driver/oauth/oauthauth/internal/provider"
+	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
 )
 
 // microsoftAuthority is the base URL of the Microsoft identity platform.

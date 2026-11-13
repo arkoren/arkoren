@@ -121,6 +121,8 @@ func TestAppleNewRejectsBadKey(t *testing.T) {
 func requireAppleFormPostName(t *testing.T, user, want string) {
 	t.Helper()
 
+	signin := newLogin(t)
+
 	_, pemKey := appleKey(t)
 	identity, err := key.ParseSigning(pemKey)
 
@@ -155,14 +157,18 @@ func requireAppleFormPostName(t *testing.T, user, want string) {
 	request = jar.attach(request)
 	request = request.WithContext(session.NewContext(request.Context(), newSession()))
 
-	if status := client.Callback(externalIdentity, func(_ context.Context, identity Identity) (Identity, error) {
-		return identity, nil
+	var external Identity
+
+	if status := client.Callback(signin, func(_ context.Context, identity Identity) (string, error) {
+		external = identity
+
+		return "user-1", nil
 	}).Record(request).StatusCode; status != http.StatusFound {
 		t.Fatalf("status = %d, want 302", status)
 	}
 
-	if identity, err := userOfIdentity(request); err != nil || identity.Name != want {
-		t.Errorf("identity = %+v, %v; want name %q", identity, err, want)
+	if external.Name != want {
+		t.Errorf("identity name = %q, want %q", external.Name, want)
 	}
 }
 

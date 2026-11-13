@@ -28,13 +28,13 @@ audiences; do not accept a browser client ID merely because it is convenient.
 Use a trusted issuer from application configuration, never from unverified
 request claims.
 
-Install `arkoren.dev/driver/oauth` as shown in
+Install `arkoren.dev/ark/oauth` as shown in
 [OAuth client setup](oauth.md#configure-clients). With an existing
 `cipher *crypto.Encrypter` from [Encryption](../encryption/overview.md) and your
 registered `clientID`, configure the verifier:
 
 ```go
-import oauth "arkoren.dev/driver/oauth/oauthauth"
+import oauth "arkoren.dev/ark/oauth/oauthauth"
 
 client, err := oauth.New(
 	oauth.OIDC("https://id.example.com/realms/invoices"),
@@ -109,12 +109,6 @@ provider-side revocation. A current local-account lookup can enforce your own
 disabled-account policy, but cannot substitute for provider introspection.
 
 ## Require Identity
-
-> **Note:** The OAuth driver still targets the previous generic `auth` API and
-> is updated to the `auth.Identity` model in a later release. Until then, the
-> `client.Verify` and `client.Callback` calls below apply to the driver version
-> that matches your `arkoren.dev/core` version; the `arkoren.dev/core/auth`
-> import path and the non-generic `auth.Require()` are the current core API.
 
 When handlers work directly with the provider identity, wrap `client.Verify` so
 the verified `oauth.Identity` rides in the `auth.Identity` record. Import `auth`
@@ -214,8 +208,8 @@ api.Use(auth.Require())
 
 Scope checks and resource permissions belong in
 [Authorization Policies](../authorization/policies.md). The token's scopes travel
-on the `auth.Identity`, so `gate.HasScopes` checks them for the mapped identity;
-`oauth.HasScopes` works with `oauth.Identity` only. Token scopes limit the presented credential's authority rather than
+on the `auth.Identity`, so `gate.HasScopes` checks them for the mapped identity.
+Token scopes limit the presented credential's authority rather than
 replacing the account's resource permissions.
 
 ## Handle Verification
@@ -243,4 +237,4 @@ tool/resource authorization. The CLI sends existing credentials; it does not
 acquire or refresh them.
 
 For all functions and options, see the
-[`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
+[`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth).

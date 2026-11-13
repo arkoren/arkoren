@@ -1,6 +1,7 @@
 go 1.27
 
 use (
+	./ark/oauth
 	./cmd/arkoren
 	./cmd/arkoren-ci
 	./core
@@ -21,7 +22,6 @@ use (
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
-	./driver/oauth
 	./driver/openai
 	./driver/openfeature
 	./driver/opensearch

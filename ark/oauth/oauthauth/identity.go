@@ -1,10 +1,5 @@
 package oauthauth
 
-import (
-	"context"
-	"slices"
-)
-
 // Identity represents an authenticated subject.
 // OIDC verification requires a nonempty final Subject after provider-specific
 // mapping. Claims and optional profile data remain provider-controlled; they are
@@ -63,12 +58,11 @@ type Identity struct {
 	//
 	// Example:
 	//
-	//	identity := oauth.Identity{Scopes: []string{"posts:write"}}
-	//	allowed, err := oauth.HasScopes("posts:write")(ctx, identity)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	_ = allowed
+	//	identity := auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
+	//		principal.Scopes(external.Scopes...) // external is the verified oauth.Identity.
+	//	})
+	//	r.With(gate.Require(gate.HasScopes("posts:write"))).Post("/posts", create)
+	//	_ = identity
 	Scopes []string `json:"scopes,omitzero"`
 
 	// Claims holds provider-controlled token claims.
@@ -80,22 +74,4 @@ type Identity struct {
 	//	domain, _ := identity.Claims["hd"].(string)
 	//	_ = domain // Apply provider-specific policy, not generic email trust.
 	Claims map[string]any `json:"claims"`
-}
-
-// HasScopes returns a rule that allows an identity holding all required
-// scopes. It copies required before capturing it; later caller edits cannot
-// change authorization. Empty requirements allow any identity. Use the rule
-// with gate.Require or gate.Authorize; it does not authenticate a request.
-//
-// Example:
-//
-//	r.With(gate.Require(oauth.HasScopes("posts:write"))).Post("/posts", create)
-func HasScopes(required ...string) func(context.Context, Identity) (bool, error) {
-	required = slices.Clone(required)
-
-	return func(_ context.Context, identity Identity) (bool, error) {
-		return !slices.ContainsFunc(required, func(scope string) bool {
-			return !slices.Contains(identity.Scopes, scope)
-		}), nil
-	}
 }

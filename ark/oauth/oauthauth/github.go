@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"arkoren.dev/driver/oauth/oauthauth/internal/provider"
+	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
 )
 
 // GitHub returns a GitHub OAuth2 provider with the scopes "read:user" and

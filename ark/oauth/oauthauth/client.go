@@ -12,6 +12,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/crypto"
 )
@@ -78,7 +79,8 @@ type endpoints struct {
 //
 // New returns an error when cipher is nil, clientID is empty ("OAuth client ID
 // cannot be empty"), the provider is incomplete, or the provider cannot derive
-// its client secret, or the configured name produces an invalid HTTP cookie name.
+// its client secret, the configured name produces an invalid HTTP cookie name,
+// or the challenge URL is not a safe local redirect target.
 //
 // Example:
 //
@@ -136,6 +138,12 @@ func New(
 
 	if err := (&http.Cookie{Name: client.prefix + "state"}).Valid(); err != nil {
 		return nil, fmt.Errorf("OAuth login cookie name: %w", err)
+	}
+
+	if config.ChallengeURL != "" {
+		if err := response.ValidateRedirectTarget(config.ChallengeURL); err != nil {
+			return nil, fmt.Errorf("OAuth challenge URL: %w", err)
+		}
 	}
 
 	if !provider.isOIDC() {

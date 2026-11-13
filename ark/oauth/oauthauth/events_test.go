@@ -28,11 +28,19 @@ func recordEvents(t *testing.T) (*event.Bus, *[]string) {
 	}
 
 	if _, err := bus.Listen(LoginFailed, func(_ context.Context, payload LoginFailedEvent) error {
-		if !errors.Is(payload.Err, ErrInvalidCallback) {
-			t.Errorf("LoginFailed error = %v, want ErrInvalidCallback", payload.Err)
+		if !errors.Is(payload.Err, ErrInvalidCallback) && !errors.Is(payload.Err, errLocalLoginFailed) {
+			t.Errorf("LoginFailed error = %v, want ErrInvalidCallback or a local failure", payload.Err)
 		}
 
 		seen = append(seen, "failed")
+
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := bus.Listen(LoggedOut, func(context.Context, event.Void) error {
+		seen = append(seen, "logged-out")
 
 		return nil
 	}); err != nil {
@@ -55,6 +63,8 @@ func recordEvents(t *testing.T) (*event.Bus, *[]string) {
 func TestCallbackPublishesLoginEvents(t *testing.T) {
 	t.Parallel()
 
+	signin := newLogin(t)
+
 	bus, seen := recordEvents(t)
 	client := newClient(t, OIDC(newTestProvider(t).server.URL), func(client *ClientBuilder) {
 		client.Events(bus)
@@ -63,14 +73,14 @@ func TestCallbackPublishesLoginEvents(t *testing.T) {
 
 	query := login(t, client, jar)
 
-	response := client.Callback(localIdentity, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
+	response := client.Callback(signin, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
 
 	if response.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302", response.StatusCode)
 	}
 
 	jar.apply(response)
-	client.Callback(localIdentity, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
+	client.Callback(signin, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
 
 	if len(*seen) != 2 || (*seen)[0] != "succeeded:user-1" || (*seen)[1] != "failed" {
 		t.Fatalf("events = %v, want a success then a failure", *seen)
@@ -100,6 +110,8 @@ func TestVerifyPublishesTokenRejected(t *testing.T) {
 func TestLoginFailedDoesNotPublishMapperCause(t *testing.T) {
 	t.Parallel()
 
+	signin := newLogin(t)
+
 	bus := event.New()
 	var observed LoginFailedEvent
 
@@ -121,7 +133,7 @@ func TestLoginFailedDoesNotPublishMapperCause(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 	cause := errors.New("synthetic-private-mapper-detail")
 
-	err := client.Callback(localIdentity, func(context.Context, Identity) (string, error) {
+	err := client.Callback(signin, func(context.Context, Identity) (string, error) {
 		return "", cause
 	})(httptest.NewRecorder(), request)
 
@@ -138,6 +150,8 @@ func TestLoginFailedDoesNotPublishMapperCause(t *testing.T) {
 // from becoming an event field, even when it looks like a provider error hint.
 func TestLoginFailedBoundsProviderError(t *testing.T) {
 	t.Parallel()
+
+	signin := newLogin(t)
 
 	bus := event.New()
 	var observed LoginFailedEvent
@@ -162,7 +176,7 @@ func TestLoginFailedBoundsProviderError(t *testing.T) {
 	parameters.Set("error", "synthetic-private-request-content")
 	request.URL.RawQuery = parameters.Encode()
 
-	err := client.Callback(localIdentity, idLogin)(httptest.NewRecorder(), request)
+	err := client.Callback(signin, idLogin)(httptest.NewRecorder(), request)
 
 	if !errors.Is(err, ErrInvalidCallback) || observed.ProviderError != "" {
 		t.Fatalf("untrusted provider hint published: %+v, %v", observed, err)
@@ -173,6 +187,8 @@ func TestLoginFailedBoundsProviderError(t *testing.T) {
 // vocabulary while reporting a provider-denied login as an invalid callback.
 func TestLoginFailedKeepsStandardProviderHint(t *testing.T) {
 	t.Parallel()
+
+	signin := newLogin(t)
 
 	bus := event.New()
 	var observed LoginFailedEvent
@@ -197,7 +213,7 @@ func TestLoginFailedKeepsStandardProviderHint(t *testing.T) {
 	parameters.Set("error", "access_denied")
 	request.URL.RawQuery = parameters.Encode()
 
-	err := client.Callback(localIdentity, idLogin)(httptest.NewRecorder(), request)
+	err := client.Callback(signin, idLogin)(httptest.NewRecorder(), request)
 
 	if !errors.Is(err, ErrInvalidCallback) || observed.ProviderError != "access_denied" {
 		t.Fatalf("standard provider hint lost: %+v, %v", observed, err)
