@@ -174,3 +174,25 @@ func TestLostActivationResponseRestoresGlobalCreationLock(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCheckRejectsRetiredPatternInCreationRulesets(t *testing.T) {
+	client, records, _ := policyClient(t, false)
+	policy := `{"schema":1,"public":["core","cmd/arkoren"],"development":["cmd/arkoren-ci"],"retired":["driver/oauth"]}`
+	if err := os.WriteFile(filepath.Join(client.Root, ".github/release-modules.json"), []byte(policy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Check(context.Background(), client, true); err != nil {
+		t.Fatalf("rulesets without the retired pattern rejected: %v", err)
+	}
+	stale := creationRules([]string{"core", "cmd/arkoren", "driver/oauth"})
+	for index, id := range []int{26325347, 26325350} {
+		data, err := json.Marshal(stale[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		records[id] = data
+	}
+	if _, err := Check(context.Background(), client, true); err == nil || !strings.Contains(err.Error(), "retired namespace") {
+		t.Fatalf("retired pattern in creation rulesets accepted: %v", err)
+	}
+}

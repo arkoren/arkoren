@@ -18,12 +18,19 @@ type Policy struct {
 
 	// Development lists explicit development-only modules, excluded from releases.
 	Development []string `json:"development"`
+
+	// Retired lists directories that once published and must never publish again.
+	// Their existing bootstrap v0.1.0 tags stay valid history; the directory must
+	// no longer exist in the tree and must not appear in Public or Development.
+	// The member is optional and omitted when empty.
+	Retired []string `json:"retired,omitempty"`
 }
 
 // canonical matches public module roots, never arbitrary command directories.
 var canonical = regexp.MustCompile(`^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$`)
 
-// ParsePolicy rejects unknown fields, duplicates and overlapping classifications.
+// ParsePolicy rejects unknown fields, duplicates and overlapping classifications,
+// including a directory that is both public (or development) and retired.
 func ParsePolicy(data []byte) (Policy, error) {
 	policy := Policy{}
 	err := json.Unmarshal(data, &policy, json.RejectUnknownMembers(true))
@@ -44,6 +51,12 @@ func ParsePolicy(data []byte) (Policy, error) {
 	for _, directory := range policy.Development {
 		if seen[directory] || directory != "cmd/arkoren-ci" {
 			return Policy{}, fmt.Errorf("unreviewed or duplicate development module: %s", directory)
+		}
+		seen[directory] = true
+	}
+	for _, directory := range policy.Retired {
+		if !canonical.MatchString(directory) || seen[directory] {
+			return Policy{}, fmt.Errorf("invalid, duplicate or still classified retired module: %s", directory)
 		}
 		seen[directory] = true
 	}

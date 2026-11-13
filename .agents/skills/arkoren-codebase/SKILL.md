@@ -45,6 +45,11 @@ duplicating rendered docs in Go CI. Require both `CI gate` and `website`.
 explicit `development` roots. It is the sole reviewed namespace list, not a copy
 of signed publication records. New public modules require reviewed policy and
 baseline decisions; unknown command roots require a boundary review.
+An optional `retired` list names directories that once published and must never
+publish again (a module moved to another family). A directory cannot be both
+`public` and `retired`, and a retired directory must not exist on disk: inventory
+fails if it does. Retire a namespace in the same reviewed change that moves the
+module, and remove its patterns from both creation rulesets.
 
 `scripts/ci-modules.sh` owns the complete-source CI inventory, not a Go dependency planner. It lists
 core, the CLI, explicit development commands and direct driver/foundation/optional ark roots;
@@ -853,8 +858,13 @@ Recorded batches check their plan inventory against the policy committed at
 their own plan SHA (original-array or policy-less commits keep their committed
 public inventory), so adding a public module never invalidates earlier signed
 batches. Every existing tag's directory must still be in the current public
-policy, so removing a namespace blocks publication; fresh plans compare against
-the current policy exactly.
+policy or be retired, so removing a namespace from `public` without retiring it
+blocks publication; fresh plans compare against the current policy exactly. A
+retired directory is accepted only for its skipped bootstrap `v0.1.0` tag; any
+later tag there is an error, because a retired namespace never published a
+signed batch. `release policy check` requires retired selectors to be absent
+from both creation rulesets, so the global lock blocks new tags there; update
+and deletion stay blocked by the immutable ruleset.
 Canonical v1 JSON retains Python `ensure_ascii=True`, sorted keys and compact
 comma/colon separators. Policy schema versions do not change signed batch schema
 or the original module records. Historical commits without classification policy
