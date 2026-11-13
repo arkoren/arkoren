@@ -59,13 +59,18 @@ fi
 command -v jq >/dev/null 2>&1 || fail 'jq is required; install jq and run again'
 [[ -f .github/release-modules.json && ! -L .github/release-modules.json && ! -L .github ]] \
   || fail 'expected real module policy'
-jq -e 'keys == ["development","public","schema"] and .schema == 1 and
+jq -e '(keys - ["retired"]) == ["development","public","schema"] and .schema == 1 and
   (.public | type == "array" and length > 0) and
   (.development | type == "array") and
   all(.public[]; type == "string" and test("^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$")) and
   all(.development[]; . == "cmd/arkoren-ci") and
-  ((.public + .development) | length == (unique | length))' \
+  ((.retired // []) | all(.[]; type == "string" and test("^(driver|foundation|ark)/[a-z0-9][a-z0-9-]*$"))) and
+  ((.public + .development + (.retired // [])) | length == (unique | length))' \
   .github/release-modules.json >/dev/null || fail 'invalid module policy'
+# Retired namespaces (once published, never again) must be gone from disk.
+while IFS= read -r module; do
+  [[ ! -e "$module" ]] || fail "retired module still exists: $module"
+done < <(jq -r '.retired[]?' .github/release-modules.json)
 development=$(jq -r '.development[]' .github/release-modules.json)
 
 # Core must remain a single module; discovery elsewhere stops at direct children.
