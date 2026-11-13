@@ -1,0 +1,59 @@
+name: Bug report
+description: Report behavior that differs from the documentation or a crash.
+title: "<module>: <short summary>"
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        **Security vulnerabilities must not be reported here.** Follow the
+        [security policy](https://github.com/arkoren/arkoren/blob/main/SECURITY.md)
+        to report them privately. For usage questions, use
+        [Discussions](https://github.com/arkoren/arkoren/discussions/categories/q-a).
+  - type: input
+    id: module
+    attributes:
+      label: Module and version
+      description: The affected module path and the version from your `go.mod`.
+      placeholder: arkoren.dev/driver/redis v0.1.1
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Go version, operating system, and backend versions if a driver is involved.
+      placeholder: |
+        go version go1.27.0 darwin/arm64
+        Redis 8.2
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A minimal program or test that shows the problem is the fastest way to a fix. Remove credentials and personal data.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen. Link the guide or Go doc comment that describes it, if one does.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead, including the full error message or panic output.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Workarounds you found, whether this worked in an earlier version, or anything else that helps.

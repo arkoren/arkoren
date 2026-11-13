@@ -39,3 +39,6 @@ driver/otel/**/testdata/collector.log
 
 # Agent scratch notes: plans and discussions, temporary by design.
 .claude/tmp/
+
+# Local only: driver/hatchet is not imported yet. Remove this line once it is committed.
+/driver/hatchet/

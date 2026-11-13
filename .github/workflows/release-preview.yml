@@ -64,7 +64,7 @@ jobs:
           cat "$RUNNER_TEMP/release-preview/summary.md" >> "$GITHUB_STEP_SUMMARY"
           echo "sha=$PLAN_SHA" >> "$GITHUB_OUTPUT"
       - name: Upload plan and release-note preview (not a release)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: release-preview-${{ steps.plan.outputs.sha }}
           path: ${{ runner.temp }}/release-preview/

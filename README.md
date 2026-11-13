@@ -123,7 +123,8 @@ share the same authored guides; API declarations live on pkg.go.dev.
 
 ## Contribute
 
-Run `make` for the available commands. From a checkout:
+Read the [contributing guide](CONTRIBUTING.md) before opening an issue or pull
+request. Run `make` for the available commands. From a checkout:
 
 ```sh
 make test MODULE=core PKG=./http/...

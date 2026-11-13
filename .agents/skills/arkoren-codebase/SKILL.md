@@ -67,8 +67,8 @@ after inventory or workflow changes.
 
 Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
 working-tree inspection, or append `--commit FULL_SHA` to validate a committed
-inventory and its same-commit policy. CI/audits currently include 45 modules and
-15 integration suites; releases include only the 44 approved public modules.
+inventory and its same-commit policy. CI/audits currently include 46 modules and
+15 integration suites; releases include only the 45 approved public modules.
 The development command uses standard flags, JSON stdout and JSON diagnostics on
 stderr. Its focused internal packages own inventory, release planning, exact-SHA
 evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
@@ -117,6 +117,15 @@ Paths below are relative to `core/` unless they start with `cmd/`, `driver/`,
 The facade adds typed values and telemetry on top of the raw driver and
 exposes `Driver()` and `DriverAs[T]()`, which looks through wrapping drivers
 with `internal/unwrap`.
+
+The user provider is a contract outside `service/`: `auth/` (`arkoren.dev/core/auth`)
+holds `UserProvider`, the `UserDriver` lookup contract keyed by text subject,
+`NewUserDriver[K, U]` for typed loaders, `memoryauth/` and the `authtest.RunUserDriver`
+suite. `OnForget(fn)` hooks are unnamed, run in registration order in the caller's
+context (so they join its transaction), and the first error stops `Forget`;
+`Forget` then emits `auth.UserForgotten` only after every hook succeeded, as a
+notification that never replaces a hook. Only `ErrUserNotFound` proves deletion.
+It must not import the older `http/auth` package.
 
 For data-result, pagination, inspection-snapshot, or iterator interface changes,
 apply [Collection results](../arkoren-go/SKILL.md#collection-results). That rule
@@ -423,7 +432,7 @@ store. Before changing these paths, read the consumer TLS Certificates and
 Certificate Commands guides for supported formats, platforms, and recovery.
 
 **Foundation modules** (`foundation/certificate`, `collection`, `key`, `problem`, `query`,
-`validate`) use the standard library only and know nothing of `arkoren.dev`.
+`validate`, `totp`) use the standard library only and know nothing of `arkoren.dev`.
 Query publishes immutable `Query` values from mutable root and restricted
 predicate callbacks; only published statements compile or execute. Keep concrete
 Query checks in database row-return guards, telemetry, and pagination in sync.

@@ -1,0 +1,69 @@
+name: Driver request
+description: Request support for a new vendor or backend in an existing service.
+title: "driver: <vendor> for <service>"
+labels: ["driver request", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Drivers implement an existing service contract, so applications can
+        switch backends without changing code. Each driver must pass the
+        service's conformance suite. See
+        [choosing a driver](https://github.com/arkoren/arkoren/blob/main/cmd/arkoren/skills/arkoren/references/guides/drivers/choosing-a-driver.md)
+        for the drivers that exist today.
+  - type: dropdown
+    id: service
+    attributes:
+      label: Service
+      description: The service contract the driver would implement.
+      options:
+        - Cache
+        - Database
+        - Storage
+        - Search
+        - Broadcasting
+        - Mail
+        - Push
+        - Payments
+        - Feature Flags
+        - Queues
+        - Scheduling
+        - Workflows
+        - Encryption
+        - Hashing
+        - Secrets
+        - Language Models
+        - Observability
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: vendor
+    attributes:
+      label: Vendor or backend
+      description: The product, with a link to its documentation or Go client.
+      placeholder: Vendor name and a link to its documentation
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Why do you need this backend? For example, you already run it in production, or it has a feature the existing drivers lack.
+    validations:
+      required: true
+  - type: textarea
+    id: capabilities
+    attributes:
+      label: Known gaps
+      description: Contract features the backend cannot support, if you know of any.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to implement this driver?
+      options:
+        - "Yes, with guidance on the approach"
+        - "No, but I can test it against a real deployment"
+        - "No"
+    validations:
+      required: true

@@ -90,9 +90,9 @@ GOWORK=off go -C cmd/arkoren-ci run . inventory
 
 `.github/release-modules.json` is the versioned classification authority: public
 release namespaces and explicit development-only roots. CI discovers all canonical
-filesystem modules, including ignored local ones (currently 45 modules and 15
+filesystem modules, including ignored local ones (currently 46 modules and 15
 integrations); release preparation validates only the exact committed public set
-(44). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
+(45). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
 The Go command owns inventory, release plans, exact-SHA evidence, publication,
 notes-PR ownership and administrative policy checks. Native gh owns auto-merge
 and prerelease creation; website TypeScript owns Markdown import/validation.
@@ -169,6 +169,15 @@ govulncheck and the CLI generated-project end-to-end test.
 Manual audit dispatch checks the selected ref; scheduled audits use the default
 branch. Audit summaries record the resolved SHA, tools, and all failing modules.
 Vulnerability scans are audit-only, not a dependency-PR merge gate.
+Dependabot groups weekly minor/patch version updates for GitHub Actions and
+website npm. Go modules get security updates only: version updates stay off
+because a library's go.mod raises consumers' minimum versions. Website
+`overrides` pin satori's exact `fflate` to a patched version; remove it when
+satori ships the fix. `dependabot-auto-merge.yml` requests native squash
+auto-merge for every non-major Dependabot PR through the required checks; it
+uses `pull_request_target` and must never check out PR code. Majors stay manual.
+Its `GITHUB_TOKEN` merges do not trigger main-push CI, so a merged Go security
+fix enters release planning with the next maintainer-triggered main CI run.
 
 Answer plans, proposals, comparisons and findings in the conversation. Write
 them to a file only when requested, under `.claude/tmp/` (temporary, gitignored,
