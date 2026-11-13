@@ -1,7 +1,7 @@
 # arkoren.dev/ark/oauth
 
 OpenID Connect and OAuth2 login, plus JWT bearer verification, for Arkoren, built on `arkoren.dev/core/auth`.
-It is an ark: it logs users in through `auth.Login` and verifies bearer tokens, and has no tables of its own.
+It is an ark: it logs users in through `*auth.Guard` and verifies bearer tokens, and has no tables of its own.
 
 Moved from `arkoren.dev/driver/oauth` (last version v0.1.0). Change the import
 path to `arkoren.dev/ark/oauth`; the package name `oauthauth` is unchanged.
@@ -59,28 +59,30 @@ Supply your own `resolve` callback (`func(context.Context, oauth.Identity)
 user, for example with the `Subject` method of your typed user driver. Match by
 issuer and subject, never by email alone; see [Identity mapping](#identity-mapping).
 Given an existing `r` router, `store` cache and `provider` (`*auth.UserProvider`),
-create the shared login and register the browser routes:
+create the shared guard and register the browser routes:
 
 ```go
-login, err := auth.NewLogin(provider, store)
+guard, err := auth.NewGuard(provider, store)
 if err != nil {
 	return err
 }
 
 r.Use(session.Middleware(store))
 r.Use(csrf.Middleware())
-r.Use(auth.Middleware(login.Authenticator()))
+r.Use(auth.Middleware(guard.Authenticator()))
 r.Get("/login", client.Login()) // supports ?return_to=/local/path
-r.Get("/oauth/callback", client.Callback(login, resolve))
-r.Post("/logout", client.Logout(login))
+r.Get("/oauth/callback", client.Callback(guard, resolve))
+r.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
+	logout.Redirect("/")
+}))
 ```
 
 ## Second factors
 
-When `login` has a registered second-factor check for the user, `Begin` holds the
+When `guard` has a registered second-factor check for the user, `Begin` holds the
 login as pending and the callback redirects to the local path set with
 `ClientBuilder.ChallengeURL`, without publishing `LoginSucceeded` or carrying
-`return_to`. Your challenge page finishes the login with `login.Complete`. Without
+`return_to`. Your challenge page finishes the login with `guard.Complete`. Without
 a challenge URL the callback ends the pending login and fails with
 `ErrNoChallengeURL`; it never signs the user in without the second factor.
 
@@ -149,14 +151,17 @@ api.With(gate.Require(gate.HasScopes("posts:write"))).Post("/posts", createPost)
 
 - `oauth.New(provider, cipher, clientID, configure...)`: pure constructor; `client.Start(ctx)` runs OIDC discovery (no-op for OAuth2).
 - `oauth.OIDC(issuerURL)`, `oauth.OAuth2(endpoint, userInfo)`: providers.
-- `client.Login()`, `client.Callback(login, resolve)`, `client.Logout(login)`: browser flow handlers. `resolve` maps the external
+- `client.Login()`, `client.Callback(guard, resolve)`: browser flow handlers. `resolve` maps the external
   identity to the app's user subject. Mapper errors matching `auth.ErrNoCredentials`
   become `ErrInvalidCallback` while retaining their causes; other mapper errors
   pass through. A subject the user provider does not know or has disabled is
   `auth.ErrUnauthenticated` (401); an invalid subject is `auth.ErrInvalidSubject`.
-- Callback and logout use the login's session without default-slot fallback. A
+- `client.Logout(guard)` is deprecated: register `guard.LogoutHandler()` from core, which owns the logout route and
+  publishes `auth.LoggedOut`. The method keeps its 401 without a session, 302 to `/` and `oauth.LoggedOut` behavior
+  and is removed in a later minor release.
+- Callback and logout use the guard's session without default-slot fallback. A
   missing session returns 401 before consuming the login cookie or calling the
-  provider or mapper. A nil login or mapper returns a configuration error before
+  provider or mapper. A nil guard or mapper returns a configuration error before
   those effects. Successful mutation still depends on session middleware for
   response-time persistence.
 - `client.Verify(ctx, token)`: verifies a JWT access token and returns the external `oauth.Identity`; wrap it for `auth.Bearer` as shown above. OIDC only; needs `ClientBuilder.Audiences`
@@ -227,7 +232,7 @@ provider text; do not log returned errors or unwrapped causes indiscriminately.
 Set `ClientBuilder.Events(bus)` to share your existing `event.Bus`. Nil publishes
 nothing. Completed logins report subject and issuer through `LoginSucceeded` (a login held
 for a second factor publishes nothing); those identifiers still require your
-application's privacy policy. `LoggedOut`
+application's privacy policy. The deprecated `LoggedOut`
 reports local session mutation, not provider logout or persisted session storage.
 
 `LoginFailed.Err` contains only `ErrInvalidCallback`, `ErrProviderUnavailable`, or

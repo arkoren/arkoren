@@ -18,20 +18,20 @@ func TestLogoutClearsLoginAndRedirects(t *testing.T) {
 	t.Parallel()
 
 	client := newClient(t, OIDC(newTestProvider(t).server.URL))
-	signin := newLogin(t)
+	guard := newGuard(t)
 	request := callbackRequest(http.MethodPost, cookieJar{}, newSession(), "", "")
 
-	if complete, err := signin.Begin(request, "user-1", federated); err != nil || !complete {
+	if complete, err := guard.Begin(request, "user-1", federated); err != nil || !complete {
 		t.Fatalf("Begin = %t, %v", complete, err)
 	}
 
-	response := client.Logout(signin).Record(request)
+	response := client.Logout(guard).Record(request)
 
 	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/" {
 		t.Errorf("response = %d %q", response.StatusCode, response.Header.Get("Location"))
 	}
 
-	if _, err := userOf(signin, request); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := userOf(guard, request); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Errorf("Authenticator() error = %v, want ErrNoCredentials", err)
 	}
 }
@@ -44,14 +44,14 @@ func TestLogoutPublishesLoggedOut(t *testing.T) {
 	client := newClient(t, OIDC(newTestProvider(t).server.URL), func(client *ClientBuilder) {
 		client.Events(bus)
 	})
-	signin := newLogin(t)
+	guard := newGuard(t)
 	request := callbackRequest(http.MethodPost, cookieJar{}, newSession(), "", "")
 
-	if _, err := signin.Begin(request, "user-1", federated); err != nil {
+	if _, err := guard.Begin(request, "user-1", federated); err != nil {
 		t.Fatal(err)
 	}
 
-	client.Logout(signin).Record(request)
+	client.Logout(guard).Record(request)
 
 	if len(*events) != 1 {
 		t.Fatalf("events = %v, want [logged-out]", *events)
@@ -70,15 +70,15 @@ func TestLogoutWithoutSessionIsUnauthenticated(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	writer := httptest.NewRecorder()
 
-	err := client.Logout(newLogin(t))(writer, request)
+	err := client.Logout(newGuard(t))(writer, request)
 
 	if !errors.Is(err, auth.ErrUnauthenticated) || len(*events) != 0 || len(writer.Header()) != 0 {
 		t.Fatalf("error = %v, events = %d, headers = %v", err, len(*events), writer.Header())
 	}
 }
 
-// TestLogoutNilLoginFails verifies a nil login is a configuration error.
-func TestLogoutNilLoginFails(t *testing.T) {
+// TestLogoutNilGuardFails verifies a nil guard is a configuration error.
+func TestLogoutNilGuardFails(t *testing.T) {
 	t.Parallel()
 
 	client := newClient(t, OIDC(newTestProvider(t).server.URL))
@@ -87,13 +87,13 @@ func TestLogoutNilLoginFails(t *testing.T) {
 	err := client.Logout(nil)(httptest.NewRecorder(), request)
 
 	if err == nil || errors.Is(err, auth.ErrUnauthenticated) {
-		t.Fatalf("nil login error = %v", err)
+		t.Fatalf("nil guard error = %v", err)
 	}
 }
 
-// TestCallbackNilLoginHasNoEffects verifies the login is configuration, not a
+// TestCallbackNilGuardHasNoEffects verifies the guard is configuration, not a
 // deferred panic, and the saved flow stays usable after the rejection.
-func TestCallbackNilLoginHasNoEffects(t *testing.T) {
+func TestCallbackNilGuardHasNoEffects(t *testing.T) {
 	t.Parallel()
 
 	provider := newTestProvider(t)
@@ -114,19 +114,19 @@ func TestCallbackNilLoginHasNoEffects(t *testing.T) {
 	err := client.Callback(nil, idLogin)(w, r)
 
 	if err == nil || errors.Is(err, ErrInvalidCallback) || errors.Is(err, auth.ErrUnauthenticated) {
-		t.Fatalf("nil login error = %v", err)
+		t.Fatalf("nil guard error = %v", err)
 	}
 
 	if current.ID() != id || current.HasChanged() || len(w.Header()) != 0 {
-		t.Fatal("nil login caused side effects")
+		t.Fatal("nil guard caused side effects")
 	}
 
 	if provider.exchanges.Load() != 0 || len(*events) != 0 {
-		t.Fatal("nil login exchanged a code or published an event")
+		t.Fatal("nil guard exchanged a code or published an event")
 	}
 
-	if got := client.Callback(newLogin(t), idLogin).Record(r).StatusCode; got != http.StatusFound {
-		t.Fatalf("nil login consumed state: %d", got)
+	if got := client.Callback(newGuard(t), idLogin).Record(r).StatusCode; got != http.StatusFound {
+		t.Fatalf("nil guard consumed state: %d", got)
 	}
 }
 
@@ -140,7 +140,7 @@ func TestCallbackNilMapperHasNoEffects(t *testing.T) {
 	client := newClient(t, OIDC(provider.server.URL), func(application *ClientBuilder) {
 		application.Events(bus)
 	})
-	signin := newLogin(t)
+	guard := newGuard(t)
 	jar := cookieJar{}
 
 	query := login(t, client, jar)
@@ -151,7 +151,7 @@ func TestCallbackNilMapperHasNoEffects(t *testing.T) {
 	r := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	w := httptest.NewRecorder()
 
-	err := client.Callback(signin, nil)(w, r)
+	err := client.Callback(guard, nil)(w, r)
 
 	if err == nil || errors.Is(err, ErrInvalidCallback) || errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("nil mapper error = %v", err)
@@ -165,7 +165,7 @@ func TestCallbackNilMapperHasNoEffects(t *testing.T) {
 		t.Fatal("nil mapper exchanged a code or published an event")
 	}
 
-	if got := client.Callback(signin, idLogin).Record(r).StatusCode; got != http.StatusFound {
+	if got := client.Callback(guard, idLogin).Record(r).StatusCode; got != http.StatusFound {
 		t.Fatalf("nil mapper consumed state: %d", got)
 	}
 }
@@ -182,13 +182,13 @@ func TestCallbackMissingSelectedSessionDoesNotFallback(t *testing.T) {
 	query := login(t, client, jar)
 
 	handle := session.NewHandle()
-	signin := newLogin(t, func(policy *auth.LoginBuilder) {
+	guard := newGuard(t, func(policy *auth.GuardBuilder) {
 		policy.Handle(handle)
 	})
 	r := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 	w := httptest.NewRecorder()
 
-	err := client.Callback(signin, idLogin)(w, r)
+	err := client.Callback(guard, idLogin)(w, r)
 
 	if !errors.Is(err, auth.ErrUnauthenticated) || len(w.Header()) != 0 {
 		t.Fatalf("missing selection: error = %v, headers = %v", err, w.Header())
@@ -196,7 +196,7 @@ func TestCallbackMissingSelectedSessionDoesNotFallback(t *testing.T) {
 
 	r = r.WithContext(session.NewContextFor(r.Context(), handle, newSession()))
 
-	if got := client.Callback(signin, idLogin).Record(r).StatusCode; got != http.StatusFound {
+	if got := client.Callback(guard, idLogin).Record(r).StatusCode; got != http.StatusFound {
 		t.Fatalf("missing selection consumed state: %d", got)
 	}
 }
@@ -208,10 +208,10 @@ func TestLogoutSelectsCustomSession(t *testing.T) {
 
 	client := newClient(t, OIDC(newTestProvider(t).server.URL))
 	handle := session.NewHandle()
-	selectedLogin := newLogin(t, func(policy *auth.LoginBuilder) {
+	selectedLogin := newGuard(t, func(policy *auth.GuardBuilder) {
 		policy.Handle(handle)
 	})
-	defaultLogin := newLogin(t)
+	defaultLogin := newGuard(t)
 	selected, defaultSession := newSession(), newSession()
 
 	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
