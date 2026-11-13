@@ -12,40 +12,43 @@ import (
 	"arkoren.dev/core/service/cache"
 )
 
-// Login turns "this person proved X" into a logged-in browser session. Every
-// login method (password, OAuth, SAML, passkey) calls [Login.Begin] after it
+// Guard turns "this person proved X" into a logged-in browser session. Every
+// login method (password, OAuth, SAML, passkey) calls [Guard.Begin] after it
 // verified its credential. Begin either logs the user in or, when a registered
 // second-factor check says the user needs one, parks the login in a pending
-// state in which the request stays anonymous until [Login.Complete]. The
+// state in which the request stays anonymous until [Guard.Complete]. The
 // factors recorded along the way give [Identity.Level], and [RequireLevel] and
-// [RequireFresh] guard routes with them.
+// [RequireFresh] protect routes with them.
 //
-// A Login stores one session record (subject, factors, credential version and
+// A Guard stores one session record (subject, factors, credential version and
 // a login-record ID) under one session key and a pending login under a second,
 // so a login can never be half written. Every transition (Begin, Complete,
 // Fail, Confirm, Logout) regenerates the session ID, which prevents session
 // fixation.
 //
 // All methods read the session from the request context with the handle chosen
-// by [LoginBuilder.Handle], so [session.Middleware] must run first; without a
+// by [GuardBuilder.Handle], so [session.Middleware] must run first; without a
 // session they return [session.ErrNoSession] (the authenticator returns
 // [ErrNoCredentials]). Methods change the session in memory; it is saved by the
 // session middleware, so change it before the response headers are written.
-// Concurrent use is safe: a Login is immutable after construction.
+// Concurrent use is safe: a Guard is immutable after construction.
 //
-// Create one with [NewLogin]. In an application the build order is user
-// provider, arks, [NewLogin], handlers.
+// Create one with [NewGuard]. In an application the build order is user
+// provider, arks, [NewGuard], handlers.
+//
+// Releases before v0.7.0 named this type Login (and [NewGuard] NewLogin). The
+// methods, session keys, events and stored record formats did not change.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.SecondFactor(factors.Enrolled)
 //	})
 //	if err != nil {
 //		return err
 //	}
-//	r.Use(session.Middleware(store), auth.Middleware(login.Authenticator()))
-type Login struct {
+//	r.Use(session.Middleware(store), auth.Middleware(guard.Authenticator()))
+type Guard struct {
 	// provider finds users at begin, completion and on every request.
 	provider *UserProvider
 
@@ -57,42 +60,42 @@ type Login struct {
 	records cache.Namespace[[]LoginRecord]
 
 	// settings are the completed construction settings.
-	settings loginSettings
+	settings guardSettings
 }
 
-// NewLogin returns a [Login] over provider. store is the cache the application
+// NewGuard returns a [Guard] over provider. store is the cache the application
 // also gives to [session.Middleware]; it keeps each user's login records (see
-// [Login.Logins]). NewLogin registers [Login.RevokeAll] with
+// [Guard.Logins]). NewGuard registers [Guard.RevokeAll] with
 // [UserProvider.OnForget], so forgetting a user ends their sessions. It returns
-// an error when provider or store is nil, when [LoginBuilder.ChallengeTTL],
-// [LoginBuilder.MaxAttempts], [LoginBuilder.MaxLogins] or
-// [LoginBuilder.SessionLifetime] is not positive, or when a second-factor check
-// or [LoginBuilder.ClientIP] is nil. Construction does no I/O and the callbacks
+// an error when provider or store is nil, when [GuardBuilder.ChallengeTTL],
+// [GuardBuilder.MaxAttempts], [GuardBuilder.MaxLogins] or
+// [GuardBuilder.SessionLifetime] is not positive, or when a second-factor check
+// or [GuardBuilder.ClientIP] is nil. Construction does no I/O and the callbacks
 // run once, in order.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.ChallengeTTL(10 * time.Minute)
 //		policy.SecondFactor(factors.Enrolled)
 //	})
-func NewLogin(provider *UserProvider, store *cache.Cache, configure ...LoginBuilderFunc) (*Login, error) {
+func NewGuard(provider *UserProvider, store *cache.Cache, configure ...GuardBuilderFunc) (*Guard, error) {
 	if provider == nil {
 		return nil, errors.New("auth: nil user provider")
 	}
 
 	if store == nil {
-		return nil, errors.New("auth: nil login store")
+		return nil, errors.New("auth: nil guard store")
 	}
 
-	settings := newLoginSettings(configure...)
+	settings := newGuardSettings(configure...)
 
 	if settings.ChallengeTTL <= 0 {
-		return nil, errors.New("auth: login challenge TTL must be positive")
+		return nil, errors.New("auth: guard challenge TTL must be positive")
 	}
 
 	if settings.MaxAttempts <= 0 {
-		return nil, errors.New("auth: login max attempts must be positive")
+		return nil, errors.New("auth: guard max attempts must be positive")
 	}
 
 	if slices.ContainsFunc(settings.SecondFactors, func(check func(context.Context, string) (bool, error)) bool { return check == nil }) {
@@ -100,11 +103,11 @@ func NewLogin(provider *UserProvider, store *cache.Cache, configure ...LoginBuil
 	}
 
 	if settings.MaxLogins <= 0 {
-		return nil, errors.New("auth: login max logins must be positive")
+		return nil, errors.New("auth: guard max logins must be positive")
 	}
 
 	if settings.SessionLifetime <= 0 {
-		return nil, errors.New("auth: login session lifetime must be positive")
+		return nil, errors.New("auth: guard session lifetime must be positive")
 	}
 
 	if settings.ClientIP == nil {
@@ -113,18 +116,18 @@ func NewLogin(provider *UserProvider, store *cache.Cache, configure ...LoginBuil
 
 	settings.SecondFactors = slices.Clone(settings.SecondFactors)
 
-	login := &Login{provider: provider, store: store, settings: settings, records: cache.NewNamespace[[]LoginRecord]("arkoren:auth:logins", func(space *cache.NamespaceBuilder) {
+	guard := &Guard{provider: provider, store: store, settings: settings, records: cache.NewNamespace[[]LoginRecord]("arkoren:auth:logins", func(space *cache.NamespaceBuilder) {
 		space.TTL(settings.SessionLifetime)
 	})}
 
-	provider.OnForget(login.RevokeAll)
+	provider.OnForget(guard.RevokeAll)
 
-	return login, nil
+	return guard, nil
 }
 
 // session resolves the request's session through the configured handle.
-func (login *Login) session(r *http.Request) (*session.Session, error) {
-	current, ok := session.FromContextFor(r.Context(), login.settings.Handle)
+func (guard *Guard) session(r *http.Request) (*session.Session, error) {
+	current, ok := session.FromContextFor(r.Context(), guard.settings.Handle)
 
 	if !ok {
 		return nil, session.ErrNoSession
@@ -146,7 +149,7 @@ func missing(err error) bool {
 
 // release removes the login record of the logged-in user of current, if any, so
 // replacing or ending a login leaves no phantom device behind.
-func (login *Login) release(ctx context.Context, current *session.Session) error {
+func (guard *Guard) release(ctx context.Context, current *session.Session) error {
 	stored, err := current.Get(sessionField)
 
 	if missing(err) {
@@ -161,19 +164,19 @@ func (login *Login) release(ctx context.Context, current *session.Session) error
 		return nil
 	}
 
-	return login.Revoke(ctx, stored.Subject, stored.LoginID)
+	return guard.Revoke(ctx, stored.Subject, stored.LoginID)
 }
 
 // start logs the user in with factors: it replaces the login record of any
 // previous login with a new one, stores the session record, drops any pending
 // login and regenerates the session ID. Writes precede regeneration so a failed
 // write leaves the ID unchanged.
-func (login *Login) start(r *http.Request, current *session.Session, user UserRecord, factors []Factor) error {
-	if err := login.release(r.Context(), current); err != nil {
+func (guard *Guard) start(r *http.Request, current *session.Session, user UserRecord, factors []Factor) error {
+	if err := guard.release(r.Context(), current); err != nil {
 		return err
 	}
 
-	id, err := login.open(r, user.Subject)
+	id, err := guard.open(r, user.Subject)
 
 	if err != nil {
 		return err
@@ -203,7 +206,7 @@ func (login *Login) start(r *http.Request, current *session.Session, user UserRe
 // A missing session, an absent or unreadable record, a deleted or disabled user
 // ([ErrUserNotFound], [ErrUserDisabled]), a credential version that no longer
 // matches [UserRecord.Version] and a login record that was revoked, expired or
-// dropped (see [Login.Revoke]) all return [ErrNoCredentials], which makes the
+// dropped (see [Guard.Revoke]) all return [ErrNoCredentials], which makes the
 // request anonymous. The version comparison is constant time. Other provider
 // errors and errors reading the login records from the store pass through and
 // stop the chain. The check costs one cache read per request; when the record's
@@ -212,10 +215,10 @@ func (login *Login) start(r *http.Request, current *session.Session, user UserRe
 //
 // Example:
 //
-//	r.Use(session.Middleware(store), auth.Middleware(login.Authenticator()))
-func (login *Login) Authenticator() Authenticator {
+//	r.Use(session.Middleware(store), auth.Middleware(guard.Authenticator()))
+func (guard *Guard) Authenticator() Authenticator {
 	return func(r *http.Request) (Identity, error) {
-		current, err := login.session(r)
+		current, err := guard.session(r)
 
 		if err != nil {
 			return Identity{}, ErrNoCredentials
@@ -231,7 +234,7 @@ func (login *Login) Authenticator() Authenticator {
 			return Identity{}, err
 		}
 
-		user, err := login.provider.Find(r.Context(), stored.Subject)
+		user, err := guard.provider.Find(r.Context(), stored.Subject)
 
 		if gone(err) {
 			return Identity{}, ErrNoCredentials
@@ -245,7 +248,7 @@ func (login *Login) Authenticator() Authenticator {
 			return Identity{}, ErrNoCredentials
 		}
 
-		active, err := login.seen(r.Context(), stored.Subject, stored.LoginID)
+		active, err := guard.seen(r.Context(), stored.Subject, stored.LoginID)
 
 		if err != nil {
 			return Identity{}, err
@@ -269,7 +272,7 @@ func (login *Login) Authenticator() Authenticator {
 // [ErrInvalidSubject], are returned unchanged.
 //
 // When the session is already logged in as subject, Begin behaves like
-// [Login.Confirm]: it adds factor to the logged-in session (a factor of the same
+// [Guard.Confirm]: it adds factor to the logged-in session (a factor of the same
 // [Method] replaces the older one), keeps the login record, skips the
 // second-factor checks, regenerates the session ID and returns true. The user
 // already passed every check, so a logged-in user who connects a provider or
@@ -278,38 +281,38 @@ func (login *Login) Authenticator() Authenticator {
 // when a second factor was enrolled. A different subject, an anonymous session
 // and a pending login keep the behavior below.
 //
-// Otherwise it asks each [LoginBuilder.SecondFactor] check. When none says yes it
+// Otherwise it asks each [GuardBuilder.SecondFactor] check. When none says yes it
 // logs the user in with factor, regenerates the session ID and returns true.
 // Otherwise it replaces any logged-in user with a pending login that expires
-// after [LoginBuilder.ChallengeTTL], regenerates the session ID and returns
-// false: the request stays anonymous until [Login.Complete]. The caller then
+// after [GuardBuilder.ChallengeTTL], regenerates the session ID and returns
+// false: the request stays anonymous until [Guard.Complete]. The caller then
 // asks for the second factor. A check error fails the login with that error and
 // changes nothing.
 //
-// Logging in creates a [LoginRecord] for the device (see [Login.Logins]) and
+// Logging in creates a [LoginRecord] for the device (see [Guard.Logins]) and
 // removes the record of the login the session replaces, so Begin can also return
 // the cache or lock errors of the record store; the session is then unchanged.
-// A login that is parked creates its record at [Login.Complete].
+// A login that is parked creates its record at [Guard.Complete].
 //
 // Begin does not verify the credential: call it only after it checked out.
 //
 // Example:
 //
-//	complete, err := login.Begin(r, subject, auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+//	complete, err := guard.Begin(r, subject, auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 //	if err != nil {
 //		return err
 //	}
 //	if !complete {
 //		return response.Status(w, http.StatusAccepted) // Ask for the second factor.
 //	}
-func (login *Login) Begin(r *http.Request, subject string, factor Factor) (complete bool, err error) {
-	current, err := login.session(r)
+func (guard *Guard) Begin(r *http.Request, subject string, factor Factor) (complete bool, err error) {
+	current, err := guard.session(r)
 
 	if err != nil {
 		return false, err
 	}
 
-	user, err := login.provider.Find(r.Context(), subject)
+	user, err := guard.provider.Find(r.Context(), subject)
 
 	if gone(err) {
 		return false, ErrUnauthenticated
@@ -321,10 +324,10 @@ func (login *Login) Begin(r *http.Request, subject string, factor Factor) (compl
 
 	// A session already logged in as this subject passed every check for it, so
 	// the new factor joins the existing login like Confirm instead of replacing it.
-	identity, err := login.Authenticator()(r)
+	identity, err := guard.Authenticator()(r)
 
 	if err == nil && identity.Subject() == user.Subject {
-		return true, login.Confirm(r, factor)
+		return true, guard.Confirm(r, factor)
 	}
 
 	if err != nil && !errors.Is(err, ErrNoCredentials) {
@@ -333,7 +336,7 @@ func (login *Login) Begin(r *http.Request, subject string, factor Factor) (compl
 
 	needed := false
 
-	for _, check := range login.settings.SecondFactors {
+	for _, check := range guard.settings.SecondFactors {
 		needed, err = check(r.Context(), user.Subject)
 
 		if err != nil {
@@ -349,12 +352,12 @@ func (login *Login) Begin(r *http.Request, subject string, factor Factor) (compl
 	factors := withFactor(nil, factor, now)
 
 	if !needed {
-		return true, login.start(r, current, user, factors)
+		return true, guard.start(r, current, user, factors)
 	}
 
-	waiting := pendingLogin{Subject: user.Subject, Factors: factors, Version: hashVersion(user.Version), Expires: now.Add(login.settings.ChallengeTTL).UTC()}
+	waiting := pendingLogin{Subject: user.Subject, Factors: factors, Version: hashVersion(user.Version), Expires: now.Add(guard.settings.ChallengeTTL).UTC()}
 
-	if err := login.release(r.Context(), current); err != nil {
+	if err := guard.release(r.Context(), current); err != nil {
 		return false, err
 	}
 
@@ -374,7 +377,7 @@ func (login *Login) Begin(r *http.Request, subject string, factor Factor) (compl
 // pending returns the unexpired pending login of current. An absent, unreadable
 // or expired one is [ErrUnauthenticated]; expiry also clears it so a stale
 // challenge cannot linger.
-func (login *Login) pending(current *session.Session) (pendingLogin, error) {
+func (guard *Guard) pending(current *session.Session) (pendingLogin, error) {
 	waiting, err := current.Get(pendingField)
 
 	if missing(err) {
@@ -398,16 +401,16 @@ func (login *Login) pending(current *session.Session) (pendingLogin, error) {
 
 // pendingUser returns the pending login of current and its user, loaded from the
 // provider. A user deleted or disabled during the challenge, or whose
-// [UserRecord.Version] differs from the one seen at [Login.Begin] (compared in
+// [UserRecord.Version] differs from the one seen at [Guard.Begin] (compared in
 // constant time), discards the pending login and is [ErrUnauthenticated].
-func (login *Login) pendingUser(r *http.Request, current *session.Session) (pendingLogin, UserRecord, error) {
-	waiting, err := login.pending(current)
+func (guard *Guard) pendingUser(r *http.Request, current *session.Session) (pendingLogin, UserRecord, error) {
+	waiting, err := guard.pending(current)
 
 	if err != nil {
 		return waiting, UserRecord{}, err
 	}
 
-	user, err := login.provider.Find(r.Context(), waiting.Subject)
+	user, err := guard.provider.Find(r.Context(), waiting.Subject)
 
 	if err != nil && !gone(err) {
 		return waiting, UserRecord{}, err
@@ -425,37 +428,37 @@ func (login *Login) pendingUser(r *http.Request, current *session.Session) (pend
 }
 
 // Pending returns the user waiting for a second factor, as parked by
-// [Login.Begin]. It returns [ErrUnauthenticated] when there is no pending login,
+// [Guard.Begin]. It returns [ErrUnauthenticated] when there is no pending login,
 // it expired (which also clears it) or the user was deleted, disabled or had its
 // [UserRecord.Version] changed, for example by a password change, in the
 // meantime (which discards it). Other provider errors pass through. Pending does
 // not consume the login, so a handler can read the user, check a code and report
-// a wrong one with [Login.Fail].
+// a wrong one with [Guard.Fail].
 //
 // Example:
 //
-//	user, err := login.Pending(r)
+//	user, err := guard.Pending(r)
 //	if err != nil {
 //		return err
 //	}
 //	ok := verifyCode(user.Subject, code)
-func (login *Login) Pending(r *http.Request) (UserRecord, error) {
-	current, err := login.session(r)
+func (guard *Guard) Pending(r *http.Request) (UserRecord, error) {
+	current, err := guard.session(r)
 
 	if err != nil {
 		return UserRecord{}, err
 	}
 
-	_, user, err := login.pendingUser(r, current)
+	_, user, err := guard.pendingUser(r, current)
 
 	return user, err
 }
 
 // Complete finishes a pending login after the second factor verified: it logs
-// the user in with the factors verified at [Login.Begin] plus factor (a zero
-// factor.At means now), creates the [LoginRecord] of the device as [Login.Begin]
+// the user in with the factors verified at [Guard.Begin] plus factor (a zero
+// factor.At means now), creates the [LoginRecord] of the device as [Guard.Begin]
 // does, regenerates the session ID and consumes the pending login, so a second
-// call returns [ErrUnauthenticated]. The errors are those of [Login.Pending]
+// call returns [ErrUnauthenticated]. The errors are those of [Guard.Pending]
 // plus the cache and lock errors of the record store; on any error nothing is
 // logged in.
 //
@@ -463,32 +466,32 @@ func (login *Login) Pending(r *http.Request) (UserRecord, error) {
 //
 // Example:
 //
-//	if _, err := login.Pending(r); err != nil {
+//	if _, err := guard.Pending(r); err != nil {
 //		return err
 //	}
 //	if !verifyCode(code) {
-//		return login.Fail(r)
+//		return guard.Fail(r)
 //	}
-//	return login.Complete(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
-func (login *Login) Complete(r *http.Request, factor Factor) error {
-	current, err := login.session(r)
+//	return guard.Complete(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
+func (guard *Guard) Complete(r *http.Request, factor Factor) error {
+	current, err := guard.session(r)
 
 	if err != nil {
 		return err
 	}
 
-	waiting, user, err := login.pendingUser(r, current)
+	waiting, user, err := guard.pendingUser(r, current)
 
 	if err != nil {
 		return err
 	}
 
-	return login.start(r, current, user, withFactor(waiting.Factors, factor, time.Now()))
+	return guard.start(r, current, user, withFactor(waiting.Factors, factor, time.Now()))
 }
 
 // Fail counts one wrong second-factor attempt on the pending login and
-// regenerates the session ID. When the count reaches [LoginBuilder.MaxAttempts]
-// the pending login is discarded and the next [Login.Pending] returns
+// regenerates the session ID. When the count reaches [GuardBuilder.MaxAttempts]
+// the pending login is discarded and the next [Guard.Pending] returns
 // [ErrUnauthenticated]. It returns [ErrUnauthenticated] when there is no pending
 // login. The count lives in the session, so it limits one browser session only;
 // rate-limit by user or address as well.
@@ -496,19 +499,19 @@ func (login *Login) Complete(r *http.Request, factor Factor) error {
 // Example:
 //
 //	if !verifyCode(code) {
-//		if err := login.Fail(r); err != nil {
+//		if err := guard.Fail(r); err != nil {
 //			return err
 //		}
 //		return problem.Unauthorized()
 //	}
-func (login *Login) Fail(r *http.Request) error {
-	current, err := login.session(r)
+func (guard *Guard) Fail(r *http.Request) error {
+	current, err := guard.session(r)
 
 	if err != nil {
 		return err
 	}
 
-	waiting, err := login.pending(current)
+	waiting, err := guard.pending(current)
 
 	if err != nil {
 		return err
@@ -516,7 +519,7 @@ func (login *Login) Fail(r *http.Request) error {
 
 	waiting.Attempts++
 
-	if waiting.Attempts >= login.settings.MaxAttempts {
+	if waiting.Attempts >= guard.settings.MaxAttempts {
 		err = current.Delete(pendingField)
 	} else {
 		err = current.Put(pendingField, waiting)
@@ -543,11 +546,11 @@ func (login *Login) Fail(r *http.Request) error {
 //
 // Example:
 //
-//	if err := login.Confirm(r, auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}); err != nil {
+//	if err := guard.Confirm(r, auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}); err != nil {
 //		return err
 //	}
-func (login *Login) Confirm(r *http.Request, factor Factor) error {
-	current, err := login.session(r)
+func (guard *Guard) Confirm(r *http.Request, factor Factor) error {
+	current, err := guard.session(r)
 
 	if err != nil {
 		return err
@@ -580,17 +583,17 @@ func (login *Login) Confirm(r *http.Request, factor Factor) error {
 //
 // Example:
 //
-//	if err := login.Logout(r); err != nil {
+//	if err := guard.Logout(r); err != nil {
 //		return err
 //	}
-func (login *Login) Logout(r *http.Request) error {
-	current, err := login.session(r)
+func (guard *Guard) Logout(r *http.Request) error {
+	current, err := guard.session(r)
 
 	if err != nil {
 		return err
 	}
 
-	if err := login.release(r.Context(), current); err != nil {
+	if err := guard.release(r.Context(), current); err != nil {
 		return err
 	}
 
