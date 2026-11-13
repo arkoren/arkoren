@@ -81,13 +81,13 @@ const (
 //	}
 type Factor struct {
 	// Method is how the factor was verified.
-	Method Method
+	Method Method `json:"method"`
 
 	// Kind is what the factor proves. [Identity.Level] is derived from it.
-	Kind Kind
+	Kind Kind `json:"kind"`
 
 	// At is when the factor was verified. The zero time means unknown.
-	At time.Time
+	At time.Time `json:"at"`
 }
 
 // Level summarizes how strongly an [Identity] was authenticated. It is derived

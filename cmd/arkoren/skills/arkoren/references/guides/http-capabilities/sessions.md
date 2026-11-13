@@ -185,19 +185,20 @@ namespace panics after configuration. Session lifetime overrides its TTL.
 
 Rotate the ID after login or privilege changes to prevent **session fixation**:
 an attacker arranging for a victim to authenticate into a known session. For
-login, use the same `auth.SessionIdentity` as your authentication middleware;
-[Session Login](../authentication/session-login.md) owns the user loader,
-credential checks, and complete identity setup.
+login, use the same `*auth.Login` as your authentication middleware;
+[Session Login](../authentication/session-login.md) owns the user provider,
+credential checks, and complete login setup.
 
-After credentials succeed, with the configured `identity` and typed loaded `user`:
+After credentials succeed, with the configured `login`, the user's `subject` and
+the verified `factor`:
 
 ```go
-if err := identity.Login(request.MustSession(r), user.ID); err != nil {
+if _, err := login.Begin(r, subject, factor); err != nil {
 	return err
 }
 ```
 
-Login stores the identifier, then regenerates the ID only if that write succeeds.
+Begin stores the session record, then regenerates the ID only if that write succeeds.
 For other privilege changes, call `current.Regenerate()` after successfully
 changing the authentication-related session state. Regeneration keeps the fields
 and original creation time; it does not log the visitor out.
@@ -205,12 +206,12 @@ and original creation time; it does not log the visitor out.
 To remove the identity but retain unrelated fields:
 
 ```go
-if err := identity.Logout(request.MustSession(r)); err != nil {
+if err := login.Logout(r); err != nil {
 	return err
 }
 ```
 
-Logout removes even a stale, wrongly typed identifier and rotates the ID. To end
+Logout removes even a stale, unreadable login record and rotates the ID. To end
 the entire session instead, call `current.Destroy()` before response headers.
 Destroy discards later changes. `Clear` only clears fields; it neither rotates
 nor retires the ID.

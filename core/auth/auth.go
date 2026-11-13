@@ -123,7 +123,7 @@ func UserFromContext[U any](ctx context.Context) (U, bool) {
 // Example:
 //
 //	r.Use(auth.Middleware(
-//		auth.NewSessionIdentity(loadUser).Authenticator(),
+//		login.Authenticator(),
 //		auth.Bearer(verifyKey),
 //	))
 func Middleware(authenticators ...Authenticator) router.Middleware {
@@ -213,8 +213,13 @@ func (authenticator *MiddlewareBuilder) Events(bus *event.Bus) *MiddlewareBuilde
 //
 //	api := r.With(auth.Require())
 func Require(configure ...MiddlewareBuilderFunc) router.Middleware {
-	config := newMiddlewareSettings(configure...)
+	return require(newMiddlewareSettings(configure...))
+}
 
+// require builds the [Require] middleware from completed settings, so wrappers
+// such as [RequireLevel] apply the caller's callbacks once and reuse its
+// rejection of anonymous requests.
+func require(config middlewareSettings) router.Middleware {
 	response := config.ErrorResponse
 
 	if reflect.ValueOf(response).IsZero() {
