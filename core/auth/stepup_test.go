@@ -217,14 +217,14 @@ func TestConfirmSatisfiesFreshness(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		login, _ := newLogin(t)
+		guard, _ := newGuard(t)
 		r := sessionRequest(newSession())
-		begin(t, login, r, "7")
+		begin(t, guard, r, "7")
 
 		time.Sleep(time.Hour)
 
 		check := func() error {
-			identity, err := login.Authenticator()(r)
+			identity, err := guard.Authenticator()(r)
 
 			if err != nil {
 				return err
@@ -239,7 +239,7 @@ func TestConfirmSatisfiesFreshness(t *testing.T) {
 			t.Fatalf("stale session = %v", err)
 		}
 
-		if err := login.Confirm(r, password); err != nil {
+		if err := guard.Confirm(r, password); err != nil {
 			t.Fatal(err)
 		}
 

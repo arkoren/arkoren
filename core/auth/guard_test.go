@@ -49,23 +49,23 @@ func newDirectory(t *testing.T) (*auth.UserProvider, *memoryauth.Driver) {
 	return provider, driver
 }
 
-// newLogin returns a login over newDirectory with a memory store.
-func newLogin(t *testing.T, configure ...auth.LoginBuilderFunc) (*auth.Login, *memoryauth.Driver) {
+// newGuard returns a login over newDirectory with a memory store.
+func newGuard(t *testing.T, configure ...auth.GuardBuilderFunc) (*auth.Guard, *memoryauth.Driver) {
 	t.Helper()
 
 	provider, driver := newDirectory(t)
-	login, err := auth.NewLogin(provider, cache.New(memorycache.New()), configure...)
+	guard, err := auth.NewGuard(provider, cache.New(memorycache.New()), configure...)
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return login, driver
+	return guard, driver
 }
 
 // withChecks registers second-factor checks on a login.
-func withChecks(checks ...func(context.Context, string) (bool, error)) auth.LoginBuilderFunc {
-	return func(policy *auth.LoginBuilder) {
+func withChecks(checks ...func(context.Context, string) (bool, error)) auth.GuardBuilderFunc {
+	return func(policy *auth.GuardBuilder) {
 		for _, check := range checks {
 			policy.SecondFactor(check)
 		}
@@ -85,16 +85,16 @@ func newSession() *session.Session {
 }
 
 // authenticate runs the login's authenticator for the session.
-func authenticate(login *auth.Login, current *session.Session) (auth.Identity, error) {
-	return login.Authenticator()(sessionRequest(current))
+func authenticate(guard *auth.Guard, current *session.Session) (auth.Identity, error) {
+	return guard.Authenticator()(sessionRequest(current))
 }
 
 // begin logs subject in with the password factor, fails the test on error and
 // reports whether the login completed.
-func begin(t *testing.T, login *auth.Login, r *http.Request, subject string) bool {
+func begin(t *testing.T, guard *auth.Guard, r *http.Request, subject string) bool {
 	t.Helper()
 
-	complete, err := login.Begin(r, subject, password)
+	complete, err := guard.Begin(r, subject, password)
 
 	if err != nil {
 		t.Fatal(err)
@@ -108,11 +108,11 @@ func begin(t *testing.T, login *auth.Login, r *http.Request, subject string) boo
 func TestBeginLogsInWithoutChecks(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	current := newSession()
 	before := current.ID()
 
-	if !begin(t, login, sessionRequest(current), "7") {
+	if !begin(t, guard, sessionRequest(current), "7") {
 		t.Fatal("login did not complete")
 	}
 
@@ -120,7 +120,7 @@ func TestBeginLogsInWithoutChecks(t *testing.T) {
 		t.Fatal("begin did not rotate the session")
 	}
 
-	if _, err := authenticate(login, current); err != nil {
+	if _, err := authenticate(guard, current); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -130,9 +130,9 @@ func TestBeginLogsInWithoutChecks(t *testing.T) {
 func TestBeginLogsInWhenAllChecksSayNo(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(false, nil), secondFactor(false, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(false, nil), secondFactor(false, nil)))
 
-	if !begin(t, login, sessionRequest(newSession()), "7") {
+	if !begin(t, guard, sessionRequest(newSession()), "7") {
 		t.Fatal("login did not complete")
 	}
 }
@@ -142,11 +142,11 @@ func TestBeginLogsInWhenAllChecksSayNo(t *testing.T) {
 func TestBeginParksLoginWhenOneCheckSaysYes(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	current := newSession()
 	before := current.ID()
 
-	if begin(t, login, sessionRequest(current), "7") {
+	if begin(t, guard, sessionRequest(current), "7") {
 		t.Fatal("login completed without its second factor")
 	}
 
@@ -154,7 +154,7 @@ func TestBeginParksLoginWhenOneCheckSaysYes(t *testing.T) {
 		t.Fatal("begin did not rotate the session")
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("pending login authenticated: %v", err)
 	}
 }
@@ -164,9 +164,9 @@ func TestBeginParksLoginWhenOneCheckSaysYes(t *testing.T) {
 func TestBeginParksLoginWhenLaterCheckSaysYes(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(false, nil), secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(false, nil), secondFactor(true, nil)))
 
-	if begin(t, login, sessionRequest(newSession()), "7") {
+	if begin(t, guard, sessionRequest(newSession()), "7") {
 		t.Fatal("login completed without its second factor")
 	}
 }
@@ -177,11 +177,11 @@ func TestBeginFailsOnCheckError(t *testing.T) {
 	t.Parallel()
 
 	failure := errors.New("lookup failed")
-	login, _ := newLogin(t, withChecks(secondFactor(false, failure)))
+	guard, _ := newGuard(t, withChecks(secondFactor(false, failure)))
 	current := newSession()
 	before := current.ID()
 
-	if _, err := login.Begin(sessionRequest(current), "7", password); !errors.Is(err, failure) {
+	if _, err := guard.Begin(sessionRequest(current), "7", password); !errors.Is(err, failure) {
 		t.Fatalf("err = %v", err)
 	}
 
@@ -196,11 +196,11 @@ func TestBeginBuildsIdentity(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		login, _ := newLogin(t)
+		guard, _ := newGuard(t)
 		current := newSession()
-		begin(t, login, sessionRequest(current), "7")
+		begin(t, guard, sessionRequest(current), "7")
 
-		identity, err := authenticate(login, current)
+		identity, err := authenticate(guard, current)
 
 		if err != nil {
 			t.Fatal(err)
@@ -223,7 +223,7 @@ func TestBeginBuildsIdentity(t *testing.T) {
 func TestBeginRejectsMissingUsers(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(func(context.Context, string) (bool, error) {
+	guard, _ := newGuard(t, withChecks(func(context.Context, string) (bool, error) {
 		t.Error("second-factor check ran for a rejected user")
 
 		return false, nil
@@ -233,7 +233,7 @@ func TestBeginRejectsMissingUsers(t *testing.T) {
 		current := newSession()
 		before := current.ID()
 
-		if _, err := login.Begin(sessionRequest(current), subject, password); !errors.Is(err, auth.ErrUnauthenticated) {
+		if _, err := guard.Begin(sessionRequest(current), subject, password); !errors.Is(err, auth.ErrUnauthenticated) {
 			t.Fatalf("Begin(%q) = %v", subject, err)
 		}
 
@@ -248,9 +248,9 @@ func TestBeginRejectsMissingUsers(t *testing.T) {
 func TestBeginRejectsInvalidSubject(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 
-	if _, err := login.Begin(sessionRequest(newSession()), "", password); !errors.Is(err, auth.ErrInvalidSubject) {
+	if _, err := guard.Begin(sessionRequest(newSession()), "", password); !errors.Is(err, auth.ErrInvalidSubject) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -260,18 +260,18 @@ func TestBeginRejectsInvalidSubject(t *testing.T) {
 func TestPendingIsAnonymousUntilComplete(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	current := newSession()
 	r := sessionRequest(current)
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
 	var seen []string
 
-	if err := auth.Middleware(login.Authenticator())(ok(&seen))(httptest.NewRecorder(), r); err != nil || seen[0] != "anonymous" {
+	if err := auth.Middleware(guard.Authenticator())(ok(&seen))(httptest.NewRecorder(), r); err != nil || seen[0] != "anonymous" {
 		t.Fatalf("seen = %v, err = %v", seen, err)
 	}
 
-	waiting, err := login.Pending(r)
+	waiting, err := guard.Pending(r)
 
 	if err != nil || waiting.Subject != "7" {
 		t.Fatalf("pending = %+v, %v", waiting, err)
@@ -279,7 +279,7 @@ func TestPendingIsAnonymousUntilComplete(t *testing.T) {
 
 	before := current.ID()
 
-	if err := login.Complete(r, otp); err != nil {
+	if err := guard.Complete(r, otp); err != nil {
 		t.Fatal(err)
 	}
 
@@ -287,7 +287,7 @@ func TestPendingIsAnonymousUntilComplete(t *testing.T) {
 		t.Fatal("complete did not rotate the session")
 	}
 
-	identity, err := authenticate(login, current)
+	identity, err := authenticate(guard, current)
 
 	if err != nil || identity.Level() != auth.LevelMulti || len(identity.Factors()) != 2 {
 		t.Fatalf("identity = %v, %v, %v", identity.Level(), identity.Factors(), err)
@@ -300,20 +300,20 @@ func TestBeginReplacesLoggedInUserWithPending(t *testing.T) {
 	t.Parallel()
 
 	needed := false
-	login, _ := newLogin(t, withChecks(func(context.Context, string) (bool, error) {
+	guard, _ := newGuard(t, withChecks(func(context.Context, string) (bool, error) {
 		return needed, nil
 	}))
 	current := newSession()
 	r := sessionRequest(current)
-	begin(t, login, r, "9")
+	begin(t, guard, r, "9")
 
 	needed = true
 
-	if begin(t, login, r, "7") {
+	if begin(t, guard, r, "7") {
 		t.Fatal("login completed without its second factor")
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("previous login survived: %v", err)
 	}
 }
@@ -325,23 +325,23 @@ func TestBeginReplacesLoggedInUserWithPending(t *testing.T) {
 func TestBeginSameSubjectAddsFactorAndSkipsSecondFactor(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	current := newSession()
 	r := sessionRequest(current)
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
-	if err := login.Complete(r, otp); err != nil {
+	if err := guard.Complete(r, otp); err != nil {
 		t.Fatal(err)
 	}
 
 	before := current.ID()
-	complete, err := login.Begin(r, "7", federated)
+	complete, err := guard.Begin(r, "7", federated)
 
 	if err != nil || !complete {
 		t.Fatalf("begin = %v, %v", complete, err)
 	}
 
-	identity, err := authenticate(login, current)
+	identity, err := authenticate(guard, current)
 	factors := identity.Factors()
 
 	if err != nil || len(factors) != 3 || factors[0].Method != auth.MethodPassword || factors[1].Method != auth.MethodOTP || factors[2].Method != auth.MethodFederated {
@@ -352,11 +352,11 @@ func TestBeginSameSubjectAddsFactorAndSkipsSecondFactor(t *testing.T) {
 		t.Fatal("begin did not rotate the session")
 	}
 
-	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending login exists: %v", err)
 	}
 
-	if len(loginsOf(t, login, "7")) != 1 {
+	if len(loginsOf(t, guard, "7")) != 1 {
 		t.Fatal("login record was not kept")
 	}
 }
@@ -366,18 +366,18 @@ func TestBeginSameSubjectAddsFactorAndSkipsSecondFactor(t *testing.T) {
 func TestBeginDifferentSubjectKeepsReplacing(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(func(_ context.Context, subject string) (bool, error) {
+	guard, _ := newGuard(t, withChecks(func(_ context.Context, subject string) (bool, error) {
 		return subject == "7", nil
 	}))
 	current := newSession()
 	r := sessionRequest(current)
-	begin(t, login, r, "9")
+	begin(t, guard, r, "9")
 
-	if begin(t, login, r, "7") {
+	if begin(t, guard, r, "7") {
 		t.Fatal("different subject skipped its second factor")
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("previous login survived: %v", err)
 	}
 }
@@ -387,14 +387,14 @@ func TestBeginDifferentSubjectKeepsReplacing(t *testing.T) {
 func TestBeginAnonymousSessionUnchanged(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	r := sessionRequest(newSession())
 
-	if complete, err := login.Begin(r, "7", federated); err != nil || complete {
+	if complete, err := guard.Begin(r, "7", federated); err != nil || complete {
 		t.Fatalf("begin = %v, %v", complete, err)
 	}
 
-	if _, err := login.Pending(r); err != nil {
+	if _, err := guard.Pending(r); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -404,16 +404,16 @@ func TestBeginDropsOlderPendingLogin(t *testing.T) {
 	t.Parallel()
 
 	needed := true
-	login, _ := newLogin(t, withChecks(func(context.Context, string) (bool, error) {
+	guard, _ := newGuard(t, withChecks(func(context.Context, string) (bool, error) {
 		return needed, nil
 	}))
 	r := sessionRequest(newSession())
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
 	needed = false
-	begin(t, login, r, "9")
+	begin(t, guard, r, "9")
 
-	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending login survived: %v", err)
 	}
 }
@@ -422,19 +422,19 @@ func TestBeginDropsOlderPendingLogin(t *testing.T) {
 func TestCompleteIsSingleUse(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	r := sessionRequest(newSession())
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
-	if err := login.Complete(r, otp); err != nil {
+	if err := guard.Complete(r, otp); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := login.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("second complete = %v", err)
 	}
 
-	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending after complete = %v", err)
 	}
 }
@@ -444,11 +444,11 @@ func TestCompleteIsSingleUse(t *testing.T) {
 func TestCompleteWithoutPendingFails(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	current := newSession()
 	before := current.ID()
 
-	if err := login.Complete(sessionRequest(current), otp); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Complete(sessionRequest(current), otp); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("err = %v", err)
 	}
 
@@ -462,16 +462,16 @@ func TestCompleteWithoutPendingFails(t *testing.T) {
 func TestCompleteFailsForDeletedUser(t *testing.T) {
 	t.Parallel()
 
-	login, driver := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, driver := newGuard(t, withChecks(secondFactor(true, nil)))
 	r := sessionRequest(newSession())
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 	driver.Delete("7")
 
-	if err := login.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("complete = %v", err)
 	}
 
-	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending survived: %v", err)
 	}
 }
@@ -481,19 +481,19 @@ func TestCompleteFailsForDeletedUser(t *testing.T) {
 func TestPendingFailsForDisabledUser(t *testing.T) {
 	t.Parallel()
 
-	login, driver := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, driver := newGuard(t, withChecks(secondFactor(true, nil)))
 	r := sessionRequest(newSession())
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
 	if err := driver.Disable("7"); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending = %v", err)
 	}
 
-	if err := login.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("complete = %v", err)
 	}
 }
@@ -501,24 +501,24 @@ func TestPendingFailsForDisabledUser(t *testing.T) {
 // expire parks a login with the given settings, waits until just before ttl and
 // verifies it still resolves, then waits past ttl and verifies Complete fails
 // and the pending record is gone.
-func expire(t *testing.T, ttl time.Duration, configure ...auth.LoginBuilderFunc) {
+func expire(t *testing.T, ttl time.Duration, configure ...auth.GuardBuilderFunc) {
 	t.Helper()
 
 	synctest.Test(t, func(t *testing.T) {
-		login, _ := newLogin(t, append(configure, withChecks(secondFactor(true, nil)))...)
+		guard, _ := newGuard(t, append(configure, withChecks(secondFactor(true, nil)))...)
 		current := newSession()
 		r := sessionRequest(current)
-		begin(t, login, r, "7")
+		begin(t, guard, r, "7")
 
 		time.Sleep(ttl - time.Nanosecond)
 
-		if _, err := login.Pending(r); err != nil {
+		if _, err := guard.Pending(r); err != nil {
 			t.Fatal(err)
 		}
 
 		time.Sleep(time.Nanosecond)
 
-		if err := login.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+		if err := guard.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
 			t.Fatalf("complete after expiry = %v", err)
 		}
 
@@ -539,7 +539,7 @@ func TestPendingExpiresAfterFiveMinutesByDefault(t *testing.T) {
 func TestPendingExpiresAfterChallengeTTL(t *testing.T) {
 	t.Parallel()
 
-	expire(t, time.Minute, func(policy *auth.LoginBuilder) {
+	expire(t, time.Minute, func(policy *auth.GuardBuilder) {
 		policy.ChallengeTTL(time.Minute)
 	})
 }
@@ -549,17 +549,17 @@ func TestPendingExpiresAfterChallengeTTL(t *testing.T) {
 func TestFailDiscardsPendingAtMaxAttempts(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)), func(policy *auth.LoginBuilder) {
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)), func(policy *auth.GuardBuilder) {
 		policy.MaxAttempts(3)
 	})
 	current := newSession()
 	r := sessionRequest(current)
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		before := current.ID()
 
-		if err := login.Fail(r); err != nil {
+		if err := guard.Fail(r); err != nil {
 			t.Fatal(err)
 		}
 
@@ -567,20 +567,20 @@ func TestFailDiscardsPendingAtMaxAttempts(t *testing.T) {
 			t.Fatalf("attempt %d did not rotate the session", attempt)
 		}
 
-		if _, err := login.Pending(r); err != nil {
+		if _, err := guard.Pending(r); err != nil {
 			t.Fatalf("pending after %d attempts = %v", attempt, err)
 		}
 	}
 
-	if err := login.Fail(r); err != nil {
+	if err := guard.Fail(r); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := login.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("complete after the limit = %v", err)
 	}
 
-	if err := login.Fail(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Fail(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("fail without pending = %v", err)
 	}
 }
@@ -589,19 +589,19 @@ func TestFailDiscardsPendingAtMaxAttempts(t *testing.T) {
 func TestBeginResetsAttempts(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)), func(policy *auth.LoginBuilder) {
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)), func(policy *auth.GuardBuilder) {
 		policy.MaxAttempts(2)
 	})
 	r := sessionRequest(newSession())
 
 	for range 2 {
-		begin(t, login, r, "7")
+		begin(t, guard, r, "7")
 
-		if err := login.Fail(r); err != nil {
+		if err := guard.Fail(r); err != nil {
 			t.Fatal(err)
 		}
 
-		if _, err := login.Pending(r); err != nil {
+		if _, err := guard.Pending(r); err != nil {
 			t.Fatalf("attempt count leaked into the next login: %v", err)
 		}
 	}
@@ -612,16 +612,16 @@ func TestBeginResetsAttempts(t *testing.T) {
 func TestConfirmRequiresLogin(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	r := sessionRequest(newSession())
 
-	if err := login.Confirm(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Confirm(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("anonymous confirm = %v", err)
 	}
 
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
-	if err := login.Confirm(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Confirm(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending confirm = %v", err)
 	}
 }
@@ -632,20 +632,20 @@ func TestConfirmAddsAndRefreshesFactors(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		login, _ := newLogin(t)
+		guard, _ := newGuard(t)
 		current := newSession()
 		r := sessionRequest(current)
-		begin(t, login, r, "7")
+		begin(t, guard, r, "7")
 
 		time.Sleep(time.Hour)
 
 		before := current.ID()
 
-		if err := login.Confirm(r, otp); err != nil {
+		if err := guard.Confirm(r, otp); err != nil {
 			t.Fatal(err)
 		}
 
-		if err := login.Confirm(r, password); err != nil {
+		if err := guard.Confirm(r, password); err != nil {
 			t.Fatal(err)
 		}
 
@@ -653,7 +653,7 @@ func TestConfirmAddsAndRefreshesFactors(t *testing.T) {
 			t.Fatal("confirm did not rotate the session")
 		}
 
-		identity, err := authenticate(login, current)
+		identity, err := authenticate(guard, current)
 		factors := identity.Factors()
 
 		if err != nil || identity.Level() != auth.LevelMulti || len(factors) != 2 || !factors[0].At.Equal(time.Now()) {
@@ -667,7 +667,7 @@ func TestConfirmAddsAndRefreshesFactors(t *testing.T) {
 func TestLogoutEndsLoginAndPending(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	current := session.New(time.Now().Add(time.Hour), map[string]any{
 		"arkoren:auth:session": struct{ N int }{N: 1},
 		"arkoren:auth:pending": 7,
@@ -675,7 +675,7 @@ func TestLogoutEndsLoginAndPending(t *testing.T) {
 	})
 	before := current.ID()
 
-	if err := login.Logout(sessionRequest(current)); err != nil {
+	if err := guard.Logout(sessionRequest(current)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -691,17 +691,17 @@ func TestLogoutEndsLoginAndPending(t *testing.T) {
 func TestTransitionsRotateSessionID(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	current := newSession()
 	r := sessionRequest(current)
 	seen := map[string]bool{current.ID(): true}
 
 	steps := []func() error{
-		func() error { _, err := login.Begin(r, "7", password); return err },
-		func() error { return login.Fail(r) },
-		func() error { return login.Complete(r, otp) },
-		func() error { return login.Confirm(r, password) },
-		func() error { return login.Logout(r) },
+		func() error { _, err := guard.Begin(r, "7", password); return err },
+		func() error { return guard.Fail(r) },
+		func() error { return guard.Complete(r, otp) },
+		func() error { return guard.Confirm(r, password) },
+		func() error { return guard.Logout(r) },
 	}
 
 	for i, step := range steps {
@@ -728,14 +728,14 @@ func TestVersionIsNotStoredInClear(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	login, err := auth.NewLogin(provider, cache.New(memorycache.New()))
+	guard, err := auth.NewGuard(provider, cache.New(memorycache.New()))
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	current := newSession()
-	begin(t, login, sessionRequest(current), "7")
+	begin(t, guard, sessionRequest(current), "7")
 
 	if text := fmt.Sprint(current.All()); strings.Contains(text, "hunter2-secret") {
 		t.Fatalf("stored session leaks the version: %s", text)
@@ -747,26 +747,26 @@ func TestVersionIsNotStoredInClear(t *testing.T) {
 func TestMethodsWithoutSession(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	_, beginErr := login.Begin(r, "7", password)
-	_, pendingErr := login.Pending(r)
+	_, beginErr := guard.Begin(r, "7", password)
+	_, pendingErr := guard.Pending(r)
 
 	for name, err := range map[string]error{
 		"begin":    beginErr,
 		"pending":  pendingErr,
-		"complete": login.Complete(r, otp),
-		"fail":     login.Fail(r),
-		"confirm":  login.Confirm(r, otp),
-		"logout":   login.Logout(r),
+		"complete": guard.Complete(r, otp),
+		"fail":     guard.Fail(r),
+		"confirm":  guard.Confirm(r, otp),
+		"logout":   guard.Logout(r),
 	} {
 		if !errors.Is(err, session.ErrNoSession) {
 			t.Errorf("%s = %v", name, err)
 		}
 	}
 
-	if _, err := login.Authenticator()(r); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := guard.Authenticator()(r); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("authenticator = %v", err)
 	}
 }
@@ -775,12 +775,12 @@ func TestMethodsWithoutSession(t *testing.T) {
 func TestAuthenticatorRejectsDeletedUser(t *testing.T) {
 	t.Parallel()
 
-	login, driver := newLogin(t)
+	guard, driver := newGuard(t)
 	current := newSession()
-	begin(t, login, sessionRequest(current), "7")
+	begin(t, guard, sessionRequest(current), "7")
 	driver.Delete("7")
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -789,15 +789,15 @@ func TestAuthenticatorRejectsDeletedUser(t *testing.T) {
 func TestAuthenticatorRejectsDisabledUser(t *testing.T) {
 	t.Parallel()
 
-	login, driver := newLogin(t)
+	guard, driver := newGuard(t)
 	current := newSession()
-	begin(t, login, sessionRequest(current), "7")
+	begin(t, guard, sessionRequest(current), "7")
 
 	if err := driver.Disable("7"); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -807,11 +807,11 @@ func TestAuthenticatorRejectsDisabledUser(t *testing.T) {
 func TestAuthenticatorRejectsChangedVersion(t *testing.T) {
 	t.Parallel()
 
-	login, driver := newLogin(t)
+	guard, driver := newGuard(t)
 	current := newSession()
-	begin(t, login, sessionRequest(current), "7")
+	begin(t, guard, sessionRequest(current), "7")
 
-	if _, err := authenticate(login, current); err != nil {
+	if _, err := authenticate(guard, current); err != nil {
 		t.Fatal(err)
 	}
 
@@ -819,7 +819,7 @@ func TestAuthenticatorRejectsChangedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -837,9 +837,9 @@ func (failingDriver) Find(context.Context, string) (auth.UserRecord, error) {
 func TestAuthenticatorPassesProviderErrors(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	current := newSession()
-	begin(t, login, sessionRequest(current), "7")
+	begin(t, guard, sessionRequest(current), "7")
 
 	broken, err := auth.NewUserProvider(failingDriver{})
 
@@ -847,7 +847,7 @@ func TestAuthenticatorPassesProviderErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	other, err := auth.NewLogin(broken, cache.New(memorycache.New()))
+	other, err := auth.NewGuard(broken, cache.New(memorycache.New()))
 
 	if err != nil {
 		t.Fatal(err)
@@ -863,7 +863,7 @@ func TestAuthenticatorPassesProviderErrors(t *testing.T) {
 func TestAuthenticatorIgnoresLegacyAndForeignRecords(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 
 	for name, storage := range map[string]map[string]any{
 		"legacy key":  {"arkoren:auth:user": 7},
@@ -871,7 +871,7 @@ func TestAuthenticatorIgnoresLegacyAndForeignRecords(t *testing.T) {
 	} {
 		current := session.New(time.Now().Add(time.Hour), storage)
 
-		if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+		if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 			t.Errorf("%s = %v", name, err)
 		}
 	}
@@ -883,19 +883,19 @@ func TestHandleSelectsSessionBridge(t *testing.T) {
 	t.Parallel()
 
 	handle := session.NewHandle()
-	login, _ := newLogin(t, func(policy *auth.LoginBuilder) {
+	guard, _ := newGuard(t, func(policy *auth.GuardBuilder) {
 		policy.Handle(handle)
 	})
 	current := newSession()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	custom := r.WithContext(session.NewContextFor(r.Context(), handle, current))
-	begin(t, login, custom, "7")
+	begin(t, guard, custom, "7")
 
-	if _, err := login.Authenticator()(custom); err != nil {
+	if _, err := guard.Authenticator()(custom); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("default session was read: %v", err)
 	}
 }
@@ -905,65 +905,65 @@ func TestHandleSelectsSessionBridge(t *testing.T) {
 func TestZeroHandleRestoresDefaultSession(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, func(policy *auth.LoginBuilder) {
+	guard, _ := newGuard(t, func(policy *auth.GuardBuilder) {
 		policy.Handle(session.NewHandle()).Handle(session.Handle{})
 	})
 	current := newSession()
-	begin(t, login, sessionRequest(current), "7")
+	begin(t, guard, sessionRequest(current), "7")
 
-	if _, err := authenticate(login, current); err != nil {
+	if _, err := authenticate(guard, current); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestNewLoginRejectsNilCollaborators verifies a nil provider or store is an
+// TestNewGuardRejectsNilCollaborators verifies a nil provider or store is an
 // error.
-func TestNewLoginRejectsNilCollaborators(t *testing.T) {
+func TestNewGuardRejectsNilCollaborators(t *testing.T) {
 	t.Parallel()
 
 	provider, _ := newDirectory(t)
 
-	if login, err := auth.NewLogin(nil, cache.New(memorycache.New())); err == nil || login != nil {
-		t.Fatalf("nil provider: login = %v, err = %v", login, err)
+	if guard, err := auth.NewGuard(nil, cache.New(memorycache.New())); err == nil || guard != nil {
+		t.Fatalf("nil provider: guard = %v, err = %v", guard, err)
 	}
 
-	if login, err := auth.NewLogin(provider, nil); err == nil || login != nil {
-		t.Fatalf("nil store: login = %v, err = %v", login, err)
+	if guard, err := auth.NewGuard(provider, nil); err == nil || guard != nil {
+		t.Fatalf("nil store: guard = %v, err = %v", guard, err)
 	}
 }
 
-// TestNewLoginRejectsInvalidSettings verifies settings that cannot work are
+// TestNewGuardRejectsInvalidSettings verifies settings that cannot work are
 // construction errors.
-func TestNewLoginRejectsInvalidSettings(t *testing.T) {
+func TestNewGuardRejectsInvalidSettings(t *testing.T) {
 	t.Parallel()
 
 	provider, _ := newDirectory(t)
 	store := cache.New(memorycache.New())
 
-	for _, configure := range []auth.LoginBuilderFunc{
-		func(policy *auth.LoginBuilder) { policy.ChallengeTTL(0) },
-		func(policy *auth.LoginBuilder) { policy.MaxAttempts(0) },
-		func(policy *auth.LoginBuilder) { policy.SecondFactor(nil) },
+	for _, configure := range []auth.GuardBuilderFunc{
+		func(policy *auth.GuardBuilder) { policy.ChallengeTTL(0) },
+		func(policy *auth.GuardBuilder) { policy.MaxAttempts(0) },
+		func(policy *auth.GuardBuilder) { policy.SecondFactor(nil) },
 	} {
-		if login, err := auth.NewLogin(provider, store, configure); err == nil || login != nil {
-			t.Errorf("login = %v, err = %v", login, err)
+		if guard, err := auth.NewGuard(provider, store, configure); err == nil || guard != nil {
+			t.Errorf("guard = %v, err = %v", guard, err)
 		}
 	}
 }
 
-// TestNewLoginRunsCallbacksOnceInOrder verifies callbacks share one draft and
+// TestNewGuardRunsCallbacksOnceInOrder verifies callbacks share one draft and
 // run once, in order.
-func TestNewLoginRunsCallbacksOnceInOrder(t *testing.T) {
+func TestNewGuardRunsCallbacksOnceInOrder(t *testing.T) {
 	t.Parallel()
 
 	provider, _ := newDirectory(t)
 	var order []int
-	var retained *auth.LoginBuilder
+	var retained *auth.GuardBuilder
 
-	_, err := auth.NewLogin(provider, cache.New(memorycache.New()), func(policy *auth.LoginBuilder) {
+	_, err := auth.NewGuard(provider, cache.New(memorycache.New()), func(policy *auth.GuardBuilder) {
 		retained = policy
 		order = append(order, 1)
-	}, func(policy *auth.LoginBuilder) {
+	}, func(policy *auth.GuardBuilder) {
 		if retained != policy {
 			t.Error("callbacks used different drafts")
 		}
@@ -980,13 +980,13 @@ func TestNewLoginRunsCallbacksOnceInOrder(t *testing.T) {
 func TestLoginConformance(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 
-	authtest.Run(t, login.Authenticator(), func(*testing.T) *http.Request {
+	authtest.Run(t, guard.Authenticator(), func(*testing.T) *http.Request {
 		return sessionRequest(newSession())
 	}, func(t *testing.T) *http.Request {
 		r := sessionRequest(newSession())
-		begin(t, login, r, "7")
+		begin(t, guard, r, "7")
 
 		return r
 	})
@@ -998,16 +998,16 @@ func TestLoginConformance(t *testing.T) {
 func TestCompleteFailsWhenVersionChangedDuringChallenge(t *testing.T) {
 	t.Parallel()
 
-	login, driver := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, driver := newGuard(t, withChecks(secondFactor(true, nil)))
 	current := newSession()
 	r := sessionRequest(current)
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
 	if err := driver.Put(auth.UserRecord{Subject: "7", Version: "v2"}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := login.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("complete = %v", err)
 	}
 
@@ -1015,7 +1015,7 @@ func TestCompleteFailsWhenVersionChangedDuringChallenge(t *testing.T) {
 		t.Fatal("pending login survived a version change")
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("logged in despite version change: %v", err)
 	}
 }
@@ -1025,19 +1025,19 @@ func TestCompleteFailsWhenVersionChangedDuringChallenge(t *testing.T) {
 func TestPendingFailsWhenVersionChanged(t *testing.T) {
 	t.Parallel()
 
-	login, driver := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, driver := newGuard(t, withChecks(secondFactor(true, nil)))
 	r := sessionRequest(newSession())
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
 	if err := driver.Put(auth.UserRecord{Subject: "7", Version: "v2"}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending = %v", err)
 	}
 
-	if _, err := login.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("pending survived = %v", err)
 	}
 }
@@ -1047,20 +1047,20 @@ func TestPendingFailsWhenVersionChanged(t *testing.T) {
 func TestCompleteSucceedsWhenVersionUnchanged(t *testing.T) {
 	t.Parallel()
 
-	login, driver := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, driver := newGuard(t, withChecks(secondFactor(true, nil)))
 	current := newSession()
 	r := sessionRequest(current)
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
 	if err := driver.Put(auth.UserRecord{Subject: "7", Version: "v1", Value: user{"renamed"}}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := login.Complete(r, otp); err != nil {
+	if err := guard.Complete(r, otp); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, current); err != nil {
+	if _, err := authenticate(guard, current); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -421,16 +421,16 @@ delivery, and lifecycle protocols explicit.
   recommended defaults versus later normalization, especially explicit empty
   security headers. Store request hooks; do not invoke them during construction
   or replay user callbacks through delegating constructors. Share immutable
-  one auth.NewLogin(provider, store) across Authenticator, Begin, Pending,
-  Complete, Fail, Confirm and Logout; auth.Logout(login) is the logout handler. Begin on a session already logged in as that subject adds the factor like Confirm and skips second-factor checks. Login owns session state: one session
+  one auth.NewGuard(provider, store) across Authenticator, Begin, Pending,
+  Complete, Fail, Confirm and Logout; guard.LogoutHandler(...LogoutBuilderFunc) is the logout handler (a method, following the XHandler convention; there is no package-level auth.Logout). Begin on a session already logged in as that subject adds the factor like Confirm and skips second-factor checks. Guard owns session state: one session
   record under arkoren:auth:session, a pending login under arkoren:auth:pending,
   every transition regenerating the ID, and the provider asked on every request
   (not found or disabled is ErrNoCredentials, a changed UserRecord.Version too).
-  Second factors are plain LoginBuilder.SecondFactor functions so core never
+  Second factors are plain GuardBuilder.SecondFactor functions so core never
   imports an ark. Each login also creates a LoginRecord (random ID kept in
   the session record's login_id) in one cache entry per subject under
   arkoren:auth:logins, written under a per-subject cache lock with bounded
-  CompareAndPut and living for LoginBuilder.SessionLifetime, which must equal the
+  CompareAndPut and living for GuardBuilder.SessionLifetime, which must equal the
   session middleware's MaxLifetime; records older than it are hidden and pruned.
   The authenticator treats a missing record as ErrNoCredentials; Logins,
   Revoke*, RevokeAll and the forget hook manage them. Records hold the user agent
@@ -442,13 +442,13 @@ delivery, and lifecycle protocols explicit.
   auth.UserFromContext[U] or request.User[U]. Check mutation errors before
   continuing; a request without a session returns session.ErrNoSession.
   Default session wiring stays handle-free. Custom context slots share one
-  session.NewHandle() through session.Builder.Handle, auth.LoginBuilder.Handle,
+  session.NewHandle() through session.Builder.Handle, auth.GuardBuilder.Handle,
   and request.WithSessionHandle. Zero Handle restores the default slot; copies
   keep identity, separate allocations differ. NewContextFor/FromContextFor are
   typed low-level forms. Handles do not isolate cookies, storage, or authorization.
-  ark/oauth logs in through Login.Begin with a federated factor:
-  Callback(login, resolve) maps the external Identity to a subject string and
-  auth.Logout(login) owns the logout route (ark/oauth Client.Logout is deprecated); a second factor redirects to
+  ark/oauth logs in through Guard.Begin with a federated factor:
+  Callback(guard, resolve) maps the external Identity to a subject string and
+  guard.LogoutHandler() owns the logout route (ark/oauth Client.Logout is deprecated); a second factor redirects to
   ClientBuilder.ChallengeURL or fails with ErrNoChallengeURL.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
@@ -817,8 +817,8 @@ in attributes (`arkoren.<component>.<field>`).
   them through JSON. Preserve physical field names and the persisted format.
   Fields do not own TTL: middleware owns session renewal and absolute lifetime,
   independently of the cache namespace's write TTL. Shared field definitions
-  do not isolate identity slots: every auth.Login on one physical session shares
-  the fixed arkoren:auth:session and arkoren:auth:pending entries. Login writes
+  do not isolate identity slots: every auth.Guard on one physical session shares
+  the fixed arkoren:auth:session and arkoren:auth:pending entries. Guard writes
   then rotates; Logout deletes then rotates, retaining unrelated fields.
   Preserve raw persisted JSON and middleware TTL; the exact-bytes persistence
   test guards the session record shape.

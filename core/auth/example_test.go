@@ -316,21 +316,21 @@ func ExampleUserDriverBuilderFunc() {
 	// Output: true <nil>
 }
 
-// exampleLogin returns a login over exampleDriver; policy callbacks configure it.
-func exampleLogin(configure ...auth.LoginBuilderFunc) *auth.Login {
+// exampleGuard returns a login over exampleDriver; policy callbacks configure it.
+func exampleGuard(configure ...auth.GuardBuilderFunc) *auth.Guard {
 	users, err := auth.NewUserProvider(exampleDriver())
 
 	if err != nil {
 		panic(err)
 	}
 
-	login, err := auth.NewLogin(users, cache.New(memorycache.New()), configure...)
+	guard, err := auth.NewGuard(users, cache.New(memorycache.New()), configure...)
 
 	if err != nil {
 		panic(err)
 	}
 
-	return login
+	return guard
 }
 
 // exampleRequest returns a request with a fresh session.
@@ -343,38 +343,38 @@ func needsSecondFactor(context.Context, string) (bool, error) {
 	return true, nil
 }
 
-func ExampleNewLogin() {
+func ExampleNewGuard() {
 	users, err := auth.NewUserProvider(exampleDriver())
 
 	if err != nil {
 		panic(err)
 	}
 
-	login, err := auth.NewLogin(users, cache.New(memorycache.New()), func(policy *auth.LoginBuilder) {
+	guard, err := auth.NewGuard(users, cache.New(memorycache.New()), func(policy *auth.GuardBuilder) {
 		policy.ChallengeTTL(10 * time.Minute)
 	})
 
-	fmt.Println(login != nil, err)
+	fmt.Println(guard != nil, err)
 	// Output: true <nil>
 }
 
-func ExampleLogin() {
-	login := exampleLogin()
+func ExampleGuard() {
+	guard := exampleGuard()
 	r := exampleRequest()
 
-	complete, err := login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
-	identity, _ := login.Authenticator()(r)
+	complete, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	identity, _ := guard.Authenticator()(r)
 
 	fmt.Println(complete, err, identity.Subject(), identity.Level() == auth.LevelSingle)
 	// Output: true <nil> 1 true
 }
 
-func ExampleLogin_Authenticator() {
-	login := exampleLogin()
+func ExampleGuard_Authenticator() {
+	guard := exampleGuard()
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	handler := auth.Middleware(login.Authenticator())(func(_ http.ResponseWriter, r *http.Request) error {
+	handler := auth.Middleware(guard.Authenticator())(func(_ http.ResponseWriter, r *http.Request) error {
 		user, _ := auth.UserFromContext[exampleUser](r.Context())
 		fmt.Println(user.Role)
 
@@ -385,168 +385,168 @@ func ExampleLogin_Authenticator() {
 	// Output: admin
 }
 
-func ExampleLogin_Begin() {
-	login := exampleLogin()
+func ExampleGuard_Begin() {
+	guard := exampleGuard()
 	r := exampleRequest()
 
-	complete, err := login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	complete, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 	fmt.Println(complete, err)
 
-	_, err = login.Begin(r, "2", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, err = guard.Begin(r, "2", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
 	// Output:
 	// true <nil>
 	// true
 }
 
-func ExampleLogin_Pending() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuard_Pending() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.SecondFactor(needsSecondFactor)
 	})
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	user, err := login.Pending(r)
+	user, err := guard.Pending(r)
 
 	fmt.Println(user.Subject, err)
 	// Output: 1 <nil>
 }
 
-func ExampleLogin_Complete() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuard_Complete() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.SecondFactor(needsSecondFactor)
 	})
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	err := login.Complete(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
-	identity, _ := login.Authenticator()(r)
+	err := guard.Complete(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
+	identity, _ := guard.Authenticator()(r)
 
 	fmt.Println(err, identity.Level() == auth.LevelMulti)
 	// Output: <nil> true
 }
 
-func ExampleLogin_Fail() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuard_Fail() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.SecondFactor(needsSecondFactor)
 		policy.MaxAttempts(1)
 	})
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	fmt.Println(login.Fail(r))
+	fmt.Println(guard.Fail(r))
 
-	_, err := login.Pending(r)
+	_, err := guard.Pending(r)
 	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
 	// Output:
 	// <nil>
 	// true
 }
 
-func ExampleLogin_Confirm() {
-	login := exampleLogin()
+func ExampleGuard_Confirm() {
+	guard := exampleGuard()
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	err := login.Confirm(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
-	identity, _ := login.Authenticator()(r)
+	err := guard.Confirm(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
+	identity, _ := guard.Authenticator()(r)
 
 	fmt.Println(err, len(identity.Factors()))
 	// Output: <nil> 2
 }
 
-func ExampleLogin_Logout() {
-	login := exampleLogin()
+func ExampleGuard_Logout() {
+	guard := exampleGuard()
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	fmt.Println(login.Logout(r))
+	fmt.Println(guard.Logout(r))
 
-	_, err := login.Authenticator()(r)
+	_, err := guard.Authenticator()(r)
 	fmt.Println(errors.Is(err, auth.ErrNoCredentials))
 	// Output:
 	// <nil>
 	// true
 }
 
-func ExampleLoginBuilder() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuardBuilder() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.ChallengeTTL(time.Minute).MaxAttempts(3).SecondFactor(needsSecondFactor)
 	})
 
-	complete, err := login.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	complete, err := guard.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
 	fmt.Println(complete, err)
 	// Output: false <nil>
 }
 
-func ExampleLoginBuilder_Handle() {
+func ExampleGuardBuilder_Handle() {
 	handle := session.NewHandle()
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.Handle(handle)
 	})
 
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r = r.WithContext(session.NewContextFor(r.Context(), handle, session.New(time.Now().Add(time.Hour), map[string]any{})))
 
-	complete, err := login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	complete, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
 	fmt.Println(complete, err)
 	// Output: true <nil>
 }
 
-func ExampleLoginBuilder_ChallengeTTL() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuardBuilder_ChallengeTTL() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.SecondFactor(needsSecondFactor).ChallengeTTL(10 * time.Minute)
 	})
 	r := exampleRequest()
 
-	complete, err := login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	complete, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
 	fmt.Println(complete, err)
 	// Output: false <nil>
 }
 
-func ExampleLoginBuilder_MaxAttempts() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuardBuilder_MaxAttempts() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.SecondFactor(needsSecondFactor).MaxAttempts(2)
 	})
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	_ = login.Fail(r)
-	_, err := login.Pending(r)
+	_ = guard.Fail(r)
+	_, err := guard.Pending(r)
 	fmt.Println(err)
 
-	_ = login.Fail(r)
-	_, err = login.Pending(r)
+	_ = guard.Fail(r)
+	_, err = guard.Pending(r)
 	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
 	// Output:
 	// <nil>
 	// true
 }
 
-func ExampleLoginBuilder_SecondFactor() {
+func ExampleGuardBuilder_SecondFactor() {
 	enrolled := map[string]bool{"1": true}
 
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.SecondFactor(func(_ context.Context, subject string) (bool, error) {
 			return enrolled[subject], nil
 		})
 	})
 
-	complete, err := login.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	complete, err := guard.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
 	fmt.Println(complete, err)
 	// Output: false <nil>
 }
 
-func ExampleLoginBuilderFunc() {
-	policy := auth.LoginBuilderFunc(func(policy *auth.LoginBuilder) {
+func ExampleGuardBuilderFunc() {
+	policy := auth.GuardBuilderFunc(func(policy *auth.GuardBuilder) {
 		policy.MaxAttempts(3)
 	})
 
-	fmt.Println(exampleLogin(policy) != nil)
+	fmt.Println(exampleGuard(policy) != nil)
 	// Output: true
 }
 
@@ -588,133 +588,133 @@ func ExampleErrStepUpRequired() {
 var examplePassword = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
 
 func ExampleLoginRecord() {
-	login := exampleLogin()
+	guard := exampleGuard()
 	r := exampleRequest()
 	r.Header.Set("User-Agent", "Firefox")
 	r.RemoteAddr = "203.0.113.7:4711"
-	_, _ = login.Begin(r, "1", examplePassword)
+	_, _ = guard.Begin(r, "1", examplePassword)
 
-	records, _ := login.Logins(r)
+	records, _ := guard.Logins(r)
 
 	fmt.Println(records[0].UserAgent, records[0].IP, records[0].Current)
 	// Output: Firefox 203.0.113.7 true
 }
 
-func ExampleLogin_Logins() {
-	login := exampleLogin()
+func ExampleGuard_Logins() {
+	guard := exampleGuard()
 	first := exampleRequest()
-	_, _ = login.Begin(first, "1", examplePassword)
-	_, _ = login.Begin(exampleRequest(), "1", examplePassword)
+	_, _ = guard.Begin(first, "1", examplePassword)
+	_, _ = guard.Begin(exampleRequest(), "1", examplePassword)
 
-	records, _ := login.Logins(first)
+	records, _ := guard.Logins(first)
 
 	fmt.Println(len(records), records[0].Current, records[1].Current)
 	// Output: 2 true false
 }
 
-func ExampleLogin_LoginsOf() {
-	login := exampleLogin()
-	_, _ = login.Begin(exampleRequest(), "1", examplePassword)
+func ExampleGuard_LoginsOf() {
+	guard := exampleGuard()
+	_, _ = guard.Begin(exampleRequest(), "1", examplePassword)
 
-	records, err := login.LoginsOf(context.Background(), "1")
+	records, err := guard.LoginsOf(context.Background(), "1")
 
 	fmt.Println(len(records), err)
 	// Output: 1 <nil>
 }
 
-func ExampleLogin_Revoke() {
-	login := exampleLogin()
+func ExampleGuard_Revoke() {
+	guard := exampleGuard()
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", examplePassword)
-	records, _ := login.Logins(r)
+	_, _ = guard.Begin(r, "1", examplePassword)
+	records, _ := guard.Logins(r)
 
-	fmt.Println(login.Revoke(context.Background(), "1", records[0].ID))
+	fmt.Println(guard.Revoke(context.Background(), "1", records[0].ID))
 
-	_, err := login.Authenticator()(r)
+	_, err := guard.Authenticator()(r)
 	fmt.Println(errors.Is(err, auth.ErrNoCredentials))
 	// Output:
 	// <nil>
 	// true
 }
 
-func ExampleLogin_RevokeOthers() {
-	login := exampleLogin()
+func ExampleGuard_RevokeOthers() {
+	guard := exampleGuard()
 	mine, other := exampleRequest(), exampleRequest()
-	_, _ = login.Begin(mine, "1", examplePassword)
-	_, _ = login.Begin(other, "1", examplePassword)
+	_, _ = guard.Begin(mine, "1", examplePassword)
+	_, _ = guard.Begin(other, "1", examplePassword)
 
-	fmt.Println(login.RevokeOthers(mine))
+	fmt.Println(guard.RevokeOthers(mine))
 
-	_, err := login.Authenticator()(other)
+	_, err := guard.Authenticator()(other)
 	fmt.Println(errors.Is(err, auth.ErrNoCredentials))
 	// Output:
 	// <nil>
 	// true
 }
 
-func ExampleLogin_RevokeAll() {
-	login := exampleLogin()
+func ExampleGuard_RevokeAll() {
+	guard := exampleGuard()
 	r := exampleRequest()
-	_, _ = login.Begin(r, "1", examplePassword)
+	_, _ = guard.Begin(r, "1", examplePassword)
 
-	fmt.Println(login.RevokeAll(context.Background(), "1"))
+	fmt.Println(guard.RevokeAll(context.Background(), "1"))
 
-	records, _ := login.LoginsOf(context.Background(), "1")
+	records, _ := guard.LoginsOf(context.Background(), "1")
 	fmt.Println(len(records))
 	// Output:
 	// <nil>
 	// 0
 }
 
-func ExampleLoginBuilder_Devices() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuardBuilder_Devices() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.Devices(false)
 	})
 	r := exampleRequest()
 	r.Header.Set("User-Agent", "Firefox")
-	_, _ = login.Begin(r, "1", examplePassword)
+	_, _ = guard.Begin(r, "1", examplePassword)
 
-	records, _ := login.Logins(r)
+	records, _ := guard.Logins(r)
 
 	fmt.Printf("%q\n", records[0].UserAgent)
 	// Output: ""
 }
 
-func ExampleLoginBuilder_ClientIP() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuardBuilder_ClientIP() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
 	})
 	r := exampleRequest()
 	r.RemoteAddr = "10.0.0.1:4711"
 	r.Header.Set("X-Forwarded-For", "198.51.100.2")
-	_, _ = login.Begin(r, "1", examplePassword)
+	_, _ = guard.Begin(r, "1", examplePassword)
 
-	records, _ := login.Logins(r)
+	records, _ := guard.Logins(r)
 
 	fmt.Println(records[0].IP)
 	// Output: 198.51.100.2
 }
 
-func ExampleLoginBuilder_MaxLogins() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuardBuilder_MaxLogins() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.MaxLogins(1)
 	})
 	first, second := exampleRequest(), exampleRequest()
-	_, _ = login.Begin(first, "1", examplePassword)
-	_, _ = login.Begin(second, "1", examplePassword)
+	_, _ = guard.Begin(first, "1", examplePassword)
+	_, _ = guard.Begin(second, "1", examplePassword)
 
-	_, err := login.Authenticator()(first)
+	_, err := guard.Authenticator()(first)
 
 	fmt.Println(errors.Is(err, auth.ErrNoCredentials))
 	// Output: true
 }
 
-func ExampleLoginBuilder_SessionLifetime() {
-	login := exampleLogin(func(policy *auth.LoginBuilder) {
+func ExampleGuardBuilder_SessionLifetime() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.SessionLifetime(7 * 24 * time.Hour)
 	})
 
-	complete, err := login.Begin(exampleRequest(), "1", examplePassword)
+	complete, err := guard.Begin(exampleRequest(), "1", examplePassword)
 
 	fmt.Println(complete, err)
 	// Output: true <nil>

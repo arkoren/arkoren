@@ -123,7 +123,7 @@ func UserFromContext[U any](ctx context.Context) (U, bool) {
 // Example:
 //
 //	r.Use(auth.Middleware(
-//		login.Authenticator(),
+//		guard.Authenticator(),
 //		auth.Bearer(verifyKey),
 //	))
 func Middleware(authenticators ...Authenticator) router.Middleware {

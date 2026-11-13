@@ -26,8 +26,8 @@
 //	r := router.New()
 //	r.Use(session.Middleware(store))
 //	r.Use(csrf.Middleware())
-//	login, _ := auth.NewLogin(users, store)
-//	r.Use(auth.Middleware(login.Authenticator()))
+//	guard, _ := auth.NewGuard(users, store)
+//	r.Use(auth.Middleware(guard.Authenticator()))
 //
 //	r.Post("/login", signIn) // see package auth
 //	r.With(auth.Require()).Get("/me", me)
