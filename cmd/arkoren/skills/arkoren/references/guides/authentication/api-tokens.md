@@ -31,18 +31,19 @@ Authorization: Bearer ak_example_token
 ```
 
 The value above illustrates the header, not a usable key. With your existing
-router group `api` and `verifyKey func(context.Context, string) (User, error)`,
-import `auth` from `arkoren.dev/core/http/auth` and register:
+router group `api` and `verifyKey func(context.Context, string) (auth.Identity, error)`,
+import `auth` from `arkoren.dev/core/auth` and register:
 
 ```go
 api.Use(auth.Middleware(auth.Bearer(verifyKey)))
-api.Use(auth.Require[User]())
+api.Use(auth.Require())
 ```
 
 `auth.Middleware` alone allows missing credentials; `Require` closes that path
-for private routes. Your verifier must return the same exact `User` type used
-by handlers and policies. A zero-valued user returned without an error still
-counts as authenticated, so reject unknown or disabled accounts explicitly.
+for private routes. Your verifier returns an `auth.Identity`; attach your user
+type to its record when handlers and policies read it with `request.User`. An
+identity returned without an error counts as authenticated even if its subject
+is meaningless, so reject unknown or disabled accounts explicitly.
 
 The bearer authenticator accepts a single `Authorization` header with a
 case-insensitive `Bearer` scheme and a nonempty token containing no spaces.
@@ -116,26 +117,35 @@ method returns an `APIKey` or an error; absence must not be reported as
 `auth.ErrNoCredentials`. Hash the entire presented token before looking it up:
 
 ```go
-verifyKey := func(ctx context.Context, token string) (User, error) {
+verifyKey := func(ctx context.Context, token string) (auth.Identity, error) {
 	digest := sha256.Sum256([]byte(token))
 	stored, err := keys.ByHash(ctx, digest[:])
 	if err != nil {
-		return User{}, err
+		return auth.Identity{}, err
 	}
 	if stored.Revoked {
-		return User{}, auth.ErrUnauthenticated
+		return auth.Identity{}, auth.ErrUnauthenticated
+	}
+	user, err := loadActiveUser(ctx, stored.UserID)
+	if err != nil {
+		return auth.Identity{}, err
 	}
 
-	return loadActiveUser(ctx, stored.UserID)
+	subject := strconv.Itoa(user.ID)
+
+	return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
+		principal.Record(auth.UserRecord{Subject: subject, Value: user})
+	}), nil
 }
 ```
 
 `loadActiveUser` is your `func(context.Context, int) (User, error)` account lookup.
 It returns an error for missing or disabled accounts, never a zero user with
 nil error or `ErrNoCredentials`. If keys have expiry or granted permissions,
-check expiry here and carry the permitted authority in a request-local identity;
-[authorization](../authorization/overview.md) still decides which actions and
-resources it allows.
+check expiry here and carry the permitted authority on the identity with
+`principal.Scopes(...)`; [authorization](../authorization/overview.md) still
+decides which actions and resources it allows, for example with
+`gate.HasScopes`.
 
 `auth.Bearer` checks the header shape, not your key format. Very short tokens can
 reach the verifier. If your format extracts a public lookup identifier or prefix,
@@ -185,4 +195,4 @@ also carries another credential. For MCP, reuse the verifier and follow
 [endpoint security](../mcp/securing-mcp.md) for protocol and tool-access rules.
 
 For all functions and options, see the
-[`auth` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth).
+[`auth` API reference](https://pkg.go.dev/arkoren.dev/core/auth).

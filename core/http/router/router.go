@@ -229,7 +229,7 @@ func (router *Router) wrap(handler Handler) Handler {
 //
 // Example:
 //
-//	r.Use(auth.Middleware(authenticator), auth.Require[User]()) // before the routes it protects
+//	r.Use(auth.Middleware(authenticator), auth.Require()) // before the routes it protects
 //	r.Get("/me", me)
 func (router *Router) Use(middlewares ...Middleware) {
 	if router.sealed {

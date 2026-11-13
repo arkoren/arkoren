@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"arkoren.dev/core/http/auth"
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 )
@@ -101,10 +101,10 @@ func TestInvalidIdentityStopsFallback(t *testing.T) {
 
 	fallback := false
 	identity := auth.SessionIdentity[int, user]{}
-	handler := auth.Middleware(identity.Authenticator(), func(*http.Request) (user, error) {
+	handler := auth.Middleware(identity.Authenticator(), func(*http.Request) (auth.Identity, error) {
 		fallback = true
 
-		return user{Name: "fallback"}, nil
+		return auth.NewIdentity("fallback"), nil
 	})(router.Handler(func(http.ResponseWriter, *http.Request) error {
 		t.Fatal("invalid identity reached handler")
 
@@ -192,8 +192,8 @@ func TestIdentityRejectsRuntimeJSONIdentifier(t *testing.T) {
 
 	id, err := identity.Authenticator()(sessionRequest(current))
 
-	if !errors.Is(err, auth.ErrNoCredentials) || id != 0 {
-		t.Fatalf("identifier = %d, error = %v", id, err)
+	if !errors.Is(err, auth.ErrNoCredentials) || id.Subject() != "" {
+		t.Fatalf("subject = %q, error = %v", id.Subject(), err)
 	}
 }
 

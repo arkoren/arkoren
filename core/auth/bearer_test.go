@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"arkoren.dev/core/http/auth"
-	"arkoren.dev/core/http/auth/authtest"
+	"arkoren.dev/core/auth"
+	"arkoren.dev/core/auth/authtest"
 )
 
 // newRequest returns a GET request without credentials.
@@ -28,12 +28,12 @@ func authorizationRequest(authorization string) func(*testing.T) *http.Request {
 }
 
 // verifyToken accepts the token "good" as user "u".
-func verifyToken(_ context.Context, token string) (user, error) {
+func verifyToken(_ context.Context, token string) (auth.Identity, error) {
 	if token != "good" {
-		return user{}, errors.New("unknown token")
+		return auth.Identity{}, errors.New("unknown token")
 	}
 
-	return user{"u"}, nil
+	return auth.NewIdentity("u"), nil
 }
 
 // TestBearerConformance runs the authenticator suite against Bearer.
@@ -41,10 +41,10 @@ func TestBearerConformance(t *testing.T) {
 	t.Parallel()
 
 	authtest.Run(t, auth.Bearer(verifyToken), newRequest, authorizationRequest("Bearer good"),
-		authtest.WithInvalid[user](authorizationRequest("Bearer forged")),
-		authtest.WithUser(func(t *testing.T, got user) {
-			if got.Name != "u" {
-				t.Fatalf("user = %+v, want u", got)
+		authtest.WithInvalid(authorizationRequest("Bearer forged")),
+		authtest.WithIdentity(func(t *testing.T, got auth.Identity) {
+			if got.Subject() != "u" {
+				t.Fatalf("subject = %q, want u", got.Subject())
 			}
 		}))
 }

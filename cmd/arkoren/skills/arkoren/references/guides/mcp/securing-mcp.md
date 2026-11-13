@@ -47,37 +47,39 @@ that proxy. A private proxy address alone does not make client headers trusted.
 ## Typed Authentication
 
 Use your existing [bearer verifier](../authentication/api-tokens.md) to resolve
-the application's user, not merely decode claims. Assume `User` is your identity
+the application's user, not merely decode claims. Assume `User` is your user
 type and `verifyAccessToken` has signature
-`func(context.Context, string) (User, error)`.
+`func(context.Context, string) (auth.Identity, error)`. It attaches the `User`
+to the identity's record when policies need it.
 
-Import `arkoren.dev/core/http/auth` and add authentication to the router above
+Import `arkoren.dev/core/auth` and add authentication to the router above
 before mounting the checked `endpoint` from [tool registration](tools.md#endpoint-registration):
 
 ```go
 routes.Use(auth.Middleware(auth.Bearer(verifyAccessToken)))
-routes.Use(auth.Require[User]())
+routes.Use(auth.Require())
 routes.Mount("/mcp", endpoint)
 ```
 
-`auth.Middleware` stores a verified `User`, but permits anonymous requests when
-credentials are absent. `auth.Require[User]()` rejects those requests. Invalid
+`auth.Middleware` stores a verified `auth.Identity`, but permits anonymous requests when
+credentials are absent. `auth.Require()` rejects those requests. Invalid
 credentials fail authentication. Configure middleware before `Mount` and serve
 the router through your existing HTTP lifecycle.
 
 The mount and adapter preserve request context for policies and handlers.
-`auth.FromContext[User]` must use the exact concrete type stored at admission:
-`User` and `*User` occupy different slots. Mismatched lookups fail closed.
+`auth.FromContext` returns the identity, and `auth.UserFromContext[User]` must use
+the exact concrete type stored in its record at admission: `User` and `*User`
+are different types. Mismatched lookups fail closed.
 
 If existing `net/http` middleware already verifies callers, retain it. Reject
-anonymous requests and inject the verified identity with `auth.NewContext`
+anonymous requests and inject the verified `auth.Identity` with `auth.NewContext`
 before calling the endpoint rather than adding another MCP-specific bearer
 parser.
 
 ## Endpoint Admission
 
 Authentication need not grant everyone access to MCP. If your application has
-an endpoint-wide rule, import `arkoren.dev/core/http/auth/gate` and insert it
+an endpoint-wide rule, import `arkoren.dev/core/auth/gate` and insert it
 after authentication but before the mount:
 
 ```go
@@ -161,10 +163,10 @@ resource metadata, and authorization-server URLs. Preserve required
 `WWW-Authenticate` challenges rather than replacing them with ordinary JSON
 authentication errors.
 
-SDK `TokenInfo` is separate from Arkoren's typed user context. Before managed
+SDK `TokenInfo` is separate from Arkoren's identity context. Before managed
 dispatch, read it with `TokenInfoFromContext`, resolve your application user,
-and inject that user with `core/http/auth.NewContext`. Require the exact identity
-type your tool policies use. The SDK requires nonzero token expiration by
+and inject an `auth.Identity` carrying that user with `core/auth.NewContext`.
+Attach the exact user type your tool policies use. The SDK requires nonzero token expiration by
 default. Enforce endpoint scopes with `RequireBearerTokenOptions.Scopes`;
 advertising supported scopes in metadata does not enforce them.
 

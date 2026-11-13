@@ -24,7 +24,7 @@ what the caller may learn about the resource:
 
 | Situation | Response | Responsibility |
 | --- | --- | --- |
-| No identity of the rule's exact type is present | `401 Unauthorized` | The gate returns `auth.ErrUnauthenticated`. |
+| No identity, or none carrying a user of the rule's exact type, is present | `401 Unauthorized` | The gate returns `auth.ErrUnauthenticated`. |
 | A known actor lacks permission and may know the resource exists | `403 Forbidden` | A rule returning `false, nil` produces `gate.ErrForbidden`. |
 | The record is absent or outside the caller's visibility boundary | `404 Not Found` | Your handler maps scoped `database.ErrNoRows` to `problem.NotFound()`. |
 | An authorized action violates current state, such as removing the last team owner | `409 Conflict` | Your application returns a conflict problem. |
@@ -64,7 +64,7 @@ the request path; this response is not a sanitized diagnostic record.
 If the caller may know why an action is unavailable, derive a more useful detail
 without changing the problem identity. Assume `team` was loaded through your
 authorized store and `policy.CanInvite(team)` is your application rule. Import
-standard-library `errors`, `gate` from `arkoren.dev/core/http/auth/gate`, and
+standard-library `errors`, `gate` from `arkoren.dev/core/auth/gate`, and
 `problem` from `arkoren.dev/foundation/problem`:
 
 ```go
@@ -154,4 +154,4 @@ observe those separately under your application's privacy policy.
 [Event auditing](../events/auditing.md) explains durable audit design.
 
 For all functions, options, and event fields, see the
-[`gate` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth/gate).
+[`gate` API reference](https://pkg.go.dev/arkoren.dev/core/auth/gate).

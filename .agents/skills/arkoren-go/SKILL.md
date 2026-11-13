@@ -422,7 +422,11 @@ delivery, and lifecycle protocols explicit.
   security headers. Store request hooks; do not invoke them during construction
   or replay user callbacks through delegating constructors. Share immutable
   auth.NewSessionIdentity(load) across Authenticator, Login, and Logout; it binds
-  the ID type to the loader. Zero definitions and nil loaders fail first with
+  the ID type to the loader. The ID type must be a string, integer or text type
+  because it becomes the non-generic auth.Identity subject (this bridge goes
+  away with the session login redesign). Authenticators, Middleware, Require and
+  Bearer are non-generic over auth.Identity; the application user rides in
+  Record().Value and is read with auth.UserFromContext[U] or request.User[U]. Zero definitions and nil loaders fail first with
   plain ErrInvalidSessionIdentity, never credential fallback. Check mutation
   errors before continuing; explicit nil sessions return session.ErrNoSession.
   Default session wiring stays handle-free. Custom context slots share one

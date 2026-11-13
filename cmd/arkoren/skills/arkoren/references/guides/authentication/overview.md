@@ -1,10 +1,10 @@
 ---
 title: Authentication Overview
 nav: Overview
-description: Resolve credentials into your application's identity and choose which routes require it.
+description: Resolve credentials into an identity and choose which routes require it.
 order: 10
 summary:
-  - Use one application-owned identity type and reject invalid accounts before publishing it.
+  - Return an auth.Identity from every authenticator and reject invalid accounts before publishing it.
   - Combine authenticators deliberately and distinguish optional identity from required access.
   - Read the request identity and customize anonymous rejections without exposing sensitive diagnostics.
 ---
@@ -12,7 +12,8 @@ summary:
 # Authentication Overview
 
 Authentication establishes who sent a request. Arkoren resolves a session or
-bearer credential into a Go value that your application owns; it supplies no
+bearer credential into an `auth.Identity`: the user's subject, how they were
+authenticated, their scopes, and optionally your own user value. It supplies no
 user table, registration flow, or login screen. [Authorization](../authorization/overview.md)
 then decides what that identity may do.
 
@@ -25,10 +26,12 @@ Focused snippets keep error results visible but omit routine propagation.
 Checks remain where failure changes authentication or access. Handle all errors
 in your application.
 
-## Define Identity
+## Define Your User
 
-Choose one identity type for handlers and policies. An invoice application might
-use this local account value:
+An `auth.Identity` is an immutable value that carries no application type, so
+packages that do not know your user (jobs, MCP tools, rate limits) can still read
+the subject, scopes, and authentication level. Handlers and policies usually also
+want your own account value. An invoice application might use:
 
 ```go
 type User struct {
@@ -38,26 +41,26 @@ type User struct {
 }
 ```
 
-No field or interface is required by Arkoren. Your verifier or loader must
-reject unknown and disabled accounts before returning success. Returning
-`User{}, nil` still authenticates a request; `auth.Require` checks presence,
-not whether fields are nonzero. The same applies to a typed nil pointer returned
-without an error.
+No field or interface is required by Arkoren. An authenticator attaches the user
+to the identity with `auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) { principal.Record(auth.UserRecord{Subject: subject, Value: user}) })`.
+The session authenticator below does that for you. Your verifier or loader must
+reject unknown and disabled accounts before returning success. Returning an
+identity still authenticates a request; `auth.Require` checks presence, not
+whether the subject or user fields are meaningful.
 
-Identity lookup uses the exact Go type. `User`, `*User`, and a separately defined
-type with identical fields are different identities; Arkoren does not convert
-between them.
+User lookup uses the exact Go type. `User`, `*User`, and a separately defined
+type with identical fields are different types; Arkoren does not convert between
+them, and a mismatch reads as no user.
 
 ## Resolve Credentials
 
-An **authenticator** is a `func(*http.Request) (User, error)` that verifies
-credentials and returns your identity. Import `auth` from
-`arkoren.dev/core/http/auth`. Its result controls whether another authenticator
-can try:
+An **authenticator** is an `auth.Authenticator`, a `func(*http.Request) (auth.Identity, error)`
+that verifies credentials and returns the identity. Import `auth` from
+`arkoren.dev/core/auth`. Its result controls whether another authenticator can try:
 
 | Result | Middleware behavior |
 | --- | --- |
-| User and nil error | Store that user and stop trying authenticators. |
+| Identity and nil error | Store that identity and stop trying authenticators. |
 | `auth.ErrNoCredentials`, including wrapped errors | Try the next authenticator. |
 | Any other error | Stop the request without calling its handler. |
 
@@ -67,7 +70,9 @@ error. Do not trust a client-supplied user ID or header as proof of identity.
 
 For routes accepting both browser sessions and API keys, use your existing
 `loadUser` (`func(context.Context, int) (User, error)`) and `verifyToken`
-(`func(context.Context, string) (User, error)`):
+(`func(context.Context, string) (auth.Identity, error)`). The session identifier
+type must be a string, an integer, or a text type, because it becomes the
+identity's subject:
 
 ```go
 identity := auth.NewSessionIdentity(loadUser)
@@ -88,11 +93,11 @@ credential policies.
 
 Authentication middleware permits anonymous requests when every authenticator
 returns `ErrNoCredentials`. This lets public pages optionally personalize their
-response. To require a user for private routes, add `auth.Require` after the
+response. To require an identity for private routes, add `auth.Require` after the
 authentication middleware:
 
 ```go
-private := r.With(auth.Require[User]())
+private := r.With(auth.Require())
 private.Get("/invoices", listInvoices)
 ```
 
@@ -103,14 +108,15 @@ read every invoice. Apply your [authorization rules](../authorization/overview.m
 separately.
 
 For browser pages, a `401` does not display a login form. If you want a login
-redirect, write middleware that checks `auth.FromContext[User]` and redirects to
+redirect, write middleware that checks `auth.FromContext` and redirects to
 a fixed local login path. Validate any return target rather than redirecting to
 an arbitrary request parameter. See [middleware scope](../http-fundamentals/middleware.md)
 for applying different behavior to different route groups.
 
 ## Read Identity
 
-Handlers retrieve the exact type stored by authentication. With `request` and
+Handlers read the identity with `request.Identity(r)`, or the user your
+authenticator attached with `request.User[User](r)`. With `request` and
 `response` from their `arkoren.dev/core/http/` packages and standard-library
 `net/http`, read the local user before returning a profile:
 
@@ -123,28 +129,29 @@ if err != nil {
 return response.JSON(w, http.StatusOK, user)
 ```
 
-`w` and `r` are the handler's response writer and request. Missing identities
-return `auth.ErrUnauthenticated`, including when a different identity type is
-present. In context-only code, `auth.FromContext[User](ctx)` returns the value
-and a presence boolean instead.
+`w` and `r` are the handler's response writer and request. A missing identity,
+or one whose user is absent or of a different type, returns
+`auth.ErrUnauthenticated`. In context-only code, `auth.FromContext(ctx)` returns
+the identity and `auth.UserFromContext[User](ctx)` returns your user, each with
+a presence boolean instead.
 
-Tests can use `auth.NewContext(ctx, User{ID: 42})` without performing a login.
+Tests can use `auth.NewContext(ctx, identity)` without performing a login.
 That helper trusts the supplied value; keep it in trusted code, not in a path
 that copies unverified request input. [Auth Tests](../testing/auth-tests.md)
 also covers testing the actual authenticators.
 
 ## Handle Rejections
 
-To change the anonymous response, configure `auth.Builder.ErrorResponse` in
-`auth.Require[User](...)`. It replaces the whole problem and its headers, so
+To change the anonymous response, configure `auth.MiddlewareBuilder.ErrorResponse` in
+`auth.Require(...)`. It replaces the whole problem and its headers, so
 include the appropriate authentication challenge if you keep status `401`.
 A zero response restores the default. This setting does not change the error
-returned by `request.User` or failures returned by an authenticator.
+returned by `request.Identity`, `request.User` or failures returned by an authenticator.
 
 If you need anonymous-rejection events, supply your existing event bus:
 
 ```go
-private := r.With(auth.Require[User](func(required *auth.Builder) {
+private := r.With(auth.Require(func(required *auth.MiddlewareBuilder) {
 	required.Events(app.Events())
 }))
 ```
@@ -157,4 +164,4 @@ Keep listeners cheap and apply [rate limiting](../abuse-prevention/rate-limiting
 before the required-user middleware when needed. No event bus means no event.
 
 For all functions and options, see the
-[`auth` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth).
+[`auth` API reference](https://pkg.go.dev/arkoren.dev/core/auth).

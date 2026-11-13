@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"arkoren.dev/core/http/auth"
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/session"
 )
 
@@ -47,8 +47,8 @@ func TestSessionCallbacksPublishIndependentHandle(t *testing.T) {
 
 	value, err := identity.Authenticator()(r)
 
-	if err != nil || value.Name != "u" || calls != 2 {
-		t.Fatalf("user = %+v, err = %v, callbacks = %d", value, err, calls)
+	if loaded, _ := value.Record().Value.(user); err != nil || loaded.Name != "u" || calls != 2 {
+		t.Fatalf("user = %+v, err = %v, callbacks = %d", value.Record().Value, err, calls)
 	}
 }
 
@@ -70,8 +70,8 @@ func TestSessionZeroHandleRestoresDefault(t *testing.T) {
 
 	value, err := identity.Authenticator()(sessionRequest(current))
 
-	if err != nil || value.Name != "u" {
-		t.Fatalf("user = %+v, err = %v", value, err)
+	if loaded, _ := value.Record().Value.(user); err != nil || loaded.Name != "u" {
+		t.Fatalf("user = %+v, err = %v", value.Record().Value, err)
 	}
 }
 

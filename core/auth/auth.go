@@ -19,16 +19,16 @@ import (
 // Example:
 //
 //	if r.Header.Get("Authorization") == "" {
-//		return User{}, auth.ErrNoCredentials
+//		return auth.Identity{}, auth.ErrNoCredentials
 //	}
 var ErrNoCredentials = errors.New("auth: no credentials")
 
 // ErrUnauthenticated is the problem returned when a request has no
-// authenticated user or presents invalid credentials.
+// authenticated identity or presents invalid credentials.
 //
 // Example:
 //
-//	if _, err := request.User[User](r); err != nil {
+//	if _, err := request.Identity(r); err != nil {
 //		return err // renders as 401
 //	}
 var ErrUnauthenticated = problem.New(func(details *problem.Builder) {
@@ -38,54 +38,80 @@ var ErrUnauthenticated = problem.New(func(details *problem.Builder) {
 	details.Status(http.StatusUnauthorized)
 })
 
-// Authenticator resolves the user of a request. It returns
+// Authenticator resolves who is acting on a request. It returns
 // [ErrNoCredentials] when the request has no credentials it handles, which
 // lets the next authenticator try. Any other error stops the chain.
 //
-// Only return a user after verifying credentials. A client-supplied identity
-// header alone is not proof of identity.
+// Only return an [Identity] after verifying credentials. A client-supplied
+// identity header alone is not proof of identity.
 //
 // The example uses an existing router r and your application's verifyToken
-// function, with signature func(context.Context, string) (User, error). The
-// verifier must validate the token before returning a user and return an error
-// other than [ErrNoCredentials] for an invalid, expired, or revoked token.
-// [Bearer] parses the header and delegates verification to that function.
+// function, with signature func(context.Context, string) (auth.Identity, error).
+// The verifier must validate the token before returning an identity and return
+// an error other than [ErrNoCredentials] for an invalid, expired, or revoked
+// token. [Bearer] parses the header and delegates verification to that
+// function.
 //
 // Example:
 //
 //	authenticate := auth.Bearer(verifyToken)
-//	r.Use(auth.Middleware(authenticate), auth.Require[User]())
-type Authenticator[U any] func(r *http.Request) (U, error)
+//	r.Use(auth.Middleware(authenticate), auth.Require())
+type Authenticator func(r *http.Request) (Identity, error)
 
-// contextKey is the context key under which a user of type U is stored.
-type contextKey[U any] struct{}
+// contextKey is the context key under which the [Identity] is stored.
+type contextKey struct{}
 
-// NewContext returns a context carrying user. [Middleware] does this for
+// NewContext returns a context carrying identity. [Middleware] does this for
 // requests; call it directly in tests.
 //
 // Example:
 //
-//	ctx := auth.NewContext(context.Background(), User{ID: 1})
-//	user, ok := auth.FromContext[User](ctx)
-func NewContext[U any](ctx context.Context, user U) context.Context {
-	return context.WithValue(ctx, contextKey[U]{}, user)
+//	ctx := auth.NewContext(context.Background(), auth.NewIdentity("42"))
+//	identity, ok := auth.FromContext(ctx)
+func NewContext(ctx context.Context, identity Identity) context.Context {
+	return context.WithValue(ctx, contextKey{}, identity)
 }
 
-// FromContext returns the user of type U stored in ctx. The boolean reports
-// whether one was found.
+// FromContext returns the [Identity] stored in ctx. The boolean reports
+// whether one was found. It needs no knowledge of the application's user type.
 //
 // Example:
 //
-//	if user, ok := auth.FromContext[User](r.Context()); ok {
+//	if identity, ok := auth.FromContext(r.Context()); ok {
+//		_ = identity.Subject()
+//	}
+func FromContext(ctx context.Context) (Identity, bool) {
+	identity, ok := ctx.Value(contextKey{}).(Identity)
+
+	return identity, ok
+}
+
+// UserFromContext returns the application user of type U that the
+// authenticator attached to the identity in ctx, by type-asserting
+// [UserRecord.Value] of [Identity.Record]. The boolean is false when there is
+// no identity, no record value, or the value has another type, so a mismatch
+// fails closed.
+//
+// Example:
+//
+//	if user, ok := auth.UserFromContext[User](r.Context()); ok {
 //		_ = user.ID
 //	}
-func FromContext[U any](ctx context.Context) (U, bool) {
-	user, ok := ctx.Value(contextKey[U]{}).(U)
+func UserFromContext[U any](ctx context.Context) (U, bool) {
+	identity, ok := FromContext(ctx)
+
+	if !ok {
+		var zero U
+
+		return zero, false
+	}
+
+	user, ok := identity.record.Value.(U)
 
 	return user, ok
 }
 
-// Middleware tries each authenticator in order and stores the first user
+// Middleware tries each authenticator in order and stores the first identity
 // found in the request context. When all return [ErrNoCredentials] the
 // request continues anonymously; use [Require] to reject it. Any other
 // error is returned and the handler is not called.
@@ -100,13 +126,13 @@ func FromContext[U any](ctx context.Context) (U, bool) {
 //		auth.NewSessionIdentity(loadUser).Authenticator(),
 //		auth.Bearer(verifyKey),
 //	))
-func Middleware[U any](authenticators ...Authenticator[U]) router.Middleware {
+func Middleware(authenticators ...Authenticator) router.Middleware {
 	authenticators = slices.Clone(authenticators)
 
 	return func(next router.Handler) router.Handler {
 		return func(w http.ResponseWriter, r *http.Request) error {
 			for _, authenticate := range authenticators {
-				user, err := authenticate(r)
+				identity, err := authenticate(r)
 
 				if errors.Is(err, ErrNoCredentials) {
 					continue
@@ -116,7 +142,7 @@ func Middleware[U any](authenticators ...Authenticator[U]) router.Middleware {
 					return err
 				}
 
-				return next(w, r.WithContext(NewContext(r.Context(), user)))
+				return next(w, r.WithContext(NewContext(r.Context(), identity)))
 			}
 
 			return next(w, r)
@@ -124,20 +150,20 @@ func Middleware[U any](authenticators ...Authenticator[U]) router.Middleware {
 	}
 }
 
-// Builder configures Require[User] before publication. Callbacks run directly
+// MiddlewareBuilder configures [Require] before publication. Callbacks run directly
 // once, synchronously in order on one fresh draft; nil entries panic. Retaining
 // the draft cannot change published settings. Methods return the same draft.
 //
 // Example:
 //
 //	r := router.New()
-//	r.Use(auth.Require[User](func(authenticator *auth.Builder) {
+//	r.Use(auth.Require(func(authenticator *auth.MiddlewareBuilder) {
 //		authenticator.ErrorResponse(problem.Unauthorized("Bearer"))
 //	}))
-type Builder struct {
+type MiddlewareBuilder struct {
 	// settings accumulates construction edits. Publication copies its completed
 	// value so retaining the draft cannot change the component.
-	settings settings
+	settings middlewareSettings
 }
 
 // ErrorResponse is the problem returned for anonymous requests. Zero
@@ -149,10 +175,10 @@ type Builder struct {
 // Example:
 //
 //	r := router.New()
-//	r.Use(auth.Require[User](func(authenticator *auth.Builder) {
+//	r.Use(auth.Require(func(authenticator *auth.MiddlewareBuilder) {
 //		authenticator.ErrorResponse(problem.Forbidden())
 //	}))
-func (authenticator *Builder) ErrorResponse(response problem.Details) *Builder {
+func (authenticator *MiddlewareBuilder) ErrorResponse(response problem.Details) *MiddlewareBuilder {
 	authenticator.settings.ErrorResponse = response
 
 	return authenticator
@@ -167,28 +193,27 @@ func (authenticator *Builder) ErrorResponse(response problem.Details) *Builder {
 // Example:
 //
 //	r := router.New()
-//	r.Use(auth.Require[User](func(authenticator *auth.Builder) {
+//	r.Use(auth.Require(func(authenticator *auth.MiddlewareBuilder) {
 //		authenticator.Events(event.New())
 //	}))
-func (authenticator *Builder) Events(bus *event.Bus) *Builder {
+func (authenticator *MiddlewareBuilder) Events(bus *event.Bus) *MiddlewareBuilder {
 	authenticator.settings.Events = bus
 
 	return authenticator
 }
 
-// Require returns a middleware that rejects requests without a user of type
-// U in the context and, with [Builder.Events], publishes [Rejected]. The default
-// is 401 with a Bearer challenge; [Builder.ErrorResponse] can replace both the
+// Require returns a middleware that rejects requests without an [Identity] in
+// the context and, with [MiddlewareBuilder.Events], publishes [Rejected]. The default
+// is 401 with a Bearer challenge; [MiddlewareBuilder.ErrorResponse] can replace both the
 // problem and its headers. A zero ErrorResponse restores the default.
-// A user stored under a different type counts as absent, so the request fails
-// closed. Rejection events omit paths and causes; the HTTP problem's normal
+// Rejection events omit paths and causes; the HTTP problem's normal
 // instance rendering and request context values are unchanged.
 //
 // Example:
 //
-//	api := r.With(auth.Require[User]())
-func Require[U any](configure ...BuilderFunc) router.Middleware {
-	config := newSettings(configure...)
+//	api := r.With(auth.Require())
+func Require(configure ...MiddlewareBuilderFunc) router.Middleware {
+	config := newMiddlewareSettings(configure...)
 
 	response := config.ErrorResponse
 
@@ -200,7 +225,7 @@ func Require[U any](configure ...BuilderFunc) router.Middleware {
 
 	return func(next router.Handler) router.Handler {
 		return func(w http.ResponseWriter, r *http.Request) error {
-			if _, ok := FromContext[U](r.Context()); !ok {
+			if _, ok := FromContext(r.Context()); !ok {
 				config.Events.Emit(r.Context(), Rejected, RejectedEvent{
 					Method: r.Method,
 				})

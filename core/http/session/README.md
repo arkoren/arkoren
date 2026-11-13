@@ -25,7 +25,7 @@ slot, allocate one `session.NewHandle()` and share it through
 calls select different slots. The zero handle selects the default slot. Handles
 do not isolate cookies, cache records, or authorization; independent sessions also
 need appropriate cookie and storage settings. See the
-[`auth` reference](https://pkg.go.dev/arkoren.dev/core/http/auth)
+[`auth` reference](https://pkg.go.dev/arkoren.dev/core/auth)
 for coordinated middleware, identity, and handler wiring.
 
 The default cookie is `__Host-arkoren.session` (plain `arkoren.session` with `Builder.AllowInsecure`, a
