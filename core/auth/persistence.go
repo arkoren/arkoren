@@ -9,7 +9,7 @@ import (
 	"arkoren.dev/core/http/session"
 )
 
-// Session fields written by [Login]. The logged-in user and the pending login
+// Session fields written by [Guard]. The logged-in user and the pending login
 // live under separate keys so the authenticator never reads a half-finished
 // login. Sessions written under the former "arkoren:auth:user" key are not read
 // and are anonymous.
@@ -52,11 +52,11 @@ type pendingLogin struct {
 	// Expires is when the pending login stops being accepted.
 	Expires time.Time `json:"expires"`
 
-	// Version is the hex SHA-256 of [UserRecord.Version] seen at [Login.Begin].
+	// Version is the hex SHA-256 of [UserRecord.Version] seen at [Guard.Begin].
 	// The pending login is discarded when the user's version no longer matches.
 	Version string `json:"version"`
 
-	// Attempts counts the wrong second factors reported by [Login.Fail].
+	// Attempts counts the wrong second factors reported by [Guard.Fail].
 	Attempts int `json:"attempts"`
 }
 

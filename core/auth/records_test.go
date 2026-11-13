@@ -19,23 +19,23 @@ import (
 
 // device logs subject in on a new session that presents agent, and returns the
 // session and a request carrying it.
-func device(t *testing.T, login *auth.Login, subject, agent string) (*session.Session, *http.Request) {
+func device(t *testing.T, guard *auth.Guard, subject, agent string) (*session.Session, *http.Request) {
 	t.Helper()
 
 	current := newSession()
 	r := sessionRequest(current)
 	r.Header.Set("User-Agent", agent)
 	r.RemoteAddr = "203.0.113.7:4711"
-	begin(t, login, r, subject)
+	begin(t, guard, r, subject)
 
 	return current, r
 }
 
 // loginsOf lists the records of subject and fails the test on error.
-func loginsOf(t *testing.T, login *auth.Login, subject string) []auth.LoginRecord {
+func loginsOf(t *testing.T, guard *auth.Guard, subject string) []auth.LoginRecord {
 	t.Helper()
 
-	records, err := login.LoginsOf(t.Context(), subject)
+	records, err := guard.LoginsOf(t.Context(), subject)
 
 	if err != nil {
 		t.Fatal(err)
@@ -49,10 +49,10 @@ func loginsOf(t *testing.T, login *auth.Login, subject string) []auth.LoginRecor
 func TestLoginCreatesRecord(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	device(t, login, "7", "Firefox")
+	guard, _ := newGuard(t)
+	device(t, guard, "7", "Firefox")
 
-	records := loginsOf(t, login, "7")
+	records := loginsOf(t, guard, "7")
 
 	if len(records) != 1 || records[0].UserAgent != "Firefox" || records[0].IP != "203.0.113.7" || records[0].ID == "" || records[0].Current {
 		t.Fatalf("records = %+v", records)
@@ -68,27 +68,27 @@ func TestLoginCreatesRecord(t *testing.T) {
 func TestCompleteCreatesRecord(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, withChecks(secondFactor(true, nil)))
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)))
 	current := newSession()
 	r := sessionRequest(current)
 
-	if begin(t, login, r, "7") {
+	if begin(t, guard, r, "7") {
 		t.Fatal("login completed without second factor")
 	}
 
-	if len(loginsOf(t, login, "7")) != 0 {
+	if len(loginsOf(t, guard, "7")) != 0 {
 		t.Fatal("pending login has a record")
 	}
 
-	if err := login.Complete(r, password); err != nil {
+	if err := guard.Complete(r, password); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(loginsOf(t, login, "7")) != 1 {
+	if len(loginsOf(t, guard, "7")) != 1 {
 		t.Fatal("completed login has no record")
 	}
 
-	if _, err := authenticate(login, current); err != nil {
+	if _, err := authenticate(guard, current); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -97,11 +97,11 @@ func TestCompleteCreatesRecord(t *testing.T) {
 func TestLoginsMarksCurrent(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	_, first := device(t, login, "7", "Firefox")
-	device(t, login, "7", "Safari")
+	guard, _ := newGuard(t)
+	_, first := device(t, guard, "7", "Firefox")
+	device(t, guard, "7", "Safari")
 
-	records, err := login.Logins(first)
+	records, err := guard.Logins(first)
 
 	if err != nil {
 		t.Fatal(err)
@@ -117,20 +117,20 @@ func TestLoginsMarksCurrent(t *testing.T) {
 func TestLoginsRequiresLogin(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	r := sessionRequest(newSession())
 
-	if _, err := login.Logins(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Logins(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("Logins: %v", err)
 	}
 
-	if err := login.RevokeOthers(r); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.RevokeOthers(r); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("RevokeOthers: %v", err)
 	}
 
 	noSession, _ := http.NewRequest(http.MethodGet, "/", nil)
 
-	if _, err := login.Logins(noSession); !errors.Is(err, session.ErrNoSession) {
+	if _, err := guard.Logins(noSession); !errors.Is(err, session.ErrNoSession) {
 		t.Fatalf("no session: %v", err)
 	}
 }
@@ -140,23 +140,23 @@ func TestLoginsRequiresLogin(t *testing.T) {
 func TestRevokedDeviceCannotManageDevices(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	_, revoked := device(t, login, "7", "Firefox")
-	second, _ := device(t, login, "7", "Safari")
+	guard, _ := newGuard(t)
+	_, revoked := device(t, guard, "7", "Firefox")
+	second, _ := device(t, guard, "7", "Safari")
 
-	if err := login.Revoke(t.Context(), "7", loginsOf(t, login, "7")[0].ID); err != nil {
+	if err := guard.Revoke(t.Context(), "7", loginsOf(t, guard, "7")[0].ID); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := login.Logins(revoked); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := guard.Logins(revoked); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("Logins: %v", err)
 	}
 
-	if err := login.RevokeOthers(revoked); !errors.Is(err, auth.ErrUnauthenticated) {
+	if err := guard.RevokeOthers(revoked); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("RevokeOthers: %v", err)
 	}
 
-	if _, err := authenticate(login, second); err != nil {
+	if _, err := authenticate(guard, second); err != nil {
 		t.Fatalf("other device was revoked: %v", err)
 	}
 }
@@ -166,9 +166,9 @@ func TestRevokedDeviceCannotManageDevices(t *testing.T) {
 func TestRecordJSONMarksCurrent(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	_, r := device(t, login, "7", "Firefox")
-	records, _ := login.Logins(r)
+	guard, _ := newGuard(t)
+	_, r := device(t, guard, "7", "Firefox")
+	records, _ := guard.Logins(r)
 
 	encoded, err := json.Marshal(records[0])
 
@@ -189,20 +189,20 @@ func TestRecordJSONMarksCurrent(t *testing.T) {
 func TestRevokedDeviceIsAnonymous(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	first, _ := device(t, login, "7", "Firefox")
-	second, _ := device(t, login, "7", "Safari")
-	records := loginsOf(t, login, "7")
+	guard, _ := newGuard(t)
+	first, _ := device(t, guard, "7", "Firefox")
+	second, _ := device(t, guard, "7", "Safari")
+	records := loginsOf(t, guard, "7")
 
-	if err := login.Revoke(t.Context(), "7", records[0].ID, "unknown"); err != nil {
+	if err := guard.Revoke(t.Context(), "7", records[0].ID, "unknown"); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, first); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, first); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("revoked device: %v", err)
 	}
 
-	if _, err := authenticate(login, second); err != nil {
+	if _, err := authenticate(guard, second); err != nil {
 		t.Fatalf("other device: %v", err)
 	}
 }
@@ -212,19 +212,19 @@ func TestRevokedDeviceIsAnonymous(t *testing.T) {
 func TestRevokeOthersKeepsCurrent(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	first, firstRequest := device(t, login, "7", "Firefox")
-	second, _ := device(t, login, "7", "Safari")
+	guard, _ := newGuard(t)
+	first, firstRequest := device(t, guard, "7", "Firefox")
+	second, _ := device(t, guard, "7", "Safari")
 
-	if err := login.RevokeOthers(firstRequest); err != nil {
+	if err := guard.RevokeOthers(firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, first); err != nil {
+	if _, err := authenticate(guard, first); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, second); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, second); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("other device: %v", err)
 	}
 }
@@ -234,28 +234,28 @@ func TestRevokeOthersKeepsCurrent(t *testing.T) {
 func TestRevokeAllLogsEveryDeviceOut(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	first, _ := device(t, login, "7", "Firefox")
-	device(t, login, "7", "Safari")
-	other, _ := device(t, login, "9", "Chrome")
+	guard, _ := newGuard(t)
+	first, _ := device(t, guard, "7", "Firefox")
+	device(t, guard, "7", "Safari")
+	other, _ := device(t, guard, "9", "Chrome")
 
-	if err := login.RevokeAll(t.Context(), "7"); err != nil {
+	if err := guard.RevokeAll(t.Context(), "7"); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, first); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, first); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("revoked device: %v", err)
 	}
 
-	if _, err := authenticate(login, other); err != nil {
+	if _, err := authenticate(guard, other); err != nil {
 		t.Fatalf("other subject: %v", err)
 	}
 
-	if err := login.Revoke(t.Context(), "nobody", "x"); err != nil {
+	if err := guard.Revoke(t.Context(), "nobody", "x"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := login.RevokeAll(t.Context(), "nobody"); err != nil {
+	if err := guard.RevokeAll(t.Context(), "nobody"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -265,17 +265,17 @@ func TestRevokeAllLogsEveryDeviceOut(t *testing.T) {
 func TestRecordsRejectInvalidSubject(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 
-	if _, err := login.LoginsOf(t.Context(), ""); !errors.Is(err, auth.ErrInvalidSubject) {
+	if _, err := guard.LoginsOf(t.Context(), ""); !errors.Is(err, auth.ErrInvalidSubject) {
 		t.Fatalf("LoginsOf: %v", err)
 	}
 
-	if err := login.Revoke(t.Context(), "a b", "x"); !errors.Is(err, auth.ErrInvalidSubject) {
+	if err := guard.Revoke(t.Context(), "a b", "x"); !errors.Is(err, auth.ErrInvalidSubject) {
 		t.Fatalf("Revoke: %v", err)
 	}
 
-	if err := login.RevokeAll(t.Context(), ""); !errors.Is(err, auth.ErrInvalidSubject) {
+	if err := guard.RevokeAll(t.Context(), ""); !errors.Is(err, auth.ErrInvalidSubject) {
 		t.Fatalf("RevokeAll: %v", err)
 	}
 }
@@ -284,22 +284,22 @@ func TestRecordsRejectInvalidSubject(t *testing.T) {
 func TestRotationKeepsRecord(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	current, r := device(t, login, "7", "Firefox")
-	before := loginsOf(t, login, "7")[0].ID
+	guard, _ := newGuard(t)
+	current, r := device(t, guard, "7", "Firefox")
+	before := loginsOf(t, guard, "7")[0].ID
 	id := current.ID()
 
-	if err := login.Confirm(r, password); err != nil {
+	if err := guard.Confirm(r, password); err != nil {
 		t.Fatal(err)
 	}
 
-	records, err := login.Logins(r)
+	records, err := guard.Logins(r)
 
 	if current.ID() == id || err != nil || len(records) != 1 || records[0].ID != before || !records[0].Current {
 		t.Fatalf("rotated = %v, records = %+v, err = %v", current.ID() != id, records, err)
 	}
 
-	if _, err := authenticate(login, current); err != nil {
+	if _, err := authenticate(guard, current); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -308,21 +308,21 @@ func TestRotationKeepsRecord(t *testing.T) {
 func TestLogoutRemovesRecord(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	_, first := device(t, login, "7", "Firefox")
-	second, _ := device(t, login, "7", "Safari")
+	guard, _ := newGuard(t)
+	_, first := device(t, guard, "7", "Firefox")
+	second, _ := device(t, guard, "7", "Safari")
 
-	if err := login.Logout(first); err != nil {
+	if err := guard.Logout(first); err != nil {
 		t.Fatal(err)
 	}
 
-	records := loginsOf(t, login, "7")
+	records := loginsOf(t, guard, "7")
 
 	if len(records) != 1 || records[0].UserAgent != "Safari" {
 		t.Fatalf("records = %+v", records)
 	}
 
-	if _, err := authenticate(login, second); err != nil {
+	if _, err := authenticate(guard, second); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -332,11 +332,11 @@ func TestLogoutRemovesRecord(t *testing.T) {
 func TestLoginAgainReplacesRecord(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	_, r := device(t, login, "7", "Firefox")
-	begin(t, login, r, "7")
+	guard, _ := newGuard(t)
+	_, r := device(t, guard, "7", "Firefox")
+	begin(t, guard, r, "7")
 
-	if records := loginsOf(t, login, "7"); len(records) != 1 {
+	if records := loginsOf(t, guard, "7"); len(records) != 1 {
 		t.Fatalf("records = %+v", records)
 	}
 }
@@ -348,13 +348,13 @@ func TestParkingLoginReleasesRecord(t *testing.T) {
 
 	provider, _ := newDirectory(t)
 	store := cache.New(memorycache.New())
-	plain, err := auth.NewLogin(provider, store)
+	plain, err := auth.NewGuard(provider, store)
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	strict, err := auth.NewLogin(provider, store, withChecks(secondFactor(true, nil)))
+	strict, err := auth.NewGuard(provider, store, withChecks(secondFactor(true, nil)))
 
 	if err != nil {
 		t.Fatal(err)
@@ -377,27 +377,27 @@ func TestSeenAtIsThrottled(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		login, _ := newLogin(t)
-		current, _ := device(t, login, "7", "Firefox")
-		created := loginsOf(t, login, "7")[0].SeenAt
+		guard, _ := newGuard(t)
+		current, _ := device(t, guard, "7", "Firefox")
+		created := loginsOf(t, guard, "7")[0].SeenAt
 
 		time.Sleep(4 * time.Minute)
 
-		if _, err := authenticate(login, current); err != nil {
+		if _, err := authenticate(guard, current); err != nil {
 			t.Fatal(err)
 		}
 
-		if seen := loginsOf(t, login, "7")[0].SeenAt; !seen.Equal(created) {
+		if seen := loginsOf(t, guard, "7")[0].SeenAt; !seen.Equal(created) {
 			t.Fatalf("SeenAt changed to %v within five minutes", seen)
 		}
 
 		time.Sleep(2 * time.Minute)
 
-		if _, err := authenticate(login, current); err != nil {
+		if _, err := authenticate(guard, current); err != nil {
 			t.Fatal(err)
 		}
 
-		if seen := loginsOf(t, login, "7")[0].SeenAt; !seen.Equal(created.Add(6 * time.Minute)) {
+		if seen := loginsOf(t, guard, "7")[0].SeenAt; !seen.Equal(created.Add(6 * time.Minute)) {
 			t.Fatalf("SeenAt = %v, want %v", seen, created.Add(6*time.Minute))
 		}
 	})
@@ -408,10 +408,10 @@ func TestSeenAtIsThrottled(t *testing.T) {
 func TestDevicesFalseStoresNoDeviceData(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, func(policy *auth.LoginBuilder) { policy.Devices(false) })
-	device(t, login, "7", "Firefox")
+	guard, _ := newGuard(t, func(policy *auth.GuardBuilder) { policy.Devices(false) })
+	device(t, guard, "7", "Firefox")
 
-	if records := loginsOf(t, login, "7"); len(records) != 1 || records[0].UserAgent != "" || records[0].IP != "" {
+	if records := loginsOf(t, guard, "7"); len(records) != 1 || records[0].UserAgent != "" || records[0].IP != "" {
 		t.Fatalf("records = %+v", records)
 	}
 }
@@ -421,10 +421,10 @@ func TestDevicesFalseStoresNoDeviceData(t *testing.T) {
 func TestUserAgentIsTruncated(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
-	device(t, login, "7", strings.Repeat("a", 254)+"é"+"tail")
+	guard, _ := newGuard(t)
+	device(t, guard, "7", strings.Repeat("a", 254)+"é"+"tail")
 
-	if agent := loginsOf(t, login, "7")[0].UserAgent; agent != strings.Repeat("a", 254) {
+	if agent := loginsOf(t, guard, "7")[0].UserAgent; agent != strings.Repeat("a", 254) {
 		t.Fatalf("agent = %q (%d bytes)", agent, len(agent))
 	}
 }
@@ -433,16 +433,16 @@ func TestUserAgentIsTruncated(t *testing.T) {
 func TestClientIPSetting(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, func(policy *auth.LoginBuilder) {
+	guard, _ := newGuard(t, func(policy *auth.GuardBuilder) {
 		policy.ClientIP(func(r *http.Request) string { return r.Header.Get("X-Real-IP") })
 	})
 
 	current := newSession()
 	r := sessionRequest(current)
 	r.Header.Set("X-Real-IP", "198.51.100.2")
-	begin(t, login, r, "7")
+	begin(t, guard, r, "7")
 
-	if ip := loginsOf(t, login, "7")[0].IP; ip != "198.51.100.2" {
+	if ip := loginsOf(t, guard, "7")[0].IP; ip != "198.51.100.2" {
 		t.Fatalf("ip = %q", ip)
 	}
 }
@@ -452,22 +452,22 @@ func TestClientIPSetting(t *testing.T) {
 func TestMaxLoginsDropsOldest(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t, func(policy *auth.LoginBuilder) { policy.MaxLogins(2) })
-	first, _ := device(t, login, "7", "one")
-	device(t, login, "7", "two")
-	third, _ := device(t, login, "7", "three")
+	guard, _ := newGuard(t, func(policy *auth.GuardBuilder) { policy.MaxLogins(2) })
+	first, _ := device(t, guard, "7", "one")
+	device(t, guard, "7", "two")
+	third, _ := device(t, guard, "7", "three")
 
-	records := loginsOf(t, login, "7")
+	records := loginsOf(t, guard, "7")
 
 	if len(records) != 2 || records[0].UserAgent != "two" || records[1].UserAgent != "three" {
 		t.Fatalf("records = %+v", records)
 	}
 
-	if _, err := authenticate(login, first); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, first); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("dropped device: %v", err)
 	}
 
-	if _, err := authenticate(login, third); err != nil {
+	if _, err := authenticate(guard, third); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -479,7 +479,7 @@ func TestConcurrentLoginsAreAllRecorded(t *testing.T) {
 
 	const devices = 40
 
-	login, _ := newLogin(t, func(policy *auth.LoginBuilder) { policy.MaxLogins(100) })
+	guard, _ := newGuard(t, func(policy *auth.GuardBuilder) { policy.MaxLogins(100) })
 
 	var wait sync.WaitGroup
 
@@ -487,7 +487,7 @@ func TestConcurrentLoginsAreAllRecorded(t *testing.T) {
 		wait.Go(func() {
 			r := sessionRequest(newSession())
 
-			if _, err := login.Begin(r, "7", password); err != nil {
+			if _, err := guard.Begin(r, "7", password); err != nil {
 				t.Error(err)
 			}
 		})
@@ -495,7 +495,7 @@ func TestConcurrentLoginsAreAllRecorded(t *testing.T) {
 
 	wait.Wait()
 
-	if records := loginsOf(t, login, "7"); len(records) != devices {
+	if records := loginsOf(t, guard, "7"); len(records) != devices {
 		t.Fatalf("lost updates: %d of %d", len(records), devices)
 	}
 }
@@ -506,22 +506,22 @@ func TestRecordsExpireWithSessionLifetime(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		login, _ := newLogin(t, func(policy *auth.LoginBuilder) { policy.SessionLifetime(time.Hour) })
-		current, _ := device(t, login, "7", "Firefox")
+		guard, _ := newGuard(t, func(policy *auth.GuardBuilder) { policy.SessionLifetime(time.Hour) })
+		current, _ := device(t, guard, "7", "Firefox")
 
 		time.Sleep(59 * time.Minute)
 
-		if len(loginsOf(t, login, "7")) != 1 {
+		if len(loginsOf(t, guard, "7")) != 1 {
 			t.Fatal("record expired early")
 		}
 
 		time.Sleep(2 * time.Minute)
 
-		if len(loginsOf(t, login, "7")) != 0 {
+		if len(loginsOf(t, guard, "7")) != 0 {
 			t.Fatal("record outlived the lifetime")
 		}
 
-		if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+		if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 			t.Fatalf("authenticate: %v", err)
 		}
 	})
@@ -536,18 +536,18 @@ func TestExpiredRecordsAreHiddenAndPruned(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		provider, _ := newDirectory(t)
 		store := cache.New(memorycache.New())
-		login, err := auth.NewLogin(provider, store, func(policy *auth.LoginBuilder) { policy.SessionLifetime(time.Hour) })
+		guard, err := auth.NewGuard(provider, store, func(policy *auth.GuardBuilder) { policy.SessionLifetime(time.Hour) })
 
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		old, _ := device(t, login, "7", "old")
-		oldID := loginsOf(t, login, "7")[0].ID
+		old, _ := device(t, guard, "7", "old")
+		oldID := loginsOf(t, guard, "7")[0].ID
 
 		time.Sleep(30 * time.Minute)
 
-		young, youngRequest := device(t, login, "7", "young")
+		young, youngRequest := device(t, guard, "7", "young")
 
 		// The entry's TTL restarts with each write, so only the age of the record
 		// can remove the old one.
@@ -559,25 +559,25 @@ func TestExpiredRecordsAreHiddenAndPruned(t *testing.T) {
 			t.Fatalf("old record is not stored before pruning: %s, %v", stored, err)
 		}
 
-		records, err := login.Logins(youngRequest)
+		records, err := guard.Logins(youngRequest)
 
 		if err != nil || len(records) != 1 || records[0].UserAgent != "young" {
 			t.Fatalf("Logins = %+v, %v", records, err)
 		}
 
-		if len(loginsOf(t, login, "7")) != 1 {
+		if len(loginsOf(t, guard, "7")) != 1 {
 			t.Fatal("LoginsOf lists the expired record")
 		}
 
-		if _, err := authenticate(login, old); !errors.Is(err, auth.ErrNoCredentials) {
+		if _, err := authenticate(guard, old); !errors.Is(err, auth.ErrNoCredentials) {
 			t.Fatalf("expired device: %v", err)
 		}
 
-		if _, err := authenticate(login, young); err != nil {
+		if _, err := authenticate(guard, young); err != nil {
 			t.Fatalf("live device: %v", err)
 		}
 
-		if err := login.Revoke(t.Context(), "7", "unknown"); err != nil {
+		if err := guard.Revoke(t.Context(), "7", "unknown"); err != nil {
 			t.Fatal(err)
 		}
 
@@ -594,19 +594,19 @@ func TestForgetRevokesAllLogins(t *testing.T) {
 	t.Parallel()
 
 	provider, _ := newDirectory(t)
-	login, err := auth.NewLogin(provider, cache.New(memorycache.New()))
+	guard, err := auth.NewGuard(provider, cache.New(memorycache.New()))
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	current, _ := device(t, login, "7", "Firefox")
+	current, _ := device(t, guard, "7", "Firefox")
 
 	if err := provider.Forget(t.Context(), "7"); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("authenticate: %v", err)
 	}
 }
@@ -616,12 +616,12 @@ func TestForgetRevokesAllLogins(t *testing.T) {
 func TestLegacySessionWithoutRecordIsAnonymous(t *testing.T) {
 	t.Parallel()
 
-	login, _ := newLogin(t)
+	guard, _ := newGuard(t)
 	current := session.New(time.Now().Add(time.Hour), map[string]any{
 		"arkoren:auth:session": map[string]any{"subject": "7", "version": "x"},
 	})
 
-	if _, err := authenticate(login, current); !errors.Is(err, auth.ErrNoCredentials) {
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("authenticate: %v", err)
 	}
 }
@@ -643,15 +643,15 @@ func TestAuthenticatorPassesStoreErrors(t *testing.T) {
 
 	provider, _ := newDirectory(t)
 	store := cache.New(memorycache.New())
-	login, err := auth.NewLogin(provider, store)
+	guard, err := auth.NewGuard(provider, store)
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	current, _ := device(t, login, "7", "Firefox")
+	current, _ := device(t, guard, "7", "Firefox")
 
-	broken, err := auth.NewLogin(provider, cache.New(brokenStore{memorycache.New()}))
+	broken, err := auth.NewGuard(provider, cache.New(brokenStore{memorycache.New()}))
 
 	if err != nil {
 		t.Fatal(err)
@@ -662,21 +662,21 @@ func TestAuthenticatorPassesStoreErrors(t *testing.T) {
 	}
 }
 
-// TestNewLoginRejectsInvalidRecordSettings verifies unusable record settings are
+// TestNewGuardRejectsInvalidRecordSettings verifies unusable record settings are
 // construction errors.
-func TestNewLoginRejectsInvalidRecordSettings(t *testing.T) {
+func TestNewGuardRejectsInvalidRecordSettings(t *testing.T) {
 	t.Parallel()
 
 	provider, _ := newDirectory(t)
 	store := cache.New(memorycache.New())
 
-	for _, configure := range []auth.LoginBuilderFunc{
-		func(policy *auth.LoginBuilder) { policy.MaxLogins(0) },
-		func(policy *auth.LoginBuilder) { policy.SessionLifetime(0) },
-		func(policy *auth.LoginBuilder) { policy.ClientIP(nil) },
+	for _, configure := range []auth.GuardBuilderFunc{
+		func(policy *auth.GuardBuilder) { policy.MaxLogins(0) },
+		func(policy *auth.GuardBuilder) { policy.SessionLifetime(0) },
+		func(policy *auth.GuardBuilder) { policy.ClientIP(nil) },
 	} {
-		if login, err := auth.NewLogin(provider, store, configure); err == nil || login != nil {
-			t.Errorf("login = %v, err = %v", login, err)
+		if guard, err := auth.NewGuard(provider, store, configure); err == nil || guard != nil {
+			t.Errorf("guard = %v, err = %v", guard, err)
 		}
 	}
 }

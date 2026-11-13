@@ -107,7 +107,7 @@ func newMiddlewareSettings(configure ...MiddlewareBuilderFunc) middlewareSetting
 	return authenticator.settings
 }
 
-// Defaults of [LoginBuilder].
+// Defaults of [GuardBuilder].
 const (
 	// defaultChallengeTTL is how long a pending login waits for its second factor.
 	defaultChallengeTTL = 5 * time.Minute
@@ -119,15 +119,15 @@ const (
 	defaultMaxLogins = 50
 )
 
-// loginSettings configures a [Login].
-type loginSettings struct {
+// guardSettings configures a [Guard].
+type guardSettings struct {
 	// Handle selects the session bridge; zero selects the default.
 	Handle session.Handle
 
 	// ChallengeTTL is how long a pending login is accepted.
 	ChallengeTTL time.Duration
 
-	// MaxAttempts is the number of [Login.Fail] calls that discard a pending login.
+	// MaxAttempts is the number of [Guard.Fail] calls that discard a pending login.
 	MaxAttempts int
 
 	// SecondFactors are the checks that decide whether a user needs a second factor.
@@ -146,30 +146,30 @@ type loginSettings struct {
 	SessionLifetime time.Duration
 }
 
-// LoginBuilder configures [NewLogin] before publication. Callbacks run
+// GuardBuilder configures [NewGuard] before publication. Callbacks run
 // directly once, synchronously in order on one fresh draft; nil entries panic.
 // Methods return the same draft, and retaining it cannot change a published
-// login.
+// guard.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.ChallengeTTL(10 * time.Minute).MaxAttempts(3)
 //	})
-type LoginBuilder struct {
+type GuardBuilder struct {
 	// settings holds the private construction values until publication.
-	settings loginSettings
+	settings guardSettings
 }
 
-// LoginBuilderFunc configures a [LoginBuilder].
+// GuardBuilderFunc configures a [GuardBuilder].
 //
 // Example:
 //
-//	policy := auth.LoginBuilderFunc(func(policy *auth.LoginBuilder) {
+//	policy := auth.GuardBuilderFunc(func(policy *auth.GuardBuilder) {
 //		policy.MaxAttempts(3)
 //	})
-//	login, err := auth.NewLogin(users, store, policy)
-type LoginBuilderFunc = func(*LoginBuilder)
+//	guard, err := auth.NewGuard(users, store, policy)
+type GuardBuilderFunc = func(*GuardBuilder)
 
 // Handle selects the request session bridge shared with [session.Middleware],
 // so one application can run several independent sessions. Zero, the default,
@@ -178,59 +178,59 @@ type LoginBuilderFunc = func(*LoginBuilder)
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.Handle(adminSession)
 //	})
-func (policy *LoginBuilder) Handle(handle session.Handle) *LoginBuilder {
+func (policy *GuardBuilder) Handle(handle session.Handle) *GuardBuilder {
 	policy.settings.Handle = handle
 
 	return policy
 }
 
-// ChallengeTTL sets how long a pending login (see [Login.Begin]) accepts its
-// second factor. The default is five minutes. [NewLogin] rejects a value of
+// ChallengeTTL sets how long a pending login (see [Guard.Begin]) accepts its
+// second factor. The default is five minutes. [NewGuard] rejects a value of
 // zero or less. The setting replaces the previous value on this draft.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.ChallengeTTL(10 * time.Minute)
 //	})
-func (policy *LoginBuilder) ChallengeTTL(ttl time.Duration) *LoginBuilder {
+func (policy *GuardBuilder) ChallengeTTL(ttl time.Duration) *GuardBuilder {
 	policy.settings.ChallengeTTL = ttl
 
 	return policy
 }
 
-// MaxAttempts sets how many calls to [Login.Fail] discard a pending login. The
-// default is five. [NewLogin] rejects a value of zero or less. The setting
+// MaxAttempts sets how many calls to [Guard.Fail] discard a pending login. The
+// default is five. [NewGuard] rejects a value of zero or less. The setting
 // replaces the previous value on this draft.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.MaxAttempts(3)
 //	})
-func (policy *LoginBuilder) MaxAttempts(attempts int) *LoginBuilder {
+func (policy *GuardBuilder) MaxAttempts(attempts int) *GuardBuilder {
 	policy.settings.MaxAttempts = attempts
 
 	return policy
 }
 
 // SecondFactor registers a check that reports whether subject must present a
-// second factor before [Login.Begin] logs them in, for example an
+// second factor before [Guard.Begin] logs them in, for example an
 // "is two-factor enrolled" lookup of an ark. Core receives plain functions, so it
 // never imports the package that owns the answer. It may be called several
 // times: one yes from any check is enough to require a second factor, and the
 // first error stops the login and is returned by Begin. A nil check makes
-// [NewLogin] fail.
+// [NewGuard] fail.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.SecondFactor(factors.Enrolled)
 //	})
-func (policy *LoginBuilder) SecondFactor(check func(ctx context.Context, subject string) (bool, error)) *LoginBuilder {
+func (policy *GuardBuilder) SecondFactor(check func(ctx context.Context, subject string) (bool, error)) *GuardBuilder {
 	policy.settings.SecondFactors = append(policy.settings.SecondFactors, check)
 
 	return policy
@@ -244,10 +244,10 @@ func (policy *LoginBuilder) SecondFactor(check func(ctx context.Context, subject
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.Devices(false)
 //	})
-func (policy *LoginBuilder) Devices(enabled bool) *LoginBuilder {
+func (policy *GuardBuilder) Devices(enabled bool) *GuardBuilder {
 	policy.settings.Devices = enabled
 
 	return policy
@@ -259,15 +259,15 @@ func (policy *LoginBuilder) Devices(enabled bool) *LoginBuilder {
 // ratelimit.TrustedProxyKey (package core/http/middleware/ratelimit) returns
 // such a function. It reports IPv4 addresses as they are but reduces IPv6
 // addresses to their /64 prefix, which is what the record then stores. The
-// result is cut to 255 bytes. [NewLogin] rejects nil. The setting replaces the
+// result is cut to 255 bytes. [NewGuard] rejects nil. The setting replaces the
 // previous value on this draft.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
 //	})
-func (policy *LoginBuilder) ClientIP(find func(*http.Request) string) *LoginBuilder {
+func (policy *GuardBuilder) ClientIP(find func(*http.Request) string) *GuardBuilder {
 	policy.settings.ClientIP = find
 
 	return policy
@@ -275,44 +275,44 @@ func (policy *LoginBuilder) ClientIP(find func(*http.Request) string) *LoginBuil
 
 // MaxLogins sets how many login records one user keeps. The default is 50. A new
 // login beyond it drops the oldest record, which logs that device out.
-// [NewLogin] rejects a value of zero or less. The setting replaces the previous
+// [NewGuard] rejects a value of zero or less. The setting replaces the previous
 // value on this draft.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.MaxLogins(10)
 //	})
-func (policy *LoginBuilder) MaxLogins(limit int) *LoginBuilder {
+func (policy *GuardBuilder) MaxLogins(limit int) *GuardBuilder {
 	policy.settings.MaxLogins = limit
 
 	return policy
 }
 
-// SessionLifetime tells the login the maximum session lifetime configured on
+// SessionLifetime tells the guard the maximum session lifetime configured on
 // [session.Middleware] with [session.Builder.MaxLifetime], which the session
 // package does not expose to other packages. A user's list of login records
 // lives that long after its last write, and a record older than it is never
 // listed and is removed by the next write, so no record outlives its sessions. The
 // default is [session.DefaultMaxLifetime]; set it when the middleware uses
-// another value. [NewLogin] rejects a value of zero or less. The setting
+// another value. [NewGuard] rejects a value of zero or less. The setting
 // replaces the previous value on this draft.
 //
 // Example:
 //
-//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
 //		policy.SessionLifetime(7 * 24 * time.Hour)
 //	})
-func (policy *LoginBuilder) SessionLifetime(lifetime time.Duration) *LoginBuilder {
+func (policy *GuardBuilder) SessionLifetime(lifetime time.Duration) *GuardBuilder {
 	policy.settings.SessionLifetime = lifetime
 
 	return policy
 }
 
-// newLoginSettings applies the callbacks once on a draft holding the defaults
+// newGuardSettings applies the callbacks once on a draft holding the defaults
 // and returns the completed settings. The check slice is owned by the result.
-func newLoginSettings(configure ...LoginBuilderFunc) loginSettings {
-	policy := &LoginBuilder{settings: loginSettings{
+func newGuardSettings(configure ...GuardBuilderFunc) guardSettings {
+	policy := &GuardBuilder{settings: guardSettings{
 		ChallengeTTL: defaultChallengeTTL,
 		MaxAttempts:  defaultMaxAttempts,
 

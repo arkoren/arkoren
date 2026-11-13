@@ -185,15 +185,15 @@ namespace panics after configuration. Session lifetime overrides its TTL.
 
 Rotate the ID after login or privilege changes to prevent **session fixation**:
 an attacker arranging for a victim to authenticate into a known session. For
-login, use the same `*auth.Login` as your authentication middleware;
+login, use the same `*auth.Guard` as your authentication middleware;
 [Session Login](../authentication/session-login.md) owns the user provider,
 credential checks, and complete login setup.
 
-After credentials succeed, with the configured `login`, the user's `subject` and
+After credentials succeed, with the configured `guard`, the user's `subject` and
 the verified `factor`:
 
 ```go
-if _, err := login.Begin(r, subject, factor); err != nil {
+if _, err := guard.Begin(r, subject, factor); err != nil {
 	return err
 }
 ```
@@ -206,7 +206,7 @@ and original creation time; it does not log the visitor out.
 To remove the identity but retain unrelated fields:
 
 ```go
-if err := login.Logout(r); err != nil {
+if err := guard.Logout(r); err != nil {
 	return err
 }
 ```
@@ -280,7 +280,7 @@ routes.Use(session.Middleware(store, func(cookies *session.Builder) {
 
 A positive maximum caps initial expiry, renewal, and `Session.Extend` at the
 original creation time plus that maximum. Regeneration does not reset it. If you
-use [`auth.Login`](../authentication/session-login.md#devices), give it the same
+use [`auth.Guard`](../authentication/session-login.md#devices), give it the same
 value with `SessionLifetime` so its login records expire with the sessions. The
 cookie expiry and record TTL use the cap; capping unused state alone does not
 create a record or cookie.
