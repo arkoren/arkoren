@@ -154,19 +154,17 @@ This token-specific path denies when the scope is absent. Do not fill `Scopes`
 from a header or unverified claim, or copy the user's full permissions into it:
 either action can expand what a restricted credential may do.
 
-If authentication instead stores `oauth.Identity` directly, `gate.HasScopes`
-provides the scope rule: it works for any user type implementing `auth.Scoped`
-(`AuthScopes() []string`), and `oauth.Identity` does. Import
+If authentication instead stores `oauth.Identity` directly, the OAuth adapter
+provides a scope rule. Import
 `oauth "arkoren.dev/driver/oauth/oauthauth"`; with the bearer-authenticated
 router `api`, apply it as admission:
 
 ```go
-api.With(gate.Require(gate.HasScopes[oauth.Identity]("billing:export"))).Post("/billing/exports", exportBilling)
+api.With(gate.Require(oauth.HasScopes("billing:export"))).Post("/billing/exports", exportBilling)
 ```
 
 `HasScopes` requires every named scope, and an empty requirement allows any
-authenticated `oauth.Identity`. Your own `User` can use the same rule by
-implementing `auth.Scoped`. It neither authenticates nor checks local team
+authenticated `oauth.Identity`. It neither authenticates nor checks local team
 membership. Do not combine it with `User` rules in the same gate call: the types
 differ. Map verified issuer-and-subject identity to your local actor before local
 resource decisions, following [OIDC bearer verification](../authentication/oidc-bearer.md).

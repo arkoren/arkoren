@@ -188,9 +188,9 @@ api.Use(auth.Require[User]())
 ```
 
 Scope checks and resource permissions belong in
-[Authorization Policies](../authorization/policies.md). `gate.HasScopes[oauth.Identity]`
-works with `oauth.Identity`; it works with this local `User` only if `User`
-implements `auth.Scoped`. Otherwise use a User-typed rule for the mapped identity. Token scopes limit the presented credential's authority rather than
+[Authorization Policies](../authorization/policies.md). `oauth.HasScopes` works
+with `oauth.Identity`, not this local `User`; use a User-typed rule for the mapped
+identity. Token scopes limit the presented credential's authority rather than
 replacing the account's resource permissions.
 
 ## Handle Verification
