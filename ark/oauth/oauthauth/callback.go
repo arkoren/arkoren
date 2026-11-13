@@ -10,20 +10,29 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"arkoren.dev/core/http/auth"
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
+	"arkoren.dev/core/http/session"
 )
 
 // Callback completes a login. It accepts the provider's GET redirect or POST
 // form, finds and deletes the login cookie, exchanges the code and verifies
-// the user (an ID token for OIDC, the user info function for OAuth2). It
-// then calls login to map the external [Identity] to the application's user
-// identifier K, stores K with identity.Login, which regenerates the session,
-// and redirects to the validated return_to target.
+// the user (an ID token for OIDC, the user info function for OAuth2). It then
+// calls resolve to map the external [Identity] to the application's user
+// subject and hands that subject to login.Begin with a federated factor, which
+// logs the user in and regenerates the session ID.
 //
-// With [ClientBuilder.Events] a completed login publishes [LoginSucceeded] and a
-// rejected callback publishes [LoginFailed].
+// A completed login publishes [LoginSucceeded] and redirects to the validated
+// return_to target. When login requires a second factor, Begin parks the login
+// as pending and the request stays anonymous: Callback then redirects to the
+// path set with [ClientBuilder.ChallengeURL], publishes no [LoginSucceeded] and
+// does not carry return_to along; the challenge page finishes the login with
+// [auth.Login.Complete]. Without a challenge URL it ends the pending login with
+// login.Logout and fails with [ErrNoChallengeURL]. It never falls back to a
+// login without the second factor.
+//
+// With [ClientBuilder.Events] a rejected callback publishes [LoginFailed].
 //
 // A missing, tampered or expired login cookie, a failed ID-token check, or a
 // native invalid_grant code-exchange rejection is reported as ErrInvalidCallback.
@@ -31,24 +40,37 @@ import (
 // cookie remains valid until expiry, and the provider must enforce one-time codes.
 // Other exchange failures wrap ErrProviderUnavailable. Returned errors retain
 // native causes, but LoginFailed contains only bounded classifications and hints.
-// Mapper errors matching auth.ErrNoCredentials also become
-// ErrInvalidCallback; other mapper errors pass through unchanged. The identity and
-// mapper must be valid before any side effects. A missing selected session
-// returns auth.ErrUnauthenticated before consuming state; no default fallback
-// occurs. Configuration errors are not credential or callback failures. A valid
-// handler still requires Start. Apps without local users may use Identity as K.
+// Resolver errors matching auth.ErrNoCredentials also become
+// ErrInvalidCallback; other resolver errors pass through unchanged. A subject
+// the user provider does not know, or that is disabled, returns
+// auth.ErrUnauthenticated from Begin; an invalid subject returns
+// auth.ErrInvalidSubject. A request without a session returns
+// auth.ErrUnauthenticated before consuming state. A nil login or resolve is a
+// configuration error returned per request before any side effects. A valid
+// handler still requires Start.
+//
+// Applications with their own users return the subject of their user record,
+// for example from their typed user driver Subject method;
+// the external [Identity] is the input, never the subject itself. Linking
+// accounts by email is unsafe.
 //
 // Example:
 //
-//	r.Get("/oauth/callback", client.Callback(identity, func(ctx context.Context, external oauthauth.Identity) (int, error) {
+//	r.Get("/oauth/callback", client.Callback(login, func(ctx context.Context, external oauthauth.Identity) (string, error) {
 //		user, err := users.UpsertBySubject(ctx, external.Issuer, external.Subject, external.Email)
+//		if err != nil {
+//			return "", err
+//		}
 //
-//		return user.ID, err
+//		return driver.Subject(user) // the application's typed user driver
 //	}))
-func (client *Client) Callback[K, U any](identity auth.SessionIdentity[K, U], login func(context.Context, Identity) (K, error)) router.Handler {
-	configurationErr := identity.Err()
+func (client *Client) Callback(login *auth.Login, resolve func(ctx context.Context, external Identity) (subject string, err error)) router.Handler {
+	var configurationErr error
 
-	if configurationErr == nil && login == nil {
+	switch {
+	case login == nil:
+		configurationErr = errors.New("oauth: nil login")
+	case resolve == nil:
 		configurationErr = errors.New("oauth: nil login mapper")
 	}
 
@@ -63,10 +85,11 @@ func (client *Client) Callback[K, U any](identity auth.SessionIdentity[K, U], lo
 			return err
 		}
 
-		current, err := loginSession(httpRequest.Context(), identity)
-
-		if err != nil {
-			return err
+		// Logins reads only the session: without one there is nothing to log in
+		// to, and the state cookie must stay unconsumed. A request with no
+		// logged-in user returns ErrUnauthenticated, which is not a failure here.
+		if _, err := login.Logins(httpRequest); errors.Is(err, session.ErrNoSession) {
+			return auth.ErrUnauthenticated
 		}
 
 		saved, err := client.take(writer, httpRequest, param(httpRequest, "state"))
@@ -87,22 +110,37 @@ func (client *Client) Callback[K, U any](identity auth.SessionIdentity[K, U], lo
 			return client.loginFailed(httpRequest, err)
 		}
 
-		id, err := login(httpRequest.Context(), external)
+		subject, err := resolve(httpRequest.Context(), external)
 
 		if err != nil {
 			return client.loginFailed(httpRequest, callbackMapperError(err))
 		}
 
-		if err := identity.Login(current, id); err != nil {
+		complete, err := login.Begin(httpRequest, subject, auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated})
+
+		if errors.Is(err, session.ErrNoSession) {
+			return auth.ErrUnauthenticated
+		}
+
+		if err != nil {
 			return client.loginFailed(httpRequest, err)
 		}
 
-		client.config.Events.Emit(httpRequest.Context(), LoginSucceeded, LoginSucceededEvent{
-			Subject: external.Subject,
-			Issuer:  external.Issuer,
-		})
+		if complete {
+			client.config.Events.Emit(httpRequest.Context(), LoginSucceeded, LoginSucceededEvent{
+				Subject: external.Subject,
+				Issuer:  external.Issuer,
+			})
 
-		return response.SafeRedirect(writer, http.StatusFound, saved.ReturnTo)
+			return response.SafeRedirect(writer, http.StatusFound, saved.ReturnTo)
+		}
+
+		if client.config.ChallengeURL == "" {
+			// Begin parked the login as pending; end it so no half login lingers.
+			return client.loginFailed(httpRequest, errors.Join(ErrNoChallengeURL, login.Logout(httpRequest)))
+		}
+
+		return response.SafeRedirect(writer, http.StatusFound, client.config.ChallengeURL)
 	}
 }
 

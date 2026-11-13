@@ -1,5 +1,7 @@
 arkoren.dev/core v0.1.0 h1:zQKIKHeoPglOyAfNM1fsoVi4bG6/gLtbRrpmMYM/oa0=
 arkoren.dev/core v0.1.0/go.mod h1:09a4ff3ddb8VhE9wQgAGcIbIJWEBHk4Ltxyg1+muE20=
+arkoren.dev/core v0.5.0 h1:Oww+IGhf0n+CZ1lIL08PHEqz0p/4RBsBHUb3+YAzzLk=
+arkoren.dev/core v0.5.0/go.mod h1:09a4ff3ddb8VhE9wQgAGcIbIJWEBHk4Ltxyg1+muE20=
 arkoren.dev/foundation/collection v0.1.0 h1:e3C0TK3ycMwSocA5bhIeqZdUInSSxPaz2yVUQPldAIc=
 arkoren.dev/foundation/collection v0.1.0/go.mod h1:mruUlD+0laXztFjDHOypPw02PSL3n6HPqShzl4V1L8E=
 arkoren.dev/foundation/key v0.1.0 h1:wetTqngc5utfMJXVeof4DpdcUZhgVR0w8hnt2qvGtyQ=

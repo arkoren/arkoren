@@ -2,6 +2,7 @@ package oauthauth
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -190,5 +191,39 @@ func TestClientBuilderSettings(t *testing.T) {
 
 	if defaults := configureClient(); defaults.Name != "arkoren.oauth" || !defaults.PKCE {
 		t.Errorf("defaults = %#v", defaults)
+	}
+}
+
+// TestNewRejectsUnsafeChallengeURL verifies the challenge URL must be a safe
+// local redirect target.
+func TestNewRejectsUnsafeChallengeURL(t *testing.T) {
+	t.Parallel()
+
+	for _, target := range []string{"//evil.example", "https://evil.example/challenge", `/\evil.example`} {
+		_, err := New(OIDC("https://issuer.example"), testCipher(t), "cid", func(client *ClientBuilder) {
+			client.ChallengeURL(target)
+		})
+
+		if err == nil {
+			t.Errorf("New accepted challenge URL %q", target)
+		}
+	}
+}
+
+// TestNewAcceptsLocalChallengeURL verifies a local path is kept and, not being
+// a secret, shows in diagnostics.
+func TestNewAcceptsLocalChallengeURL(t *testing.T) {
+	t.Parallel()
+
+	client, err := New(OIDC("https://issuer.example"), testCipher(t), "cid", func(client *ClientBuilder) {
+		client.ChallengeURL("/login/challenge")
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if client.config.ChallengeURL != "/login/challenge" || !strings.Contains(client.config.String(), "/login/challenge") {
+		t.Errorf("config = %v", client.config)
 	}
 }

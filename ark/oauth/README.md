@@ -1,19 +1,21 @@
-# arkoren.dev/driver/oauth
+# arkoren.dev/ark/oauth
 
-OpenID Connect and OAuth2 login, plus JWT bearer verification, for Arkoren, built on `arkoren.dev/core/http/auth`.
-This is an auth driver: it provides an `Authenticator` source and HTTP handlers rather than implementing a `Driver`.
+OpenID Connect and OAuth2 login, plus JWT bearer verification, for Arkoren, built on `arkoren.dev/core/auth`.
+It is an ark: it logs users in through `auth.Login` and verifies bearer tokens, and has no tables of its own.
+
+Moved from `arkoren.dev/driver/oauth` (last version v0.1.0). Change the import
+path to `arkoren.dev/ark/oauth`; the package name `oauthauth` is unchanged.
 
 ```sh
-go get arkoren.dev/driver/oauth
+go get arkoren.dev/ark/oauth
 ```
 
 ```go
-import oauth "arkoren.dev/driver/oauth/oauthauth"
+import oauth "arkoren.dev/ark/oauth/oauthauth"
 ```
 
-The examples also use `auth`, `router`, and `session` from their
-`arkoren.dev/core/http/` packages, `gate` from `arkoren.dev/core/http/auth/gate`,
-`csrf` from `arkoren.dev/core/http/middleware/csrf`, `application` from
+The examples also use `auth` and `gate` from `arkoren.dev/core/auth`, `session`
+from `arkoren.dev/core/http/session`, `csrf` from `arkoren.dev/core/http/middleware/csrf`, `application` from
 `arkoren.dev/core/application`, and standard-library `context` and `os`.
 
 ## Creating a client
@@ -52,20 +54,43 @@ compose.Startup(client.Start)
 
 ## Browser login
 
-Supply your own `login` callback (`func(context.Context, oauth.Identity) (int,
-error)`) to map a verified identity to your application's user ID. Match by
+Supply your own `resolve` callback (`func(context.Context, oauth.Identity)
+(string, error)`) to map a verified identity to the subject of your application's
+user, for example with the `Subject` method of your typed user driver. Match by
 issuer and subject, never by email alone; see [Identity mapping](#identity-mapping).
-Given an existing `r` router, `store` cache, and your `users.Find` session loader,
-register the browser routes:
+Given an existing `r` router, `store` cache and `provider` (`*auth.UserProvider`),
+create the shared login and register the browser routes:
 
 ```go
-identity := auth.NewSessionIdentity(users.Find)
+login, err := auth.NewLogin(provider, store)
+if err != nil {
+	return err
+}
+
 r.Use(session.Middleware(store))
 r.Use(csrf.Middleware())
-r.Use(auth.Middleware(identity.Authenticator()))
+r.Use(auth.Middleware(login.Authenticator()))
 r.Get("/login", client.Login()) // supports ?return_to=/local/path
-r.Get("/oauth/callback", client.Callback(identity, login))
-r.Post("/logout", client.Logout(identity))
+r.Get("/oauth/callback", client.Callback(login, resolve))
+r.Post("/logout", client.Logout(login))
+```
+
+## Second factors
+
+When `login` has a registered second-factor check for the user, `Begin` holds the
+login as pending and the callback redirects to the local path set with
+`ClientBuilder.ChallengeURL`, without publishing `LoginSucceeded` or carrying
+`return_to`. Your challenge page finishes the login with `login.Complete`. Without
+a challenge URL the callback ends the pending login and fails with
+`ErrNoChallengeURL`; it never signs the user in without the second factor.
+
+```go
+client, err := oauth.New(oauth.OIDC("https://id.example.com/realms/app"), cipher, "web",
+	func(client *oauth.ClientBuilder) {
+		client.RedirectURL("https://app.example.com/oauth/callback")
+		client.ChallengeURL("/login/challenge")
+	},
+)
 ```
 
 Use HTTPS in production. Apple sends a cross-site POST callback, which CSRF
@@ -77,8 +102,8 @@ cookie-authenticated state-changing routes.
 
 ## API authentication
 
-If API handlers need your local `User`, verify the JWT before resolving it
-with your application's `users.UpsertByIdentity` operation. First construct a
+`Verify` returns the external `oauth.Identity`, never an `auth.Identity`: the
+application maps issuer and subject to its own subject. First construct a
 dedicated verifier inside the composition callback with the API's registered
 audience, not the browser client ID:
 
@@ -93,47 +118,52 @@ Both client instances share your existing stable `cipher`. After discovery
 succeeds, use `verifier` in the application mapping:
 
 ```go
-bearer := func(ctx context.Context, token string) (User, error) {
-	identity, err := verifier.Verify(ctx, token)
+bearer := auth.Bearer(func(ctx context.Context, token string) (auth.Identity, error) {
+	external, err := verifier.Verify(ctx, token)
 	if err != nil {
-		return User{}, err
+		return auth.Identity{}, err
 	}
 
-	return users.UpsertByIdentity(ctx, identity.Issuer, identity.Subject, identity.Email)
-}
+	subject, err := users.SubjectFor(ctx, external.Issuer, external.Subject)
+	if err != nil {
+		return auth.Identity{}, err
+	}
+
+	return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
+		principal.Scopes(external.Scopes...)
+	}), nil
+})
 ```
 
-Add `auth.Bearer(bearer)` to the authentication middleware and protect local-user
-routes with `auth.Require[User]()`. The `oauth.HasScopes` rule instead needs an
-`oauth.Identity` in the context; it cannot authorize the mapped `User` above.
-For an API that works directly with verified identities, use a separate group
-and your `createPost` handler:
+Add `bearer` to the authentication middleware and protect routes with
+`auth.Require()`. Because the wrapper carries the token's scopes on the
+`auth.Identity`, `gate.HasScopes` authorizes them, given your `createPost`
+handler:
 
 ```go
-api := r.With(auth.Middleware(auth.Bearer(verifier.Verify)))
-api.With(gate.Require(oauth.HasScopes("posts:write"))).Post("/posts", createPost)
+api := r.With(auth.Middleware(bearer))
+api.With(gate.Require(gate.HasScopes("posts:write"))).Post("/posts", createPost)
 ```
 
 ## API
 
 - `oauth.New(provider, cipher, clientID, configure...)`: pure constructor; `client.Start(ctx)` runs OIDC discovery (no-op for OAuth2).
 - `oauth.OIDC(issuerURL)`, `oauth.OAuth2(endpoint, userInfo)`: providers.
-- `client.Login()`, `client.Callback(identity, login)`, `client.Logout(identity)`: browser flow handlers. `login` maps the external
-  identity to the app's user ID. Mapper errors matching `auth.ErrNoCredentials`
+- `client.Login()`, `client.Callback(login, resolve)`, `client.Logout(login)`: browser flow handlers. `resolve` maps the external
+  identity to the app's user subject. Mapper errors matching `auth.ErrNoCredentials`
   become `ErrInvalidCallback` while retaining their causes; other mapper errors
-  pass through. Returning `auth.ErrUnauthenticated` refuses login with 401.
-- Callback and logout select the identity's session once, without default-slot
-  fallback. A missing session returns 401 before consuming the login cookie or
-  calling the provider or mapper. Invalid identity configuration or a nil mapper
-  returns a configuration error before those effects. Successful mutation still
-  depends on session middleware for response-time persistence.
-- `client.Verify(ctx, token)`: verifies a JWT access token; use as `auth.Bearer(client.Verify)`. OIDC only; needs `ClientBuilder.Audiences`
+  pass through. A subject the user provider does not know or has disabled is
+  `auth.ErrUnauthenticated` (401); an invalid subject is `auth.ErrInvalidSubject`.
+- Callback and logout use the login's session without default-slot fallback. A
+  missing session returns 401 before consuming the login cookie or calling the
+  provider or mapper. A nil login or mapper returns a configuration error before
+  those effects. Successful mutation still depends on session middleware for
+  response-time persistence.
+- `client.Verify(ctx, token)`: verifies a JWT access token and returns the external `oauth.Identity`; wrap it for `auth.Bearer` as shown above. OIDC only; needs `ClientBuilder.Audiences`
   (`ErrNoAudiences` otherwise).
-- `oauth.HasScopes(scopes...)`: gate rule requiring all scopes.
-  It captures a copy of the requirements; caller slice edits cannot weaken it.
-- Errors: `ErrInvalidLoginRequest`, `ErrInvalidCallback`, `ErrProviderUnavailable`, `ErrNotStarted`, `ErrUnsupported`, `ErrNoAudiences`.
+- Errors: `ErrInvalidLoginRequest`, `ErrInvalidCallback`, `ErrProviderUnavailable`, `ErrNotStarted`, `ErrUnsupported`, `ErrNoAudiences`, `ErrNoChallengeURL`.
 
-`ClientBuilder` provides `ClientSecret`, `RedirectURL`, `Scopes`, `Audiences`, `Name`
+`ClientBuilder` provides `ClientSecret`, `RedirectURL`, `ChallengeURL`, `Scopes`, `Audiences`, `Name`
 (default `arkoren.oauth`), `AllowInsecure(bool)`, `PKCE(bool)` (default on), and `Events`.
 Callbacks run directly once in order on one fresh draft before validation. Nil entries panic;
 expanded nil or empty slices omit edits. Retained drafts cannot change published settings.
@@ -195,8 +225,9 @@ provider text; do not log returned errors or unwrapped causes indiscriminately.
 ## Observing login outcomes
 
 Set `ClientBuilder.Events(bus)` to share your existing `event.Bus`. Nil publishes
-nothing. Successful callbacks report subject and issuer through `LoginSucceeded`;
-those identifiers still require your application's privacy policy. `LoggedOut`
+nothing. Completed logins report subject and issuer through `LoginSucceeded` (a login held
+for a second factor publishes nothing); those identifiers still require your
+application's privacy policy. `LoggedOut`
 reports local session mutation, not provider logout or persisted session storage.
 
 `LoginFailed.Err` contains only `ErrInvalidCallback`, `ErrProviderUnavailable`, or
@@ -242,4 +273,4 @@ OIDC, OAuth2, Apple, Microsoft, and GitHub have no optional builders.
 For provider-specific email handling, Apple callback setup, and event payloads,
 follow the [browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/authentication/oauth.md).
 For every exported identifier, see the
-[`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/driver/oauth/oauthauth).
+[`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth).

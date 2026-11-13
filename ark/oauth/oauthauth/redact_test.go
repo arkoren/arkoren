@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"arkoren.dev/driver/oauth/oauthauth"
+	"arkoren.dev/ark/oauth/oauthauth"
 )
 
 // TestConfigDoesNotPrintSecrets verifies fmt and slog never show secret fields.

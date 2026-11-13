@@ -182,6 +182,17 @@ fixture 'overlapping module classifications'
 printf '%s\n' '{"schema":1,"public":["core","cmd/arkoren"],"development":["cmd/arkoren"]}' > .github/release-modules.json
 expect_rejected 'invalid module policy'
 
+fixture 'retired module also public'
+jq '.retired = ["driver/z"]' .github/release-modules.json > "$scratch/policy"
+mv "$scratch/policy" .github/release-modules.json
+expect_rejected 'invalid module policy'
+
+fixture 'retired module present on disk'
+jq '.retired = ["driver/old"]' .github/release-modules.json > "$scratch/policy"
+mv "$scratch/policy" .github/release-modules.json
+mkdir driver/old
+expect_rejected 'retired module still exists: driver/old'
+
 fixture 'missing reviewed public module'
 jq '.public += ["driver/missing"]' .github/release-modules.json > "$scratch/policy"
 mv "$scratch/policy" .github/release-modules.json

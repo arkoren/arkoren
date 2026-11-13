@@ -99,11 +99,11 @@ are client-controlled too; keep secrets out of custom method names. See
 
 ### OAuth Outcomes
 
-The client in `arkoren.dev/driver/oauth/oauthauth` uses `ClientBuilder.Events`:
+The client in `arkoren.dev/ark/oauth/oauthauth` uses `ClientBuilder.Events`:
 
 | Topic | Name | Observation |
 | --- | --- | --- |
-| `oauthauth.LoginSucceeded` | `oauth.login.succeeded` | `LoginSucceededEvent{Subject, Issuer}` after local session login. |
+| `oauthauth.LoginSucceeded` | `oauth.login.succeeded` | `LoginSucceededEvent{Subject, Issuer}` after a completed local login; a login held for a second factor publishes nothing. |
 | `oauthauth.LoginFailed` | `oauth.login.failed` | `LoginFailedEvent{ProviderError, Err}` for a rejected callback. |
 | `oauthauth.LoggedOut` | `oauth.logged-out` | Signal after removing the user from the local session. |
 | `oauthauth.TokenRejected` | `oauth.token.rejected` | `TokenRejectedEvent{Err}` for bearer rejection. |

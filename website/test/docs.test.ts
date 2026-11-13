@@ -201,7 +201,7 @@ test("the API catalog and sidebar link to every public library module exactly on
   const repository = resolve(website, "..");
   const moduleFiles = [
     "core/go.mod",
-    ...["foundation", "driver"]
+    ...["foundation", "driver", "ark"]
       .filter((area) => existsSync(resolve(repository, area)))
       .flatMap((area) =>
         readdirSync(resolve(repository, area))
