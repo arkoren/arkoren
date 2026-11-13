@@ -118,6 +118,15 @@ The facade adds typed values and telemetry on top of the raw driver and
 exposes `Driver()` and `DriverAs[T]()`, which looks through wrapping drivers
 with `internal/unwrap`.
 
+The user provider is a contract outside `service/`: `auth/` (`arkoren.dev/core/auth`)
+holds `UserProvider`, the `UserDriver` lookup contract keyed by text subject,
+`NewUserDriver[K, U]` for typed loaders, `memoryauth/` and the `authtest.RunUserDriver`
+suite. `OnForget(fn)` hooks are unnamed, run in registration order in the caller's
+context (so they join its transaction), and the first error stops `Forget`;
+`Forget` then emits `auth.UserForgotten` only after every hook succeeded, as a
+notification that never replaces a hook. Only `ErrUserNotFound` proves deletion.
+It must not import the older `http/auth` package.
+
 For data-result, pagination, inspection-snapshot, or iterator interface changes,
 apply [Collection results](../arkoren-go/SKILL.md#collection-results). That rule
 distinguishes native collection outputs from standard driver/transport inputs
