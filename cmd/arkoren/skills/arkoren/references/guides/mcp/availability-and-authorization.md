@@ -186,4 +186,4 @@ for that boundary.
 
 For exact declaration and policy contracts, see the
 [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp) and
-[MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).
+[MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).

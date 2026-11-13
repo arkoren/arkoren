@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "public": [
+    "ark/mcp",
     "ark/oauth",
     "cmd/arkoren",
     "core",
@@ -15,7 +16,6 @@
     "driver/gcp",
     "driver/launchdarkly",
     "driver/mailgun",
-    "driver/mcp",
     "driver/meilisearch",
     "driver/mollie",
     "driver/mqtt",
@@ -48,5 +48,5 @@
     "foundation/validate"
   ],
   "development": ["cmd/arkoren-ci"],
-  "retired": ["driver/oauth"]
+  "retired": ["driver/mcp", "driver/oauth"]
 }

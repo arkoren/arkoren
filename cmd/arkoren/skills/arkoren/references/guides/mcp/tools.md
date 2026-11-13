@@ -18,7 +18,7 @@ The endpoint does not discover service methods automatically.
 
 The examples use `context` and `encoding/json/jsontext` from the standard
 library, plus `arkoren.dev/core/mcp`, `arkoren.dev/foundation/validate`, and
-`arkoren.dev/driver/mcp/mcpserver`. Focused fragments omit routine error
+`arkoren.dev/ark/mcp/mcpserver`. Focused fragments omit routine error
 propagation; complete functions handle errors.
 
 ## Application Operation
@@ -279,7 +279,7 @@ weights, denied capabilities, cancellation, and resource policy. Direct core
 calls preserve error identities and propagate panics; they do not exercise
 adapter recovery, redaction, or advertised-output validation. Use an SDK client
 against the HTTP handler for those boundaries, as in the
-[adapter HTTP tests](https://github.com/arkoren/arkoren/blob/main/driver/mcp/mcpserver/server_test.go).
+[adapter HTTP tests](https://github.com/arkoren/arkoren/blob/main/ark/mcp/mcpserver/server_test.go).
 
 ## Call Telemetry
 
@@ -331,4 +331,4 @@ accessor: doing so can bypass guards or leave metadata stale.
 
 For exact declarations and transport settings, see the
 [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp) and
-[MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).
+[MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).

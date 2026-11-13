@@ -27,8 +27,8 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 | Tier | Path | Modules | Holds |
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
-| Drivers | `driver/<vendor>/` | one per vendor | Implement a `core/service/<x>` contract and run its `<x>test` conformance suite. Seams in `core/auth` (`UserDriver`, `authtest`) do not make a package a driver. A driver may own infrastructure tables (`postgressearch`). Webhook and CAPTCHA adapters are undecided: the contract test decides each one when it is built. `driver/mcp` predates this rule and is a pending move to `ark/mcp`; `driver/oauth` moved to `ark/oauth`, which plugs into `core/auth`. |
-| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Every other opt-in module on core: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features with tables (two-factor, users, tokens, linked accounts). `ark/oauth` is the first. |
+| Drivers | `driver/<vendor>/` | one per vendor | Implement a `core/service/<x>` contract and run its `<x>test` conformance suite. Seams in `core/auth` (`UserDriver`, `authtest`) do not make a package a driver. A driver may own infrastructure tables (`postgressearch`). Webhook and CAPTCHA adapters are undecided: the contract test decides each one when it is built. `driver/mcp` and `driver/oauth` moved to `ark/mcp` and `ark/oauth`; the latter plugs into `core/auth`. |
+| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Every other opt-in module on core: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features with tables (two-factor, users, tokens, linked accounts). `ark/mcp` and `ark/oauth` are the first. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
 | Development | `cmd/arkoren-ci/` | `arkoren.dev/cmd/arkoren-ci` | Repository maintenance only; standard library only, with no dependency on toolkit or consumer CLI modules. Public source and vanity resolution do not imply a supported release/install namespace. Excluded from releases and the library API catalog. |
@@ -266,7 +266,7 @@ are rejected) and once-cached JSON/Handler export, including errors. See
 `cmd/arkoren/skills/arkoren/references/guides/asyncapi/overview.md` for application wiring.
 
 **MCP tools** live in `core/mcp`, not `service/`: immutable SDK-independent
-typed definitions, with `driver/mcp/mcpserver` as the HTTP protocol adapter.
+typed definitions, with `ark/mcp/mcpserver` (an ark, not a driver) as the HTTP protocol adapter.
 Services may expose their own `[]mcp.Tool` methods; composition registers tools
 explicitly. Keep SDK dependencies out of core and do not add a contract-map row.
 Applications own `ToolBuilder.Available` capability policy; shared typed service

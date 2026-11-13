@@ -6,7 +6,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"arkoren.dev/driver/mcp/mcpserver/internal/wire"
+	"arkoren.dev/ark/mcp/mcpserver/internal/wire"
 )
 
 // execute contains application execution and output validation inside one

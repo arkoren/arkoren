@@ -6,7 +6,7 @@ and no root module. `core/` is `arkoren.dev/core`: application lifecycle,
 `<contract>test` conformance suites. `driver/<vendor>` holds modules that
 implement a `core/service` contract and run its conformance suite; `ark/<name>`
 holds every other opt-in module on core, protocol modules and features with
-tables (none yet);
+tables (currently `ark/mcp`);
 `foundation/<name>` holds stdlib-only libraries. `cmd/arkoren` is the consumer
 CLI; `cmd/arkoren-ci` is a separate stdlib-only development command, never a
 release or consumer dependency. `scripts/` holds workflow fixtures. The committed

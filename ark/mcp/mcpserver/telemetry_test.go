@@ -9,10 +9,10 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"arkoren.dev/ark/mcp/mcpserver"
 	"arkoren.dev/core/mcp"
 	"arkoren.dev/core/service/telemetry"
 	"arkoren.dev/core/service/telemetry/memorytelemetry"
-	"arkoren.dev/driver/mcp/mcpserver"
 )
 
 func TestTelemetryExecutionErrorsArePayloadFree(t *testing.T) {

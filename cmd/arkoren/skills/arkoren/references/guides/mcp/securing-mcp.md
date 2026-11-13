@@ -181,5 +181,5 @@ Neither endpoint scopes nor metadata authorize a particular shipment or invoice.
 Keep resource checks in shared services. The [CLI connection guide](../cli/connecting.md)
 shows how to supply an existing token; the CLI does not log in or refresh it.
 
-For endpoint settings, see the [MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver);
+For endpoint settings, see the [MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver);
 for tool policy declarations, see the [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp).
