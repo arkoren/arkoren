@@ -2,6 +2,7 @@
   "schema": 1,
   "public": [
     "ark/mcp",
+    "ark/oauth",
     "cmd/arkoren",
     "core",
     "driver/aes",
@@ -20,7 +21,6 @@
     "driver/mqtt",
     "driver/mysql",
     "driver/nats",
-    "driver/oauth",
     "driver/openai",
     "driver/openfeature",
     "driver/opensearch",
@@ -47,6 +47,6 @@
     "foundation/totp",
     "foundation/validate"
   ],
-  "retired": ["driver/mcp"],
-  "development": ["cmd/arkoren-ci"]
+  "development": ["cmd/arkoren-ci"],
+  "retired": ["driver/mcp", "driver/oauth"]
 }

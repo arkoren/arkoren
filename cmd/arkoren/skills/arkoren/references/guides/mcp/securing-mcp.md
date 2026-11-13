@@ -148,11 +148,11 @@ deployment also needs protected resource metadata, bearer challenges, and an
 authorization server issuing tokens for this resource. A login flow or a
 token verifier alone is not that complete integration.
 
-`oauthauth.Client.Verify` from `arkoren.dev/driver/oauth/oauthauth` verifies
+`oauthauth.Client.Verify` from `arkoren.dev/ark/oauth/oauthauth` verifies
 OIDC bearer access tokens with configured audiences and returns
 `oauthauth.Identity`. Map it to your application `User` if your policies expect
 that type; the [OIDC bearer guide](../authentication/oidc-bearer.md) owns verifier
-configuration and lifecycle. The driver is neither a token issuer nor a complete
+configuration and lifecycle. The adapter is neither a token issuer nor a complete
 MCP authorization server.
 
 For native integration, the pinned SDK provides `RequireBearerToken` and

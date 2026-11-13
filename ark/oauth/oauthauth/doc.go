@@ -1,13 +1,15 @@
 // Package oauthauth logs users in with OpenID Connect and OAuth2 providers, and
 // verifies OIDC bearer tokens. Import it as oauth:
 //
-//	import oauth "arkoren.dev/driver/oauth/oauthauth"
+//	import oauth "arkoren.dev/ark/oauth/oauthauth"
 //
-// It plugs into [arkoren.dev/core/http/auth] without being a driver: [Client.Login]
-// and [Client.Callback] run the browser Authorization Code flow with PKCE
-// and store the user with auth.SessionIdentity.Login; [Client.Logout] ends it;
-// [Client.Verify] verifies JWT access tokens and fits auth.Bearer directly.
-// Authorization is done with gate rules such as [HasScopes].
+// It builds on [arkoren.dev/core/auth]: [Client.Login] and [Client.Callback]
+// run the browser Authorization Code flow with PKCE and log the user in through
+// auth.Login.Begin with a federated factor, so a registered second factor is
+// honored; [Client.Logout] ends the login; [Client.Verify] verifies JWT access
+// tokens and returns the external [Identity], which the application maps to its
+// own subject for auth.Bearer. Authorization is done with gate rules such as
+// gate.HasScopes.
 //
 // The login state (state, nonce, PKCE verifier, return target) lives in a
 // short-lived, encrypted, HttpOnly cookie per login, not in the session, so
@@ -48,43 +50,70 @@
 //	// Start performs OIDC discovery.
 //	compose.Startup(client.Start)
 //
-//	// Find or create the local user of an external identity.
-//	login := func(ctx context.Context, identity oauth.Identity) (int, error) {
-//		user, err := users.UpsertByIdentity(ctx, identity.Issuer, identity.Subject, identity.Email)
+//	// Find or create the local user of an external identity and return its
+//	// subject, the string the application's user provider knows it by.
+//	resolve := func(ctx context.Context, external oauth.Identity) (string, error) {
+//		user, err := users.UpsertByIdentity(ctx, external.Issuer, external.Subject, external.Email)
+//		if err != nil {
+//			return "", err
+//		}
 //
-//		return user.ID, err
+//		return driver.Subject(user) // the application's typed user driver
 //	}
 //
-//	// Browser routes: the session holds the local user ID.
-//	identity := auth.NewSessionIdentity(users.Find)
-//	compose.Require(identity.Err())
+//	// One login serves every login method; it shares the session middleware's cache.
+//	login := compose.Must(auth.NewLogin(provider, store))
+//
+//	// Browser routes: the session holds the subject.
 //	web := r.With(
 //		session.Middleware(store, func(cookies *session.Builder) {
 //			cookies.Name(session.HostPrefix + "app.session")
 //		}),
 //
-//		auth.Middleware(identity.Authenticator()),
+//		auth.Middleware(login.Authenticator()),
 //	)
 //	web.Get("/login", client.Login()) // supports ?return_to=/local/path
-//	web.Get("/oauth/callback", client.Callback(identity, login))
-//	web.Post("/logout", client.Logout(identity))
-//	web.With(auth.Require[User]()).Get("/me", me)
+//	web.Get("/oauth/callback", client.Callback(login, resolve))
+//	web.Post("/logout", client.Logout(login))
+//	web.With(auth.Require()).Get("/me", me)
 //
-//	// API routes: the user is the verified token identity, so scope rules apply.
+//	// API routes: wrap Verify so the token maps to the application's subject.
 //	// The construction callback configures the API's accepted audience above.
-//	api := r.With(auth.Middleware(auth.Bearer(client.Verify)))
-//	api.With(gate.Require(oauth.HasScopes("posts:write"))).Post("/posts", create)
+//	bearer := auth.Bearer(func(ctx context.Context, token string) (auth.Identity, error) {
+//		external, err := client.Verify(ctx, token)
+//		if err != nil {
+//			return auth.Identity{}, err
+//		}
+//
+//		subject, err := users.SubjectFor(ctx, external.Issuer, external.Subject)
+//		if err != nil {
+//			return auth.Identity{}, err
+//		}
+//
+//		return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
+//			principal.Scopes(external.Scopes...)
+//		}), nil
+//	})
+//	api := r.With(auth.Middleware(bearer))
+//	api.With(gate.Require(gate.HasScopes("posts:write"))).Post("/posts", create)
+//
+// # Second factors
+//
+// A login that needs a second factor is parked as pending by auth.Login.Begin.
+// Callback then redirects to [ClientBuilder.ChallengeURL] and publishes no
+// [LoginSucceeded]; return_to is not carried over. The challenge page verifies
+// the factor and calls auth.Login.Complete. Without a challenge URL Callback ends
+// the pending login and fails with [ErrNoChallengeURL]; it never logs in
+// without the second factor.
 //
 // # Identity mapping
 //
-// Callback and Logout resolve exactly the identity's selected session before
-// side effects. Missing selected sessions return auth.ErrUnauthenticated without
-// default fallback. Invalid identities and nil mappers are configuration errors;
-// mapper errors matching auth.ErrNoCredentials become ErrInvalidCallback, while
-// other mapper errors pass through. Explicit identity.Login calls do not check
-// the session against its handle. A physical session has one identity slot, and
-// same-K definitions or compatible persisted JSON do not enforce realm isolation.
-// Handles do not isolate cookies, storage or user context (still keyed by U).
+// Callback checks the session before side effects: a request without one
+// returns auth.ErrUnauthenticated without consuming state. A nil login or
+// resolver is a configuration error. Resolver errors matching
+// auth.ErrNoCredentials become ErrInvalidCallback, while other resolver errors
+// pass through. A subject the user provider does not know or has disabled is
+// auth.ErrUnauthenticated; an invalid subject is auth.ErrInvalidSubject.
 //
 // Match local users on the pair Issuer + Subject, which the provider guarantees
 // stable and unique. Never link accounts by email: providers differ in whether
@@ -107,7 +136,7 @@
 //
 // # Bearer tokens
 //
-// Verify and auth.Bearer work for OIDC providers only. OAuth2 providers have no
+// Verify, wrapped for auth.Bearer, works for OIDC providers only. OAuth2 providers have no
 // signed tokens to verify and return ErrUnsupported. Verify requires
 // ClientBuilder.Audiences naming your API and returns ErrNoAudiences otherwise:
 // the client ID is not a default because it is the audience of ID tokens.

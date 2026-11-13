@@ -12,8 +12,9 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
-	"arkoren.dev/core/http/auth"
-	"arkoren.dev/core/http/auth/authtest"
+	"arkoren.dev/core/auth"
+	"arkoren.dev/core/auth/authtest"
+	"arkoren.dev/core/auth/gate"
 	"arkoren.dev/core/http/router"
 )
 
@@ -42,6 +43,30 @@ func TestVerifyUsesAPIAudiencesAlongsideBrowserLogin(t *testing.T) {
 	}
 }
 
+// bearerIdentity wraps Verify the way applications do: it maps the external
+// identity to an application subject (here the provider subject itself) and
+// carries the granted scopes.
+func bearerIdentity(ctx context.Context, client *Client, token string) (auth.Identity, Identity, error) {
+	external, err := client.Verify(ctx, token)
+
+	if err != nil {
+		return auth.Identity{}, Identity{}, err
+	}
+
+	return auth.NewIdentity(external.Subject, func(principal *auth.IdentityBuilder) {
+		principal.Scopes(external.Scopes...)
+	}), external, nil
+}
+
+// bearer returns the auth.Bearer authenticator over bearerIdentity.
+func bearer(client *Client) auth.Authenticator {
+	return auth.Bearer(func(ctx context.Context, token string) (auth.Identity, error) {
+		identity, _, err := bearerIdentity(ctx, client, token)
+
+		return identity, err
+	})
+}
+
 // requireBearerStatus sends the token made by token as a bearer credential
 // through Verify, auth.Middleware and auth.Require and verifies the status.
 func requireBearerStatus(t *testing.T, token func(*testProvider) string, want int) {
@@ -49,7 +74,7 @@ func requireBearerStatus(t *testing.T, token func(*testProvider) string, want in
 
 	provider := newTestProvider(t)
 	client := newClient(t, OIDC(provider.server.URL))
-	handler := auth.Middleware(auth.Bearer(client.Verify))(auth.Require[Identity]()(
+	handler := auth.Middleware(bearer(client))(auth.Require()(
 		func(w http.ResponseWriter, _ *http.Request) error {
 			w.WriteHeader(http.StatusNoContent)
 
@@ -174,11 +199,11 @@ func TestVerifyConformance(t *testing.T) {
 		}
 	}
 
-	authtest.Run(t, auth.Bearer(client.Verify), request(""), request("Bearer "+provider.sign(nil)),
-		authtest.WithInvalid[Identity](request("Bearer forged")),
-		authtest.WithUser(func(t *testing.T, identity Identity) {
-			if identity.Subject != "user-1" {
-				t.Fatalf("Subject = %q, want user-1", identity.Subject)
+	authtest.Run(t, bearer(client), request(""), request("Bearer "+provider.sign(nil)),
+		authtest.WithInvalid(request("Bearer forged")),
+		authtest.WithIdentity(func(t *testing.T, identity auth.Identity) {
+			if identity.Subject() != "user-1" {
+				t.Fatalf("Subject = %q, want user-1", identity.Subject())
 			}
 		}))
 }
@@ -236,9 +261,14 @@ func requireKeycloakBearer(t *testing.T, audiences []string, want int) {
 
 	client, token := keycloakToken(t, ctx, audiences...)
 
-	var identity Identity
-	handler := auth.Middleware(auth.Bearer(client.Verify))(func(w http.ResponseWriter, r *http.Request) error {
-		identity, _ = auth.FromContext[Identity](r.Context())
+	var external Identity
+	verify := auth.Bearer(func(ctx context.Context, token string) (auth.Identity, error) {
+		identity, verified, err := bearerIdentity(ctx, client, token)
+		external = verified
+
+		return identity, err
+	})
+	handler := auth.Middleware(verify)(func(w http.ResponseWriter, _ *http.Request) error {
 		w.WriteHeader(http.StatusNoContent)
 
 		return nil
@@ -251,8 +281,8 @@ func requireKeycloakBearer(t *testing.T, audiences []string, want int) {
 		t.Fatalf("status = %d, want %d", got, want)
 	}
 
-	if want == http.StatusNoContent && (identity.Issuer != keycloakIssuerURL || identity.Subject == "" || !slices.Contains(identity.Scopes, "profile")) {
-		t.Errorf("identity = %+v", identity)
+	if want == http.StatusNoContent && (external.Issuer != keycloakIssuerURL || external.Subject == "" || !slices.Contains(external.Scopes, "profile")) {
+		t.Errorf("identity = %+v", external)
 	}
 }
 
@@ -465,5 +495,29 @@ func TestVerifyCanceledContextPreservesMissingAudiences(t *testing.T) {
 
 	if !errors.Is(err, ErrNoAudiences) {
 		t.Fatalf("Verify missing audiences canceled context = %v", err)
+	}
+}
+
+// TestVerifyScopesWithGateHasScopes verifies the application wrapper carries
+// the granted scopes into an auth.Identity that gate.HasScopes evaluates.
+func TestVerifyScopesWithGateHasScopes(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestProvider(t)
+	client := newClient(t, OIDC(provider.server.URL))
+	token := provider.sign(map[string]any{"scope": "posts:read posts:write"})
+
+	identity, _, err := bearerIdentity(t.Context(), client, token)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for scopes, want := range map[string]bool{"posts:write": true, "posts:read": true, "admin": false} {
+		allowed, err := gate.HasScopes(scopes)(t.Context(), identity)
+
+		if err != nil || allowed != want {
+			t.Errorf("HasScopes(%q) = %t, %v; want %t", scopes, allowed, err, want)
+		}
 	}
 }

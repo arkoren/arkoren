@@ -97,6 +97,17 @@ var ErrUnsupported = problem.New(func(details *problem.Builder) {
 //	}
 var ErrNoAudiences = errors.New("oauth: Verify requires ClientBuilder.Audiences")
 
+// ErrNoChallengeURL is returned by [Client.Callback] when the login requires a
+// second factor but [ClientBuilder.ChallengeURL] is unset. The pending login is
+// ended first; the callback never completes a login without its second factor.
+//
+// Example:
+//
+//	if errors.Is(err, oauth.ErrNoChallengeURL) {
+//		// Set client.ChallengeURL("/login/challenge") in its construction callback.
+//	}
+var ErrNoChallengeURL = errors.New("oauth: second factor required but ClientBuilder.ChallengeURL is unset")
+
 // invalidCallback adds callback failure details to the standard problem.
 func invalidCallback(err error) problem.Details {
 	details := ErrInvalidCallback.Derive(func(details *problem.Builder) {

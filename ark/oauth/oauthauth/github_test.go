@@ -80,6 +80,8 @@ func TestGitHubIdentityUnverifiedIgnoredLoginFallback(t *testing.T) {
 func TestGitHubFlow(t *testing.T) {
 	t.Parallel()
 
+	signin := newLogin(t)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		if r.PostFormValue("code_verifier") == "" {
@@ -115,16 +117,22 @@ func TestGitHubFlow(t *testing.T) {
 	sess := newSession()
 	request := callbackRequest(http.MethodGet, jar, sess, query.Get("state"), "code")
 
-	if status := client.Callback(externalIdentity, func(_ context.Context, identity Identity) (Identity, error) {
-		return identity, nil
+	var identity Identity
+
+	if status := client.Callback(signin, func(_ context.Context, external Identity) (string, error) {
+		identity = external
+
+		return external.Subject, nil
 	}).Record(request).StatusCode; status != http.StatusFound {
 		t.Fatalf("status = %d, want 302", status)
 	}
 
-	identity, err := userOfIdentity(request)
+	if subject, err := userOf(signin, request); err != nil || subject != "42" {
+		t.Fatalf("user = %q, %v", subject, err)
+	}
 
-	if err != nil || identity.Subject != "42" || identity.Email != "o@x.com" || len(identity.Scopes) != 1 {
-		t.Fatalf("identity = %+v, %v", identity, err)
+	if identity.Subject != "42" || identity.Email != "o@x.com" || len(identity.Scopes) != 1 {
+		t.Fatalf("identity = %+v", identity)
 	}
 }
 
@@ -174,6 +182,8 @@ func TestGitHubAPIErrorEmails(t *testing.T) {
 func TestGitHubCleanupIsBestEffort(t *testing.T) {
 	t.Parallel()
 
+	signin := newLogin(t)
+
 	client := newClient(t, GitHub())
 	jar := cookieJar{}
 
@@ -195,7 +205,7 @@ func TestGitHubCleanupIsBestEffort(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), "code")
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 
-	response := client.Callback(localIdentity, idLogin).Record(request)
+	response := client.Callback(signin, idLogin).Record(request)
 
 	if response.StatusCode != http.StatusFound || closed != 3 {
 		t.Fatalf("cleanup changed callback: status %d, closes %d", response.StatusCode, closed)
@@ -223,6 +233,8 @@ func (body *closingBody) Close() error {
 func TestGitHubCallbackRejectsMissingID(t *testing.T) {
 	t.Parallel()
 
+	signin := newLogin(t)
+
 	client := newClient(t, GitHub())
 	jar := cookieJar{}
 
@@ -241,7 +253,7 @@ func TestGitHubCallbackRejectsMissingID(t *testing.T) {
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 	called := false
 
-	response := client.Callback(localIdentity, func(context.Context, Identity) (string, error) {
+	response := client.Callback(signin, func(context.Context, Identity) (string, error) {
 		called = true
 
 		return "mapped", nil

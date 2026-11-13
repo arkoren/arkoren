@@ -12,7 +12,7 @@ export function checkoutModules(): string[] {
   /** Resolve from this file so Playwright's fixture cwd cannot change the inventory. */
   const repository = new URL("../../", import.meta.url);
   /** Foundation and vendor areas can arrive independently, in any order. */
-  const areas = ["foundation", "driver"].filter((area) =>
+  const areas = ["foundation", "driver", "ark"].filter((area) =>
     existsSync(new URL(`${area}/`, repository)),
   );
   /** Core is one module; the other library areas contain direct module children. */

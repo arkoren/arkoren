@@ -3,7 +3,7 @@ package oauthauth
 import (
 	"net/url"
 
-	"arkoren.dev/driver/oauth/oauthauth/internal/provider"
+	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
 )
 
 // GoogleBuilderFunc edits one fresh provider draft synchronously, once in order.

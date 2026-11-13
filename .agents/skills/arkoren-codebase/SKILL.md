@@ -27,8 +27,8 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 | Tier | Path | Modules | Holds |
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
-| Drivers | `driver/<vendor>/` | one per vendor | Implement a `core/service/<x>` contract and run its `<x>test` conformance suite. Seams in `core/auth` (`UserDriver`, `authtest`) do not make a package a driver. A driver may own infrastructure tables (`postgressearch`). Webhook and CAPTCHA adapters are undecided: the contract test decides each one when it is built. `driver/oauth` predates this rule and is pending a move to `ark/`. |
-| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Every other opt-in module on core: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features with tables (two-factor, users, tokens, linked accounts). `ark/mcp` is the first. |
+| Drivers | `driver/<vendor>/` | one per vendor | Implement a `core/service/<x>` contract and run its `<x>test` conformance suite. Seams in `core/auth` (`UserDriver`, `authtest`) do not make a package a driver. A driver may own infrastructure tables (`postgressearch`). Webhook and CAPTCHA adapters are undecided: the contract test decides each one when it is built. `driver/mcp` and `driver/oauth` moved to `ark/mcp` and `ark/oauth`; the latter plugs into `core/auth`. |
+| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Every other opt-in module on core: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features with tables (two-factor, users, tokens, linked accounts). `ark/mcp` and `ark/oauth` are the first. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
 | Development | `cmd/arkoren-ci/` | `arkoren.dev/cmd/arkoren-ci` | Repository maintenance only; standard library only, with no dependency on toolkit or consumer CLI modules. Public source and vanity resolution do not imply a supported release/install namespace. Excluded from releases and the library API catalog. |
@@ -344,9 +344,10 @@ never replaying user policies. Session middleware owns cookie/persistence policy
 auth.NewLogin owns the session login state machine and LoginBuilder.Handle;
 request lookup owns per-call WithSessionHandle. Share one session.NewHandle()
 across those roles; zero selects the default context slot. Handles do not isolate
-cookies, cache records, or authorization. OAuth Callback(identity, mapper) and
-Logout(identity) in driver/oauth still target the former SessionIdentity until
-that module moves to Login.Begin. Session data uses
+cookies, cache records, or authorization. ark/oauth Callback(login, resolve)
+returns a subject string to Login.Begin (federated factor; ChallengeURL on a
+pending second factor) and Logout(login) calls Login.Logout; Verify returns the
+external Identity, which the application maps for auth.Bearer. Session data uses
 shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns
 renewal and absolute lifetime. Login keeps one session record (arkoren:auth:session) and a pending login

@@ -20,8 +20,11 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"arkoren.dev/core/http/auth"
+	"arkoren.dev/core/auth"
+	"arkoren.dev/core/auth/memoryauth"
 	"arkoren.dev/core/http/session"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
 	"arkoren.dev/core/service/crypto"
 )
 
@@ -301,24 +304,49 @@ func idLogin(_ context.Context, identity Identity) (string, error) {
 	return identity.Subject, nil
 }
 
-// localIdentity is the application identity shared by string-ID login handlers
-// and authenticators. Its loader has no I/O and preserves the subject exactly.
-var localIdentity = auth.NewSessionIdentity(func(_ context.Context, id string) (string, error) {
-	return id, nil
-})
+// testSubjects are the users newLogin seeds: the subjects the fixture
+// providers produce plus subjects tests map to explicitly.
+var testSubjects = []string{"user-1", "default", "selected", "object-1", "stub-1", "42", "7", "583231"}
 
-// externalIdentity keeps provider identities directly in the existing session
-// member for applications without a separate local user record.
-var externalIdentity = auth.NewSessionIdentity(func(_ context.Context, id Identity) (Identity, error) {
-	return id, nil
-})
+// newLogin returns a login over an in-memory user directory holding
+// testSubjects, with a fresh in-memory cache. Callers pass second-factor and
+// session-handle policies through configure.
+func newLogin(t *testing.T, configure ...auth.LoginBuilderFunc) *auth.Login {
+	t.Helper()
 
-// userOf returns the user id stored in the session of request.
-func userOf(request *http.Request) (string, error) {
-	return localIdentity.Authenticator()(request)
+	driver := memoryauth.New()
+
+	for _, subject := range testSubjects {
+		if err := driver.Put(auth.UserRecord{Subject: subject}); err != nil {
+			t.Fatalf("Put(%q): %v", subject, err)
+		}
+	}
+
+	users, err := auth.NewUserProvider(driver)
+
+	if err != nil {
+		t.Fatalf("NewUserProvider: %v", err)
+	}
+
+	login, err := auth.NewLogin(users, cache.New(memorycache.New()), configure...)
+
+	if err != nil {
+		t.Fatalf("NewLogin: %v", err)
+	}
+
+	return login
 }
 
-// userOfIdentity returns the identity stored in the session of request.
-func userOfIdentity(request *http.Request) (Identity, error) {
-	return externalIdentity.Authenticator()(request)
+// withSecondFactor requires a second factor for every login.
+func withSecondFactor(policy *auth.LoginBuilder) {
+	policy.SecondFactor(func(context.Context, string) (bool, error) {
+		return true, nil
+	})
+}
+
+// userOf returns the subject logged in on the session of request.
+func userOf(login *auth.Login, request *http.Request) (string, error) {
+	identity, err := login.Authenticator()(request)
+
+	return identity.Subject(), err
 }

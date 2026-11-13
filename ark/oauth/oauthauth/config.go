@@ -70,6 +70,17 @@ type Config struct {
 	//	_ = config.String()
 	Audiences []string
 
+	// ChallengeURL is the local path Callback redirects to when the login
+	// needs a second factor. It must pass [response.ValidateRedirectTarget].
+	// Empty makes such a callback fail with [ErrNoChallengeURL]. It is not a
+	// secret and appears in formatted output.
+	//
+	// Example:
+	//
+	//	config := oauth.Config{ChallengeURL: "/login/challenge"}
+	//	_ = config.String()
+	ChallengeURL string
+
 	// Name prefixes the login cookie names. Empty uses "arkoren.oauth".
 	// New rejects names that produce an invalid HTTP cookie name.
 	//
@@ -209,6 +220,24 @@ func (client *ClientBuilder) Scopes(scopes ...string) *ClientBuilder {
 //	_ = configure
 func (client *ClientBuilder) Audiences(audiences ...string) *ClientBuilder {
 	client.config.Audiences = slices.Clone(audiences)
+
+	return client
+}
+
+// ChallengeURL sets the local path Callback redirects to when the login needs
+// a second factor, and returns the same draft. The path serves the second-factor
+// form and finishes the login with auth.Login.Complete. Empty, the default,
+// makes a callback that needs a second factor fail with [ErrNoChallengeURL].
+// New rejects a target that response.ValidateRedirectTarget refuses.
+//
+// Example:
+//
+//	configure := func(client *oauth.ClientBuilder) {
+//		client.ChallengeURL("/login/challenge")
+//	}
+//	_ = configure
+func (client *ClientBuilder) ChallengeURL(path string) *ClientBuilder {
+	client.config.ChallengeURL = path
 
 	return client
 }

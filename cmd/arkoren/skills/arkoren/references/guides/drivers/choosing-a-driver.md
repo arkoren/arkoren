@@ -125,11 +125,6 @@ and authorization boundaries.
 The [`mcpserver` API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver)
 provides the adapter's constructor and transport settings.
 
-For browser login or OIDC bearer verification, use the
-[OAuth adapter](../authentication/oauth.md). It integrates with HTTP
-authentication rather than implementing a service `Driver` interface. Provider
-registration, callback URLs, and accepted token audiences remain explicit setup.
-
 Webhook adapters authenticate provider requests and expose typed event definitions.
 They do not start receivers when you construct an outbound mail, payment, or LLM
 driver. Bind the events you accept and mount the endpoint yourself:

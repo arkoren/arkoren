@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"arkoren.dev/driver/oauth/oauthauth/internal/provider"
+	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
 )
 
 // Verify checks a JWT's issuer, audience, signature, expiry and nonempty final
@@ -20,7 +20,9 @@ import (
 // [ClientBuilder.Audiences]; without them Verify returns [ErrNoAudiences], because the
 // default audience of an ID token is the client ID and would make ID tokens
 // pass as bearer tokens. Errors are plain; [auth.Bearer] turns them into a
-// 401 challenge.
+// 401 challenge. Verify returns the external [Identity], not an [auth.Identity]:
+// the application maps issuer and subject to its own subject and wraps Verify
+// for [auth.Bearer].
 // After provider and audience checks, an ended context rejects verification,
 // including cached-key success and cancellation before identity publication.
 // Cancellation/deadline errors retain their identity for errors.Is. The error
@@ -32,7 +34,21 @@ import (
 // Example:
 //
 //	// client was built with ClientBuilder.Audiences("https://api.example.com").
-//	r.Use(auth.Middleware(auth.Bearer(client.Verify)))
+//	r.Use(auth.Middleware(auth.Bearer(func(ctx context.Context, token string) (auth.Identity, error) {
+//		external, err := client.Verify(ctx, token)
+//		if err != nil {
+//			return auth.Identity{}, err
+//		}
+//
+//		subject, err := users.SubjectFor(ctx, external.Issuer, external.Subject)
+//		if err != nil {
+//			return auth.Identity{}, err
+//		}
+//
+//		return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
+//			principal.Scopes(external.Scopes...)
+//		}), nil
+//	})))
 func (client *Client) Verify(ctx context.Context, token string) (Identity, error) {
 	if !client.provider.isOIDC() {
 		return Identity{}, ErrUnsupported
