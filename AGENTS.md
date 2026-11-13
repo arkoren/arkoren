@@ -90,9 +90,9 @@ GOWORK=off go -C cmd/arkoren-ci run . inventory
 
 `.github/release-modules.json` is the versioned classification authority: public
 release namespaces and explicit development-only roots. CI discovers all canonical
-filesystem modules, including ignored local ones (currently 45 modules and 15
+filesystem modules, including ignored local ones (currently 46 modules and 15
 integrations); release preparation validates only the exact committed public set
-(44). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
+(45). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
 The Go command owns inventory, release plans, exact-SHA evidence, publication,
 notes-PR ownership and administrative policy checks. Native gh owns auto-merge
 and prerelease creation; website TypeScript owns Markdown import/validation.

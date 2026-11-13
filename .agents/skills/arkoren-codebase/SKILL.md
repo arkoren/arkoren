@@ -67,8 +67,8 @@ after inventory or workflow changes.
 
 Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
 working-tree inspection, or append `--commit FULL_SHA` to validate a committed
-inventory and its same-commit policy. CI/audits currently include 45 modules and
-15 integration suites; releases include only the 44 approved public modules.
+inventory and its same-commit policy. CI/audits currently include 46 modules and
+15 integration suites; releases include only the 45 approved public modules.
 The development command uses standard flags, JSON stdout and JSON diagnostics on
 stderr. Its focused internal packages own inventory, release planning, exact-SHA
 evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
@@ -432,7 +432,7 @@ store. Before changing these paths, read the consumer TLS Certificates and
 Certificate Commands guides for supported formats, platforms, and recovery.
 
 **Foundation modules** (`foundation/certificate`, `collection`, `key`, `problem`, `query`,
-`validate`) use the standard library only and know nothing of `arkoren.dev`.
+`validate`, `totp`) use the standard library only and know nothing of `arkoren.dev`.
 Query publishes immutable `Query` values from mutable root and restricted
 predicate callbacks; only published statements compile or execute. Keep concrete
 Query checks in database row-return guards, telemetry, and pagination in sync.
