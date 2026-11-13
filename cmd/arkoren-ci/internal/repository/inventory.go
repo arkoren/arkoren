@@ -222,6 +222,9 @@ func (source view) inventory(ctx context.Context, policy Policy, exact bool) (In
 			return Inventory{}, err
 		}
 		classification := "public"
+		if slices.Contains(policy.Retired, directory) {
+			return Inventory{}, fmt.Errorf("retired module root still exists: %s", directory)
+		}
 		if slices.Contains(policy.Development, directory) {
 			classification = "development"
 			development = append(development, directory)

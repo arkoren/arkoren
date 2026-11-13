@@ -89,7 +89,9 @@ GOWORK=off go -C cmd/arkoren-ci run . inventory
 ```
 
 `.github/release-modules.json` is the versioned classification authority: public
-release namespaces and explicit development-only roots. CI discovers all canonical
+release namespaces, explicit development-only roots and optional `retired`
+directories (once published, never again: they must be absent from disk and from
+both creation rulesets, and keep only their bootstrap `v0.1.0` tag). CI discovers all canonical
 filesystem modules, including ignored local ones (currently 46 modules and 15
 integrations); release preparation validates only the exact committed public set
 (45). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
