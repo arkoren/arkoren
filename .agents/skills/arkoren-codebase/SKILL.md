@@ -902,7 +902,11 @@ Conflicts stop; existing tags are never moved or deleted. After refs exist,
 bounded retries check the normal public Go proxy and checksum database, build
 each exact downloaded module with `GOWORK=off` and install the exact CLI version
 when released. Only then are GitHub releases created idempotently with the
-planner's exact notes, `prerelease=true` and `make_latest=false`. A complete release
+planner's exact notes, `prerelease=true` and `make_latest=false`. Creation is
+confirmed by re-reading the full release listing with bounded backoff (about
+3m43s) because GitHub can briefly omit or show stale just-created releases;
+pre-existing conflicts stop immediately, and exhaustion fails without
+recreating, so a same-SHA rerun resumes. A complete release
 set is the durable completion checkpoint: every public build passed before any
 release in that batch was created. Missing releases resume from signed annotations
 even when the current planner sees nothing unreleased. Existing differing

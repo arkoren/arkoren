@@ -2,6 +2,7 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -44,7 +45,17 @@ func (item Release) Check(entry release.Entry, schema int) error {
 	return nil
 }
 
-// releases reads all release pages before mutations and rejects duplicate tags.
+// errDuplicateRelease reports a listing that contains one tag twice, which
+// GitHub can briefly produce while pagination shifts under a concurrent create.
+var errDuplicateRelease = errors.New("duplicate GitHub release tag")
+
+// confirmation spaces post-create listings; GitHub's release list can briefly
+// omit or show stale just-created releases. Total wait 3m43s, far below the
+// one-hour App token and the 120-minute job timeout.
+var confirmation = []time.Duration{0, 3 * time.Second, 10 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute}
+
+// releases reads all release pages before mutations and rejects duplicate tags
+// with [errDuplicateRelease].
 func releases(ctx context.Context, client github.Client) (map[string]Release, error) {
 	items, err := github.Pages[Release](ctx, client, github.API+"/releases")
 	if err != nil {
@@ -53,7 +64,7 @@ func releases(ctx context.Context, client github.Client) (map[string]Release, er
 	result := map[string]Release{}
 	for _, item := range items {
 		if _, ok := result[item.Tag]; ok {
-			return nil, fmt.Errorf("duplicate GitHub release tag")
+			return nil, errDuplicateRelease
 		}
 		result[item.Tag] = item
 	}
@@ -285,16 +296,27 @@ func ValidateManifest(ctx context.Context, client github.Client, trust string, m
 
 // PublishReleases creates exact prereleases through native gh with a fresh App token.
 // The caller must first finish all public builds in this batch in the same job.
+//
+// The pre-mutation listing is fail-fast: a listing error, or an existing release
+// that conflicts with the approved plan, returns at once with no wait and no
+// write. Missing releases are created with `gh release create`; a create error
+// returns immediately. Because GitHub's release list can briefly omit or show
+// stale just-created releases, only the releases created by this call are then
+// re-read with bounded backoff (see [confirmation], about 3m43s) until each
+// matches the plan. Confirmation is read-only: exhaustion fails without
+// recreating, editing or deleting anything, and a rerun of the same SHA finds
+// the releases and resumes idempotently.
 func PublishReleases(ctx context.Context, client github.Client, batch Batch) error {
 	existing, err := releases(ctx, client)
 	if err != nil {
 		return err
 	}
+	var created []release.Entry
 	for _, entry := range batch.Proposals() {
 		name := TagName(entry)
 		if item, ok := existing[name]; ok {
 			if err := item.Check(entry, batch.Plan.SchemaVersion); err != nil {
-				return err
+				return fmt.Errorf("%s: %w", name, err)
 			}
 			continue
 		}
@@ -302,16 +324,54 @@ func PublishReleases(ctx context.Context, client github.Client, batch Batch) err
 			"--verify-tag", "--prerelease", "--latest=false", "--title", ReleaseName(entry, batch.Plan.SchemaVersion), "--notes-file", "-"); err != nil {
 			return err
 		}
-	}
-	confirmed, err := releases(ctx, client)
-	if err != nil {
-		return err
-	}
-	for _, entry := range batch.Proposals() {
-		if err := confirmed[TagName(entry)].Check(entry, batch.Plan.SchemaVersion); err != nil {
-			return err
-		}
+		created = append(created, entry)
 	}
 
-	return nil
+	return confirm(ctx, client, batch.Plan.SchemaVersion, created)
+}
+
+// confirm re-reads the full release listing on the [confirmation] schedule until
+// every created entry is present and passes [Release.Check]. A release that is
+// absent, stale, or listed in a duplicated page stays pending and is retried; a
+// persistent mismatch therefore fails at the bound with its conflict reason.
+// Other listing errors and context cancellation return immediately. It only
+// reads; it never writes, edits or deletes a release. With nothing created it
+// performs no listing.
+func confirm(ctx context.Context, client github.Client, schema int, created []release.Entry) error {
+	pending := created
+	var last error
+	for _, delay := range confirmation {
+		if len(pending) == 0 {
+			return nil
+		}
+		if err := evidence.Delay(ctx, delay); err != nil {
+			return err
+		}
+		listed, err := releases(ctx, client)
+		if errors.Is(err, errDuplicateRelease) {
+			last = err
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var next []release.Entry
+		for _, entry := range pending {
+			name := TagName(entry)
+			item, ok := listed[name]
+			if !ok {
+				last = fmt.Errorf("created release %s not yet visible", name)
+				next = append(next, entry)
+			} else if err := item.Check(entry, schema); err != nil {
+				last = fmt.Errorf("created release %s: %w", name, err)
+				next = append(next, entry)
+			}
+		}
+		pending = next
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("created releases unconfirmed after bounded listing; rerun the same SHA, never recreate: %w", last)
 }

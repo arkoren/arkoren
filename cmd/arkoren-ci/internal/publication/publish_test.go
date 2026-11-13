@@ -3,6 +3,7 @@ package publication
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"arkoren.dev/cmd/arkoren-ci/internal/github"
@@ -101,19 +103,167 @@ func TestPartialPrereleaseFailureResumesOriginalVersionsIdempotently(t *testing.
 	}
 }
 
+// TestExistingReleaseConflictNeverOverwrites ensures a pre-existing conflicting
+// release fails at once: one listing, no wait and no write.
 func TestExistingReleaseConflictNeverOverwrites(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		batch, entry := newReleaseBatch()
+		fake := &releaseFake{t: t, entry: entry, body: "foreign", visible: true}
+		start := time.Now()
+		if err := PublishReleases(context.Background(), fake.client(), batch); err == nil {
+			t.Fatal("conflicting release accepted")
+		}
+		if elapsed := time.Since(start); elapsed != 0 || fake.listings != 1 || fake.creates != 0 {
+			t.Fatalf("elapsed %v, listings %d, creates %d", elapsed, fake.listings, fake.creates)
+		}
+	})
+}
+
+// releaseFake answers release listings and records `gh release create` calls
+// for one entry. Before creation the listing is empty; after creation the
+// release is listed with body, except as hide, duplicate or visible say.
+type releaseFake struct {
+	t     *testing.T
+	entry release.Entry
+	body  string
+	// visible lists the release from the start, as if it pre-existed.
+	visible bool
+	// hide is the number of post-create listings that omit the release.
+	hide int
+	// duplicate makes the first post-create listing contain the tag twice.
+	duplicate bool
+	// onList runs inside every post-create listing.
+	onList   func()
+	creates  int
+	listings int
+	postList int
+}
+
+// client returns a gh client backed by the fake; any other command fails the test.
+func (f *releaseFake) client() github.Client {
+	return github.Client{Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) >= 4 && args[0] == "api" && strings.Contains(args[3], "/releases?") {
+			f.listings++
+			item := Release{Tag: TagName(f.entry), Name: ReleaseName(f.entry, 0), Body: f.body, Prerelease: true, Assets: []any{}}
+			items := []Release{}
+			if f.visible {
+				items = append(items, item)
+			} else if f.creates > 0 {
+				f.postList++
+				if f.onList != nil {
+					f.onList()
+				}
+				switch {
+				case f.postList <= f.hide:
+				case f.duplicate && f.postList == 1:
+					items = append(items, item, item)
+				default:
+					items = append(items, item)
+				}
+			}
+			return json.Marshal(items)
+		}
+		if len(args) < 3 || args[0] != "release" || args[1] != "create" {
+			f.t.Fatalf("unexpected command %v", args)
+		}
+		f.creates++
+		return nil, nil
+	}}
+}
+
+// newReleaseBatch returns a one-module batch and its entry.
+func newReleaseBatch() (Batch, release.Entry) {
 	version := "v0.1.1"
 	entry := release.Entry{Directory: "core", NextVersion: &version, Notes: "approved"}
-	batch := Batch{Plan: release.Plan{Modules: []release.Entry{entry}}}
-	client := github.Client{Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
-		if len(args) < 4 || args[0] != "api" {
-			t.Fatalf("conflicting release was mutated: %v", args)
+	return Batch{Plan: release.Plan{Modules: []release.Entry{entry}}}, entry
+}
+
+// TestCreatedReleaseConfirmationWaitsForListing covers a lagging listing that
+// shows the new release only on the third post-create read.
+func TestCreatedReleaseConfirmationWaitsForListing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		batch, entry := newReleaseBatch()
+		fake := &releaseFake{t: t, entry: entry, body: entry.Notes, hide: 2}
+		start := time.Now()
+		if err := PublishReleases(context.Background(), fake.client(), batch); err != nil {
+			t.Fatal(err)
 		}
-		return []byte(`[{"tag_name":"core/v0.1.1","name":"core/v0.1.1","body":"foreign","prerelease":true,"draft":false,"assets":[]}]`), nil
-	}}
-	if err := PublishReleases(context.Background(), client, batch); err == nil {
-		t.Fatal("conflicting release accepted")
-	}
+		if elapsed := time.Since(start); elapsed != 13*time.Second || fake.creates != 1 || fake.listings != 4 {
+			t.Fatalf("elapsed %v, creates %d, listings %d", elapsed, fake.creates, fake.listings)
+		}
+		if err := PublishReleases(context.Background(), fake.client(), batch); err != nil {
+			t.Fatal(err)
+		}
+		if fake.creates != 1 || fake.listings != 5 {
+			t.Fatalf("rerun recreated or re-listed: creates %d, listings %d", fake.creates, fake.listings)
+		}
+	})
+}
+
+// TestCreatedReleaseNeverVisibleFailsWithoutRecreating exhausts the schedule.
+func TestCreatedReleaseNeverVisibleFailsWithoutRecreating(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		batch, entry := newReleaseBatch()
+		fake := &releaseFake{t: t, entry: entry, body: entry.Notes, hide: 1 << 30}
+		start := time.Now()
+		err := PublishReleases(context.Background(), fake.client(), batch)
+		if err == nil || !strings.Contains(err.Error(), "not yet visible") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != 223*time.Second || fake.creates != 1 || fake.listings != 7 {
+			t.Fatalf("elapsed %v, creates %d, listings %d", elapsed, fake.creates, fake.listings)
+		}
+	})
+}
+
+// TestCreatedReleaseConflictFailsAtBound ensures a persistently conflicting
+// created release is never overwritten and fails when the schedule ends.
+func TestCreatedReleaseConflictFailsAtBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		batch, entry := newReleaseBatch()
+		fake := &releaseFake{t: t, entry: entry, body: "foreign"}
+		start := time.Now()
+		err := PublishReleases(context.Background(), fake.client(), batch)
+		if err == nil || !strings.Contains(err.Error(), "conflicts") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != 223*time.Second || fake.creates != 1 {
+			t.Fatalf("elapsed %v, creates %d", elapsed, fake.creates)
+		}
+	})
+}
+
+// TestConfirmationRetriesDuplicatePage treats a duplicated tag in one listing as
+// transient.
+func TestConfirmationRetriesDuplicatePage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		batch, entry := newReleaseBatch()
+		fake := &releaseFake{t: t, entry: entry, body: entry.Notes, duplicate: true}
+		start := time.Now()
+		if err := PublishReleases(context.Background(), fake.client(), batch); err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(start); elapsed != 3*time.Second {
+			t.Fatalf("elapsed %v", elapsed)
+		}
+	})
+}
+
+// TestReleaseConfirmationHonorsCancellation stops waiting once the context ends.
+func TestReleaseConfirmationHonorsCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		batch, entry := newReleaseBatch()
+		ctx, cancel := context.WithCancel(context.Background())
+		fake := &releaseFake{t: t, entry: entry, body: entry.Notes, hide: 1 << 30, onList: cancel}
+		start := time.Now()
+		err := PublishReleases(ctx, fake.client(), batch)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != 0 || fake.creates != 1 {
+			t.Fatalf("elapsed %v, creates %d", elapsed, fake.creates)
+		}
+	})
 }
 
 // TestExistingNeutralReleaseRetainsOriginalTitle ensures recovery does not
