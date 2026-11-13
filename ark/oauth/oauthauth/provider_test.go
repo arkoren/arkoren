@@ -304,14 +304,14 @@ func idLogin(_ context.Context, identity Identity) (string, error) {
 	return identity.Subject, nil
 }
 
-// testSubjects are the users newLogin seeds: the subjects the fixture
+// testSubjects are the users newGuard seeds: the subjects the fixture
 // providers produce plus subjects tests map to explicitly.
 var testSubjects = []string{"user-1", "default", "selected", "object-1", "stub-1", "42", "7", "583231"}
 
-// newLogin returns a login over an in-memory user directory holding
+// newGuard returns a guard over an in-memory user directory holding
 // testSubjects, with a fresh in-memory cache. Callers pass second-factor and
 // session-handle policies through configure.
-func newLogin(t *testing.T, configure ...auth.LoginBuilderFunc) *auth.Login {
+func newGuard(t *testing.T, configure ...auth.GuardBuilderFunc) *auth.Guard {
 	t.Helper()
 
 	driver := memoryauth.New()
@@ -328,25 +328,25 @@ func newLogin(t *testing.T, configure ...auth.LoginBuilderFunc) *auth.Login {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
 
-	login, err := auth.NewLogin(users, cache.New(memorycache.New()), configure...)
+	guard, err := auth.NewGuard(users, cache.New(memorycache.New()), configure...)
 
 	if err != nil {
-		t.Fatalf("NewLogin: %v", err)
+		t.Fatalf("NewGuard: %v", err)
 	}
 
-	return login
+	return guard
 }
 
 // withSecondFactor requires a second factor for every login.
-func withSecondFactor(policy *auth.LoginBuilder) {
+func withSecondFactor(policy *auth.GuardBuilder) {
 	policy.SecondFactor(func(context.Context, string) (bool, error) {
 		return true, nil
 	})
 }
 
 // userOf returns the subject logged in on the session of request.
-func userOf(login *auth.Login, request *http.Request) (string, error) {
-	identity, err := login.Authenticator()(request)
+func userOf(guard *auth.Guard, request *http.Request) (string, error) {
+	identity, err := guard.Authenticator()(request)
 
 	return identity.Subject(), err
 }

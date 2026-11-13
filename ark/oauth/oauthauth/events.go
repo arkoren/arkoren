@@ -149,6 +149,9 @@ var (
 	// the local session. It carries no identity and does not assert provider logout
 	// or response-time session persistence.
 	//
+	// Deprecated: it goes away with [Client.Logout]. Subscribe to [auth.LoggedOut],
+	// which guard.LogoutHandler publishes with the subject.
+	//
 	// Example:
 	//
 	//	_, err := bus.Listen(oauth.LoggedOut, func(context.Context, event.Void) error {

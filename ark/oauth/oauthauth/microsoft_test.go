@@ -433,7 +433,7 @@ func TestMicrosoftPolicyCommonRejectsUntrustedSignature(t *testing.T) {
 func TestMicrosoftPolicyOrganizationsRejectsPersonalCallback(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	claims := microsoftPolicyClaims(microsoftPolicyPersonalTenant)
 	client, _ := newMicrosoftPolicyClient(t, "organizations", claims)
@@ -446,7 +446,7 @@ func TestMicrosoftPolicyOrganizationsRejectsPersonalCallback(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	response := httptest.NewRecorder()
 
-	err := client.Callback(signin, func(_ context.Context, _ Identity) (string, error) {
+	err := client.Callback(guard, func(_ context.Context, _ Identity) (string, error) {
 		t.Fatal("Callback invoked the mapper for a rejected personal account")
 
 		return "", nil
@@ -460,7 +460,7 @@ func TestMicrosoftPolicyOrganizationsRejectsPersonalCallback(t *testing.T) {
 		t.Fatal("Callback rotated the session for a rejected account")
 	}
 
-	if id, err := userOf(signin, request); err == nil {
+	if id, err := userOf(guard, request); err == nil {
 		t.Fatalf("Callback authenticated rejected account %q", id)
 	}
 }
@@ -470,7 +470,7 @@ func TestMicrosoftPolicyOrganizationsRejectsPersonalCallback(t *testing.T) {
 func TestMicrosoftPolicyConsumersRejectsOrganizationCallback(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	claims := microsoftPolicyClaims(microsoftPolicyOrganizationTenant)
 	client, _ := newMicrosoftPolicyClient(t, "consumers", claims)
@@ -483,7 +483,7 @@ func TestMicrosoftPolicyConsumersRejectsOrganizationCallback(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	response := httptest.NewRecorder()
 
-	err := client.Callback(signin, func(_ context.Context, _ Identity) (string, error) {
+	err := client.Callback(guard, func(_ context.Context, _ Identity) (string, error) {
 		t.Fatal("Callback invoked the mapper for a rejected organizational account")
 
 		return "", nil
@@ -497,7 +497,7 @@ func TestMicrosoftPolicyConsumersRejectsOrganizationCallback(t *testing.T) {
 		t.Fatal("Callback rotated the session for a rejected account")
 	}
 
-	if id, err := userOf(signin, request); err == nil {
+	if id, err := userOf(guard, request); err == nil {
 		t.Fatalf("Callback authenticated rejected account %q", id)
 	}
 }
@@ -508,7 +508,7 @@ func TestMicrosoftPolicyConsumersRejectsOrganizationCallback(t *testing.T) {
 func TestMicrosoftPolicyConsumersAcceptsPersonalCallback(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	claims := microsoftPolicyClaims(microsoftPolicyPersonalTenant)
 	client, _ := newMicrosoftPolicyClient(t, "consumers", claims)
@@ -521,7 +521,7 @@ func TestMicrosoftPolicyConsumersAcceptsPersonalCallback(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	response := httptest.NewRecorder()
 
-	if err := client.Callback(signin, idLogin)(response, request); err != nil {
+	if err := client.Callback(guard, idLogin)(response, request); err != nil {
 		t.Fatalf("Callback rejected personal account: %v", err)
 	}
 
@@ -533,7 +533,7 @@ func TestMicrosoftPolicyConsumersAcceptsPersonalCallback(t *testing.T) {
 		t.Fatal("Callback did not rotate the authenticated session")
 	}
 
-	if id, err := userOf(signin, request); err != nil || id != "object-1" {
+	if id, err := userOf(guard, request); err != nil || id != "object-1" {
 		t.Fatalf("Callback user = %q, error = %v", id, err)
 	}
 }

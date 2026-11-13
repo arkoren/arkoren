@@ -57,7 +57,7 @@ func TestNewRejectsProviderWithoutUserInfo(t *testing.T) {
 func TestClientRejectsUseBeforeStart(t *testing.T) {
 	t.Parallel()
 
-	signin := newLogin(t)
+	guard := newGuard(t)
 
 	client, err := New(OIDC("https://issuer.example"), testCipher(t), "id", func(client *ClientBuilder) {
 		client.RedirectURL("https://app/cb")
@@ -76,7 +76,7 @@ func TestClientRejectsUseBeforeStart(t *testing.T) {
 		t.Errorf("Login error = %v, want ErrNotStarted", err)
 	}
 
-	response := client.Callback(signin, idLogin).
+	response := client.Callback(guard, idLogin).
 		Record(httptest.NewRequest(http.MethodGet, "/callback", nil))
 
 	if response.StatusCode != http.StatusServiceUnavailable {

@@ -28,7 +28,7 @@ import (
 // as pending and the request stays anonymous: Callback then redirects to the
 // path set with [ClientBuilder.ChallengeURL], publishes no [LoginSucceeded] and
 // does not carry return_to along; the challenge page finishes the login with
-// [auth.Login.Complete]. Without a challenge URL it ends the pending login with
+// [auth.Guard.Complete]. Without a challenge URL it ends the pending login with
 // login.Logout and fails with [ErrNoChallengeURL]. It never falls back to a
 // login without the second factor.
 //
@@ -45,7 +45,7 @@ import (
 // the user provider does not know, or that is disabled, returns
 // auth.ErrUnauthenticated from Begin; an invalid subject returns
 // auth.ErrInvalidSubject. A request without a session returns
-// auth.ErrUnauthenticated before consuming state. A nil login or resolve is a
+// auth.ErrUnauthenticated before consuming state. A nil guard or resolve is a
 // configuration error returned per request before any side effects. A valid
 // handler still requires Start.
 //
@@ -56,7 +56,7 @@ import (
 //
 // Example:
 //
-//	r.Get("/oauth/callback", client.Callback(login, func(ctx context.Context, external oauthauth.Identity) (string, error) {
+//	r.Get("/oauth/callback", client.Callback(guard, func(ctx context.Context, external oauthauth.Identity) (string, error) {
 //		user, err := users.UpsertBySubject(ctx, external.Issuer, external.Subject, external.Email)
 //		if err != nil {
 //			return "", err
@@ -64,12 +64,12 @@ import (
 //
 //		return driver.Subject(user) // the application's typed user driver
 //	}))
-func (client *Client) Callback(login *auth.Login, resolve func(ctx context.Context, external Identity) (subject string, err error)) router.Handler {
+func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Context, external Identity) (subject string, err error)) router.Handler {
 	var configurationErr error
 
 	switch {
-	case login == nil:
-		configurationErr = errors.New("oauth: nil login")
+	case guard == nil:
+		configurationErr = errors.New("oauth: nil guard")
 	case resolve == nil:
 		configurationErr = errors.New("oauth: nil login mapper")
 	}
@@ -88,7 +88,7 @@ func (client *Client) Callback(login *auth.Login, resolve func(ctx context.Conte
 		// Logins reads only the session: without one there is nothing to log in
 		// to, and the state cookie must stay unconsumed. A request with no
 		// logged-in user returns ErrUnauthenticated, which is not a failure here.
-		if _, err := login.Logins(httpRequest); errors.Is(err, session.ErrNoSession) {
+		if _, err := guard.Logins(httpRequest); errors.Is(err, session.ErrNoSession) {
 			return auth.ErrUnauthenticated
 		}
 
@@ -116,7 +116,7 @@ func (client *Client) Callback(login *auth.Login, resolve func(ctx context.Conte
 			return client.loginFailed(httpRequest, callbackMapperError(err))
 		}
 
-		complete, err := login.Begin(httpRequest, subject, auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated})
+		complete, err := guard.Begin(httpRequest, subject, auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated})
 
 		if errors.Is(err, session.ErrNoSession) {
 			return auth.ErrUnauthenticated
@@ -137,7 +137,7 @@ func (client *Client) Callback(login *auth.Login, resolve func(ctx context.Conte
 
 		if client.config.ChallengeURL == "" {
 			// Begin parked the login as pending; end it so no half login lingers.
-			return client.loginFailed(httpRequest, errors.Join(ErrNoChallengeURL, login.Logout(httpRequest)))
+			return client.loginFailed(httpRequest, errors.Join(ErrNoChallengeURL, guard.Logout(httpRequest)))
 		}
 
 		return response.SafeRedirect(writer, http.StatusFound, client.config.ChallengeURL)
