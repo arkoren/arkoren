@@ -110,22 +110,43 @@ disabled-account policy, but cannot substitute for provider introspection.
 
 ## Require Identity
 
-When handlers work directly with the provider identity, use its exact type
-throughout middleware and lookup. Import `auth` and `request` from their
-`arkoren.dev/core/http/` packages. With your existing API router group `api`:
+> **Note:** The OAuth driver still targets the previous generic `auth` API and
+> is updated to the `auth.Identity` model in a later release. Until then, the
+> `client.Verify` and `client.Callback` calls below apply to the driver version
+> that matches your `arkoren.dev/core` version; the `arkoren.dev/core/auth`
+> import path and the non-generic `auth.Require()` are the current core API.
+
+When handlers work directly with the provider identity, wrap `client.Verify` so
+the verified `oauth.Identity` rides in the `auth.Identity` record. Import `auth`
+from `arkoren.dev/core/auth` and `request` from `arkoren.dev/core/http/request`.
+With your existing API router group `api`:
 
 ```go
-api.Use(auth.Middleware(auth.Bearer(client.Verify)))
-api.Use(auth.Require[oauth.Identity]())
+verifyExternal := func(ctx context.Context, token string) (auth.Identity, error) {
+	external, err := client.Verify(ctx, token)
+	if err != nil {
+		return auth.Identity{}, err
+	}
+
+	return auth.NewIdentity(external.Subject, func(principal *auth.IdentityBuilder) {
+		principal.Scopes(external.Scopes...)
+		principal.Record(auth.UserRecord{Subject: external.Subject, Value: external})
+	}), nil
+}
+
+api.Use(auth.Middleware(auth.Bearer(verifyExternal)))
+api.Use(auth.Require())
 ```
 
 This assumes the audience and purpose policy above is sufficient for your
-provider. Otherwise pass your stricter application verifier instead of
-`client.Verify`. Authentication middleware alone permits missing credentials;
+provider. Otherwise call your stricter application verifier inside the wrapper.
+A provider subject is unique only within its issuer and may not satisfy
+`auth.ValidateSubject`; map it to a local account, as below, before other
+packages key on the identity's subject. Authentication middleware alone permits missing credentials;
 `Require` rejects that anonymous path. Invalid bearer credentials produce `401`
 with `WWW-Authenticate: Bearer error="invalid_token"`.
 
-In a handler, read the same identity type:
+In a handler, read the external identity from the record:
 
 ```go
 external, err := request.User[oauth.Identity](r)
@@ -135,8 +156,8 @@ if err != nil {
 ```
 
 `external.Issuer` and `external.Subject` identify the external account.
-`*oauth.Identity` and your local `User` are different context keys, not alternate
-views of this value. `Claims`, `Email`, and `Name` remain provider-controlled
+`*oauth.Identity` and your local `User` are different record value types, not
+alternate views of this value. `Claims`, `Email`, and `Name` remain provider-controlled
 data; do not log arbitrary claims or use email to link local accounts.
 
 ## Load Local Accounts
@@ -147,50 +168,54 @@ a shared cached account. For example:
 
 ```go
 type User struct {
-	ID     int
-	Scopes []string
+	ID int
 }
 ```
 
-With standard-library `context` and `slices`, `accounts.ByIdentity` returning
+With standard-library `context` and `strconv`, `accounts.ByIdentity` returning
 your application's `Account`, and a `client` satisfying your provider's purpose
 policy, use:
 
 ```go
-verifyUser := func(ctx context.Context, token string) (User, error) {
+verifyUser := func(ctx context.Context, token string) (auth.Identity, error) {
 	external, err := client.Verify(ctx, token)
 	if err != nil {
-		return User{}, err
+		return auth.Identity{}, err
 	}
 	account, err := accounts.ByIdentity(ctx, external.Issuer, external.Subject)
 	if err != nil {
-		return User{}, err
+		return auth.Identity{}, err
 	}
 	if account.Disabled {
-		return User{}, auth.ErrUnauthenticated
+		return auth.Identity{}, auth.ErrUnauthenticated
 	}
 
-	return User{ID: account.ID, Scopes: slices.Clone(external.Scopes)}, nil
+	subject := strconv.Itoa(account.ID)
+
+	return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
+		principal.Scopes(external.Scopes...)
+		principal.Record(auth.UserRecord{Subject: subject, Value: User{ID: account.ID}})
+	}), nil
 }
 ```
 
 The repository must reject unknown links with an error other than
 `auth.ErrNoCredentials`. That sentinel would permit credential fallback, not
-reject the presented token. A zero user with nil error would count as a success.
+reject the presented token. An identity returned with nil error counts as a success.
 Do not create or merge accounts automatically from the email claim; see
 [local-account linkage](oauth.md#link-local-accounts).
 
-Wire the mapped type, not the external type:
+Wire the mapped verifier, not the external one:
 
 ```go
 api.Use(auth.Middleware(auth.Bearer(verifyUser)))
-api.Use(auth.Require[User]())
+api.Use(auth.Require())
 ```
 
 Scope checks and resource permissions belong in
-[Authorization Policies](../authorization/policies.md). `oauth.HasScopes` works
-with `oauth.Identity`, not this local `User`; use a User-typed rule for the mapped
-identity. Token scopes limit the presented credential's authority rather than
+[Authorization Policies](../authorization/policies.md). The token's scopes travel
+on the `auth.Identity`, so `gate.HasScopes` checks them for the mapped identity;
+`oauth.HasScopes` works with `oauth.Identity` only. Token scopes limit the presented credential's authority rather than
 replacing the account's resource permissions.
 
 ## Handle Verification

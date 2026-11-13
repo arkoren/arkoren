@@ -81,7 +81,7 @@ These notifications observe refusal, not successful identity establishment:
 
 | Topic | Name | Enabling Policy | Observation |
 | --- | --- | --- | --- |
-| `auth.Rejected` | `http.auth.rejected` | `auth.Builder.Events` on `Require` | `RejectedEvent{Method}` when an anonymous request is rejected. |
+| `auth.Rejected` | `http.auth.rejected` | `auth.MiddlewareBuilder.Events` on `Require` | `RejectedEvent{Method}` when an anonymous request is rejected. |
 | `gate.Denied` | `http.gate.denied` | `gate.Builder.Events` on `gate.New` | `DeniedEvent{Method, Rule}` when a rule returns false. |
 
 `Rule` is the zero-based rule index in registration order. `Method` is empty

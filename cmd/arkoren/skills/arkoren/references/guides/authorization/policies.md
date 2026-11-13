@@ -27,7 +27,6 @@ role held in one team:
 type User struct {
 	ID          int
 	Permissions map[string]bool
-	Scopes      []string
 }
 
 type Team struct {
@@ -39,10 +38,10 @@ type Membership struct {
 }
 ```
 
-Authentication must store exactly `User`, not `*User`. Load `Permissions` from
-your trusted application data. Populate `Scopes` only when verified token
-credentials supply them; the [token checks](#token-limits) below use that field
-for a separate decision.
+Authentication must attach exactly `User`, not `*User`, to the identity's record.
+Load `Permissions` from your trusted application data. Verified token scopes
+travel on the `auth.Identity`, not on `User`; the [token checks](#token-limits)
+below use them for a separate decision.
 
 Give the policy its configured database rather than reaching for a global.
 Import `database` from `arkoren.dev/core/service/database`:
@@ -96,7 +95,7 @@ what callers ask.
 
 With `team` returned by your [authorized store lookup](row-access.md), apply the
 rule before changing billing details. Import `gate` from
-`arkoren.dev/core/http/auth/gate`:
+`arkoren.dev/core/auth/gate`:
 
 ```go
 if err := gate.Authorize(ctx, policy.CanManage(team)); err != nil {
@@ -136,26 +135,29 @@ snapshot.
 ## Token Limits
 
 A **scope** limits a client's delegated authority. It must restrict, not replace,
-the user's application permissions and resource access. For a bearer-token API
-whose authenticator stores the `User` above, require the verified token scope
-as another rule of that same type. Here `slices` is the standard-library package:
+the user's application permissions and resource access. The authenticator
+records the verified token scopes on the `auth.Identity` with
+`principal.Scopes(...)`, so `gate.HasScopes` checks them without an application
+user type. Because one `gate.Authorize` call takes rules of a single type, check
+the scope first and the user rules after it:
 
 ```go
-func hasBillingScope(_ context.Context, user User) (bool, error) {
-	return slices.Contains(user.Scopes, "billing:export"), nil
+if err := gate.Authorize(ctx, gate.HasScopes("billing:export")); err != nil {
+	return err
 }
-
-if err := gate.Authorize(ctx, hasBillingScope, policy.CanExport, policy.CanManage(team)); err != nil {
+if err := gate.Authorize(ctx, policy.CanExport, policy.CanManage(team)); err != nil {
 	return err
 }
 ```
 
-This token-specific path denies when the scope is absent. Do not fill `Scopes`
-from a header or unverified claim, or copy the user's full permissions into it:
-either action can expand what a restricted credential may do.
+This token-specific path denies when the scope is absent. Do not fill the
+identity's scopes from a header or unverified claim, or copy the user's full
+permissions into them: either action can expand what a restricted credential
+may do. `gate.HasScopes` requires every named scope, and an empty requirement
+allows any authenticated identity.
 
-If authentication instead stores `oauth.Identity` directly, the OAuth adapter
-provides a scope rule. Import
+If the authenticator instead attaches `oauth.Identity` as the identity's record
+value, the OAuth adapter provides its own scope rule. Import
 `oauth "arkoren.dev/driver/oauth/oauthauth"`; with the bearer-authenticated
 router `api`, apply it as admission:
 
@@ -163,7 +165,7 @@ router `api`, apply it as admission:
 api.With(gate.Require(oauth.HasScopes("billing:export"))).Post("/billing/exports", exportBilling)
 ```
 
-`HasScopes` requires every named scope, and an empty requirement allows any
+`oauth.HasScopes` requires every named scope, and an empty requirement allows any
 authenticated `oauth.Identity`. It neither authenticates nor checks local team
 membership. Do not combine it with `User` rules in the same gate call: the types
 differ. Map verified issuer-and-subject identity to your local actor before local
@@ -192,4 +194,4 @@ forbidden, and anonymous callers. Direct rule tests cannot prove that a handler
 actually calls the rule.
 
 For all functions and options, see the
-[`gate` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth/gate).
+[`gate` API reference](https://pkg.go.dev/arkoren.dev/core/auth/gate).

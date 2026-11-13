@@ -266,7 +266,7 @@ With your already-protected router named `protected`, your server-selected
 protected.Post("/push/subscriptions", registrationHandler(keyID, saveRegistration))
 ```
 
-The route's authentication must load the exact `User` type read by the handler.
+The route's authentication must attach the exact `User` type read by the handler to the identity.
 Rate limiting bounds requests, not stored device counts; storage quotas remain
 necessary. Keep registration endpoints and auth secrets out of logs. Never use
 client input to configure allowed origins: a valid stored subscription remains

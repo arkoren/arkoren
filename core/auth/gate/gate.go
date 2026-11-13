@@ -3,9 +3,10 @@ package gate
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"slices"
 
-	"arkoren.dev/core/http/auth"
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/foundation/problem"
 )
@@ -58,19 +59,34 @@ func New(configure ...BuilderFunc) *Gate {
 	}
 }
 
-// check runs rules in order against the user of type U in ctx. It returns
-// [auth.ErrUnauthenticated] without a user, [ErrForbidden] with the index of
-// the first rule that returned false, and the error of the first rule that
-// failed. The index is -1 for every other outcome.
+// user returns the U that rules receive from ctx. When U is [auth.Identity]
+// it is the identity itself; otherwise it is the application user the
+// authenticator attached to the identity's record (see [auth.UserFromContext]).
+// The boolean is false without an identity, without a record value, or when the
+// value has another type, so a mismatch fails closed.
+func user[U any](ctx context.Context) (U, bool) {
+	if reflect.TypeFor[U]() == reflect.TypeFor[auth.Identity]() {
+		identity, ok := auth.FromContext(ctx)
+
+		return any(identity).(U), ok
+	}
+
+	return auth.UserFromContext[U](ctx)
+}
+
+// check runs rules in order against the user of type U in ctx, see user. It
+// returns [auth.ErrUnauthenticated] without a user, [ErrForbidden] with the
+// index of the first rule that returned false, and the error of the first rule
+// that failed. The index is -1 for every other outcome.
 func check[U any](ctx context.Context, rules []func(context.Context, U) (bool, error)) (int, error) {
-	user, ok := auth.FromContext[U](ctx)
+	current, ok := user[U](ctx)
 
 	if !ok {
 		return -1, auth.ErrUnauthenticated
 	}
 
 	for index, rule := range rules {
-		allowed, err := rule(ctx, user)
+		allowed, err := rule(ctx, current)
 
 		if err != nil {
 			return -1, err
@@ -188,5 +204,66 @@ func Require[U any](rules ...func(context.Context, U) (bool, error)) router.Midd
 
 			return next(w, r)
 		}
+	}
+}
+
+// Bind adapts rules for U to a context-only availability check, the shape taken
+// by features such as tool or action availability that have no user parameter.
+// The returned function resolves U as [Require] does and runs the rules in
+// order. It returns (false, nil) when there is no user, which hides the feature
+// from anonymous callers without an error, (false, nil) at the first rule that
+// denies, and (false, err) at the first rule that fails. Like [Require], it
+// panics when no rule is given and copies the rule slice; functions and their
+// captures remain shared.
+//
+// Example:
+//
+//	tool := mcp.NewTool("report", report, func(action *mcp.ToolBuilder[In, Out]) {
+//		action.Available(gate.Bind(isAnalyst))
+//	})
+func Bind[U any](rules ...func(context.Context, U) (bool, error)) func(context.Context) (bool, error) {
+	if len(rules) == 0 {
+		panic("gate: Bind needs at least one rule")
+	}
+
+	rules = slices.Clone(rules)
+
+	return func(ctx context.Context) (bool, error) {
+		current, ok := user[U](ctx)
+
+		if !ok {
+			return false, nil
+		}
+
+		for _, rule := range rules {
+			allowed, err := rule(ctx, current)
+
+			if err != nil || !allowed {
+				return false, err
+			}
+		}
+
+		return true, nil
+	}
+}
+
+// HasScopes returns a rule over [auth.Identity] that allows an identity
+// holding every required scope, read through [auth.Identity.Scopes]. It copies
+// required before capturing it, so later caller edits cannot change
+// authorization. Empty requirements allow any identity. Use the rule with
+// [Require], [Authorize] or [Bind]; it does not authenticate a request.
+//
+// Example:
+//
+//	r.With(gate.Require(gate.HasScopes("posts:write"))).Post("/posts", create)
+func HasScopes(required ...string) func(context.Context, auth.Identity) (bool, error) {
+	required = slices.Clone(required)
+
+	return func(_ context.Context, identity auth.Identity) (bool, error) {
+		granted := identity.Scopes()
+
+		return !slices.ContainsFunc(required, func(scope string) bool {
+			return !slices.Contains(granted, scope)
+		}), nil
 	}
 }

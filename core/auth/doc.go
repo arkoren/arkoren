@@ -1,6 +1,197 @@
-// Package auth resolves application users by a text subject, independently of
-// HTTP. Jobs, MCP tools and feature packages use it to look a user up and to
-// clean up the data attached to a user that is gone.
+// Package auth answers two questions for any part of an application: who is
+// acting, and does this user exist. Authentication of HTTP requests, the
+// application user lookup and the cleanup of user data share one vocabulary, the
+// subject, and none of them needs to know the application's user type.
+// Authorization lives in the gate subpackage, and authtest checks drivers and
+// authenticators.
+//
+// # Identity
+//
+// An [Identity] says who is acting: a [Identity.Subject], the [Factor] values
+// that were verified, the granted [Identity.Scopes], an optional
+// [Identity.Actor] and the [UserRecord] the authenticator resolved. It is an
+// immutable value built with [NewIdentity] and read from a context with
+// [FromContext], so jobs, MCP tools and arks can use it without importing the
+// application's user type. [Identity.Level] is derived from the factors:
+// [LevelNone] without factors, [LevelSingle] for factors of one kind and
+// [LevelMulti] for two distinct kinds among [KindKnowledge], [KindPossession]
+// and [KindInherence]. [KindFederated] never counts toward [LevelMulti].
+//
+// A request authenticator may attach the application's own user to the record.
+// [UserFromContext] returns it by type, and a value of another type is reported
+// as absent, so a mismatch fails closed.
+//
+// # Authenticating requests
+//
+// An [Authenticator] turns a request into an [Identity]. It returns
+// [ErrNoCredentials] when the request has nothing it understands, so
+// [Middleware] tries the next one; any other error stops the request.
+// Anonymous requests continue without an identity; [Require] rejects them.
+// [Bearer] adapts a token verifier. [Require] uses [MiddlewareBuilder]
+// construction policies.
+//
+// Session authentication uses the temporary [SessionIdentity] bridge: it binds
+// the identifier type K, the user loader and a session.Handle, stores the raw
+// K in the session and builds an identity whose subject is K as text and whose
+// record holds the loaded user. K must be a string, an integer or a text type
+// (see below); [SessionIdentity.Err] reports anything else. Zero definitions
+// and nil loaders are invalid configuration; callbacks still run once in order.
+// A later zero handle restores default lookup. Loaders are not invoked during
+// construction. Invalid definitions stop middleware fallback. Handles do not
+// isolate cookies, storage or users. One physical session has one identity
+// slot ("arkoren:auth:user"), so definitions with the same K can still mix
+// realms, and compatible persisted JSON may decode across types.
+//
+// # Wiring
+//
+// Order matters: session, then authentication, then everything that needs
+// the identity (rate limits keyed by user, routes).
+//
+//	r := router.New()
+//	identity := auth.NewSessionIdentity(loadUser)
+//	if err := identity.Err(); err != nil {
+//		return err
+//	}
+//	r.Use(session.Middleware(store))
+//	r.Use(csrf.Middleware())
+//	r.Use(auth.Middleware(identity.Authenticator(), auth.Bearer(verifyKey)))
+//	r.Use(ratelimit.Middleware(store, func(limiter *ratelimit.Builder) {
+//		limiter.KeyFunc(func(r *http.Request) string {
+//			if current, err := request.Identity(r); err == nil {
+//				return "user:" + current.Subject()
+//			}
+//
+//			return "ip:" + r.RemoteAddr
+//		})
+//	}))
+//
+//	r.Post("/login", login)
+//	r.Post("/logout", logout)
+//
+//	private := r.With(auth.Require())
+//	private.Get("/me", me)
+//	r.With(gate.Require(isAdmin)).Delete("/users/{id}", deleteUser)
+//
+// Where loadUser resolves the stored identifier:
+//
+//	func loadUser(ctx context.Context, id int) (User, error) {
+//		user, err := db.Find[User](ctx, query.Table("users", func(statement *query.Builder) {
+//			statement.Where("id", id)
+//		}))
+//		if errors.Is(err, database.ErrNoRows) {
+//			return User{}, auth.ErrNoCredentials // deleted user: anonymous
+//		}
+//		return user, err
+//	}
+//
+// # Login and logout
+//
+// Hash passwords with the hash package. Precompute dummyHash at startup with
+// the same hasher and cost as real passwords. Checking it for unknown emails
+// reduces timing differences; it does not guarantee identical request times.
+// A missing account or password mismatch is a credential rejection; return
+// database and hash failures without replacing them with [ErrUnauthenticated].
+// JSON v2 matches field names case-sensitively, so tag the lower-case request
+// members:
+//
+//	func login(w http.ResponseWriter, r *http.Request) error {
+//		in, err := request.JSON[struct {
+//			Email    string `json:"email"`
+//			Password string `json:"password"`
+//		}](r)
+//		if err != nil {
+//			return err
+//		}
+//
+//		user, err := db.Find[User](r.Context(), query.Table("users", func(statement *query.Builder) {
+//			statement.Where("email", in.Email)
+//		}))
+//		if err != nil && !errors.Is(err, database.ErrNoRows) {
+//			return err
+//		}
+//
+//		found := err == nil
+//		hashed := dummyHash
+//		if found {
+//			hashed = user.PasswordHash
+//		}
+//		ok, err := hasher.CheckRaw([]byte(in.Password), hashed)
+//		if err != nil {
+//			return err
+//		}
+//		if !found || !ok {
+//			return auth.ErrUnauthenticated
+//		}
+//		if err := identity.Login(request.MustSession(r), user.ID); err != nil {
+//			return err
+//		}
+//
+//		return response.Status(w, http.StatusNoContent)
+//	}
+//
+//	func logout(w http.ResponseWriter, r *http.Request) error {
+//		if err := identity.Logout(request.MustSession(r)); err != nil {
+//			return err
+//		} // or Destroy() to drop all data
+//		return response.Status(w, http.StatusNoContent)
+//	}
+//
+// # Cookie authentication needs CSRF protection
+//
+// Browsers send session cookies on cross-site requests, so install
+// csrf.Middleware whenever [SessionIdentity] authenticates browser cookies.
+//
+// # Deleted users
+//
+// Sessions outlive accounts. Return [ErrNoCredentials] from the load
+// function when the user no longer exists; the request becomes anonymous
+// instead of failing with a 500.
+//
+// # API keys
+//
+// Look the key up by a non-secret id or hash, and compare secrets in
+// constant time. Bearer validates the header, not your application's key
+// format: even a one-byte token reaches the verifier. This application uses
+// an eight-byte lookup prefix and stores the full token's SHA-256 hash in
+// key.Hash. Reject short tokens before slicing them:
+//
+//	auth.Bearer(func(ctx context.Context, token string) (auth.Identity, error) {
+//		const prefixLength = 8
+//		if len(token) < prefixLength {
+//			return auth.Identity{}, auth.ErrUnauthenticated
+//		}
+//
+//		key, err := keys.ByPrefix(ctx, token[:prefixLength])
+//		if err != nil {
+//			return auth.Identity{}, err
+//		}
+//
+//		sum := sha256.Sum256([]byte(token))
+//		if subtle.ConstantTimeCompare(sum[:], key.Hash) != 1 {
+//			return auth.Identity{}, auth.ErrUnauthenticated
+//		}
+//
+//		return auth.NewIdentity(key.OwnerSubject, func(principal *auth.IdentityBuilder) {
+//			principal.Scopes(key.Scopes...)
+//		}), nil
+//	})
+//
+// keys.ByPrefix is application code. It must reject unknown or revoked keys
+// with an error other than [ErrNoCredentials], which would allow anonymous
+// fallback. Bearer wraps lookup failures as 401 responses while retaining
+// their causes; do not include tokens in errors that can reach logs.
+//
+// # JWT bearer tokens
+//
+// Verify the signature and claims in the verify function and build the identity
+// from the claims without a database call. The trade-off is revocation lag:
+// a token stays valid until it expires, so keep lifetimes short.
+//
+// # OAuth2 and OIDC
+//
+// The driver/oauth/oauthauth package plugs into auth without auth importing it.
+// See its package documentation for the setup; it is updated for the
+// non-generic [Authenticator] in a later release.
 //
 // # Subjects
 //
@@ -32,13 +223,24 @@
 //
 // # Events
 //
+// With [MiddlewareBuilder.Events], [Require] publishes [Rejected]
+// ("http.auth.rejected") with the method of every anonymous request it
+// rejects. The response defaults to 401; ErrorResponse can replace it. Paths
+// are not published because they can contain identifiers or credentials.
+// Clients control the event rate, so listeners must be cheap and a rate limiter
+// should sit in front of [Require]. Payloads carry no identity, credentials,
+// query, or cause. Event contexts still retain request context values;
+// listeners must select safe attributes. These payload limits do not change
+// HTTP problem instance rendering.
+//
 // [UserForgotten] ("auth.user.forgotten") carries only the subject. It means
 // the forget hooks completed, not that a surrounding transaction committed.
 //
 // # Drivers and tests
 //
-// [arkoren.dev/core/auth/memoryauth] is an in-memory driver and
-// [arkoren.dev/core/auth/authtest] is the conformance suite every driver runs.
+// [arkoren.dev/core/auth/memoryauth] is an in-memory user driver and
+// [arkoren.dev/core/auth/authtest] holds the conformance suites: one for every
+// user driver and one for every [Authenticator].
 //
 // Example:
 //

@@ -46,7 +46,7 @@ import (
 // Example:
 //
 //	admin := router.New()
-//	admin.Use(auth.Middleware(authenticator), auth.Require[User]())
+//	admin.Use(auth.Middleware(authenticator), auth.Require())
 //	admin.Mount("/tools", tools) // tools sees paths relative to /tools
 func (router *Router) Mount(prefix string, handler http.Handler, configure ...OperationBuilderFunc) {
 	if strings.ContainsAny(prefix, "{}") {

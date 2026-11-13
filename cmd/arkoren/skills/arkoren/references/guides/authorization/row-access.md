@@ -188,7 +188,7 @@ requested candidate, and `targetUserID` identifies the member to remove—not th
 authenticated actor. Your application policy `members.CanRemove(team)` checks
 the actor's current owner membership for this exact team, using this same `db`.
 
-Import `gate` from `arkoren.dev/core/http/auth/gate`. In the shared application
+Import `gate` from `arkoren.dev/core/auth/gate`. In the shared application
 operation, the transaction first locks the team, then checks the actor:
 
 ```go

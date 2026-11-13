@@ -12,7 +12,7 @@ summary:
 
 A handler that uses the current user and an endpoint that enforces authentication need different tests. Inject an identity when the question is what the handler does for that user. Send credentials through authentication middleware when the question is who can reach the handler. Neither shortcut replaces a test of your actual login mechanism.
 
-The fragments below run inside tests with `t *testing.T`. Import `context`, `net/http`, `net/http/httptest`, `arkoren.dev/core/http/auth`, and `arkoren.dev/core/http/router` as needed. The examples use this test identity:
+The fragments below run inside tests with `t *testing.T`. Import `context`, `net/http`, `net/http/httptest`, `arkoren.dev/core/auth`, and `arkoren.dev/core/http/router` as needed. The examples use this test identity:
 
 ```go
 type testUser struct {
@@ -22,28 +22,32 @@ type testUser struct {
 
 ## Inject Identity
 
-For a handler test, attach the exact user type the handler reads with `request.User[testUser]`. With your handler named `showProfile`:
+For a handler test, attach an identity whose record holds the exact user type the handler reads with `request.User[testUser]`. With your handler named `showProfile`:
 
 ```go
 incoming := httptest.NewRequest(http.MethodGet, "/me", nil)
-ctx := auth.NewContext(incoming.Context(), testUser{ID: 42})
+ctx := auth.NewContext(incoming.Context(), auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
+	principal.Record(auth.UserRecord{Subject: "42", Value: testUser{ID: 42}})
+}))
 res := router.Handler(showProfile).Record(incoming.WithContext(ctx))
 ```
 
 Register response-body cleanup and assert the returned profile, following [HTTP Tests](http-tests.md#record-requests). This bypasses credential verification intentionally. It proves neither that anonymous requests are rejected nor that one user may access another user's data. Keep [authorization checks](../authorization/overview.md) in the route tests that exercise those decisions.
 
-User types must match exactly: a `testUser` value does not satisfy a lookup for `*testUser`. `auth.Require` treats a mismatched type as absent and rejects it.
+User types must match exactly: a `testUser` value does not satisfy a lookup for `*testUser`, and `request.User` reports a mismatch as `auth.ErrUnauthenticated`. A handler that only reads `request.Identity` needs no record.
 
 ## Exercise Enforcement
 
 When testing the router's authentication and authorization path, supply a test-only authenticator instead of production credentials. This verifier accepts one fixed token; never enable it outside test code:
 
 ```go
-authenticate := auth.Bearer(func(ctx context.Context, token string) (testUser, error) {
+authenticate := auth.Bearer(func(ctx context.Context, token string) (auth.Identity, error) {
 	if token != "profile-test-token" {
-		return testUser{}, auth.ErrUnauthenticated
+		return auth.Identity{}, auth.ErrUnauthenticated
 	}
-	return testUser{ID: 42}, nil
+	return auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
+		principal.Record(auth.UserRecord{Subject: "42", Value: testUser{ID: 42}})
+	}), nil
 })
 ```
 
@@ -52,7 +56,7 @@ Pass it into your route factory so tests reuse production middleware ordering an
 ```go
 routes := router.New()
 routes.Use(auth.Middleware(authenticate))
-routes.With(auth.Require[testUser]()).Get("/me", showProfile)
+routes.With(auth.Require()).Get("/me", showProfile)
 ```
 
 Send a valid token, register body cleanup, and assert the expected profile as well as HTTP 200:
@@ -79,21 +83,21 @@ If production uses a custom session slot, allocate one `session.NewHandle()` and
 
 ## Check Authenticators
 
-For your own authenticator, `authtest.Run` checks the public authentication contract. Import `arkoren.dev/core/http/auth/authtest`. Here `apiKeyAuthenticator` is your implementation, and each application helper returns a fresh `*http.Request` carrying the credentials and context for its case:
+For your own authenticator, `authtest.Run` checks the public authentication contract. Import `arkoren.dev/core/auth/authtest`. Here `apiKeyAuthenticator` is your implementation, and each application helper returns a fresh `*http.Request` carrying the credentials and context for its case:
 
 ```go
 func TestAPIKeyContract(t *testing.T) {
 	authtest.Run(t, apiKeyAuthenticator, anonymousRequest, validRequest,
-		authtest.WithInvalid[testUser](rejectedRequest),
-		authtest.WithUser(func(t *testing.T, user testUser) {
-			if user.ID != 42 {
-				t.Fatalf("user ID = %d, want 42", user.ID)
+		authtest.WithInvalid(rejectedRequest),
+		authtest.WithIdentity(func(t *testing.T, identity auth.Identity) {
+			if identity.Subject() != "42" {
+				t.Fatalf("subject = %q, want 42", identity.Subject())
 			}
 		}),
 	)
 }
 ```
 
-The suite checks that absent credentials yield `auth.ErrNoCredentials`, valid credentials resolve and store a user, and rejected credentials yield `auth.ErrUnauthenticated` and stop middleware. `WithInvalid` enables rejection checks; without it those checks are skipped. Add application tests for credential expiry, revocation, and backend failures beyond that shared contract.
+The suite checks that absent credentials yield `auth.ErrNoCredentials`, valid credentials resolve and store an identity, and rejected credentials yield `auth.ErrUnauthenticated` and stop middleware. `WithInvalid` enables rejection checks; without it those checks are skipped. Add application tests for credential expiry, revocation, and backend failures beyond that shared contract.
 
-See the [`auth` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth) and [`authtest` suite](https://pkg.go.dev/arkoren.dev/core/http/auth/authtest).
+See the [`auth` API reference](https://pkg.go.dev/arkoren.dev/core/auth) and [`authtest` suite](https://pkg.go.dev/arkoren.dev/core/auth/authtest).

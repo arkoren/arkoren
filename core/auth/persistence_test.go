@@ -10,7 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"arkoren.dev/core/http/auth"
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -65,10 +65,10 @@ func TestIdentityReadsPhysicalLegacyRecord(t *testing.T) {
 		})
 
 		handler := session.Middleware(cache.New(driver))(router.Handler(func(_ http.ResponseWriter, r *http.Request) error {
-			key, err := identity.Authenticator()(r)
+			resolved, err := identity.Authenticator()(r)
 
-			if err != nil || key != 9007199254740993 {
-				t.Fatalf("legacy identifier = %d, error = %v", key, err)
+			if key, _ := resolved.Record().Value.(int64); err != nil || key != 9007199254740993 || resolved.Subject() != "9007199254740993" {
+				t.Fatalf("legacy identifier = %d, subject = %q, error = %v", key, resolved.Subject(), err)
 			}
 
 			current, err := identity.Session(r.Context())

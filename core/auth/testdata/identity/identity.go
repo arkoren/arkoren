@@ -4,7 +4,7 @@ package identity
 import (
 	"context"
 
-	"arkoren.dev/core/http/auth"
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/session"
 )
 

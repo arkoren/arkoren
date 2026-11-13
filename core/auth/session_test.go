@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"arkoren.dev/core/http/auth"
-	"arkoren.dev/core/http/auth/authtest"
+	"arkoren.dev/core/auth"
+	"arkoren.dev/core/auth/authtest"
 	"arkoren.dev/core/http/session"
 )
 

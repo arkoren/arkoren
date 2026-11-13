@@ -11,13 +11,13 @@ import (
 func TestCompletedSettingsAppliesCallbacksAfterReplacement(t *testing.T) {
 	t.Parallel()
 
-	config := newSettings(
-		func(authenticator *Builder) {
-			authenticator.settings = settings{
+	config := newMiddlewareSettings(
+		func(authenticator *MiddlewareBuilder) {
+			authenticator.settings = middlewareSettings{
 				ErrorResponse: problem.Forbidden(),
 			}
 		},
-		func(authenticator *Builder) {
+		func(authenticator *MiddlewareBuilder) {
 			authenticator.ErrorResponse(problem.NotFound())
 		},
 	)
@@ -32,16 +32,16 @@ func TestCompletedSettingsAppliesCallbacksAfterReplacement(t *testing.T) {
 func TestConstructionCallbacksRunOnceInOrder(t *testing.T) {
 	t.Parallel()
 
-	var retained *Builder
+	var retained *MiddlewareBuilder
 	order := 0
-	Require[int](func(authenticator *Builder) {
+	Require(func(authenticator *MiddlewareBuilder) {
 		retained = authenticator
 		order++
 
 		if authenticator.ErrorResponse(problem.Forbidden()) != authenticator {
 			t.Fatal("setting returned another draft")
 		}
-	}, func(authenticator *Builder) {
+	}, func(authenticator *MiddlewareBuilder) {
 		if order != 1 || authenticator != retained {
 			t.Fatal("callbacks were reordered or used different drafts")
 		}
@@ -59,9 +59,9 @@ func TestConstructionCallbacksRunOnceInOrder(t *testing.T) {
 func TestConstructionOmissionAndEmptyExpansions(t *testing.T) {
 	t.Parallel()
 
-	var omitted []func(*Builder)
-	Require[int](omitted...)
-	Require[int]([]func(*Builder){}...)
+	var omitted []func(*MiddlewareBuilder)
+	Require(omitted...)
+	Require([]func(*MiddlewareBuilder){}...)
 
 	reached := false
 	defer func() {
@@ -69,7 +69,7 @@ func TestConstructionOmissionAndEmptyExpansions(t *testing.T) {
 			t.Fatal("nil entry was filtered or later callback ran")
 		}
 	}()
-	Require[int](nil, func(authenticator *Builder) {
+	Require(nil, func(authenticator *MiddlewareBuilder) {
 		reached = true
 	})
 }
@@ -85,9 +85,9 @@ func TestConstructionApplicationPanicPropagates(t *testing.T) {
 			t.Fatalf("panic = %v, later callback = %v", value, reached)
 		}
 	}()
-	Require[int](func(authenticator *Builder) {
+	Require(func(authenticator *MiddlewareBuilder) {
 		panic("construction sentinel")
-	}, func(authenticator *Builder) {
+	}, func(authenticator *MiddlewareBuilder) {
 		reached = true
 	})
 }
@@ -97,8 +97,8 @@ func TestConstructionApplicationPanicPropagates(t *testing.T) {
 func TestBuilderPublicationDetachesRoot(t *testing.T) {
 	t.Parallel()
 
-	var retained *Builder
-	config := newSettings(func(authenticator *Builder) {
+	var retained *MiddlewareBuilder
+	config := newMiddlewareSettings(func(authenticator *MiddlewareBuilder) {
 		retained = authenticator
 		authenticator.ErrorResponse(problem.Forbidden())
 	})
