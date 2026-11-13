@@ -211,8 +211,11 @@ func VerifyTag(ctx context.Context, root, trust, name string, expected *Batch) (
 }
 
 // Recorded recovers original plans; bootstrap v0.1.0 tags remain untouched.
-// Every tag directory must be in the current public policy, but each batch's
-// module inventory is checked against the policy committed at its own SHA.
+// Every tag directory must be in the current public policy or be retired, but
+// each batch's module inventory is checked against the policy committed at its
+// own SHA. A retired directory keeps only its skipped bootstrap v0.1.0 tag: any
+// later tag there is an error, so a retired namespace can never have published
+// a signed batch.
 func Recorded(ctx context.Context, root, trust string) ([]Batch, error) {
 	data, err := os.ReadFile(filepath.Join(root, ".github/release-modules.json"))
 	if err != nil {
@@ -233,11 +236,15 @@ func Recorded(ctx context.Context, root, trust string) ([]Batch, error) {
 			continue
 		}
 		directory, tag := filepath.ToSlash(filepath.Dir(name)), filepath.Base(name)
-		if !slices.Contains(policy.Public, directory) || !version.MatchString(tag) {
+		retired := slices.Contains(policy.Retired, directory)
+		if (!slices.Contains(policy.Public, directory) && !retired) || !version.MatchString(tag) {
 			return nil, fmt.Errorf("tag outside approved canonical namespaces")
 		}
 		if tag == "v0.1.0" {
 			continue
+		}
+		if retired {
+			return nil, fmt.Errorf("tag %s after bootstrap in retired namespace", name)
 		}
 		batch, err := VerifyTag(ctx, root, trust, name, nil)
 		if err != nil {

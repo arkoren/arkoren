@@ -159,6 +159,9 @@ type Snapshot struct {
 }
 
 // Check validates the existing App allowlist and global/main protection read-only.
+// Retired directories must be absent from both creation rulesets, so the lock
+// ruleset blocks new tags there; update and deletion stay blocked by the
+// immutable ruleset regardless.
 func Check(ctx context.Context, client github.Client, locked bool) (Snapshot, error) {
 	data, err := os.ReadFile(filepath.Join(client.Root, ".github/release-modules.json"))
 	if err != nil {
@@ -211,6 +214,12 @@ func Check(ctx context.Context, client github.Client, locked bool) (Snapshot, er
 			actual := Ruleset{}
 			if err := json.Unmarshal(raw, &actual); err != nil {
 				return Snapshot{}, err
+			}
+			for _, directory := range policy.Retired {
+				pattern := "refs/tags/" + directory + "/v0.*"
+				if slices.Contains(actual.Conditions.Ref.Include, pattern) || slices.Contains(actual.Conditions.Ref.Exclude, pattern) {
+					return Snapshot{}, fmt.Errorf("retired namespace %s remains in creation ruleset %q", directory, record.Name)
+				}
 			}
 			if !matchesShape(raw, expected) {
 				return Snapshot{}, fmt.Errorf("creation policy differs from exact approved App/public allowlist")
