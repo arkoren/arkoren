@@ -427,7 +427,15 @@ delivery, and lifecycle protocols explicit.
   every transition regenerating the ID, and the provider asked on every request
   (not found or disabled is ErrNoCredentials, a changed UserRecord.Version too).
   Second factors are plain LoginBuilder.SecondFactor functions so core never
-  imports an ark. RequireLevel and RequireFresh read the Identity from the
+  imports an ark. Each login also creates a LoginRecord (random ID kept in
+  the session record's login_id) in one cache entry per subject under
+  arkoren:auth:logins, written under a per-subject cache lock with bounded
+  CompareAndPut and living for LoginBuilder.SessionLifetime, which must equal the
+  session middleware's MaxLifetime; records older than it are hidden and pruned.
+  The authenticator treats a missing record as ErrNoCredentials; Logins,
+  Revoke*, RevokeAll and the forget hook manage them. Records hold the user agent
+  and client address (Devices(false) drops both): personal data that never enters
+  telemetry or events. RequireLevel and RequireFresh read the Identity from the
   context, so tokens with factors work; ErrStepUpRequired is 403. Authenticators,
   Middleware, Require and Bearer are non-generic over auth.Identity; the
   application user rides in Record().Value and is read with
