@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -119,9 +120,11 @@ func TestLoginPersistsOneRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		const want = `{"arkoren:auth:session":{"subject":"7","factors":[{"method":"pwd","kind":"knowledge","at":"2000-01-01T00:00:00Z"}],"version":"3bfc269594ef649228e9a74bab00f042efc91d5acc6fbee31a382e80d42388fe"}}`
+		const want = `{"arkoren:auth:session":{"subject":"7","factors":[{"method":"pwd","kind":"knowledge","at":"2000-01-01T00:00:00Z"}],"version":"3bfc269594ef649228e9a74bab00f042efc91d5acc6fbee31a382e80d42388fe","login_id":"ID"}}`
 
-		if string(stored.Storage) != want {
+		got := regexp.MustCompile(`"login_id":"[A-Z2-7]{26}"`).ReplaceAllString(string(stored.Storage), `"login_id":"ID"`)
+
+		if got != want {
 			t.Fatalf("stored session = %s", stored.Storage)
 		}
 	})

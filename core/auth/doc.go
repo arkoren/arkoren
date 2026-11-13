@@ -95,6 +95,30 @@
 // changing the version ends every other session of the user. Sessions written
 // before this layout, under "arkoren:auth:user", are anonymous.
 //
+// # Devices
+//
+// Every login (Begin without a second factor, and Complete) creates a
+// [LoginRecord] with a random ID that survives session ID rotation. All records
+// of a user live in one entry of the cache given to [NewLogin], under
+// "arkoren:auth:logins", whose lifetime is [LoginBuilder.SessionLifetime] (set it
+// to the session middleware's maximum lifetime). [Login.Logins] lists them and
+// flags the current one, [Login.Revoke], [Login.RevokeOthers] and
+// [Login.RevokeAll] log devices out, and [Login.LoginsOf] serves administrators.
+// The authenticator reads the entry on every request and treats a missing record
+// as [ErrNoCredentials]; it refreshes [LoginRecord.SeenAt] at most every five
+// minutes. At most [LoginBuilder.MaxLogins] records are kept and the oldest is
+// dropped, which logs that device out. [Login.Logout] removes its record and
+// [NewLogin] registers [Login.RevokeAll] with [UserProvider.OnForget].
+//
+// Records hold the user agent (cut to 255 bytes) and client address, which are
+// personal data: [LoginBuilder.Devices] turns them off, and they never enter
+// telemetry or events. The address is the host of r.RemoteAddr unless
+// [LoginBuilder.ClientIP] says otherwise; behind a reverse proxy pass
+// ratelimit.TrustedProxyKey from core/http/middleware/ratelimit with your proxy
+// prefixes. Writes take a per-user cache lock and compare-and-put with a bounded
+// retry. A flushed cache logs everyone out, and each authenticated session
+// request costs one extra cache read.
+//
 // [RequireLevel] and [RequireFresh] guard routes by the factors of the identity
 // in the context, so they also work for tokens that carry factors. Too weak or
 // too old is [ErrStepUpRequired] (403); no identity is rejected like [Require].

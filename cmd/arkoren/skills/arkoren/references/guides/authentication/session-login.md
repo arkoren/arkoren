@@ -5,7 +5,7 @@ order: 20
 summary:
   - Find current accounts through a user provider and reject deleted or disabled accounts.
   - Check passwords without revealing account existence and log in through one entry point that rotates the session.
-  - End local logins, revoke older account sessions, and select the intended session context.
+  - End local logins, revoke older account sessions, list and revoke devices, and select the intended session context.
 ---
 
 # Session Login
@@ -244,6 +244,58 @@ enrolled user would be parked as pending.
 Existing in-flight requests are not retroactively canceled, and account caching
 can delay the effect. A provider that leaves `Version` empty never ends sessions
 this way. Only disabling or deleting the account does.
+
+## Devices
+
+Every login creates a login record: a random ID, the creation and last-seen
+times, the user agent and the client address. All records of a user live in one
+entry of the `store` you gave `auth.NewLogin`, and the session stores only the
+record's ID, which stays the same when the session ID rotates. The authenticator
+reads the entry on every request (one extra cache read), and a session whose
+record is gone is anonymous, so revoking a record logs that device out on its
+next request.
+
+```go
+web.Get("/devices", func(w http.ResponseWriter, r *http.Request) error {
+	records, err := login.Logins(r) // Current marks this browser.
+	if err != nil {
+		return err
+	}
+
+	return response.JSON(w, http.StatusOK, records)
+})
+
+web.Post("/devices/revoke-others", func(w http.ResponseWriter, r *http.Request) error {
+	if err := login.RevokeOthers(r); err != nil {
+		return err
+	}
+
+	return response.Status(w, http.StatusNoContent)
+})
+```
+
+Use `login.Revoke(ctx, subject, ids...)` to log out chosen devices,
+`login.RevokeAll(ctx, subject)` for all of them and `login.LoginsOf(ctx, subject)`
+for an administrator's view. Mount the revoking routes as CSRF-protected `POST`s.
+`Logout` removes the current record, and forgetting a user with
+`UserProvider.Forget` revokes all of theirs.
+
+Behavior to know:
+
+- Records live as long as the maximum session lifetime. `session.Middleware`
+  does not expose it, so tell the login with `policy.SessionLifetime(d)` if you
+  changed `MaxLifetime` from the 24-hour default.
+- `SeenAt` is refreshed at most once every five minutes, so it lags by that much
+  and ordinary requests stay read-only.
+- At most 50 records are kept per user (`policy.MaxLogins(n)`). A new login
+  beyond that drops the oldest record and logs that device out.
+- The user agent is cut to 255 bytes. The address is the host of `r.RemoteAddr`;
+  behind a reverse proxy that is the proxy, so set
+  `policy.ClientIP(ratelimit.TrustedProxyKey(prefixes...))` with your proxy
+  prefixes from `arkoren.dev/core/http/middleware/ratelimit`. Both are personal
+  data: `policy.Devices(false)` stores neither, and records never go into
+  telemetry or events.
+- A flushed or replaced cache logs every user out.
 
 ## Select Sessions
 

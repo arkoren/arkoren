@@ -581,3 +581,138 @@ func ExampleErrStepUpRequired() {
 	fmt.Println(auth.ErrStepUpRequired.Status())
 	// Output: 403
 }
+
+// examplePassword is the factor the record examples log in with.
+var examplePassword = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
+
+func ExampleLoginRecord() {
+	login := exampleLogin()
+	r := exampleRequest()
+	r.Header.Set("User-Agent", "Firefox")
+	r.RemoteAddr = "203.0.113.7:4711"
+	_, _ = login.Begin(r, "1", examplePassword)
+
+	records, _ := login.Logins(r)
+
+	fmt.Println(records[0].UserAgent, records[0].IP, records[0].Current)
+	// Output: Firefox 203.0.113.7 true
+}
+
+func ExampleLogin_Logins() {
+	login := exampleLogin()
+	first := exampleRequest()
+	_, _ = login.Begin(first, "1", examplePassword)
+	_, _ = login.Begin(exampleRequest(), "1", examplePassword)
+
+	records, _ := login.Logins(first)
+
+	fmt.Println(len(records), records[0].Current, records[1].Current)
+	// Output: 2 true false
+}
+
+func ExampleLogin_LoginsOf() {
+	login := exampleLogin()
+	_, _ = login.Begin(exampleRequest(), "1", examplePassword)
+
+	records, err := login.LoginsOf(context.Background(), "1")
+
+	fmt.Println(len(records), err)
+	// Output: 1 <nil>
+}
+
+func ExampleLogin_Revoke() {
+	login := exampleLogin()
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", examplePassword)
+	records, _ := login.Logins(r)
+
+	fmt.Println(login.Revoke(context.Background(), "1", records[0].ID))
+
+	_, err := login.Authenticator()(r)
+	fmt.Println(errors.Is(err, auth.ErrNoCredentials))
+	// Output:
+	// <nil>
+	// true
+}
+
+func ExampleLogin_RevokeOthers() {
+	login := exampleLogin()
+	mine, other := exampleRequest(), exampleRequest()
+	_, _ = login.Begin(mine, "1", examplePassword)
+	_, _ = login.Begin(other, "1", examplePassword)
+
+	fmt.Println(login.RevokeOthers(mine))
+
+	_, err := login.Authenticator()(other)
+	fmt.Println(errors.Is(err, auth.ErrNoCredentials))
+	// Output:
+	// <nil>
+	// true
+}
+
+func ExampleLogin_RevokeAll() {
+	login := exampleLogin()
+	r := exampleRequest()
+	_, _ = login.Begin(r, "1", examplePassword)
+
+	fmt.Println(login.RevokeAll(context.Background(), "1"))
+
+	records, _ := login.LoginsOf(context.Background(), "1")
+	fmt.Println(len(records))
+	// Output:
+	// <nil>
+	// 0
+}
+
+func ExampleLoginBuilder_Devices() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.Devices(false)
+	})
+	r := exampleRequest()
+	r.Header.Set("User-Agent", "Firefox")
+	_, _ = login.Begin(r, "1", examplePassword)
+
+	records, _ := login.Logins(r)
+
+	fmt.Printf("%q\n", records[0].UserAgent)
+	// Output: ""
+}
+
+func ExampleLoginBuilder_ClientIP() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.ClientIP(func(r *http.Request) string { return r.Header.Get("X-Real-IP") })
+	})
+	r := exampleRequest()
+	r.Header.Set("X-Real-IP", "198.51.100.2")
+	_, _ = login.Begin(r, "1", examplePassword)
+
+	records, _ := login.Logins(r)
+
+	fmt.Println(records[0].IP)
+	// Output: 198.51.100.2
+}
+
+func ExampleLoginBuilder_MaxLogins() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.MaxLogins(1)
+	})
+	first, second := exampleRequest(), exampleRequest()
+	_, _ = login.Begin(first, "1", examplePassword)
+	_, _ = login.Begin(second, "1", examplePassword)
+
+	_, err := login.Authenticator()(first)
+
+	fmt.Println(errors.Is(err, auth.ErrNoCredentials))
+	// Output: true
+}
+
+func ExampleLoginBuilder_SessionLifetime() {
+	login := exampleLogin(func(policy *auth.LoginBuilder) {
+		policy.SessionLifetime(7 * 24 * time.Hour)
+	})
+
+	complete, err := login.Begin(exampleRequest(), "1", examplePassword)
+
+	fmt.Println(complete, err)
+	// Output: true <nil>
+}

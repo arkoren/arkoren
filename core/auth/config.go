@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"arkoren.dev/core/event"
@@ -113,6 +114,9 @@ const (
 
 	// defaultMaxAttempts is how many wrong second factors discard a pending login.
 	defaultMaxAttempts = 5
+
+	// defaultMaxLogins is how many login records one user keeps.
+	defaultMaxLogins = 50
 )
 
 // loginSettings configures a [Login].
@@ -128,6 +132,18 @@ type loginSettings struct {
 
 	// SecondFactors are the checks that decide whether a user needs a second factor.
 	SecondFactors []func(ctx context.Context, subject string) (bool, error)
+
+	// Devices selects whether login records keep the user agent and address.
+	Devices bool
+
+	// ClientIP returns the address stored in a login record.
+	ClientIP func(*http.Request) string
+
+	// MaxLogins is the number of login records kept per user.
+	MaxLogins int
+
+	// SessionLifetime is the lifetime of the login-record list.
+	SessionLifetime time.Duration
 }
 
 // LoginBuilder configures [NewLogin] before publication. Callbacks run
@@ -220,12 +236,87 @@ func (policy *LoginBuilder) SecondFactor(check func(ctx context.Context, subject
 	return policy
 }
 
+// Devices selects whether login records keep the User-Agent and client address
+// of each login, which is what makes the device list readable. The default is
+// true. With false the records hold only IDs and times. Both values are personal
+// data; they are never put in telemetry or events. The setting replaces the
+// previous value on this draft.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.Devices(false)
+//	})
+func (policy *LoginBuilder) Devices(enabled bool) *LoginBuilder {
+	policy.settings.Devices = enabled
+
+	return policy
+}
+
+// ClientIP sets how the address of a login record is found. The default is the
+// host of r.RemoteAddr, which behind a reverse proxy is the proxy. Behind a
+// proxy, pass a function that trusts forwarded headers only from your proxies:
+// ratelimit.TrustedProxyKey (package core/http/middleware/ratelimit) returns
+// such a function. [NewLogin] rejects nil. The setting replaces the previous
+// value on this draft.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
+//	})
+func (policy *LoginBuilder) ClientIP(find func(*http.Request) string) *LoginBuilder {
+	policy.settings.ClientIP = find
+
+	return policy
+}
+
+// MaxLogins sets how many login records one user keeps. The default is 50. A new
+// login beyond it drops the oldest record, which logs that device out.
+// [NewLogin] rejects a value of zero or less. The setting replaces the previous
+// value on this draft.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.MaxLogins(10)
+//	})
+func (policy *LoginBuilder) MaxLogins(limit int) *LoginBuilder {
+	policy.settings.MaxLogins = limit
+
+	return policy
+}
+
+// SessionLifetime tells the login the maximum session lifetime configured on
+// [session.Middleware] with [session.Builder.MaxLifetime], which the session
+// package does not expose to other packages. A user's list of login records
+// lives that long after its last write, so no record outlives its sessions. The
+// default is [session.DefaultMaxLifetime]; set it when the middleware uses
+// another value. [NewLogin] rejects a value of zero or less. The setting
+// replaces the previous value on this draft.
+//
+// Example:
+//
+//	login, err := auth.NewLogin(users, store, func(policy *auth.LoginBuilder) {
+//		policy.SessionLifetime(7 * 24 * time.Hour)
+//	})
+func (policy *LoginBuilder) SessionLifetime(lifetime time.Duration) *LoginBuilder {
+	policy.settings.SessionLifetime = lifetime
+
+	return policy
+}
+
 // newLoginSettings applies the callbacks once on a draft holding the defaults
 // and returns the completed settings. The check slice is owned by the result.
 func newLoginSettings(configure ...LoginBuilderFunc) loginSettings {
 	policy := &LoginBuilder{settings: loginSettings{
 		ChallengeTTL: defaultChallengeTTL,
 		MaxAttempts:  defaultMaxAttempts,
+
+		Devices:         true,
+		ClientIP:        remoteHost,
+		MaxLogins:       defaultMaxLogins,
+		SessionLifetime: session.DefaultMaxLifetime,
 	}}
 
 	for _, configure := range configure {

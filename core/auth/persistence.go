@@ -36,8 +36,8 @@ type sessionRecord struct {
 	// it. The hash keeps the raw value out of session storage.
 	Version string `json:"version"`
 
-	// LoginID identifies the session's login record. It is empty until login
-	// records exist.
+	// LoginID identifies the session's [LoginRecord]. It survives session ID
+	// rotation; the authenticator ends the session when the record is gone.
 	LoginID string `json:"login_id,omitempty"`
 }
 
