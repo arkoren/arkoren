@@ -31,7 +31,7 @@ go mod init example.com/mcp-service
 Install the tool definitions and HTTP adapter:
 
 ```sh
-go get arkoren.dev/core arkoren.dev/driver/mcp
+go get arkoren.dev/core arkoren.dev/ark/mcp
 ```
 
 The adapter brings in the official Go MCP SDK. The following steps create
@@ -95,7 +95,7 @@ import (
 
 	"arkoren.dev/core/http/middleware/csrf"
 	"arkoren.dev/core/http/router"
-	"arkoren.dev/driver/mcp/mcpserver"
+	"arkoren.dev/ark/mcp/mcpserver"
 )
 ```
 
@@ -205,4 +205,4 @@ handler without adding a second listener or lifecycle owner.
 Continue with [Tools](tools.md) for validated arguments, output contracts, and
 safe failures. For exact declarations and settings, see the
 [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp) and
-[MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).
+[MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).

@@ -1,4 +1,9 @@
-# mcpserver
+# arkoren.dev/ark/mcp
+
+Moved from `arkoren.dev/driver/mcp` (last version v0.1.0). Only the import path
+changed; the `mcpserver` package API is the same.
+
+## mcpserver
 
 Expose typed `arkoren.dev/core/mcp` tools through the official MCP Go SDK's
 stateless Streamable HTTP transport. This is a protocol adapter, not an LLM
@@ -7,10 +12,10 @@ provider or an application lifecycle component. Diagnostics use native MCP tools
 Install in your application's module directory:
 
 ```sh
-go get arkoren.dev/core arkoren.dev/driver/mcp
+go get arkoren.dev/core arkoren.dev/ark/mcp
 ```
 
-Import `mcpserver` from `arkoren.dev/driver/mcp/mcpserver` and `mcp` from
+Import `mcpserver` from `arkoren.dev/ark/mcp/mcpserver` and `mcp` from
 `arkoren.dev/core/mcp`. With your published `lookup mcp.Tool` and existing
 `mux *http.ServeMux`, register only the operations intended for this endpoint:
 
@@ -130,5 +135,5 @@ CLI metadata. Native tools remain listed without availability checks. Do not
 replace managed names or the managed-list middleware through the native accessor;
 doing so can bypass execution guards.
 
-See the [API reference](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver)
+See the [API reference](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver)
 for construction, execution, observability, and compatibility details.

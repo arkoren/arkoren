@@ -27,7 +27,7 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 | Tier | Path | Modules | Holds |
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
-| Drivers | `driver/<vendor>/` | one per vendor | Vendor implementations of core contracts, and HTTP protocol adapters that have no `Driver` (`oauth` plugs into `core/auth`; `mcp/mcpserver` serves `core/mcp.Tool`; a provider webhook adapter would return a `webhook.Source` and publish `webhook.Event` definitions). |
+| Drivers | `driver/<vendor>/` | one per vendor | Vendor implementations of core contracts, and HTTP protocol adapters that have no `Driver` (`oauth` plugs into `core/auth`; a provider webhook adapter would return a `webhook.Source` and publish `webhook.Event` definitions). |
 | Arks | `ark/<name>/` | one per ark, opt in with `go get` | Domain features with their own tables, routes, or flows. None yet. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
@@ -257,7 +257,7 @@ are rejected) and once-cached JSON/Handler export, including errors. See
 `cmd/arkoren/skills/arkoren/references/guides/asyncapi/overview.md` for application wiring.
 
 **MCP tools** live in `core/mcp`, not `service/`: immutable SDK-independent
-typed definitions, with `driver/mcp/mcpserver` as the HTTP protocol adapter.
+typed definitions, with `ark/mcp/mcpserver` (an ark, not a driver) as the HTTP protocol adapter.
 Services may expose their own `[]mcp.Tool` methods; composition registers tools
 explicitly. Keep SDK dependencies out of core and do not add a contract-map row.
 Applications own `ToolBuilder.Available` capability policy; shared typed service

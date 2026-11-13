@@ -8,9 +8,9 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"arkoren.dev/ark/mcp/mcpserver/internal/wire"
 	"arkoren.dev/core/mcp"
 	"arkoren.dev/core/service/telemetry"
-	"arkoren.dev/driver/mcp/mcpserver/internal/wire"
 	"arkoren.dev/foundation/validate"
 )
 

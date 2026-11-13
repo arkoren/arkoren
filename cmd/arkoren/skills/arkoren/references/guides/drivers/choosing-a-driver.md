@@ -114,15 +114,15 @@ development material belongs to the contributor archive, not application setup.
 
 ## Protocol Adapters
 
-Some driver modules adapt a protocol rather than implement a service's `Driver`
-interface. The MCP adapter serves application-owned `mcp.Tool` definitions from
-`arkoren.dev/core/mcp`
+Some modules adapt a protocol rather than implement a service's `Driver`
+interface. The MCP server (`arkoren.dev/ark/mcp`, an ark rather than a driver)
+serves application-owned `mcp.Tool` definitions from `arkoren.dev/core/mcp`
 over HTTP using the official Go SDK; it is not a storage backend or a language
 model driver. [Your First MCP Server](../mcp/first-server.md) shows registration
 and HTTP serving; [Securing MCP](../mcp/securing-mcp.md) explains the authentication
 and authorization boundaries.
 
-The [`mcpserver` API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver)
+The [`mcpserver` API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver)
 provides the adapter's constructor and transport settings.
 
 For browser login or OIDC bearer verification, use the

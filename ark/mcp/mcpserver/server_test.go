@@ -19,8 +19,8 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"arkoren.dev/ark/mcp/mcpserver"
 	"arkoren.dev/core/mcp"
-	"arkoren.dev/driver/mcp/mcpserver"
 	"arkoren.dev/foundation/validate"
 )
 

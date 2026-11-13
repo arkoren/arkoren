@@ -371,4 +371,4 @@ For custom observations, follow [Recording Spans](telemetry.md#recording-spans)
 and [Recording Metrics](telemetry.md#recording-metrics). Full declarations live
 in the [`telemetry` API](https://pkg.go.dev/arkoren.dev/core/service/telemetry), with
 adapter-specific MCP settings in the
-[`mcpserver` API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).
+[`mcpserver` API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).

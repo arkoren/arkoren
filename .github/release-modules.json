@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "public": [
+    "ark/mcp",
     "cmd/arkoren",
     "core",
     "driver/aes",
@@ -14,7 +15,6 @@
     "driver/gcp",
     "driver/launchdarkly",
     "driver/mailgun",
-    "driver/mcp",
     "driver/meilisearch",
     "driver/mollie",
     "driver/mqtt",
@@ -47,5 +47,6 @@
     "foundation/totp",
     "foundation/validate"
   ],
+  "retired": ["driver/mcp"],
   "development": ["cmd/arkoren-ci"]
 }

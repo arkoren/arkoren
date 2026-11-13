@@ -1,4 +1,4 @@
-module arkoren.dev/driver/mcp
+module arkoren.dev/ark/mcp
 
 go 1.27
 
