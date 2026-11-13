@@ -518,3 +518,67 @@ func TestPythonV1GoldenAnnotationIsSignedVerifiedAndRecomputedWithoutPython(t *t
 		t.Fatal(err)
 	}
 }
+
+// writePolicy rewrites the fixture's committed public list.
+func (fixture fixture) writePolicy(t *testing.T, public []string) {
+	t.Helper()
+	policy, err := json.Marshal(map[string]any{"schema": 1, "public": public, "development": []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTest(t, fixture.root, ".github/release-modules.json", string(policy))
+}
+
+func TestRecordedAcceptsModuleAddedAfterSignedBatch(t *testing.T) {
+	fixture := newFixture(t)
+	batch := fixture.batch(t)
+	fixture.push(t, batch)
+	writeTest(t, fixture.root, "foundation/added/go.mod", "module arkoren.dev/foundation/added\n")
+	fixture.writePolicy(t, []string{"core", "cmd/arkoren", "driver/example", "foundation/example", "foundation/added"})
+	head := fixture.commit(t, "feat: add public module")
+	history, err := Recorded(t.Context(), fixture.root, fixture.trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Digest != batch.Digest {
+		t.Fatalf("wrong durable batch: %+v", history)
+	}
+	if err := Recompute(t.Context(), fixture.root, history[0]); err != nil {
+		t.Fatal(err)
+	}
+	command(t, fixture.root, "git", "tag", "foundation/added/v0.1.0")
+	plan, err := release.Prepare(t.Context(), fixture.root, head, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approved(fixture.root, plan); err != nil {
+		t.Fatalf("fresh plan must match current policy: %v", err)
+	}
+	if err := approved(fixture.root, batch.Plan); err == nil {
+		t.Fatal("fresh approval accepted the stale inventory")
+	}
+}
+
+func TestRecordedRejectsTagForModuleRemovedFromPublic(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.push(t, fixture.batch(t))
+	fixture.writePolicy(t, []string{"core", "cmd/arkoren", "foundation/example"})
+	fixture.commit(t, "chore: remove public module")
+	if _, err := Recorded(t.Context(), fixture.root, fixture.trust); err == nil {
+		t.Fatal("tag for a namespace removed from current policy accepted")
+	}
+}
+
+func TestRecordedRejectsInventoryDifferingFromOwnCommitPolicy(t *testing.T) {
+	fixture := newFixture(t)
+	batch := fixture.batch(t)
+	batch.Plan.Modules = batch.Plan.Modules[:len(batch.Plan.Modules)-1]
+	altered, err := NewBatch(batch.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.push(t, altered)
+	if _, err := Recorded(t.Context(), fixture.root, fixture.trust); err == nil || !strings.Contains(err.Error(), "plan inventory differs") {
+		t.Fatalf("batch inventory differing from its commit policy accepted: %v", err)
+	}
+}
