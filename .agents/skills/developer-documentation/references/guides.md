@@ -199,8 +199,10 @@ drivers page.
 Every service drivers page, including `observability/telemetry-drivers.md`,
 requires a compatibility matrix after its introduction and before provider setup.
 An embedded `Drivers` section requires the same comparison before provider setup.
-General driver-writing and discovery catalogs link these service comparisons
-instead of duplicating them.
+Every driver implements a core service contract, so every driver page has a
+matrix. Ark guides keep a matrix wherever providers vary (the OAuth guide's
+provider comparison). General driver-writing and discovery catalogs link these
+service comparisons instead of duplicating them.
 
 On every edit to a drivers page, recheck its matrix against the provider sections
 and current implementation/tests. When a contract, driver, configuration default,
