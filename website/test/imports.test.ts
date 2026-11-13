@@ -101,6 +101,13 @@ test("selected drivers add their links without requiring the other vendors or CL
   );
 });
 
+test("arks join the catalog and publish import pages", () => {
+  assertCatalog(
+    ["core", "driver/fixture", "ark/fixture"],
+    ["arkoren.dev/ark/fixture", "arkoren.dev/core", "arkoren.dev/driver/fixture"],
+  );
+});
+
 test("the CLI publishes import paths but never becomes a library catalog entry", () => {
   assertCatalog(
     ["foundation/fixture", "core", "driver/fixture", "cmd/arkoren"],
