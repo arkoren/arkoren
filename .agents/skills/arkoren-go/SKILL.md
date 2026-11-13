@@ -446,8 +446,10 @@ delivery, and lifecycle protocols explicit.
   and request.WithSessionHandle. Zero Handle restores the default slot; copies
   keep identity, separate allocations differ. NewContextFor/FromContextFor are
   typed low-level forms. Handles do not isolate cookies, storage, or authorization.
-  The driver/oauth module still targets the former SessionIdentity until its own
-  phase moves it to Login.Begin.
+  ark/oauth logs in through Login.Begin with a federated factor:
+  Callback(login, resolve) maps the external Identity to a subject string and
+  Logout(login) calls Login.Logout; a second factor redirects to
+  ClientBuilder.ChallengeURL or fails with ErrNoChallengeURL.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
   preserve the first definition error; nil conversion is a domain error, not

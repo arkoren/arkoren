@@ -174,6 +174,18 @@ func TestMissingApprovedModuleFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRetiredDirectoryOnDiskFailsInventory(t *testing.T) {
+	root := fixture(t)
+	write(t, root, ".github/release-modules.json", `{"schema":1,"public":["core","cmd/arkoren","driver/example","foundation/example"],"development":["cmd/arkoren-ci"],"retired":["driver/old"]}`)
+	if _, err := repository.Inspect(context.Background(), root, ""); err != nil {
+		t.Fatalf("absent retired directory rejected: %v", err)
+	}
+	write(t, root, "driver/old/go.mod", "module arkoren.dev/driver/old\n\ngo 1.27\n")
+	if _, err := repository.Inspect(context.Background(), root, ""); err == nil {
+		t.Fatal("retired directory present on disk accepted")
+	}
+}
+
 func TestNestedCoreModuleFailsClosed(t *testing.T) {
 	root := fixture(t)
 	write(t, root, "core/nested/go.mod", "module private\n")

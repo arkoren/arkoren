@@ -569,6 +569,48 @@ func TestRecordedRejectsTagForModuleRemovedFromPublic(t *testing.T) {
 	}
 }
 
+// retire moves directory from the fixture's public list to the retired list and
+// removes it from the tree, as a namespace move would.
+func (fixture fixture) retire(t *testing.T, directory string) {
+	t.Helper()
+	public := []string{}
+	for _, module := range []string{"core", "cmd/arkoren", "driver/example", "foundation/example"} {
+		if module != directory {
+			public = append(public, module)
+		}
+	}
+	policy, err := json.Marshal(map[string]any{"schema": 1, "public": public, "development": []string{}, "retired": []string{directory}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTest(t, fixture.root, ".github/release-modules.json", string(policy))
+	if err := os.RemoveAll(filepath.Join(fixture.root, directory)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.commit(t, "refactor: retire namespace")
+}
+
+func TestRecordedAcceptsRetiredBootstrapTag(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.retire(t, "driver/example")
+	history, err := Recorded(t.Context(), fixture.root, fixture.trust)
+	if err != nil {
+		t.Fatalf("retired bootstrap tag rejected: %v", err)
+	}
+	if len(history) != 0 {
+		t.Fatalf("bootstrap tags are not batches: %+v", history)
+	}
+}
+
+func TestRecordedRejectsRetiredNamespaceLaterTag(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.push(t, fixture.batch(t))
+	fixture.retire(t, "driver/example")
+	if _, err := Recorded(t.Context(), fixture.root, fixture.trust); err == nil {
+		t.Fatal("signed batch tag in a retired namespace accepted")
+	}
+}
+
 func TestRecordedRejectsInventoryDifferingFromOwnCommitPolicy(t *testing.T) {
 	fixture := newFixture(t)
 	batch := fixture.batch(t)

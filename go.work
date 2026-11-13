@@ -1,6 +1,8 @@
 go 1.27
 
 use (
+	./ark/mcp
+	./ark/oauth
 	./cmd/arkoren
 	./cmd/arkoren-ci
 	./core
@@ -15,13 +17,11 @@ use (
 	./driver/gcp
 	./driver/launchdarkly
 	./driver/mailgun
-	./driver/mcp
 	./driver/meilisearch
 	./driver/mollie
 	./driver/mqtt
 	./driver/mysql
 	./driver/nats
-	./driver/oauth
 	./driver/openai
 	./driver/openfeature
 	./driver/opensearch

@@ -3,8 +3,10 @@
 Modular Go 1.27 toolkit (`github.com/arkoren/arkoren`) with independent modules
 and no root module. `core/` is `arkoren.dev/core`: application lifecycle,
 `http/` request handling, and `service/` contracts, memory drivers and
-`<contract>test` conformance suites. `driver/<vendor>` holds one module per
-vendor; `ark/<name>` holds opt-in domain features (none yet);
+`<contract>test` conformance suites. `driver/<vendor>` holds modules that
+implement a `core/service` contract and run its conformance suite; `ark/<name>`
+holds every other opt-in module on core, protocol modules and features with
+tables (currently `ark/mcp`);
 `foundation/<name>` holds stdlib-only libraries. `cmd/arkoren` is the consumer
 CLI; `cmd/arkoren-ci` is a separate stdlib-only development command, never a
 release or consumer dependency. `scripts/` holds workflow fixtures. The committed
@@ -54,7 +56,9 @@ Never read `go.sum`, `go.work.sum`, `website/package-lock.json`, or
   tooling; there is no generated contract map.
 - Core has no third-party dependencies and never imports a driver, ark or CLI.
   Driver modules never require other driver modules; arks never require other
-  arks. Foundation modules import only the standard library. `cmd/arkoren` may
+  arks or import drivers outside tests. An ark with tables stores user data by
+  subject, registers `OnForget`, ships `Migrations()` and runs three-database
+  integration tests (see `arkoren-codebase`). Foundation modules import only the standard library. `cmd/arkoren` may
   require core and its pinned MCP SDK; keep dependencies small because a
   `go tool` dependency enters the consumer's `go.mod`.
 - Separate modules live under `cmd/`, `driver/`, `ark/`, and `foundation/`, never
@@ -89,7 +93,9 @@ GOWORK=off go -C cmd/arkoren-ci run . inventory
 ```
 
 `.github/release-modules.json` is the versioned classification authority: public
-release namespaces and explicit development-only roots. CI discovers all canonical
+release namespaces, explicit development-only roots and optional `retired`
+directories (once published, never again: they must be absent from disk and from
+both creation rulesets, and keep only their bootstrap `v0.1.0` tag). CI discovers all canonical
 filesystem modules, including ignored local ones (currently 46 modules and 15
 integrations); release preparation validates only the exact committed public set
 (45). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
@@ -146,11 +152,11 @@ and rendered docs. `scripts/ci-modules.sh` owns the bounded inventory; module
 changes must preserve its canonical paths and pass its fixtures. Compose modules
 run lint in check and full race suites in integration.
 Require both `CI gate` (all Go/tooling jobs) and the separate `website` check.
-PRs select owning driver/CLI modules; core, foundation, manifest, suite-marker,
+PRs select owning driver/ark/CLI modules; core, foundation, manifest, suite-marker,
 shared configuration and unknown-path changes select the full suite. The shared
 `scripts/ci-select.sh` selector validates the complete inventory before selection.
 It compares the tested PR merge tree with its exact base parent; missing or
-mismatched history selects full work. Driver/consumer CLI changes also select the
+mismatched history selects full work. Driver/ark/consumer CLI changes also select the
 website, which reads package metadata and embedded consumer guides. Website-only
 PRs select no Go modules. Tooling always runs. Main pushes and manual runs stay full.
 The gate rejects failures, cancellations, missing jobs, invalid plans and skips

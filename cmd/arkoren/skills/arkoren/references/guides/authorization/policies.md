@@ -156,19 +156,11 @@ permissions into them: either action can expand what a restricted credential
 may do. `gate.HasScopes` requires every named scope, and an empty requirement
 allows any authenticated identity.
 
-If the authenticator instead attaches `oauth.Identity` as the identity's record
-value, the OAuth adapter provides its own scope rule. Import
-`oauth "arkoren.dev/driver/oauth/oauthauth"`; with the bearer-authenticated
-router `api`, apply it as admission:
-
-```go
-api.With(gate.Require(oauth.HasScopes("billing:export"))).Post("/billing/exports", exportBilling)
-```
-
-`oauth.HasScopes` requires every named scope, and an empty requirement allows any
-authenticated `oauth.Identity`. It neither authenticates nor checks local team
-membership. Do not combine it with `User` rules in the same gate call: the types
-differ. Map verified issuer-and-subject identity to your local actor before local
+The OAuth adapter has no scope rule of its own. Wrap its verifier so the
+granted scopes ride on the `auth.Identity`, as shown in
+[OIDC Tokens](../authentication/oidc-bearer.md#require-identity), and use
+`gate.HasScopes` as above. It neither authenticates nor checks local team
+membership. Map verified issuer-and-subject identity to your local actor before local
 resource decisions, following [OIDC bearer verification](../authentication/oidc-bearer.md).
 [API keys](../authentication/api-tokens.md#issue-keys) also need their credential
 permissions intersected with the actor's authority.

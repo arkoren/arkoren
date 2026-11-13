@@ -17,13 +17,18 @@ const MODULE = /^(core|cmd\/arkoren|(?:driver|foundation|ark)\/[a-z0-9][a-z0-9-]
 /** Normal pre-1.0 versions; prerelease status belongs to GitHub metadata. */
 const VERSION = /^v0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
-/** Read committed manifests only; ignored local modules cannot enter history. */
+/**
+ * Read committed manifests only; ignored local modules cannot enter history.
+ * Retired namespaces are no longer on disk but keep their published release
+ * history, so they stay valid release modules.
+ */
 export function releaseModules(repo = RELEASE_REPO): string[] {
   const policy = z
     .strictObject({
       schema: z.literal(1),
       public: z.array(z.string().regex(MODULE)).min(1),
       development: z.array(z.literal("cmd/arkoren-ci")),
+      retired: z.array(z.string().regex(MODULE)).optional(),
     })
     .refine(
       (value) =>
@@ -50,19 +55,19 @@ export function releaseModules(repo = RELEASE_REPO): string[] {
   if (JSON.stringify(directories) !== JSON.stringify([...policy.public].sort())) {
     throw new Error("committed public inventory differs from module policy");
   }
-  return directories
-    .map((directory) => {
-      const file = `${directory}/go.mod`;
-      const manifest = execFileSync("git", ["show", `HEAD:${file}`], {
-        cwd: repo,
-        encoding: "utf8",
-      });
-      if (manifest.match(/^module\s+(\S+)/m)?.[1] !== `arkoren.dev/${directory}`) {
-        throw new Error(`noncanonical module declaration: ${directory}`);
-      }
-      return `arkoren.dev/${directory}`;
-    })
-    .sort();
+  const retired = (policy.retired ?? []).map((directory) => `arkoren.dev/${directory}`);
+  const published = directories.map((directory) => {
+    const file = `${directory}/go.mod`;
+    const manifest = execFileSync("git", ["show", `HEAD:${file}`], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    if (manifest.match(/^module\s+(\S+)/m)?.[1] !== `arkoren.dev/${directory}`) {
+      throw new Error(`noncanonical module declaration: ${directory}`);
+    }
+    return `arkoren.dev/${directory}`;
+  });
+  return [...published, ...retired].sort();
 }
 
 /** Validate exact source metadata without coercing timestamps or booleans. */

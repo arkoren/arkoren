@@ -40,3 +40,29 @@ func TestPolicyRejectsUnreviewedDevelopmentRoot(t *testing.T) {
 		t.Fatal("unreviewed development root accepted")
 	}
 }
+
+func TestPolicyAcceptsRetiredDirectory(t *testing.T) {
+	policy, err := repository.ParsePolicy([]byte(`{"schema":1,"public":["core","cmd/arkoren"],"development":[],"retired":["driver/oauth"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policy.Retired) != 1 || policy.Retired[0] != "driver/oauth" {
+		t.Fatalf("retired list not parsed: %v", policy.Retired)
+	}
+}
+
+func TestPolicyRejectsPublicAndRetiredDirectory(t *testing.T) {
+	_, err := repository.ParsePolicy([]byte(`{"schema":1,"public":["core","cmd/arkoren","driver/oauth"],"development":[],"retired":["driver/oauth"]}`))
+	if err == nil {
+		t.Fatal("directory both public and retired accepted")
+	}
+}
+
+func TestPolicyRejectsDuplicateOrNoncanonicalRetiredDirectory(t *testing.T) {
+	for _, retired := range []string{`["driver/oauth","driver/oauth"]`, `["driver/../outside"]`} {
+		_, err := repository.ParsePolicy([]byte(`{"schema":1,"public":["core","cmd/arkoren"],"development":[],"retired":` + retired + `}`))
+		if err == nil {
+			t.Fatalf("invalid retired list accepted: %s", retired)
+		}
+	}
+}

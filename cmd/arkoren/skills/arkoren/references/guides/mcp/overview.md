@@ -26,7 +26,7 @@ AI host → MCP client → HTTP endpoint → typed operation
 ```
 
 `arkoren.dev/core/mcp` defines immutable tools without depending on a protocol
-SDK. `arkoren.dev/driver/mcp/mcpserver` registers selected definitions with the
+SDK. `arkoren.dev/ark/mcp/mcpserver` registers selected definitions with the
 official Go MCP SDK and returns an `http.Handler`. Your application mounts that
 handler and owns the listener, authentication, deadlines, and shutdown.
 
@@ -107,4 +107,4 @@ require the [native SDK boundary](tools.md#native-extensions); they do not gain
 managed protections automatically.
 
 For declarations and adapter settings, see the [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp)
-and [MCP server API](https://pkg.go.dev/arkoren.dev/driver/mcp/mcpserver).
+and [MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).

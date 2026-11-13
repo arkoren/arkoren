@@ -140,7 +140,7 @@ protect any saved output as well as the live endpoint.
 
 In your existing `mcpserver.New` callback, register `selected` with the shared
 application handles obtained above. Here `listener` is the
-`*mcpserver.Builder` from `arkoren.dev/driver/mcp/mcpserver`:
+`*mcpserver.Builder` from `arkoren.dev/ark/mcp/mcpserver`:
 
 ```go
 listener.Tools(selected...)

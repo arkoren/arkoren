@@ -77,7 +77,6 @@ const DRIVERS = [
   "mysql/mysqldatabase",
   "nats/natsbroadcast",
   "nats/natsqueue",
-  "oauth/oauthauth",
   "openai/openaillm",
   "openai/openaiwebhook",
   "openfeature/openfeaturefeature",
@@ -125,6 +124,7 @@ export function legacyApiRedirects(): Record<string, string> {
       `core/service/${name}/memory${name}`,
     ]),
     ["memory/slogmail", "core/service/mail/slogmail"],
+    ["drivers/oauth/oauthauth", "ark/oauth/oauthauth"],
     ...DRIVERS.map((path) => [`drivers/${path}`, `driver/${path}`]),
     ..."certificate collection key problem query validate"
       .split(" ")
