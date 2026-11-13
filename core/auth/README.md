@@ -33,8 +33,12 @@ Create one `auth.NewLogin(provider, store)` and share it across authentication,
 login, and logout. Every login method calls `Begin` with the subject and the
 factor it verified; `Begin` logs the user in, or parks a pending login when a
 registered `SecondFactor` check says a second factor is needed (finish with
-`Pending`, `Fail` and `Complete`). `Confirm` records a fresh factor on a
-logged-in session. `RequireLevel` and `RequireFresh` guard routes by the factors
+`Pending`, `Fail` and `Complete`). A session already logged in as that subject
+keeps its login instead: `Begin` adds the factor like `Confirm` and skips the
+second-factor checks (before v0.6.0 it replaced the factors). `Confirm` records
+a fresh factor on a logged-in session. `web.Post("/logout", auth.Logout(login))`
+owns the logout route: it ends the login, publishes `auth.LoggedOut` and
+answers 204, or 303 with `LogoutBuilder.Redirect`. `RequireLevel` and `RequireFresh` guard routes by the factors
 of the identity, so they also work for tokens. The provider is asked on every
 request, so a deleted or disabled user is anonymous. Each login also creates a
 login record, so a user can list devices with `Logins` and log them out with

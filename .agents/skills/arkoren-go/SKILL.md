@@ -422,7 +422,7 @@ delivery, and lifecycle protocols explicit.
   security headers. Store request hooks; do not invoke them during construction
   or replay user callbacks through delegating constructors. Share immutable
   one auth.NewLogin(provider, store) across Authenticator, Begin, Pending,
-  Complete, Fail, Confirm and Logout. Login owns session state: one session
+  Complete, Fail, Confirm and Logout; auth.Logout(login) is the logout handler. Begin on a session already logged in as that subject adds the factor like Confirm and skips second-factor checks. Login owns session state: one session
   record under arkoren:auth:session, a pending login under arkoren:auth:pending,
   every transition regenerating the ID, and the provider asked on every request
   (not found or disabled is ErrNoCredentials, a changed UserRecord.Version too).
@@ -448,7 +448,7 @@ delivery, and lifecycle protocols explicit.
   typed low-level forms. Handles do not isolate cookies, storage, or authorization.
   ark/oauth logs in through Login.Begin with a federated factor:
   Callback(login, resolve) maps the external Identity to a subject string and
-  Logout(login) calls Login.Logout; a second factor redirects to
+  auth.Logout(login) owns the logout route (ark/oauth Client.Logout is deprecated); a second factor redirects to
   ClientBuilder.ChallengeURL or fails with ErrNoChallengeURL.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
