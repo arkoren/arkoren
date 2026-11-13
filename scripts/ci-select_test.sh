@@ -33,8 +33,8 @@ fixture() {
   cd tree
   git init -q -b base
   mkdir .github
-  printf '%s\n' '{"schema":1,"public":["core","cmd/arkoren","driver/a","driver/z","foundation/f"],"development":["cmd/arkoren-ci"]}' > .github/release-modules.json
-  for module in core cmd/arkoren cmd/arkoren-ci driver/a driver/z foundation/f; do
+  printf '%s\n' '{"schema":1,"public":["core","cmd/arkoren","driver/a","driver/z","ark/a","foundation/f"],"development":["cmd/arkoren-ci"]}' > .github/release-modules.json
+  for module in core cmd/arkoren cmd/arkoren-ci driver/a driver/z ark/a foundation/f; do
     mkdir -p "$module"
     printf 'module fixture\n' > "$module/go.mod"
     printf 'fixture\n' > "$module/payload"
@@ -93,6 +93,12 @@ touch driver/z/new_test.go
 merge_pr
 select_work
 expect '.modules == ["driver/z"] and .integration == [] and .website'
+
+fixture 'ark payload selects its module and website'
+printf 'changed\n' >> ark/a/payload
+merge_pr
+select_work
+expect '.mode == "selective" and .modules == ["ark/a"] and .integration == [] and .website'
 
 fixture 'embedded guides select CLI and website'
 mkdir -p cmd/arkoren/skills/arkoren/references/guides
@@ -172,7 +178,7 @@ jq '.public -= ["driver/z"]' .github/release-modules.json > policy
 mv policy .github/release-modules.json
 merge_pr
 select_work
-expect '.mode == "full" and (.modules | length) == 5 and (.modules | index("driver/z")) == null'
+expect '.mode == "full" and (.modules | length) == 6 and (.modules | index("driver/z")) == null'
 
 fixture 'removed Compose marker selects full remaining suites'
 touch driver/z/compose.yaml

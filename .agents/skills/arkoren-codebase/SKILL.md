@@ -27,8 +27,8 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 | Tier | Path | Modules | Holds |
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
-| Drivers | `driver/<vendor>/` | one per vendor | Vendor implementations of core contracts, and HTTP protocol adapters that have no `Driver` (`oauth` plugs into `core/auth`; `mcp/mcpserver` serves `core/mcp.Tool`; a provider webhook adapter would return a `webhook.Source` and publish `webhook.Event` definitions). |
-| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Domain features with their own tables, routes, or flows. None yet. |
+| Drivers | `driver/<vendor>/` | one per vendor | Implement a `core/service/<x>` contract and run its `<x>test` conformance suite. Seams in `core/auth` (`UserDriver`, `authtest`) do not make a package a driver. A driver may own infrastructure tables (`postgressearch`). Webhook and CAPTCHA adapters are undecided: the contract test decides each one when it is built. `driver/oauth` and `driver/mcp` predate this rule and are pending moves to `ark/`. |
+| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Every other opt-in module on core: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features with tables (two-factor, users, tokens, linked accounts). None published yet. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
 | Development | `cmd/arkoren-ci/` | `arkoren.dev/cmd/arkoren-ci` | Repository maintenance only; standard library only, with no dependency on toolkit or consumer CLI modules. Public source and vanity resolution do not imply a supported release/install namespace. Excluded from releases and the library API catalog. |
@@ -50,9 +50,9 @@ baseline decisions; unknown command roots require a boundary review.
 core, the CLI, explicit development commands and direct driver/foundation/optional ark roots;
 Compose markers select integration suites. `scripts/ci-select.sh` validates this
 inventory, then selects PR work from the tested merge tree against its exact base
-parent. Driver/CLI changes select owning modules; core, foundation, manifests,
+parent. Driver/ark/CLI changes select owning modules; core, foundation, manifests,
 suite markers, shared configuration and unknown paths select full work. Missing
-comparison history also selects full work. Driver/consumer CLI changes select
+comparison history also selects full work. Driver/ark/consumer CLI changes select
 the website because package metadata and embedded guides are website inputs.
 Website-only PRs select no Go modules; tooling always runs. Main pushes and manual
 runs remain full. Preserve the `CI gate` and `website` names for release evidence.
@@ -79,21 +79,30 @@ from their original tree; normal planning still requires schema-1 approval.
 
 Place new code by asking, in order:
 
-1. Needs a vendor? Use a core contract in `core/service/` plus drivers for
-   interchangeable service behavior. Keep provider-specific HTTP adapters in
-   `driver/<vendor>/` when their protocol and policy are the interface, as with
-   OAuth, webhooks, and CAPTCHA. A vendor alone does not justify a new contract.
+1. Implements a core service contract for a vendor? Driver
+   (`driver/<vendor>/`), checked from code: it runs the contract's `<x>test`
+   suite. Anything else opt-in that needs a third-party library or owns domain
+   data? Ark (`ark/<name>/`). A vendor alone does not justify a new contract.
+   Webhook and CAPTCHA adapters are undecided; the contract test decides each
+   when it is built.
 2. A pure algorithm, standard library only, useful without Arkoren?
    `foundation/`.
 3. Assumes the app's domain or product flow (users, teams, plans, roles;
    signup, checkout; its own routes, screens, or email wording)? An ark.
-4. Needs a third-party library? Not core: a driver or an ark.
+4. Needs a third-party library? Not core: a driver or an ark (rule 1).
 5. Otherwise core: a mechanism any app could use. It may own an
    infrastructure table (an outbox, a job table), never a domain table.
 
 Core services that compose contracts without a `Driver` of their own (such
 as a future notification dispatcher or outbox) also live in `core/service/`.
 An ark cannot import `core/internal`; core makes public what arks need.
+
+Rules for every ark: Go API first; no driver imports outside tests; arks never require other
+arks. An ark with tables also stores user data under a subject text column,
+registers `OnForget`, ships `Migrations()` and runs integration tests on all
+three databases. Arks without tables (protocol modules such as OAuth client,
+SAML, MCP server) have none of those four obligations. Keep a provider
+compatibility matrix in the ark's guide wherever providers vary.
 
 ## How the pieces fit
 
