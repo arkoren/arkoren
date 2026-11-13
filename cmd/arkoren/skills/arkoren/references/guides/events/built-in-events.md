@@ -83,12 +83,14 @@ These notifications observe refusal, not successful identity establishment:
 | --- | --- | --- | --- |
 | `auth.Rejected` | `http.auth.rejected` | `auth.MiddlewareBuilder.Events` on `Require` | `RejectedEvent{Method}` when an anonymous request is rejected. |
 | `gate.Denied` | `http.gate.denied` | `gate.Builder.Events` on `gate.New` | `DeniedEvent{Method, Rule}` when a rule returns false. |
+| `auth.LoggedOut` | `auth.user.logged-out` | `auth.LogoutBuilder.Events` on `auth.Logout` | `LoggedOutEvent{Subject}` after a logged-in user logged out; anonymous sessions publish nothing. |
 
 `Rule` is the zero-based rule index in registration order. `Method` is empty
 for `Gate.Authorize`, which has no request. Neither payload contains a path,
 user, or cause. Rule errors, missing users, allowed calls, and the free
-`gate.Authorize`/`gate.Require` functions publish no gate event. Identity
-login/logout methods also have no bus and publish nothing themselves.
+`gate.Authorize`/`gate.Require` functions publish no gate event. The
+`auth.Login` methods have no bus and publish nothing themselves; the
+`auth.Logout` handler publishes `auth.LoggedOut`.
 
 Each refusal publishes, even when a custom error response changes the default
 status. Clients control the frequency: keep callbacks cheap and place
