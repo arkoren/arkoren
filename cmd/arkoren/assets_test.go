@@ -325,10 +325,10 @@ import (
 	"testing"
 	"time"
 
-	"arkoren.dev/ark/mcp/mcpserver"
 	"arkoren.dev/core/application"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/server"
+	"arkoren.dev/driver/mcp/mcpserver"
 	"example.com/hello/internal/bootstrap"
 )
 
