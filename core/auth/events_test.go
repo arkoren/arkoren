@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
-	"arkoren.dev/core/http/auth"
 	"arkoren.dev/foundation/problem"
 )
 
@@ -38,7 +38,7 @@ func TestRequirePublishesRejected(t *testing.T) {
 	got := listenRejected(t, bus)
 	var seen []string
 
-	response := status(auth.Require[user](func(authenticator *auth.Builder) {
+	response := status(auth.Require(func(authenticator *auth.MiddlewareBuilder) {
 		authenticator.Events(bus)
 	})(ok(&seen)), httptest.NewRequest(http.MethodPost, "/admin/private-identity?token=secret", nil))
 
@@ -61,7 +61,7 @@ func TestRequireRejectedEventOmitsRequestIdentity(t *testing.T) {
 	bus := event.New()
 	got := listenRejected(t, bus)
 	var seen []string
-	handler := auth.Require[user](func(authenticator *auth.Builder) {
+	handler := auth.Require(func(authenticator *auth.MiddlewareBuilder) {
 		authenticator.Events(bus)
 	})(ok(&seen))
 	status(handler, httptest.NewRequest(http.MethodGet, "/reset/private-token?signature=private-signature", nil))
@@ -83,7 +83,7 @@ func TestRequireCustomStatusStillPublishesRejected(t *testing.T) {
 	bus := event.New()
 	got := listenRejected(t, bus)
 	var seen []string
-	handler := auth.Require[user](func(authenticator *auth.Builder) {
+	handler := auth.Require(func(authenticator *auth.MiddlewareBuilder) {
 		authenticator.Events(bus)
 		authenticator.ErrorResponse(problem.Forbidden())
 	})(ok(&seen))
@@ -107,7 +107,7 @@ func TestRequirePublishesEveryRejection(t *testing.T) {
 	bus := event.New()
 	got := listenRejected(t, bus)
 	var seen []string
-	handler := auth.Require[user](func(authenticator *auth.Builder) {
+	handler := auth.Require(func(authenticator *auth.MiddlewareBuilder) {
 		authenticator.Events(bus)
 	})(ok(&seen))
 
@@ -128,7 +128,7 @@ func TestRequirePublishesNothingForUser(t *testing.T) {
 	bus := event.New()
 	got := listenRejected(t, bus)
 	var seen []string
-	handler := auth.Middleware(returns("a", nil))(auth.Require[user](func(authenticator *auth.Builder) {
+	handler := auth.Middleware(returns("a", nil))(auth.Require(func(authenticator *auth.MiddlewareBuilder) {
 		authenticator.Events(bus)
 	})(ok(&seen)))
 
@@ -148,7 +148,7 @@ func TestRequireWithoutBusPublishesNothing(t *testing.T) {
 	got := listenRejected(t, bus)
 	var seen []string
 
-	status(auth.Require[user]()(ok(&seen)), httptest.NewRequest(http.MethodGet, "/", nil))
+	status(auth.Require()(ok(&seen)), httptest.NewRequest(http.MethodGet, "/", nil))
 
 	if len(*got) != 0 {
 		t.Fatalf("Rejected = %+v; want none", *got)

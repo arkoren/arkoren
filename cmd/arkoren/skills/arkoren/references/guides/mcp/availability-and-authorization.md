@@ -22,7 +22,7 @@ to use every tool or read every record. Reuse your existing
 [Gate rules](../authorization/overview.md), not a separate MCP permission model.
 
 The examples import standard `context`, `arkoren.dev/core/mcp`,
-`arkoren.dev/core/http/auth`, and `arkoren.dev/core/http/auth/gate`.
+`arkoren.dev/core/auth`, and `arkoren.dev/core/auth/gate`.
 
 ## Capability Rules
 
@@ -53,20 +53,16 @@ func canTrack(ctx context.Context, user User) (bool, error) {
 }
 ```
 
-Adapt that shared rule to the context-only callback MCP needs:
+Adapt that shared rule to the context-only callback MCP needs with `gate.Bind`:
 
 ```go
-func trackingAvailable(ctx context.Context) (bool, error) {
-	user, ok := auth.FromContext[User](ctx)
-	if !ok {
-		return false, nil
-	}
-	return canTrack(ctx, user)
-}
+trackingAvailable := gate.Bind(canTrack)
 ```
 
-Missing identity denies availability here. The lookup must use the same
-concrete `User` type as admission; `User` and `*User` are different slots.
+`gate.Bind` looks up the `User` that admission attached to the identity and runs
+the rules in order. Missing identity, or a user of another type, denies
+availability without an error. The lookup must use the same concrete `User`
+type as admission; `User` and `*User` are different types.
 If a real plan lookup fails, return its error rather than turning an outage
 into an ordinary denial. Policies must be observational and safe for concurrent
 use: listing tools must not change business data. Pass context into backend

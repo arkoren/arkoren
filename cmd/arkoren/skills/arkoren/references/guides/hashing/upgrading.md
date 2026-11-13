@@ -44,7 +44,7 @@ Assume a decoded `LoginInput` with a `Password string` field, an account named
 input limits first. For bcrypt, reject attempts over 72 bytes before comparison:
 native checking can accept an extra suffix after a valid 72-byte prefix.
 
-With `auth` imported from `arkoren.dev/core/http/auth`, establish the credential
+With `auth` imported from `arkoren.dev/core/auth`, establish the credential
 decision separately from renewal:
 
 ```go

@@ -27,7 +27,7 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 | Tier | Path | Modules | Holds |
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
-| Drivers | `driver/<vendor>/` | one per vendor | Vendor implementations of core contracts, and HTTP protocol adapters that have no `Driver` (`oauth` plugs into `http/auth`; `mcp/mcpserver` serves `core/mcp.Tool`; a provider webhook adapter would return a `webhook.Source` and publish `webhook.Event` definitions). |
+| Drivers | `driver/<vendor>/` | one per vendor | Vendor implementations of core contracts, and HTTP protocol adapters that have no `Driver` (`oauth` plugs into `core/auth`; `mcp/mcpserver` serves `core/mcp.Tool`; a provider webhook adapter would return a `webhook.Source` and publish `webhook.Event` definitions). |
 | Arks | `ark/<name>/` | one per ark, opt in with `go get` | Domain features with their own tables, routes, or flows. None yet. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
@@ -125,7 +125,11 @@ suite. `OnForget(fn)` hooks are unnamed, run in registration order in the caller
 context (so they join its transaction), and the first error stops `Forget`;
 `Forget` then emits `auth.UserForgotten` only after every hook succeeded, as a
 notification that never replaces a hook. Only `ErrUserNotFound` proves deletion.
-It must not import the older `http/auth` package.
+`core/auth` also holds the identity side that moved from `http/auth`:
+the non-generic `Identity`, `Authenticator`, `Middleware`, `Require` and
+`Bearer`, with `core/auth/gate` and `core/auth/authtest`. `core/auth` imports
+`http/router` and `http/session` for them; nothing in `http/` imports it
+except `request`.
 
 For data-result, pagination, inspection-snapshot, or iterator interface changes,
 apply [Collection results](../arkoren-go/SKILL.md#collection-results). That rule
@@ -184,9 +188,9 @@ LLM-only attribute translation lives in `service/llm/internal/genai`.
 **HTTP path** (`http/`): `server` serves an `http.Handler` with safe timeouts →
 `router` runs handlers that return `error` and renders `problem.Details`
 errors centrally → `http/middleware/*` are `func(router.Handler) router.Handler`
-→ handlers use `request` and `response`; `auth` resolves the user (any
-`Authenticator` checked with `http/auth/authtest.Run`), `http/auth/gate`
-authorizes it, and `link` signs URLs. Pagination types (DTOs and small
+→ handlers use `request` and `response`; `auth` resolves who is acting as an
+`auth.Identity` (any `Authenticator` checked with `auth/authtest.Run`),
+`auth/gate` authorizes it, and `link` signs URLs. Pagination types (DTOs and small
 helpers shared by `service/database` and `request`) live in `pagination`; `request` reads their query parameters. `http/webhook` receives provider notifications: a `Source` (credentials, authentication) and credential-free `Event` definitions come from a vendor package, library or ark, and the application's `Builder` binds handlers and owns policy (deduplication scope, event bus, limits); it has no name, `Driver` or receiver object.
 `Event.Map` composes pure payload conversion with the original decoder for
 application-owned queue DTOs; it preserves the provider key and leaves the
@@ -256,8 +260,9 @@ handlers own resource Gate checks for all transports. Policies filter complete,
 unpaginated discovery and guard calls before decode; failures fail closed even
 when wrapping `ToolError`. Keep SDK imports in adapter/composition and authenticate
 outer HTTP with `auth.Middleware(auth.Bearer(verifyAccessToken))` followed by
-`auth.Require[User]()` before `routes.Mount("/mcp", endpoint)`; use the same
-concrete application user type in the verifier and policy lookups. Optional
+`auth.Require()` before `routes.Mount("/mcp", endpoint)`; attach the same
+concrete application user type to the identity's record in the verifier that
+policy lookups read. Optional
 `gate.Require(canUseMCP)` controls endpoint admission, not resource access.
 For an ark client without app permissions, wrap its typed operation
 in an app-owned authorized handler, then build the tool; see the shipped guide

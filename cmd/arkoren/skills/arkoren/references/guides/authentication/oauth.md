@@ -110,7 +110,7 @@ available until handlers have finished.
 
 Use an existing session-enabled, CSRF-protected browser group `web`, as in
 [Enable Login](session-login.md#enable-login). Import `auth` from
-`arkoren.dev/core/http/auth`. Your `loadUser` loads a current local `User` by
+`arkoren.dev/core/auth`. Your `loadUser` loads a current local `User` by
 integer ID; `mapIdentity` below returns that same ID type:
 
 ```go

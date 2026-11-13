@@ -12,7 +12,9 @@ summary:
 
 A browser login checks credentials once, then stores an account identifier in
 the session. On later requests, `auth.SessionIdentity` loads the current account
-from that identifier. You own the accounts, password checks, and account-status
+from that identifier and publishes an `auth.Identity` whose subject is the
+identifier as text and whose user record holds the loaded account, so
+`request.User[User]` returns it. You own the accounts, password checks, and account-status
 policy; [Sessions](../http-capabilities/sessions.md#enable-sessions) owns cookie
 configuration, storage, and response-time persistence.
 
@@ -83,12 +85,15 @@ web.Use(auth.Middleware(identity.Authenticator()))
 Session middleware must run first. Keep [CSRF protection](../browser-security/csrf-protection.md)
 on login, logout, and other state-changing browser routes: browsers send session
 cookies automatically, including on requests another site can initiate. Add
-`auth.Require[User]()` only to routes requiring a signed-in account, not to the
+`auth.Require()` only to routes requiring a signed-in account, not to the
 login route itself.
 
 Construction does not call the loader. Check `identity.Err()` during setup
-when configuration is assembled dynamically; a zero definition or nil loader
-returns `auth.ErrInvalidSessionIdentity`, not an anonymous result. Missing
+when configuration is assembled dynamically; a zero definition, a nil loader, or
+an identifier type that is not a string, an integer, or a text type (it must
+become a subject) returns `auth.ErrInvalidSessionIdentity`, not an anonymous
+result. A stored identifier that does not format as a valid subject, such as an
+empty string, also fails the request instead of falling back to anonymous. Missing
 sessions, missing identity fields, and incompatible stored types are anonymous.
 Persisted JSON that remains compatible can still decode after an identifier
 type change; a type change is not a revocation mechanism.
@@ -209,35 +214,38 @@ old ID valid.
 ## Revoke Account Sessions
 
 To end sessions across devices after a password change or compromise, store an
-account version with the ID. This is an alternative identity definition, not
-an additional identity entry:
+account version next to the ID. The identifier stays the plain account ID, because
+it becomes the identity's stable subject, so keep the version in its own session
+field:
 
 ```go
-type SessionUser struct {
-	ID      int
-	Version int
-}
+var sessionVersion = session.NewField[int]("account:version")
 ```
 
-Change your loader to `func(context.Context, SessionUser) (User, error)`.
-After loading the account and handling absence or storage errors as above,
-reject a stale version:
+The loader reads the session from its context, which session middleware filled
+before authentication. After loading the account and handling absence or storage
+errors as above, reject a missing or stale version:
 
 ```go
-if account.Disabled || account.SessionVersion != saved.Version {
+current, ok := session.FromContext(ctx)
+if !ok {
+	return User{}, auth.ErrNoCredentials
+}
+saved, err := current.Get(sessionVersion)
+if err != nil || account.Disabled || account.SessionVersion != saved {
 	return User{}, auth.ErrNoCredentials
 }
 return account.User, nil
 ```
 
-Here `saved` is the loader's `SessionUser` argument. Reconstruct the definition
-with that loader and supply both values after successful credential checks:
+Here `ctx` is the loader's context. Supply both values after successful
+credential checks:
 
 ```go
-if err := identity.Login(current, SessionUser{
-	ID:      account.ID,
-	Version: account.SessionVersion,
-}); err != nil {
+if err := identity.Login(current, account.ID); err != nil {
+	return err
+}
+if err := current.Put(sessionVersion, account.SessionVersion); err != nil {
 	return err
 }
 ```
@@ -276,4 +284,4 @@ For authentication tests, combine [direct identity tests](../testing/auth-tests.
 with a real cookie-based login/logout test that exercises persistence.
 
 For all functions and options, see the
-[`auth` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth).
+[`auth` API reference](https://pkg.go.dev/arkoren.dev/core/auth).

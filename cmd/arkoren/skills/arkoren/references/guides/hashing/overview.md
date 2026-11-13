@@ -76,7 +76,7 @@ request supply the stored hash or its work settings: verification uses the
 record's settings, not the current new-hash policy.
 
 Assume a decoded `LoginInput` with a `Password string` field, an account named
-`account`, and `auth` imported from `arkoren.dev/core/http/auth`. After enforcing
+`account`, and `auth` imported from `arkoren.dev/core/auth`. After enforcing
 the input limits above, check the attempt:
 
 ```go

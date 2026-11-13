@@ -8,9 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"arkoren.dev/core/auth"
+	"arkoren.dev/core/auth/gate"
 	"arkoren.dev/core/event"
-	"arkoren.dev/core/http/auth"
-	"arkoren.dev/core/http/auth/gate"
 	"arkoren.dev/core/http/router"
 )
 
@@ -54,7 +54,7 @@ func TestGateRequirePublishesDenied(t *testing.T) {
 
 	r := httptest.NewRequest(http.MethodDelete, "/admin?token=secret", nil)
 
-	err := handler(router.Handler(next))(httptest.NewRecorder(), r.WithContext(auth.NewContext(r.Context(), user{})))
+	err := handler(router.Handler(next))(httptest.NewRecorder(), r.WithContext(withUser(r.Context(), user{})))
 
 	if !hasStatus(err, http.StatusForbidden) {
 		t.Fatalf("err = %v", err)
@@ -80,8 +80,10 @@ func TestGateDeniedEventOmitsRequestIdentity(t *testing.T) {
 	})
 
 	routes := router.New()
-	routes.Use(auth.Middleware(func(*http.Request) (user, error) {
-		return user{}, nil
+	routes.Use(auth.Middleware(func(*http.Request) (auth.Identity, error) {
+		return auth.NewIdentity("1", func(principal *auth.IdentityBuilder) {
+			principal.Record(auth.UserRecord{Value: user{}})
+		}), nil
 	}), policy.Require(allow, isAdmin))
 	routes.Delete("/users/{identity}", next)
 
@@ -110,7 +112,7 @@ func TestGateAuthorizePublishesDeniedWithoutRequest(t *testing.T) {
 
 	bus := event.New()
 	got := listenDenied(t, bus)
-	ctx := auth.NewContext(t.Context(), user{})
+	ctx := withUser(t.Context(), user{})
 
 	if err := gate.New(func(access *gate.Builder) {
 		access.Events(bus)
@@ -132,7 +134,7 @@ func TestGatePublishesNothingWhenAllowed(t *testing.T) {
 
 	bus := event.New()
 	got := listenDenied(t, bus)
-	ctx := auth.NewContext(t.Context(), user{
+	ctx := withUser(t.Context(), user{
 		Admin: true,
 	})
 
@@ -178,7 +180,7 @@ func TestGatePublishesNothingWhenRuleFails(t *testing.T) {
 		return false, boom
 	}
 
-	ctx := auth.NewContext(t.Context(), user{})
+	ctx := withUser(t.Context(), user{})
 
 	if err := gate.New(func(access *gate.Builder) {
 		access.Events(bus)
@@ -198,7 +200,7 @@ func TestGateWithoutBusPublishesNothing(t *testing.T) {
 
 	bus := event.New()
 	got := listenDenied(t, bus)
-	ctx := auth.NewContext(t.Context(), user{})
+	ctx := withUser(t.Context(), user{})
 
 	if err := gate.New().Authorize(ctx, isAdmin); !errors.Is(err, gate.ErrForbidden) {
 		t.Fatalf("err = %v", err)

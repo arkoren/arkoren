@@ -6,6 +6,17 @@
 // There are no combinators and no registry: compose rules with ordinary Go
 // if and ||.
 //
+// U is the application user the authenticator attached to the identity's
+// [auth.UserRecord.Value], read as [auth.UserFromContext] does; User and *User
+// are different types. When U is [auth.Identity] the rule receives the
+// identity itself, which needs no application user type. No identity, no
+// record value or a value of another type is [auth.ErrUnauthenticated]: the
+// check fails closed.
+//
+// [Bind] adapts rules to a context-only availability check, such as tool
+// availability, that reports false instead of an error for anonymous callers.
+// [HasScopes] is a rule over [auth.Identity] that requires granted scopes.
+//
 // The free functions publish nothing. To observe denials, build a [Gate]
 // with [New] and [Builder.Events] and call its [Gate.Authorize] and
 // [Gate.Require] methods, which behave the same.
@@ -19,7 +30,7 @@
 //	r.Use(auth.Middleware(identity.Authenticator()))
 //
 //	r.Post("/login", login) // see package auth
-//	r.With(auth.Require[User]()).Get("/me", me)
+//	r.With(auth.Require()).Get("/me", me)
 //
 //	policy := &Policy{db: db}
 //	r.With(gate.Require(policy.Admin)).Get("/admin", dashboard)

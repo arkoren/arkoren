@@ -3,7 +3,7 @@ title: Authorization Overview
 nav: Overview
 description: Check actions with plain Go rules and keep permission decisions beside the resources they protect.
 summary:
-  - Match gate rules to the authenticated identity type and distinguish denials from failed checks.
+  - Match gate rules to the authenticated user type or identity and distinguish denials from failed checks.
   - Combine route admission with resource checks against authorized store results.
   - Reload identities and recheck permissions before deferred work runs.
 order: 10
@@ -24,15 +24,18 @@ missing-user and forbidden errors.
 ## Identity Boundaries
 
 Configure [credential resolution](../authentication/overview.md#resolve-credentials)
-before using the gate. Rules must accept the exact type that authentication puts
-in the context: `User` and `*User` are different types. A mismatch produces
-`auth.ErrUnauthenticated` (`401`), even if credentials were valid for the other
-type. The gate does not resolve credentials itself.
+before using the gate. A rule receives the application user that authentication
+attached to the identity's record. Rules must accept the exact type that
+authentication stored: `User` and `*User` are different types. A mismatch, an
+identity without a user, or no identity produces `auth.ErrUnauthenticated`
+(`401`), even if credentials were valid for the other type. A rule over
+`auth.Identity` instead receives the identity itself and needs no application
+user type. The gate does not resolve credentials itself.
 
 The examples use standard-library `context`, `auth` from
-`arkoren.dev/core/http/auth`, and `gate` from
-`arkoren.dev/core/http/auth/gate`. Assume your authenticator stores this
-application-owned identity:
+`arkoren.dev/core/auth`, and `gate` from
+`arkoren.dev/core/auth/gate`. Assume your authenticator attaches this
+application-owned user to the identity:
 
 ```go
 type User struct {
@@ -64,7 +67,7 @@ the rule before the handler runs:
 r.With(gate.Require(canExport)).Post("/reports/{id}/export", exportReport)
 ```
 
-No user of type `User` produces `401`. A rule returning `false, nil` produces
+No identity, or one without a `User`, produces `401`. A rule returning `false, nil` produces
 `gate.ErrForbidden` (`403`); a non-nil error is returned unchanged, even if the
 boolean is `true`. An infrastructure failure therefore does not become either
 permission or an ordinary denial. [Handling Denials](denials.md) explains how
@@ -74,7 +77,7 @@ If you pass several rules, every rule must allow. They run in argument order,
 stopping at the first denial or error; put inexpensive checks before external
 lookups. Express alternatives inside a rule with ordinary Go conditions.
 `gate.Require` panics with no rules. For sign-in alone, use
-`auth.Require[User]()` instead.
+`auth.Require()` instead.
 
 ## Resource Checks
 
@@ -125,16 +128,19 @@ runs, rather than trusting the queued permission snapshot. With those trusted
 rules:
 
 ```go
-ctx = auth.NewContext(ctx, user)
+actor := auth.NewIdentity(strconv.Itoa(user.ID), func(principal *auth.IdentityBuilder) {
+	principal.Record(auth.UserRecord{Subject: strconv.Itoa(user.ID), Value: user})
+})
+ctx = auth.NewContext(ctx, actor)
 if err := gate.Authorize(ctx, canExport, canExportReport(report)); err != nil {
 	return err
 }
 ```
 
-`auth.NewContext` attaches a value; it does not authenticate that value. The job
+`auth.NewContext` attaches an identity; it does not authenticate it. The job
 owns resolving the queued actor reference to a current identity. Do not attach
 an arbitrary user decoded from the job payload and treat it as trusted.
 
 As related checks grow, [Writing Policies](policies.md) keeps them together
 without introducing a separate policy language. For all functions and options,
-see the [`gate` API reference](https://pkg.go.dev/arkoren.dev/core/http/auth/gate).
+see the [`gate` API reference](https://pkg.go.dev/arkoren.dev/core/auth/gate).
