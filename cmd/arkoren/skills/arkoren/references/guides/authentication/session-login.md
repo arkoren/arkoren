@@ -222,8 +222,9 @@ if err := login.Logout(r); err != nil {
 return response.Status(w, http.StatusNoContent)
 ```
 
-Logout removes the session record and any pending login, even stale or unreadable
-ones, and rotates the ID after successful deletion. Other values, such as a
+Logout removes the session record, its [login record](#devices) and any pending
+login, even stale or unreadable ones, and rotates the ID after successful
+deletion. Other values, such as a
 language preference, remain. Use `request.MustSession(r).Destroy()` instead when
 the whole session must end. Both paths still depend on response-time
 persistence; a failed retirement can leave the old ID valid.
@@ -284,15 +285,24 @@ Behavior to know:
 
 - Records live as long as the maximum session lifetime. `session.Middleware`
   does not expose it, so tell the login with `policy.SessionLifetime(d)` if you
-  changed `MaxLifetime` from the 24-hour default.
-- `SeenAt` is refreshed at most once every five minutes, so it lags by that much
-  and ordinary requests stay read-only.
+  changed `MaxLifetime` from the 24-hour default (see
+  [Sessions](../http-capabilities/sessions.md)); the two must match.
+- `SeenAt` is refreshed at most once every five minutes, on a best-effort basis:
+  a failed refresh write never fails the request, so it can lag by more. Ordinary
+  requests stay read-only.
+- A device whose record was revoked is anonymous, so it cannot call `Logins` or
+  `RevokeOthers` either. Records of sessions that expired without a logout stay
+  listed until the record list expires or the 50-record limit drops them.
+- `Begin`, `Complete` and `Logout` return cache and lock errors from the record
+  store; the session is unchanged when they do.
 - At most 50 records are kept per user (`policy.MaxLogins(n)`). A new login
   beyond that drops the oldest record and logs that device out.
 - The user agent is cut to 255 bytes. The address is the host of `r.RemoteAddr`;
   behind a reverse proxy that is the proxy, so set
   `policy.ClientIP(ratelimit.TrustedProxyKey(prefixes...))` with your proxy
-  prefixes from `arkoren.dev/core/http/middleware/ratelimit`. Both are personal
+  prefixes from `arkoren.dev/core/http/middleware/ratelimit`. It trusts
+  `X-Forwarded-For` only from those prefixes and reduces IPv6 addresses to their
+  `/64` prefix, which is what the record stores. Both are personal
   data: `policy.Devices(false)` stores neither, and records never go into
   telemetry or events.
 - A flushed or replaced cache logs every user out.

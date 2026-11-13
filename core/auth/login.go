@@ -149,12 +149,16 @@ func missing(err error) bool {
 func (login *Login) release(ctx context.Context, current *session.Session) error {
 	stored, err := current.Get(sessionField)
 
-	if missing(err) || stored.LoginID == "" {
+	if missing(err) {
 		return nil
 	}
 
 	if err != nil {
 		return err
+	}
+
+	if stored.LoginID == "" {
+		return nil
 	}
 
 	return login.Revoke(ctx, stored.Subject, stored.LoginID)
@@ -197,10 +201,14 @@ func (login *Login) start(r *http.Request, current *session.Session, user UserRe
 // provider's [UserRecord], so [UserFromContext] returns its Value.
 //
 // A missing session, an absent or unreadable record, a deleted or disabled user
-// ([ErrUserNotFound], [ErrUserDisabled]) and a credential version that no longer
-// matches [UserRecord.Version] all return [ErrNoCredentials], which makes the
+// ([ErrUserNotFound], [ErrUserDisabled]), a credential version that no longer
+// matches [UserRecord.Version] and a login record that was revoked, expired or
+// dropped (see [Login.Revoke]) all return [ErrNoCredentials], which makes the
 // request anonymous. The version comparison is constant time. Other provider
-// errors pass through and stop the chain.
+// errors and errors reading the login records from the store pass through and
+// stop the chain. The check costs one cache read per request; when the record's
+// SeenAt is older than five minutes the authenticator also tries to refresh it,
+// ignoring a failed write.
 //
 // Example:
 //
@@ -267,6 +275,11 @@ func (login *Login) Authenticator() Authenticator {
 // false: the request stays anonymous until [Login.Complete]. The caller then
 // asks for the second factor. A check error fails the login with that error and
 // changes nothing.
+//
+// Logging in creates a [LoginRecord] for the device (see [Login.Logins]) and
+// removes the record of the login the session replaces, so Begin can also return
+// the cache or lock errors of the record store; the session is then unchanged.
+// A login that is parked creates its record at [Login.Complete].
 //
 // Begin does not verify the credential: call it only after it checked out.
 //
@@ -418,9 +431,11 @@ func (login *Login) Pending(r *http.Request) (UserRecord, error) {
 
 // Complete finishes a pending login after the second factor verified: it logs
 // the user in with the factors verified at [Login.Begin] plus factor (a zero
-// factor.At means now), regenerates the session ID and consumes the pending
-// login, so a second call returns [ErrUnauthenticated]. The errors are those of
-// [Login.Pending]; on any error nothing is logged in.
+// factor.At means now), creates the [LoginRecord] of the device as [Login.Begin]
+// does, regenerates the session ID and consumes the pending login, so a second
+// call returns [ErrUnauthenticated]. The errors are those of [Login.Pending]
+// plus the cache and lock errors of the record store; on any error nothing is
+// logged in.
 //
 // Complete does not verify the factor: call it only after it checked out.
 //

@@ -105,8 +105,9 @@
 // flags the current one, [Login.Revoke], [Login.RevokeOthers] and
 // [Login.RevokeAll] log devices out, and [Login.LoginsOf] serves administrators.
 // The authenticator reads the entry on every request and treats a missing record
-// as [ErrNoCredentials]; it refreshes [LoginRecord.SeenAt] at most every five
-// minutes. At most [LoginBuilder.MaxLogins] records are kept and the oldest is
+// as [ErrNoCredentials], so a revoked device cannot list or revoke devices
+// either; it refreshes [LoginRecord.SeenAt] at most every five minutes, ignoring
+// a failed write. At most [LoginBuilder.MaxLogins] records are kept and the oldest is
 // dropped, which logs that device out. [Login.Logout] removes its record and
 // [NewLogin] registers [Login.RevokeAll] with [UserProvider.OnForget].
 //
@@ -115,7 +116,7 @@
 // telemetry or events. The address is the host of r.RemoteAddr unless
 // [LoginBuilder.ClientIP] says otherwise; behind a reverse proxy pass
 // ratelimit.TrustedProxyKey from core/http/middleware/ratelimit with your proxy
-// prefixes. Writes take a per-user cache lock and compare-and-put with a bounded
+// prefixes (it reports IPv6 addresses as their /64 prefix). Writes take a per-user cache lock and compare-and-put with a bounded
 // retry. A flushed cache logs everyone out, and each authenticated session
 // request costs one extra cache read.
 //

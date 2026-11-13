@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"time"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/auth/memoryauth"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -680,10 +682,11 @@ func ExampleLoginBuilder_Devices() {
 
 func ExampleLoginBuilder_ClientIP() {
 	login := exampleLogin(func(policy *auth.LoginBuilder) {
-		policy.ClientIP(func(r *http.Request) string { return r.Header.Get("X-Real-IP") })
+		policy.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
 	})
 	r := exampleRequest()
-	r.Header.Set("X-Real-IP", "198.51.100.2")
+	r.RemoteAddr = "10.0.0.1:4711"
+	r.Header.Set("X-Forwarded-For", "198.51.100.2")
 	_, _ = login.Begin(r, "1", examplePassword)
 
 	records, _ := login.Logins(r)

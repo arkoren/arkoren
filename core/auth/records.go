@@ -57,20 +57,22 @@ type LoginRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// SeenAt is when the login last authenticated a request, in UTC. It is
-	// refreshed at most once per five minutes, so it can lag by that much.
+	// refreshed at most once per five minutes and on a best-effort basis, so it
+	// can lag by that much or more.
 	SeenAt time.Time `json:"seen_at"`
 
 	// UserAgent is the User-Agent request header at login, truncated to 255
 	// bytes. It is empty when [LoginBuilder.Devices] is false.
 	UserAgent string `json:"user_agent,omitzero"`
 
-	// IP is the client address at login, from [LoginBuilder.ClientIP]. It is empty
-	// when [LoginBuilder.Devices] is false.
+	// IP is the client address at login, from [LoginBuilder.ClientIP], cut to 255
+	// bytes. It is empty when [LoginBuilder.Devices] is false.
 	IP string `json:"ip,omitzero"`
 
 	// Current is true for the record of the request's own login. Only
-	// [Login.Logins] sets it; it is never stored.
-	Current bool `json:"-"`
+	// [Login.Logins] sets it; it is never stored, so it appears in JSON only
+	// when true.
+	Current bool `json:"current,omitzero"`
 }
 
 // remoteHost is the default [LoginBuilder.ClientIP]: the host of r.RemoteAddr.
@@ -187,7 +189,8 @@ func (login *Login) list(ctx context.Context, subject string) ([]LoginRecord, er
 }
 
 // seen reports whether the record id of subject still exists and refreshes its
-// SeenAt when it is older than five minutes. The common case is one read.
+// SeenAt when it is older than five minutes. The common case is one read. Only
+// the read can fail; see the refresh below.
 func (login *Login) seen(ctx context.Context, subject, id string) (bool, error) {
 	current, err := login.list(ctx, subject)
 
@@ -205,7 +208,10 @@ func (login *Login) seen(ctx context.Context, subject, id string) (bool, error) 
 		return true, nil
 	}
 
-	err = login.edit(ctx, subject, func(current []LoginRecord) []LoginRecord {
+	// The refresh is best effort: the record exists, so a failed write (lock
+	// contention, cache error) only leaves SeenAt stale and must not fail a
+	// request that is otherwise authenticated. The next request retries.
+	_ = login.edit(ctx, subject, func(current []LoginRecord) []LoginRecord {
 		for i := range current {
 			if current[i].ID == id && time.Since(current[i].SeenAt) >= seenInterval {
 				current[i].SeenAt = time.Now().UTC()
@@ -215,13 +221,14 @@ func (login *Login) seen(ctx context.Context, subject, id string) (bool, error) 
 		return current
 	})
 
-	return true, err
+	return true, nil
 }
 
 // Logins returns the login records of the request's user, oldest first, with
 // [LoginRecord.Current] set on the record of this request's own login. It
-// returns [ErrUnauthenticated] when the session holds no logged-in user and
-// [session.ErrNoSession] without a session. Mount it behind [Require].
+// returns [ErrUnauthenticated] when the session holds no logged-in user or its
+// own login was revoked, and [session.ErrNoSession] without a session. Mount it
+// behind [Require].
 //
 // Example:
 //
@@ -251,6 +258,11 @@ func (login *Login) Logins(r *http.Request) ([]LoginRecord, error) {
 
 	if err != nil {
 		return nil, err
+	}
+
+	// A revoked device must not read the user's other devices.
+	if !slices.ContainsFunc(records, func(record LoginRecord) bool { return record.ID == stored.LoginID }) {
+		return nil, ErrUnauthenticated
 	}
 
 	for i := range records {
@@ -303,7 +315,8 @@ func (login *Login) Revoke(ctx context.Context, subject string, ids ...string) e
 
 // RevokeOthers logs every device of the request's user out except the one that
 // made the request. It returns [ErrUnauthenticated] when the session holds no
-// logged-in user and [session.ErrNoSession] without a session.
+// logged-in user or its own login was revoked (nothing is revoked then), and
+// [session.ErrNoSession] without a session.
 //
 // Example:
 //
@@ -327,8 +340,25 @@ func (login *Login) RevokeOthers(r *http.Request) error {
 		return err
 	}
 
+	own := func(record LoginRecord) bool { return record.ID == stored.LoginID }
+
+	records, err := login.list(r.Context(), stored.Subject)
+
+	if err != nil {
+		return err
+	}
+
+	if !slices.ContainsFunc(records, own) {
+		return ErrUnauthenticated
+	}
+
 	return login.edit(r.Context(), stored.Subject, func(records []LoginRecord) []LoginRecord {
-		return slices.DeleteFunc(records, func(record LoginRecord) bool { return record.ID != stored.LoginID })
+		// A revocation between the check and the edit must not wipe the list.
+		if !slices.ContainsFunc(records, own) {
+			return records
+		}
+
+		return slices.DeleteFunc(records, func(record LoginRecord) bool { return !own(record) })
 	})
 }
 

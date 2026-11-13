@@ -36,7 +36,10 @@ registered `SecondFactor` check says a second factor is needed (finish with
 `Pending`, `Fail` and `Complete`). `Confirm` records a fresh factor on a
 logged-in session. `RequireLevel` and `RequireFresh` guard routes by the factors
 of the identity, so they also work for tokens. The provider is asked on every
-request, so a deleted or disabled user is anonymous. Handle mutation errors.
+request, so a deleted or disabled user is anonymous. Each login also creates a
+login record, so a user can list devices with `Logins` and log them out with
+`Revoke`, `RevokeOthers` and `RevokeAll`; a revoked device is anonymous on its
+next request. Handle mutation errors.
 Rotation does not prove persistence succeeded; session middleware owns saving,
 renewal, and retirement. Handles select context slots, not separate authorization
 realms or physical identity fields.

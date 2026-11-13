@@ -257,8 +257,10 @@ func (policy *LoginBuilder) Devices(enabled bool) *LoginBuilder {
 // host of r.RemoteAddr, which behind a reverse proxy is the proxy. Behind a
 // proxy, pass a function that trusts forwarded headers only from your proxies:
 // ratelimit.TrustedProxyKey (package core/http/middleware/ratelimit) returns
-// such a function. [NewLogin] rejects nil. The setting replaces the previous
-// value on this draft.
+// such a function. It reports IPv4 addresses as they are but reduces IPv6
+// addresses to their /64 prefix, which is what the record then stores. The
+// result is cut to 255 bytes. [NewLogin] rejects nil. The setting replaces the
+// previous value on this draft.
 //
 // Example:
 //

@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"strings"
@@ -127,16 +128,60 @@ func TestLoginsRequiresLogin(t *testing.T) {
 		t.Fatalf("RevokeOthers: %v", err)
 	}
 
-	if _, err := login.Logins(httpRequest()); !errors.Is(err, session.ErrNoSession) {
+	noSession, _ := http.NewRequest(http.MethodGet, "/", nil)
+
+	if _, err := login.Logins(noSession); !errors.Is(err, session.ErrNoSession) {
 		t.Fatalf("no session: %v", err)
 	}
 }
 
-// httpRequest returns a request without a session.
-func httpRequest() *http.Request {
-	r, _ := http.NewRequest(http.MethodGet, "/", nil)
+// TestRevokedDeviceCannotManageDevices verifies a device whose record was
+// revoked can neither list nor revoke the other devices.
+func TestRevokedDeviceCannotManageDevices(t *testing.T) {
+	t.Parallel()
 
-	return r
+	login, _ := newLogin(t)
+	_, revoked := device(t, login, "7", "Firefox")
+	second, _ := device(t, login, "7", "Safari")
+
+	if err := login.Revoke(t.Context(), "7", loginsOf(t, login, "7")[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := login.Logins(revoked); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("Logins: %v", err)
+	}
+
+	if err := login.RevokeOthers(revoked); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("RevokeOthers: %v", err)
+	}
+
+	if _, err := authenticate(login, second); err != nil {
+		t.Fatalf("other device was revoked: %v", err)
+	}
+}
+
+// TestRecordJSONMarksCurrent verifies Current is the only computed field that
+// reaches JSON, and only when set.
+func TestRecordJSONMarksCurrent(t *testing.T) {
+	t.Parallel()
+
+	login, _ := newLogin(t)
+	_, r := device(t, login, "7", "Firefox")
+	records, _ := login.Logins(r)
+
+	encoded, err := json.Marshal(records[0])
+
+	if err != nil || !strings.Contains(string(encoded), `"current":true`) {
+		t.Fatalf("encoded = %s, err = %v", encoded, err)
+	}
+
+	records[0].Current = false
+	encoded, _ = json.Marshal(records[0])
+
+	if strings.Contains(string(encoded), "current") {
+		t.Fatalf("encoded = %s", encoded)
+	}
 }
 
 // TestRevokedDeviceIsAnonymous verifies a revoked device is anonymous on its
