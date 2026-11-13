@@ -31,7 +31,7 @@
     "@astrojs/sitemap": "^3.7.4",
     "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4.3.4",
-    "astro": "^7.4.5",
+    "astro": "^7.4.12",
     "satori": "^0.63.2",
     "satteri": "^0.10.5",
     "tailwindcss": "^4.3.3",
