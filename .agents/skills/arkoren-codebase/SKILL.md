@@ -832,6 +832,12 @@ annotation stores the complete original planner result, exact notes, expected
 module set, SHA and SHA-256 plan digest. Recovery verifies the signature and
 recomputes the original result in a disposable clone with only that batch's tags
 removed. Keep planner/tool changes compatible with recorded-batch recovery.
+Recorded batches check their plan inventory against the policy committed at
+their own plan SHA (original-array or policy-less commits keep their committed
+public inventory), so adding a public module never invalidates earlier signed
+batches. Every existing tag's directory must still be in the current public
+policy, so removing a namespace blocks publication; fresh plans compare against
+the current policy exactly.
 Canonical v1 JSON retains Python `ensure_ascii=True`, sorted keys and compact
 comma/colon separators. Policy schema versions do not change signed batch schema
 or the original module records. Historical commits without classification policy
