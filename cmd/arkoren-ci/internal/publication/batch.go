@@ -99,7 +99,10 @@ func git(ctx context.Context, root string, args ...string) (string, error) {
 	return strings.TrimSpace(string(data)), err
 }
 
-// approved checks current reviewed namespaces even for historically signed plans.
+// approved checks a freshly computed plan against the current reviewed public
+// namespaces. Only new plans use it: recorded batches are judged against the
+// policy of their own commit by [approvedAtSHA], so adding a public module
+// never invalidates batches signed before that module existed.
 func approved(root string, plan release.Plan) error {
 	data, err := os.ReadFile(filepath.Join(root, ".github/release-modules.json"))
 	if err != nil {
@@ -109,6 +112,34 @@ func approved(root string, plan release.Plan) error {
 	if err != nil {
 		return err
 	}
+
+	return sameInventory(plan, policy.Public)
+}
+
+// approvedAtSHA checks a historically signed plan against the module inventory
+// committed at the plan's own SHA, not the current policy. It reuses
+// [repository.ReleaseInventory], so commits without classification policy or
+// with the original array allowlist keep their original public inventory.
+// Callers separately require every tagged directory to be in the current policy,
+// so removing a namespace still blocks recovery.
+func approvedAtSHA(ctx context.Context, root string, plan release.Plan) error {
+	inventory, err := repository.ReleaseInventory(ctx, root, plan.SHA)
+	if err != nil {
+		return err
+	}
+	public := []string{}
+	for _, module := range inventory.Modules {
+		if module.Classification == "public" {
+			public = append(public, module.Directory)
+		}
+	}
+
+	return sameInventory(plan, public)
+}
+
+// sameInventory requires exact-SHA plain v0 entries whose module set equals
+// public. It sorts public in place.
+func sameInventory(plan release.Plan, public []string) error {
 	actual := []string{}
 	for _, entry := range plan.Modules {
 		actual = append(actual, entry.Directory)
@@ -117,8 +148,8 @@ func approved(root string, plan release.Plan) error {
 		}
 	}
 	slices.Sort(actual)
-	slices.Sort(policy.Public)
-	if !slices.Equal(actual, policy.Public) {
+	slices.Sort(public)
+	if !slices.Equal(actual, public) {
 		return fmt.Errorf("plan inventory differs from reviewed public namespaces")
 	}
 
@@ -180,6 +211,8 @@ func VerifyTag(ctx context.Context, root, trust, name string, expected *Batch) (
 }
 
 // Recorded recovers original plans; bootstrap v0.1.0 tags remain untouched.
+// Every tag directory must be in the current public policy, but each batch's
+// module inventory is checked against the policy committed at its own SHA.
 func Recorded(ctx context.Context, root, trust string) ([]Batch, error) {
 	data, err := os.ReadFile(filepath.Join(root, ".github/release-modules.json"))
 	if err != nil {
@@ -210,7 +243,7 @@ func Recorded(ctx context.Context, root, trust string) ([]Batch, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := approved(root, batch.Plan); err != nil {
+		if err := approvedAtSHA(ctx, root, batch.Plan); err != nil {
 			return nil, err
 		}
 		batches[batch.Digest], members[name] = batch, batch.Digest
@@ -263,5 +296,5 @@ func Recompute(ctx context.Context, root string, batch Batch) error {
 		return fmt.Errorf("signed plan differs from recomputed trusted source")
 	}
 
-	return approved(root, plan)
+	return approvedAtSHA(ctx, root, plan)
 }
