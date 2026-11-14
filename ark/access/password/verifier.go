@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,11 +21,11 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/core/service/hash"
-	"arkoren.dev/foundation/problem"
 	"arkoren.dev/foundation/query"
 	"arkoren.dev/foundation/query/schema"
 
 	"arkoren.dev/ark/access/internal/storage"
+	"arkoren.dev/ark/access/internal/throttle"
 )
 
 const (
@@ -757,20 +756,15 @@ func (verifier *Verifier) emit(ctx context.Context, topic event.Topic[UserEvent]
 }
 
 // attempts reserves one attempt on each key and fails with [ErrThrottled] and a
-// Retry-After header when any counter exceeds its limit. The counters are
-// returned so a success can release them.
+// Retry-After header when any counter exceeds its limit.
 func (verifier *Verifier) attempts(ctx context.Context, keys ...cache.Key[int64]) error {
 	for _, key := range keys {
-		count, remaining, err := verifier.store.IncrementWithTTL(ctx, key, 1, throttleWindow)
+		wait, err := throttle.Reserve(ctx, verifier.store, key, maxFailures, throttleWindow)
 		if err != nil {
-			return fmt.Errorf("password: count attempt: %w", err)
+			return err
 		}
-		if count > maxFailures {
-			seconds := max(int(remaining.Seconds()), 1)
-
-			return ErrThrottled.Derive(func(details *problem.Builder) {
-				details.Header("Retry-After", strconv.Itoa(seconds))
-			})
+		if wait > 0 {
+			return throttle.Reject(ErrThrottled, wait)
 		}
 	}
 
