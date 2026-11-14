@@ -4,6 +4,8 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/x509"
+	"fmt"
+	"io"
 	"log/slog"
 )
 
@@ -20,8 +22,10 @@ import (
 //	}
 //	_ = identity.PublicPEM()
 type Exchange struct {
-	// material owns validated X25519 private bytes, never a caller's buffer.
-	material string
+	// material owns validated X25519 private bytes, never a caller's buffer. It
+	// is a pointer so fmt and slog print an address, not the bytes, when the
+	// identity sits in an unexported field. The pointee is never mutated.
+	material *string
 }
 
 // NewExchange snapshots a native X25519 private key. Nil and other curves
@@ -44,7 +48,9 @@ func NewExchange(private *ecdh.PrivateKey) (Exchange, error) {
 		return Exchange{}, ErrInvalid
 	}
 
-	return Exchange{material: string(private.Bytes())}, nil
+	material := string(private.Bytes())
+
+	return Exchange{material: &material}, nil
 }
 
 // GenerateExchange provisions an independent X25519 identity using
@@ -173,7 +179,7 @@ func ParseExchangePublic(encoded []byte) (*ecdh.PublicKey, error) {
 //		fmt.Println("configure an exchange identity")
 //	}
 func (identity Exchange) Err() error {
-	if identity.material == "" {
+	if identity.material == nil {
 		return ErrInvalid
 	}
 
@@ -197,7 +203,7 @@ func (identity Exchange) PrivateKey() *ecdh.PrivateKey {
 		return nil
 	}
 
-	private, _ := ecdh.X25519().NewPrivateKey([]byte(identity.material))
+	private, _ := ecdh.X25519().NewPrivateKey([]byte(*identity.material))
 
 	// Only validated native material can enter a nonzero identity.
 	return private
@@ -274,6 +280,20 @@ func (identity Exchange) PublicPEM() []byte {
 //	fmt.Println(key.Exchange{}) // [REDACTED exchange key]
 func (identity Exchange) String() string {
 	return "[REDACTED exchange key]"
+}
+
+// Format writes the same constant redaction marker as String for every verb,
+// including %d, %x and %q, which would otherwise print the underlying value.
+// Verbs, flags, width and precision never change the output, and it never
+// includes material, even for a zero value. Redaction also holds when the
+// value sits in an unexported struct field, because the material is held
+// behind a pointer that reflection-based printing reports as an address.
+//
+// Example:
+//
+//	fmt.Printf("%x", key.Exchange{}) // [REDACTED exchange key]
+func (identity Exchange) Format(state fmt.State, verb rune) {
+	_, _ = io.WriteString(state, identity.String())
 }
 
 // GoString redacts the identity in Go-syntax formatting. It never reveals
