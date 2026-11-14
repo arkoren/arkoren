@@ -1,0 +1,81 @@
+package account
+
+import (
+	"errors"
+	"net/http"
+
+	"arkoren.dev/foundation/problem"
+)
+
+// ErrEmailTaken is returned when an address already belongs to a user. The
+// package never links accounts by email: the user is asked to log in and
+// connect the provider or credential from their settings instead. It is a
+// problem with status 409.
+//
+// Example:
+//
+//	_, err := directory.Create(ctx, "ada@example.com")
+//	if errors.Is(err, account.ErrEmailTaken) {
+//		// ask the user to log in
+//	}
+var ErrEmailTaken = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:account:email-taken")
+	details.Title("Email already registered")
+	details.Detail("An account with this email already exists. Log in and connect new sign-in methods from your settings.")
+	details.Status(http.StatusConflict)
+})
+
+// ErrInvalidEmail is returned for an address that is empty, malformed, carries
+// a display name or exceeds 254 bytes. It is a problem with status 422.
+//
+// Example:
+//
+//	_, err := directory.Create(ctx, "not an email")
+//	fmt.Println(errors.Is(err, account.ErrInvalidEmail)) // true
+var ErrInvalidEmail = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:account:invalid-email")
+	details.Title("Invalid email")
+	details.Detail("The email address is not valid.")
+	details.Status(http.StatusUnprocessableEntity)
+})
+
+// ErrInvalidToken is returned for a verification token that is unknown,
+// expired, already used or replaced by a newer one. One response covers all of
+// them. It is a problem with status 422.
+//
+// Example:
+//
+//	_, err := directory.Verify(ctx, token)
+//	if errors.Is(err, account.ErrInvalidToken) {
+//		// ask the user to request a new link
+//	}
+var ErrInvalidToken = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:account:invalid-token")
+	details.Title("Invalid token")
+	details.Detail("The token is invalid or has expired.")
+	details.Status(http.StatusUnprocessableEntity)
+})
+
+// ErrEmailUnverified is returned by [RequireVerified] for a user who has not
+// verified their email. It is a problem with status 403.
+//
+// Example:
+//
+//	router.With(account.RequireVerified()).Post("/posts", create)
+var ErrEmailUnverified = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:account:email-unverified")
+	details.Title("Email not verified")
+	details.Detail("Verify your email address to continue.")
+	details.Status(http.StatusForbidden)
+})
+
+// ErrNoDelivery is returned by [Directory.SendVerification] when no
+// [Builder.Deliver] function is configured. It is a configuration error, not a
+// problem, so a request that hits it answers 500.
+//
+// Example:
+//
+//	if errors.Is(err, account.ErrNoDelivery) {
+//		// configure Builder.Deliver
+//	}
+var ErrNoDelivery = errors.New("account: no delivery function configured")
