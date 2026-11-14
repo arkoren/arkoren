@@ -137,15 +137,17 @@ factor to their session and does not ask for a second factor again.
 
 The federated factor is stamped with the ID token's `auth_time` claim, the time
 the provider says the user really authenticated, so a silent single sign-on
-approval does not satisfy `auth.RequireFresh`. Only when the claim is absent
-(providers that omit it, and OAuth2 providers without an ID token) is the factor
-stamped with the callback time, which proves nothing about when the user last
-entered a credential; do not rely on `RequireFresh` after such a login. For
-step-up, send the user to `/login?return_to=/path&fresh=1`: on an OIDC provider
-this adds `prompt=login` and `max_age=0` to the authorization request so the
-provider asks for credentials again, and the callback then sees a new
-`auth_time`. A provider that ignores the request returns the old `auth_time` and
-the login stays not fresh.
+approval does not satisfy `auth.RequireFresh`. When the claim is absent
+(providers that omit it, and OAuth2 providers without an ID token) the time is
+unknown, not now: the login still signs in a new session, but its factor never
+satisfies `RequireFresh`, including when it re-authenticates a session that is
+already logged in as the same subject. Such providers cannot back step-up;
+require a password or second factor with `guard.Confirm` instead. For step-up on
+an OIDC provider that returns `auth_time`, send the user to
+`/login?return_to=/path&fresh=1`: this adds `prompt=login` and `max_age=0` to
+the authorization request so the provider asks for credentials again, and the
+callback requires an `auth_time` from after the login started. A provider that
+ignores the request, or omits `auth_time`, leaves the login not fresh.
 
 A nil guard or mapper is a configuration error, not a rejected credential. A
 request without a session returns `401` before state consumption or provider
