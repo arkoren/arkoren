@@ -10,6 +10,11 @@ summary:
 
 # Two-Factor Login
 
+> [!NOTE]
+> The [Access](access.md) module ships this flow, with TOTP, recovery codes and
+> their routes: see [Access Two-Factor](access-two-factor.md). This page explains
+> the guard seams it is built on, which you use directly for other factors.
+
 A password alone may not be enough to sign someone in, or to let them delete an
 account. The session records which **factors** the user proved (password,
 one-time code, security key) and when. A login that still needs a factor is held

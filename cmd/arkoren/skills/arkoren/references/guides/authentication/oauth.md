@@ -158,6 +158,13 @@ successful callback mutation does not prove storage or old-ID retirement succeed
 
 ## Link Local Accounts
 
+> [!NOTE]
+> With the [Access](access.md) module you write no mapper: `iam.Provider(client)`
+> mounts these routes and maps identities through its connection store, with
+> connect and disconnect, never linking by email. See
+> [Access Connections](access-connections.md). The rest of this section shows how
+> to write the mapper yourself.
+
 Identify an external account by the pair `Issuer` and `Subject`, not by email
 or display name. Require an existing link for ordinary sign-in; create accounts
 only under your explicit registration policy. To link another provider to an
