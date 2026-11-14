@@ -7,7 +7,10 @@
 //
 // Load functions read explicit files; they never generate missing keys, inspect
 // environment variables, or rotate identities. Private material is exported only
-// through explicitly named methods. Formatting and structured logging redact it.
+// through explicitly named methods. Every formatting verb and structured logging
+// redact it, including when a value sits in an unexported struct field: the
+// material is held behind a pointer, so values copy cheaply but compare with ==
+// by identity, not by contents.
 // Exported byte slices and native keys are independent copies. The zero values
 // are invalid; consumers must check Err before using exported material.
 //
