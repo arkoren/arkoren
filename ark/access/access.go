@@ -59,9 +59,21 @@ type Kind string
 
 const (
 	// KindVerify is the email verification of a new account.
+	//
+	// Example:
+	//
+	//	if message.Kind == access.KindVerify {
+	//		// link to the verification page
+	//	}
 	KindVerify Kind = "verify"
 
 	// KindReset is a password reset.
+	//
+	// Example:
+	//
+	//	if message.Kind == access.KindReset {
+	//		// link to the reset page
+	//	}
 	KindReset Kind = "reset"
 )
 

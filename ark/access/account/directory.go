@@ -19,7 +19,12 @@ import (
 	"arkoren.dev/ark/access/internal/storage"
 )
 
-// DefaultVerifyTTL is how long an email verification token stays valid.
+// DefaultVerifyTTL is how long an email verification token stays valid when
+// [Builder.VerifyTTL] is not set: 24 hours.
+//
+// Example:
+//
+//	accounts.VerifyTTL(account.DefaultVerifyTTL / 2)
 const DefaultVerifyTTL = 24 * time.Hour
 
 // maxEmailLength is the longest accepted address in bytes (RFC 5321).

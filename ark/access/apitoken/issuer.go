@@ -26,6 +26,10 @@ import (
 const (
 	// DefaultPrefix starts every token text ("ark_<id>_<secret>"); change it with
 	// [Builder.Prefix] so secret scanners can recognize your tokens.
+	//
+	// Example:
+	//
+	//	tokens.Prefix(apitoken.DefaultPrefix + "x") // "arkx_<id>_<secret>"
 	DefaultPrefix = "ark"
 
 	// touchInterval is the shortest time between two writes of a token's
@@ -55,10 +59,20 @@ type Kind string
 
 const (
 	// KindPersonal marks a named, scoped token a user created for themselves.
+	//
+	// Example:
+	//
+	//	token, _, err := issuer.Issue(ctx, subject, apitoken.Request{Name: "CI"})
+	//	fmt.Println(token.Kind == apitoken.KindPersonal) // true
 	KindPersonal Kind = "personal"
 
 	// KindDevice marks a token issued to a first-party app when a login was
 	// exchanged; it carries every scope of the catalog.
+	//
+	// Example:
+	//
+	//	token, _, err := issuer.IssueDevice(ctx, subject, "Pixel 9")
+	//	fmt.Println(token.Kind == apitoken.KindDevice) // true
 	KindDevice Kind = "device"
 )
 

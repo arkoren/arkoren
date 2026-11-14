@@ -30,9 +30,19 @@ import (
 const (
 	// MethodRecovery names the recovery-code method in challenge and confirm
 	// requests. RFC 8176 has no value for it, so it belongs to this package.
+	//
+	// Example:
+	//
+	//	body := `{"method": "recovery", "code": "ABCD-EFGH-IJKL-MNOP"}`
+	//	_ = twofactor.MethodRecovery // the value of "method" in body
 	MethodRecovery auth.Method = "recovery"
 
-	// DefaultRecoveryCodes is how many recovery codes enabling two-factor creates.
+	// DefaultRecoveryCodes is how many recovery codes enabling two-factor
+	// creates when [Builder.RecoveryCodes] is not set.
+	//
+	// Example:
+	//
+	//	factors.RecoveryCodes(twofactor.DefaultRecoveryCodes)
 	DefaultRecoveryCodes = 10
 
 	// maxRecoveryCodes bounds [Builder.RecoveryCodes].

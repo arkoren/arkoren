@@ -18,7 +18,12 @@ import (
 )
 
 // ConnectIntentTTL is how long a connect intent stays valid: the time the user
-// has to finish signing in at the provider after starting a connection.
+// has to finish signing in at the provider after starting a connection (ten
+// minutes).
+//
+// Example:
+//
+//	deadline := time.Now().Add(federation.ConnectIntentTTL)
 const ConnectIntentTTL = 10 * time.Minute
 
 // connectField is the session field that holds the connect intent.

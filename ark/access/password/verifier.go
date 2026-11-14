@@ -29,15 +29,28 @@ import (
 )
 
 const (
-	// DefaultResetTTL is how long a password reset token stays valid.
+	// DefaultResetTTL is how long a password reset token stays valid when
+	// [Builder.ResetTTL] is not set.
+	//
+	// Example:
+	//
+	//	passwords.ResetTTL(password.DefaultResetTTL / 2)
 	DefaultResetTTL = time.Hour
 
-	// MinLength and MaxLength bound the default password policy, in bytes.
-	// bcrypt hashers reject more than 72 bytes, so the default never admits a
-	// password the common hashers cannot take.
+	// MinLength is the shortest password the default policy accepts, in bytes.
+	//
+	// Example:
+	//
+	//	fmt.Println(password.MinLength) // 8
 	MinLength = 8
 
-	// MaxLength is the upper bound of the default password policy; see MinLength.
+	// MaxLength is the longest password the default policy accepts, in bytes.
+	// bcrypt hashers reject more than 72 bytes, so the default never admits a
+	// password the common hashers cannot take.
+	//
+	// Example:
+	//
+	//	fmt.Println(password.MaxLength) // 72
 	MaxLength = 72
 
 	// maxFailures is how many login attempts per identifier and per client IP

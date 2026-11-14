@@ -13,7 +13,14 @@ import (
 )
 
 // ExchangeWindow is how recent the login must be for [Issuer.ExchangeHandler]
-// to trade it for a device token.
+// to trade it for a device token: five minutes. A silent re-login of the same
+// user does not extend it.
+//
+// Example:
+//
+//	if err := guard.RecentLogin(r, apitoken.ExchangeWindow); err != nil {
+//		return err
+//	}
 const ExchangeWindow = 5 * time.Minute
 
 // secretBody is the response of the handlers that issue a token: the token and
