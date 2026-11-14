@@ -203,9 +203,10 @@ func (policy *GuardBuilder) ChallengeTTL(ttl time.Duration) *GuardBuilder {
 	return policy
 }
 
-// MaxAttempts sets how many calls to [Guard.Fail] for one user, within a
-// [GuardBuilder.ChallengeTTL] window and across all sessions, discard the pending
-// login and lock the user out of the second factor until the window ends. The
+// MaxAttempts sets how many second-factor code checks, each reserved by a
+// successful [Guard.Pending], one user gets within a [GuardBuilder.ChallengeTTL]
+// window and across all sessions, before the pending login is discarded and the
+// user is locked out of the second factor until the window ends. The
 // default is five. [NewGuard] rejects a value of zero or less. The setting
 // replaces the previous value on this draft.
 //

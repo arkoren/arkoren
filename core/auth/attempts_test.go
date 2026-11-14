@@ -3,7 +3,9 @@ package auth_test
 import (
 	"errors"
 	"maps"
+	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +13,20 @@ import (
 	"arkoren.dev/core/auth/memoryauth"
 	"arkoren.dev/core/http/session"
 )
+
+// wrongCode runs one failed second-factor attempt the way a handler does: the
+// pending check that counts it, then Fail.
+func wrongCode(t *testing.T, guard *auth.Guard, r *http.Request) {
+	t.Helper()
+
+	if _, err := guard.Pending(r); err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+
+	if err := guard.Fail(r); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+}
 
 // TestReBeginDoesNotResetAttempts verifies the attempt count belongs to the
 // user: a new pending login in the same or another session continues it, and
@@ -25,10 +41,7 @@ func TestReBeginDoesNotResetAttempts(t *testing.T) {
 
 	for range 2 {
 		begin(t, guard, r, "7")
-
-		if err := guard.Fail(r); err != nil {
-			t.Fatal(err)
-		}
+		wrongCode(t, guard, r)
 	}
 
 	if _, err := guard.Pending(r); !errors.Is(err, auth.ErrUnauthenticated) {
@@ -61,10 +74,7 @@ func TestCompleteClearsAttempts(t *testing.T) {
 	for range 3 {
 		r := sessionRequest(newSession())
 		begin(t, guard, r, "7")
-
-		if err := guard.Fail(r); err != nil {
-			t.Fatal(err)
-		}
+		wrongCode(t, guard, r)
 
 		if err := guard.Complete(r, otp); err != nil {
 			t.Fatalf("complete: %v", err)
@@ -96,7 +106,13 @@ func TestConcurrentFailuresLockOut(t *testing.T) {
 		current := fork()
 
 		group.Go(func() {
-			if err := guard.Fail(sessionRequest(current)); err != nil {
+			r := sessionRequest(current)
+
+			if _, err := guard.Pending(r); err != nil {
+				return
+			}
+
+			if err := guard.Fail(r); err != nil {
 				t.Errorf("fail: %v", err)
 			}
 		})
@@ -188,4 +204,74 @@ func TestStaleSessionCannotManageDevices(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestConcurrentPendingBoundsCodeChecks verifies a burst of requests forking one
+// pending session passes Pending, the point where a code check is allowed, at
+// most MaxAttempts times. Reading the counter before the check and counting
+// only afterwards would let every request through. Run with -race.
+func TestConcurrentPendingBoundsCodeChecks(t *testing.T) {
+	t.Parallel()
+
+	const maxAttempts = 5
+
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)), func(policy *auth.GuardBuilder) {
+		policy.MaxAttempts(maxAttempts)
+	})
+	origin := newSession()
+	begin(t, guard, sessionRequest(origin), "7")
+
+	sessions := make([]*session.Session, 200)
+
+	for i := range sessions {
+		sessions[i] = session.New(origin.ExpiresAt(), maps.Clone(origin.All()))
+	}
+
+	if got := countPending(guard, sessions); got != maxAttempts {
+		t.Fatalf("code checks allowed from one pending session = %d, want %d", got, maxAttempts)
+	}
+}
+
+// TestConcurrentPendingAcrossSessionsBoundsCodeChecks verifies the limit is per
+// user: many independent pending sessions of one subject share MaxAttempts code
+// checks. Run with -race.
+func TestConcurrentPendingAcrossSessionsBoundsCodeChecks(t *testing.T) {
+	t.Parallel()
+
+	const maxAttempts = 5
+
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)), func(policy *auth.GuardBuilder) {
+		policy.MaxAttempts(maxAttempts)
+	})
+	sessions := make([]*session.Session, 200)
+
+	for i := range sessions {
+		sessions[i] = newSession()
+		begin(t, guard, sessionRequest(sessions[i]), "7")
+	}
+
+	if got := countPending(guard, sessions); got != maxAttempts {
+		t.Fatalf("code checks allowed across pending sessions = %d, want %d", got, maxAttempts)
+	}
+}
+
+// countPending calls Pending once per session concurrently and returns how many
+// calls were allowed to check a code.
+func countPending(guard *auth.Guard, sessions []*session.Session) int {
+	var (
+		group   sync.WaitGroup
+		allowed atomic.Int64
+	)
+
+	for _, current := range sessions {
+		group.Go(func() {
+			if _, err := guard.Pending(sessionRequest(current)); err == nil {
+				allowed.Add(1)
+			}
+		})
+	}
+
+	group.Wait()
+
+	return int(allowed.Load())
 }

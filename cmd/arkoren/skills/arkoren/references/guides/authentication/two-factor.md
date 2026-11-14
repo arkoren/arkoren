@@ -114,13 +114,16 @@ return guard.Complete(r, otp)
 code whose time step you already accepted for that user, since a six-digit code
 stays valid for its whole period.
 
-`Fail` counts a wrong attempt per user in the guard's cache store, so a new
-login, a new session or parallel requests on one pending cookie do not reset it.
-At five failures within the challenge window (`policy.MaxAttempts(n)`, window
-`policy.ChallengeTTL(d)`) the pending login is discarded and that user cannot
-pass the second factor, in any session, until the window ends; a successful
-`Complete` clears the count. A request that passed `Pending` before the limit was
-reached can still finish its one check. The lockout lets anyone who knows a
+Each successful `Pending` reserves one attempt per user in the guard's cache
+store before you check the code, so a new login, a new session or parallel
+requests on one pending cookie do not reset it, and racing requests cannot check
+more codes than the limit. At most five codes are checked within the challenge
+window (`policy.MaxAttempts(n)`, window `policy.ChallengeTTL(d)`); after that the
+pending login is discarded and that user cannot pass the second factor, in any
+session, until the window ends. A successful `Complete` clears the count, and
+`Fail` only reports the wrong code and rotates the session ID. Call `Pending`
+once per code check, in the route that verifies the code: calling it to render a
+form spends an attempt. The lockout lets anyone who knows a
 subject delay that user, so also
 [rate limit](../abuse-prevention/rate-limiting.md) this route by address. Use the
 same `auth.ErrUnauthenticated` for every failure so the

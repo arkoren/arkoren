@@ -556,7 +556,11 @@ func TestFailDiscardsPendingAtMaxAttempts(t *testing.T) {
 	r := sessionRequest(current)
 	begin(t, guard, r, "7")
 
-	for attempt := 1; attempt <= 2; attempt++ {
+	for attempt := 1; attempt <= 3; attempt++ {
+		if _, err := guard.Pending(r); err != nil {
+			t.Fatalf("pending for attempt %d = %v", attempt, err)
+		}
+
 		before := current.ID()
 
 		if err := guard.Fail(r); err != nil {
@@ -566,14 +570,6 @@ func TestFailDiscardsPendingAtMaxAttempts(t *testing.T) {
 		if current.ID() == before {
 			t.Fatalf("attempt %d did not rotate the session", attempt)
 		}
-
-		if _, err := guard.Pending(r); err != nil {
-			t.Fatalf("pending after %d attempts = %v", attempt, err)
-		}
-	}
-
-	if err := guard.Fail(r); err != nil {
-		t.Fatal(err)
 	}
 
 	if err := guard.Complete(r, otp); !errors.Is(err, auth.ErrUnauthenticated) {
