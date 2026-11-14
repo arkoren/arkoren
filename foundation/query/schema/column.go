@@ -150,6 +150,10 @@ type Column struct {
 	// unique requests a separate unique index after the column is created.
 	unique bool
 
+	// bytewise requests a binary collation; only string and text columns
+	// accept it.
+	bytewise bool
+
 	// primary includes this column in the table's primary key.
 	primary bool
 
@@ -195,6 +199,10 @@ func (column *Column) validate() error {
 
 	if err := column.validateTimestampDefault(); err != nil {
 		return err
+	}
+
+	if column.bytewise && column.kind != kindString && column.kind != kindText {
+		return fmt.Errorf("column %q: Bytewise needs a string or text column", column.name)
 	}
 
 	if !column.references && (column.foreign.onDelete != "" || column.foreign.onUpdate != "") {
@@ -369,6 +377,41 @@ func (column *Column) DefaultRaw(expression string) *Column {
 //	}
 func (column *Column) Unique() *Column {
 	column.unique = true
+
+	return column
+}
+
+// Bytewise compares the column's values byte for byte: case, accents, and
+// trailing spaces all matter, so "abc", "ABC", and "abc " are three distinct
+// values, including under [Column.Unique] and [Table.Index]. Use it for
+// identifiers that must match exactly, such as the subject of an authenticated
+// user, which database default collations often compare case-insensitively.
+// It is valid only on [Table.String] and [Table.Text] columns; other types
+// record a construction error reported by [Operation.Err]. It returns the same
+// draft, and modifier order does not matter.
+//
+// The collation clause follows the type: PostgreSQL renders COLLATE "C",
+// SQLite COLLATE BINARY (its default, stated so the intent survives a schema
+// review), and MySQL 8 COLLATE utf8mb4_0900_bin. That MySQL collation is a
+// NO PAD binary collation; utf8mb4_bin would still treat "abc" and "abc " as
+// equal, and MariaDB does not offer utf8mb4_0900_bin. ANSI has no portable
+// collation names, so compiling for ANSI fails with
+// [arkoren.dev/foundation/query.ErrUnsupported].
+//
+// MySQL cannot index a text column without a prefix length, which this package
+// does not render. Declare an indexed bytewise column with [Table.String]
+// and, to fit the 3072-byte index limit of InnoDB, a length of at most 768.
+//
+// Example:
+//
+//	op := schema.Create("identities", func(table *schema.Table) {
+//		table.String("subject", 255).Bytewise().Unique()
+//	})
+//	if err := op.Err(); err != nil {
+//		return err
+//	}
+func (column *Column) Bytewise() *Column {
+	column.bytewise = true
 
 	return column
 }

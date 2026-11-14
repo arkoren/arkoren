@@ -193,6 +193,16 @@ func columnDefinition(dialect query.Dialect, column *Column) (string, error) {
 
 	parts := []string{name, typ}
 
+	if column.bytewise {
+		collation, err := bytewiseCollation(dialect)
+
+		if err != nil {
+			return "", err
+		}
+
+		parts = append(parts, "COLLATE", collation)
+	}
+
 	if !column.nullable {
 		parts = append(parts, "NOT NULL")
 	}
@@ -208,6 +218,23 @@ func columnDefinition(dialect query.Dialect, column *Column) (string, error) {
 	}
 
 	return strings.Join(parts, " "), nil
+}
+
+// bytewiseCollation names the dialect's binary collation for [Column.Bytewise].
+// MySQL uses the NO PAD utf8mb4_0900_bin because the PAD SPACE utf8mb4_bin
+// ignores trailing spaces in comparisons and unique indexes. ANSI has no
+// standard collation names, so it is unsupported rather than guessed.
+func bytewiseCollation(dialect query.Dialect) (string, error) {
+	switch dialect {
+	case query.Postgres:
+		return `"C"`, nil
+	case query.MySQL:
+		return "utf8mb4_0900_bin", nil
+	case query.SQLite:
+		return "BINARY", nil
+	default:
+		return "", unsupported(dialect, "Bytewise collation")
+	}
 }
 
 // quoteList quotes and comma-joins column names.
