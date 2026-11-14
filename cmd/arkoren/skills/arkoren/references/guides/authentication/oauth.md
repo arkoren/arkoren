@@ -37,8 +37,8 @@ challenge sent by default, not a claim about provider-side enforcement.
 | [Google](#google) | `google` | Yes | Yes — [Native login](#native-login). | Yes | Yes | Yes | Yes — Requires explicit API audiences. |
 | [Microsoft](#microsoft) | `microsoft` | Yes — Enforces the selected tenant policy. | No | Yes | Yes | Yes — Requires boolean xms_edov. | Yes — Enforces the selected tenant policy. |
 | [GitHub](#github) | `github` | Yes | No | No | Yes | Yes — Selects the primary verified address. | No |
-| [Apple](#apple) | `apple` | Yes — Requires a POST callback and key.Signing. | Yes — [Native login](#native-login). | Yes | No | Partial — Reads the email_verified claim. | Yes — Requires explicit API audiences. |
-| [Generic OIDC](#generic-oidc) | `oauth` | Yes | No | Yes | Yes | Partial — Reads the email_verified claim. | Yes — Requires explicit API audiences. |
+| [Apple](#apple) | `apple` | Yes — Requires a POST callback and key.Signing. | Yes — [Native login](#native-login). | Yes | No | No | Yes — Requires explicit API audiences. |
+| [Generic OIDC](#generic-oidc) | `oauth` | Yes | No | Yes | Yes | No | Yes — Requires explicit API audiences. |
 | [Generic OAuth2](#generic-oauth2) | `oauth` | Yes | No | No | Yes | Partial — The application owns user-info validation. | No |
 
 All clients require an encrypter. JWT verification requires OIDC, explicit API
@@ -314,15 +314,18 @@ List the audiences your apps request tokens for with `ClientBuilder.NativeAudien
 without them the handlers return `ErrNoNativeAudiences`, and a token for any other
 audience, including the browser client ID, is rejected:
 
-- **Google.** The ID token's `aud` is the client ID the app passes to the SDK as its
-  server client ID (`setServerClientId`, `serverClientID`). That is normally the
-  web client ID, the one you give `oauth.New`. An SDK configured without a server
-  client ID issues tokens for the iOS or Android client ID instead. List every ID
-  your apps use. Google returns the SDK's `nonce` unchanged, so the app passes the
-  nonce as received.
-- **Apple.** The `aud` is the app's bundle ID, not the Services ID of browser
-  login. Apple copies the request's nonce into the token as sent, so the app must
-  send the lowercase hexadecimal SHA-256 of the issued nonce, and the handler
+- **Google.** The ID token's audience is the server client ID the app configures
+  in its SDK: Credential Manager's `setServerClientId` on Android and
+  `GIDConfiguration.serverClientID` on iOS. That is normally the web client ID,
+  the one you give `oauth.New`. List it, and any iOS or Android client ID your apps
+  request tokens for; Google's backend guide only requires `aud` to be one of
+  your app's client IDs. The SDK's `nonce` comes back in the token's `nonce`
+  claim, so the app passes the nonce as received.
+- **Apple.** The `aud` is the app's `client_id`, which for a native app is its
+  bundle ID, not the Services ID of browser login. The token carries the nonce
+  that was passed in the authorization request, and Apple does not hash it. This
+  handler requires the app to pass the lowercase hexadecimal SHA-256 of the issued
+  nonce to Apple, so the token never carries the secret held in the session, and
   accepts only that form. Apple's token has no name: the SDK hands it to the app on
   the first authorization only, so the app sends it to your API itself.
 
@@ -334,9 +337,22 @@ client, err := oauth.New(oauth.Google(), cipher, webClientID,
 )
 ```
 
-Email and `EmailVerified` follow the same rules as browser login: Google's
+Email and `EmailVerified` follow the same rules as browser login: Google's boolean
 `email_verified` and Apple's `email_verified` (a boolean or `"true"`). Other
-presets return `ErrUnsupported`. Native tokens are not accepted by `Verify`,
+presets return `ErrUnsupported`.
+
+These facts come from the provider documentation:
+
+- Google: [Authenticate with a backend server](https://developers.google.com/identity/sign-in/ios/backend-auth)
+  and [OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect)
+  for `iss`, `aud`, `exp`, `email_verified`, `hd` and the `nonce` claim;
+  [`GetGoogleIdOption.Builder`](https://developers.google.com/identity/android-credential-manager/android/reference/com/google/android/libraries/identity/googleid/GetGoogleIdOption.Builder)
+  and [`GIDConfiguration`](https://developers.google.com/identity/sign-in/ios/reference/Classes/GIDConfiguration)
+  for the server client ID as token audience and the nonce.
+- Apple: [Verifying a user](https://developer.apple.com/documentation/signinwithapple/verifying-a-user)
+  (verify the nonce, `iss`, `aud` as the developer's `client_id` and `exp`) and the
+  [identity token claims](https://developer.apple.com/documentation/signinwithapplejs/authorizationi/id_token)
+  (`nonce`, `nonce_supported`, `email_verified` as a string or Boolean). Native tokens are not accepted by `Verify`,
 which requires `Audiences` for API tokens and rejects tokens that carry a nonce.
 
 ## Google

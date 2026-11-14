@@ -131,10 +131,11 @@ func (client *Client) NonceHandler() router.Handler {
 // cookie; a successful login publishes [LoginSucceeded].
 //
 // Accepted audiences are exactly [ClientBuilder.NativeAudiences]; neither the
-// client ID nor [ClientBuilder.Audiences] is added. For Google an ID token's
-// audience is the server client ID the app passed to the SDK: the web client
-// ID when it sets one (the usual case, and then the same as the client ID given
-// to [New]), otherwise the iOS or Android client ID. For Apple the audience of
+// client ID nor [ClientBuilder.Audiences] is added. For Google the ID token's
+// audience is the server client ID the app passed to the SDK (Credential
+// Manager setServerClientId, Google Sign-In serverClientID), usually the web
+// client ID, and then the same as the client ID given to [New]; list it, and
+// any iOS or Android client ID your apps request tokens for. For Apple the audience of
 // a native token is the app's bundle ID, not the Services ID. The nonce claim
 // must be present and equal the issued nonce (Google), or the lowercase
 // hexadecimal SHA-256 of it (Apple); see [Client.NonceHandler]. The Google
@@ -145,8 +146,9 @@ func (client *Client) NonceHandler() router.Handler {
 // Claims["scope"] is not set, because no authorization code is exchanged.
 //
 // The nonce is spent before the token is verified, so one nonce serves one
-// attempt: a replayed, forged or wrong-audience token costs the app a new
-// nonce request. A missing, expired or already used nonce, a bad token, or a
+// attempt: after a rejected token the app asks for a new nonce. Session
+// middleware saves no change for a 5xx response, so a server failure (for
+// example a resolver outage) leaves the nonce unspent. A missing, expired or already used nonce, a bad token, or a
 // nonce mismatch returns [ErrInvalidCallback] and publishes [LoginFailed]; a
 // malformed body or an empty id_token returns [ErrInvalidLoginRequest] without
 // spending the nonce. The resolver and guard errors behave as in

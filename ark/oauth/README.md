@@ -137,8 +137,9 @@ The app passes the nonce to the SDK and posts `{"id_token"}` to `NativeHandler`,
 which spends the nonce, verifies signature, expiry, issuer, audience and nonce,
 calls `resolve` and `guard.Begin`, and answers `204` (logged in) or `202` with the
 second-factor methods. Accepted audiences are exactly `NativeAudiences`: for
-Google the server client ID the app requests tokens for (normally the web client
-ID; the iOS or Android client ID when the SDK has none), for Apple the bundle ID.
+Google the server client ID the apps set in their SDK, which Google documents as the
+token's audience (normally the web client ID), plus any iOS or Android client ID they
+request tokens for, for Apple the bundle ID.
 Google returns the nonce unchanged. Apple copies the request nonce into the token
 as sent, so the app sends the lowercase hex SHA-256 of the nonce and the handler
 accepts only that. Other presets return `ErrUnsupported`. See the

@@ -19,7 +19,11 @@ func Google(identity auth.External, issuer, bare, domain string) (auth.External,
 		}
 	}
 
-	if !identity.EmailVerified {
+	// Google documents email_verified as a boolean; accept nothing else.
+	verified, _ := identity.Claims["email_verified"].(bool)
+	identity.EmailVerified = verified
+
+	if !verified {
 		identity.Email = ""
 	}
 

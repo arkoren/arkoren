@@ -16,6 +16,8 @@ import (
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
 	"arkoren.dev/foundation/key"
 )
 
@@ -382,5 +384,48 @@ func TestNativeRejectsBadBody(t *testing.T) {
 
 	if status := handler.Record(nativePost(token, current)).StatusCode; status != http.StatusNoContent {
 		t.Fatalf("nonce was spent by a bad body: %d", status)
+	}
+}
+
+// TestNativeNonceSurvivesSessionPersistence runs both native routes behind the
+// real session middleware, so the nonce is saved after the first request and
+// loaded from the store for the second, and a replay is refused afterwards.
+func TestNativeNonceSurvivesSessionPersistence(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestProvider(t)
+	client, _ := nativeGoogle(t, provider)
+	guard := newGuard(t)
+	middleware := session.Middleware(cache.New(memorycache.New()), func(cookies *session.Builder) {
+		cookies.AllowInsecure(true)
+	})
+	jar := cookieJar{}
+
+	response := middleware(client.NonceHandler()).Record(jar.attach(httptest.NewRequest(http.MethodGet, "/nonce", nil)))
+	jar.apply(response)
+
+	var body struct {
+		Nonce string `json:"nonce"`
+	}
+
+	if err := json.UnmarshalRead(response.Body, &body); err != nil || body.Nonce == "" {
+		t.Fatalf("nonce = %+v, %v", body, err)
+	}
+
+	token := provider.signFor(nativeAudience, map[string]any{"nonce": body.Nonce})
+	post := func() *http.Response {
+		request := jar.attach(httptest.NewRequest(http.MethodPost, "/native", strings.NewReader(`{"id_token":"`+token+`"}`)))
+		response := middleware(client.NativeHandler(guard, idLogin)).Record(request)
+		jar.apply(response)
+
+		return response
+	}
+
+	if status := post().StatusCode; status != http.StatusNoContent {
+		t.Fatalf("native login = %d, want 204", status)
+	}
+
+	if status := post().StatusCode; status != http.StatusBadRequest {
+		t.Fatalf("replay = %d, want 400", status)
 	}
 }

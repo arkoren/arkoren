@@ -144,9 +144,10 @@
 // [Client.NativeHandler], which verifies signature, expiry, issuer, audience and
 // nonce, calls the resolver and auth.Guard.Begin, and answers
 // outcome.Response. The nonce is single use. Accepted audiences are exactly
-// [ClientBuilder.NativeAudiences]: for Google the server client ID the app
-// requests tokens for (usually the web client ID), otherwise its iOS or Android
-// client ID; for Apple the app's bundle ID.
+// [ClientBuilder.NativeAudiences]: for Google the server client ID the apps
+// configure in their SDK, which Google documents as the token's audience
+// (usually the web client ID), plus any iOS or Android client ID they request
+// tokens for; for Apple the app's bundle ID.
 //
 //	client := compose.Must(oauth.New(oauth.Google(), cipher, webClientID, func(client *oauth.ClientBuilder) {
 //		client.NativeAudiences(webClientID, iosClientID)

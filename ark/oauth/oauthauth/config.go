@@ -98,10 +98,12 @@ type Config struct {
 	// NativeAudiences are the audiences [Client.NativeHandler] accepts in the
 	// ID tokens that mobile apps obtain from the provider's own SDK. Empty
 	// makes the native handler fail with [ErrNoNativeAudiences]. For Google
-	// list the client ID the app passes as its server client ID, which is
-	// usually the web client ID given to [New], or the iOS or Android client ID
-	// when the SDK is configured without one; for Apple list the app's bundle
-	// ID. Browser callbacks and [Client.Verify] ignore it.
+	// list the server client ID the apps configure in their SDK (Credential
+	// Manager setServerClientId, Google Sign-In serverClientID), which Google
+	// documents as the audience of the ID token and which is usually the web
+	// client ID given to [New], and any iOS or Android client ID your apps
+	// request tokens for; for Apple list the app's bundle ID. Browser callbacks
+	// and [Client.Verify] ignore it.
 	//
 	// Example:
 	//
@@ -247,9 +249,10 @@ func (client *ClientBuilder) Audiences(audiences ...string) *ClientBuilder {
 // returns the same draft. Empty, the default, makes [Client.NativeHandler] fail
 // with [ErrNoNativeAudiences]: native tokens are never accepted for an
 // audience the application did not list. For Google list the server client ID
-// the app requests tokens for (the web client ID when it sets one, otherwise
-// the iOS or Android client ID); for Apple list the app's bundle ID. The input
-// slice is copied here and at publication.
+// the apps set in their SDK, which Google documents as the ID token's audience
+// (usually the web client ID), and any iOS or Android client ID your apps
+// request tokens for; for Apple list the app's bundle ID. The input slice is
+// copied here and at publication.
 //
 // Example:
 //
