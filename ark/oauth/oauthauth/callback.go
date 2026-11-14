@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
-	"time"
 
 	"golang.org/x/oauth2"
 
@@ -17,34 +15,37 @@ import (
 	"arkoren.dev/core/http/session"
 )
 
-// Callback completes a login. It accepts the provider's GET redirect or POST
-// form, finds and deletes the login cookie, exchanges the code and verifies
-// the user (an ID token for OIDC, the user info function for OAuth2). It then
-// calls resolve to map the external [Identity] to the application's user
-// subject and hands that subject to login.Begin with a federated factor, which
-// logs the user in and regenerates the session ID.
+// CallbackHandler completes a browser login. It accepts the provider's GET
+// redirect or POST form, finds and deletes the login cookie, exchanges the code
+// and verifies the user (an ID token for OIDC, the user info function for
+// OAuth2). It then calls resolve to map the verified [auth.External] identity to
+// the application's user subject and hands that subject to guard.Begin with a
+// federated factor ([MethodFederated], [auth.KindFederated]), which logs the
+// user in and regenerates the session ID.
 //
-// The federated factor is stamped with the ID token's auth_time claim, the time
-// the provider says the user really authenticated, so [auth.RequireFresh] is
-// not satisfied by a silent single sign-on approval. When the claim is absent
-// (providers that omit it, and OAuth2 providers without an ID token) the time
-// is unknown, not now: the factor is stamped with a time in the distant past,
-// so the login signs the user in but never satisfies RequireFresh, including
-// when it re-authenticates a session that is already logged in as the same
-// subject. When the login was started with the fresh query parameter (see
-// [Client.Login]), an auth_time from before the login started, which means the
-// provider ignored the re-authentication request, is treated as unknown too.
-// To make step-up demand a real prompt, use fresh on an OIDC provider that
-// returns auth_time.
+// The factor time is this server's clock at the callback, stamped by the guard.
+// What the provider says about when the user authenticated (the auth_time claim)
+// is ignored, so a silent single sign-on approval and a fresh password prompt
+// both count as a login now. Whether that satisfies [auth.Guard.RequireFresh]
+// follows the core rule: federated is not a step-up method by default, so a
+// user with a step-up method such as a password or TOTP is not fresh after a
+// silent federated login. The fresh query parameter of [Client.LoginHandler]
+// is only a hint to the provider.
+//
+// The verified claims reach resolve in External.Claims. The granted scopes are
+// added to them as the space-delimited string claim "scope": the token response
+// scope or, when the provider omits it, the requested scopes (RFC 6749
+// section 5.1). The display name, when the provider has one, is Claims["name"];
+// Sign in with Apple's first-authorization name replaces the (absent) claim.
 //
 // A completed login publishes [LoginSucceeded] and redirects to the validated
 // return_to target. When login requires a second factor, Begin parks the login
-// as pending and the request stays anonymous: Callback then redirects to the
+// as pending and the request stays anonymous: the handler then redirects to the
 // path set with [ClientBuilder.ChallengeURL], publishes no [LoginSucceeded] and
-// does not carry return_to along; the challenge page finishes the login with
-// [auth.Guard.Complete]. Without a challenge URL it ends the pending login with
-// login.Logout and fails with [ErrNoChallengeURL]. It never falls back to a
-// login without the second factor.
+// does not carry return_to along; the page there finishes the login through
+// the core challenge route ([auth.Guard.ChallengeHandler]). Without a challenge
+// URL it ends the pending login with guard.Logout and fails with
+// [ErrNoChallengeURL]. It never falls back to a login without the second factor.
 //
 // With [ClientBuilder.Events] a rejected callback publishes [LoginFailed].
 //
@@ -63,22 +64,17 @@ import (
 // configuration error returned per request before any side effects. A valid
 // handler still requires Start.
 //
-// Applications with their own users return the subject of their user record,
-// for example from their typed user driver Subject method;
-// the external [Identity] is the input, never the subject itself. Linking
-// accounts by email is unsafe.
+// resolve is the only code that decides which local account an outside
+// identity may log into. Return the subject of the user record, for example
+// from a federation table keyed by Issuer and Subject. Linking accounts by email
+// is unsafe unless EmailVerified is true and the application's policy allows it.
 //
 // Example:
 //
-//	r.Get("/oauth/callback", client.Callback(guard, func(ctx context.Context, external oauthauth.Identity) (string, error) {
-//		user, err := users.UpsertBySubject(ctx, external.Issuer, external.Subject, external.Email)
-//		if err != nil {
-//			return "", err
-//		}
-//
-//		return driver.Subject(user) // the application's typed user driver
+//	r.Get("/auth/google/callback", client.CallbackHandler(guard, func(ctx context.Context, external auth.External) (string, error) {
+//		return links.SubjectFor(ctx, external.Issuer, external.Subject) // create or refuse per policy
 //	}))
-func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Context, external Identity) (subject string, err error)) router.Handler {
+func (client *Client) CallbackHandler(guard *auth.Guard, resolve auth.Resolver) router.Handler {
 	var configurationErr error
 
 	switch {
@@ -130,7 +126,7 @@ func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Conte
 			return client.loginFailed(httpRequest, callbackMapperError(err))
 		}
 
-		complete, err := guard.Begin(httpRequest, subject, auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated, At: authTime(external.Claims, saved)})
+		outcome, err := guard.Begin(httpRequest, subject, federatedFactor)
 
 		if errors.Is(err, session.ErrNoSession) {
 			return auth.ErrUnauthenticated
@@ -140,10 +136,11 @@ func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Conte
 			return client.loginFailed(httpRequest, err)
 		}
 
-		if complete {
+		if outcome.Complete() {
 			client.config.Events.Emit(httpRequest.Context(), LoginSucceeded, LoginSucceededEvent{
-				Subject: external.Subject,
-				Issuer:  external.Issuer,
+				Subject:      external.Subject,
+				Issuer:       external.Issuer,
+				LocalSubject: subject,
 			})
 
 			return response.SafeRedirect(writer, http.StatusFound, saved.ReturnTo)
@@ -158,41 +155,20 @@ func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Conte
 	}
 }
 
-// unknownAuthTime is the factor time recorded when the provider does not say
-// when the user authenticated. [auth.Guard.Begin] reads a zero time as now, so
-// unknown needs an explicit, nonzero time that [auth.RequireFresh] rejects for
-// any realistic maximum age.
-var unknownAuthTime = time.Unix(1, 0)
+// MethodFederated is the [auth.Method] of a login proved by an external
+// identity provider (browser callback or native ID token). Core defines only
+// the RFC 8176 methods, so this module names its own. It is not a step-up
+// method unless the application registers a credential for it.
+//
+// Example:
+//
+//	factor := auth.Factor{Method: oauth.MethodFederated, Kind: auth.KindFederated}
+//	_ = factor
+const MethodFederated auth.Method = "federated"
 
-// freshSkew is the clock difference tolerated between this server and the
-// provider when checking an auth_time against the start of a fresh login.
-const freshSkew = time.Minute
-
-// authTime returns when the provider says the user last authenticated: the
-// ID token's auth_time claim (OIDC Core section 2), which providers set to the
-// moment of the real interactive authentication, not of a silent single
-// sign-on approval. [Client.Callback] stamps the federated factor with it so
-// [auth.RequireFresh] reflects a real re-authentication. A missing, non-numeric
-// or non-positive claim returns [unknownAuthTime], as does an auth_time before
-// the start of a login that saved.Fresh asked to re-authenticate (the provider
-// ignored the request). A future time is returned unchanged; RequireFresh
-// treats it as not fresh.
-func authTime(claims map[string]any, saved loginState) time.Time {
-	seconds, ok := claims["auth_time"].(float64)
-
-	if !ok || seconds <= 0 {
-		return unknownAuthTime
-	}
-
-	at := time.Unix(int64(seconds), 0)
-	started := saved.Expires.Add(-loginTTL)
-
-	if saved.Fresh && at.Before(started.Add(-freshSkew)) {
-		return unknownAuthTime
-	}
-
-	return at
-}
+// federatedFactor is the factor every login of this package proves. The guard
+// stamps its time; see [Client.CallbackHandler].
+var federatedFactor = auth.Factor{Method: MethodFederated, Kind: auth.KindFederated}
 
 // callbackMapperError preserves the browser callback's credential rejection
 // contract, including wrapped causes. Other application failures keep their
@@ -207,11 +183,11 @@ func callbackMapperError(err error) error {
 
 // callbackIdentity resolves the verified provider identity, including optional
 // POST-only provider data. This keeps protocol completion before local mapping.
-func (client *Client) callbackIdentity(request *http.Request, ready *endpoints, code string, saved loginState) (Identity, error) {
+func (client *Client) callbackIdentity(request *http.Request, ready *endpoints, code string, saved loginState) (auth.External, error) {
 	external, err := client.identity(request.Context(), ready, code, saved)
 
 	if err != nil {
-		return Identity{}, err
+		return auth.External{}, err
 	}
 
 	if complete := client.provider.formIdentity; complete != nil && request.Method == http.MethodPost {
@@ -232,14 +208,14 @@ func param(httpRequest *http.Request, key string) string {
 }
 
 // identity exchanges code and returns the verified identity of the login.
-func (client *Client) identity(ctx context.Context, ready *endpoints, code string, saved loginState) (Identity, error) {
+func (client *Client) identity(ctx context.Context, ready *endpoints, code string, saved loginState) (auth.External, error) {
 	config := ready.oauth
 
 	if secret := client.provider.clientSecret; secret != nil {
 		signed, err := secret(config.ClientID, config.ClientSecret)
 
 		if err != nil {
-			return Identity{}, fmt.Errorf("derive client secret: %w", err)
+			return auth.External{}, fmt.Errorf("derive client secret: %w", err)
 		}
 
 		config.ClientSecret = signed
@@ -254,10 +230,10 @@ func (client *Client) identity(ctx context.Context, ready *endpoints, code strin
 	token, err := config.Exchange(ctx, code, options...)
 
 	if err != nil {
-		return Identity{}, exchangeFailure(err)
+		return auth.External{}, exchangeFailure(err)
 	}
 
-	var identity Identity
+	var identity auth.External
 
 	if client.provider.isOIDC() {
 		identity, err = client.idTokenIdentity(ctx, token, saved.Nonce)
@@ -270,17 +246,22 @@ func (client *Client) identity(ctx context.Context, ready *endpoints, code strin
 	}
 
 	if err != nil {
-		return Identity{}, err
+		return auth.External{}, err
 	}
 
 	// The token response lists the granted scopes; when a provider omits
 	// it, the requested scopes were granted (RFC 6749 section 5.1).
 	scope, _ := token.Extra("scope").(string)
-	identity.Scopes = strings.Fields(scope)
 
-	if len(identity.Scopes) == 0 {
-		identity.Scopes = slices.Clone(config.Scopes)
+	if strings.TrimSpace(scope) == "" {
+		scope = strings.Join(config.Scopes, " ")
 	}
+
+	if identity.Claims == nil {
+		identity.Claims = map[string]any{}
+	}
+
+	identity.Claims["scope"] = strings.Join(strings.Fields(scope), " ")
 
 	return identity, nil
 }
@@ -302,21 +283,21 @@ func exchangeFailure(err error) error {
 // positional client-ID audience before matching the saved, nonempty nonce.
 // Configured API audiences do not apply to browser login. Missing ID tokens
 // and failed checks return ErrInvalidCallback before local identity mapping.
-func (client *Client) idTokenIdentity(ctx context.Context, token *oauth2.Token, nonce string) (Identity, error) {
+func (client *Client) idTokenIdentity(ctx context.Context, token *oauth2.Token, nonce string) (auth.External, error) {
 	raw, ok := token.Extra("id_token").(string)
 
 	if !ok {
-		return Identity{}, invalidCallback(nil)
+		return auth.External{}, invalidCallback(nil)
 	}
 
 	identity, err := client.verify(ctx, raw, []string{client.clientID})
 
 	if err != nil {
-		return Identity{}, invalidCallback(err)
+		return auth.External{}, invalidCallback(err)
 	}
 
 	if got, _ := identity.Claims["nonce"].(string); nonce == "" || got != nonce {
-		return Identity{}, invalidCallback(nil)
+		return auth.External{}, invalidCallback(nil)
 	}
 
 	return identity, nil

@@ -1,7 +1,8 @@
 package oauthauth
 
 import (
-	"net/http"
+	"crypto/sha256"
+	"encoding/hex"
 	"time"
 
 	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
@@ -24,8 +25,13 @@ const appleIssuer = "https://appleid.apple.com"
 // login cookie are the CSRF defense of this route.
 //
 // Apple sends the user's name only on the first authorization, in the form
-// field "user"; it is added to [Identity.Name] and is empty on later logins,
+// field "user"; it is added as Claims["name"] of the [auth.External] on that login only,
 // so store it then. The email may be a private relay address. PKCE is off.
+//
+// Apple supports native login ([Client.NativeHandler]) for the app's bundle ID.
+// Its ID token carries the nonce exactly as the app sent it to Apple, so the app
+// sends the lowercase hexadecimal SHA-256 of the nonce from [Client.NonceHandler].
+// The client name is "apple".
 //
 // Example:
 //
@@ -44,11 +50,15 @@ func Apple(teamID, keyID string, identity key.Signing) Provider {
 	privateKey, keyErr := identity.PrivateKey(), identity.Err()
 
 	definition := OIDC(appleIssuer)
+	definition.name = "apple"
 	definition.scopes = []string{"openid", "name", "email"}
 	definition.formPost = true
 	definition.noPKCE = true
-	definition.formIdentity = func(request *http.Request, identity Identity) Identity {
-		return Identity(provider.AppleName(request, provider.Record(identity)))
+	definition.formIdentity = provider.AppleName
+	definition.nativeNonce = func(nonce string) string {
+		digest := sha256.Sum256([]byte(nonce))
+
+		return hex.EncodeToString(digest[:])
 	}
 
 	definition.clientSecret = func(clientID, _ string) (string, error) {

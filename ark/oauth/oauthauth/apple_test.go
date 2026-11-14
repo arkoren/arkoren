@@ -17,6 +17,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/foundation/key"
 )
@@ -157,9 +158,9 @@ func requireAppleFormPostName(t *testing.T, user, want string) {
 	request = jar.attach(request)
 	request = request.WithContext(session.NewContext(request.Context(), newSession()))
 
-	var external Identity
+	var external auth.External
 
-	if status := client.Callback(guard, func(_ context.Context, identity Identity) (string, error) {
+	if status := client.CallbackHandler(guard, func(_ context.Context, identity auth.External) (string, error) {
 		external = identity
 
 		return "user-1", nil
@@ -167,8 +168,8 @@ func requireAppleFormPostName(t *testing.T, user, want string) {
 		t.Fatalf("status = %d, want 302", status)
 	}
 
-	if external.Name != want {
-		t.Errorf("identity name = %q, want %q", external.Name, want)
+	if name, _ := external.Claims["name"].(string); name != want {
+		t.Errorf("identity name = %q, want %q", name, want)
 	}
 }
 

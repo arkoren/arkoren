@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,15 +48,17 @@ func TestVerifyUsesAPIAudiencesAlongsideBrowserLogin(t *testing.T) {
 // bearerIdentity wraps Verify the way applications do: it maps the external
 // identity to an application subject (here the provider subject itself) and
 // carries the granted scopes.
-func bearerIdentity(ctx context.Context, client *Client, token string) (auth.Identity, Identity, error) {
+func bearerIdentity(ctx context.Context, client *Client, token string) (auth.Identity, auth.External, error) {
 	external, err := client.Verify(ctx, token)
 
 	if err != nil {
-		return auth.Identity{}, Identity{}, err
+		return auth.Identity{}, auth.External{}, err
 	}
 
+	scope, _ := external.Claims["scope"].(string)
+
 	return auth.NewIdentity(external.Subject, func(principal *auth.IdentityBuilder) {
-		principal.Scopes(external.Scopes...)
+		principal.Scopes(strings.Fields(scope)...)
 	}), external, nil
 }
 
@@ -122,9 +126,9 @@ func TestIssuerHook(t *testing.T) {
 
 	provider := newTestProvider(t)
 	oidcProvider := OIDC(provider.server.URL)
-	oidcProvider.identity = func(identity Identity) (Identity, error) {
+	oidcProvider.identity = func(identity auth.External) (auth.External, error) {
 		if identity.Subject != "user-1" {
-			return Identity{}, errors.New("bad subject")
+			return auth.External{}, errors.New("bad subject")
 		}
 
 		return identity, nil
@@ -138,8 +142,8 @@ func TestIssuerHook(t *testing.T) {
 
 	denied := newClient(t, func() Provider {
 		p := oidcProvider
-		p.identity = func(Identity) (Identity, error) {
-			return Identity{}, errors.New("no")
+		p.identity = func(auth.External) (auth.External, error) {
+			return auth.External{}, errors.New("no")
 		}
 
 		return p
@@ -261,7 +265,7 @@ func requireKeycloakBearer(t *testing.T, audiences []string, want int) {
 
 	client, token := keycloakToken(t, ctx, audiences...)
 
-	var external Identity
+	var external auth.External
 	verify := auth.Bearer(func(ctx context.Context, token string) (auth.Identity, error) {
 		identity, verified, err := bearerIdentity(ctx, client, token)
 		external = verified
@@ -281,7 +285,7 @@ func requireKeycloakBearer(t *testing.T, audiences []string, want int) {
 		t.Fatalf("status = %d, want %d", got, want)
 	}
 
-	if want == http.StatusNoContent && (external.Issuer != keycloakIssuerURL || external.Subject == "" || !slices.Contains(external.Scopes, "profile")) {
+	if want == http.StatusNoContent && (external.Issuer != keycloakIssuerURL || external.Subject == "" || !slices.Contains(strings.Fields(fmt.Sprint(external.Claims["scope"])), "profile")) {
 		t.Errorf("identity = %+v", external)
 	}
 }
@@ -392,7 +396,7 @@ func TestVerifyRejectsCanceledContextWithLocalKey(t *testing.T) {
 	provider := newTestProvider(t)
 	checked := false
 	configuration := OIDC(provider.server.URL)
-	configuration.identity = func(identity Identity) (Identity, error) {
+	configuration.identity = func(identity auth.External) (auth.External, error) {
 		checked = true
 
 		return identity, nil
@@ -442,7 +446,7 @@ func TestVerifyRejectsCancellationDuringIdentityCheck(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	configuration := OIDC(provider.server.URL)
-	configuration.identity = func(identity Identity) (Identity, error) {
+	configuration.identity = func(identity auth.External) (auth.External, error) {
 		cancel()
 
 		return identity, nil

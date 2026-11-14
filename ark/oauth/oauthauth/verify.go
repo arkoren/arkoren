@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
+	"arkoren.dev/core/auth"
 )
 
 // Verify checks a JWT's issuer, audience, signature, expiry and nonempty final
-// subject, then returns its [Identity]. It rejects a nonce claim or typ=ID claim
+// subject, then returns its [auth.External] identity. It rejects a nonce claim or typ=ID claim
 // as an ID-token heuristic, not a universal proof of access-token purpose. An
 // unmarked JWT matching the accepted audience can pass. Applications must enforce
 // provider-specific purpose policy where needed; do not rely on overlapping
@@ -20,9 +21,10 @@ import (
 // [ClientBuilder.Audiences]; without them Verify returns [ErrNoAudiences], because the
 // default audience of an ID token is the client ID and would make ID tokens
 // pass as bearer tokens. Errors are plain; [auth.Bearer] turns them into a
-// 401 challenge. Verify returns the external [Identity], not an [auth.Identity]:
+// 401 challenge. Verify returns the external [auth.External], not an [auth.Identity]:
 // the application maps issuer and subject to its own subject and wraps Verify
-// for [auth.Bearer].
+// for [auth.Bearer]. The token's scopes are in Claims["scope"] (a
+// space-delimited string; Microsoft v2 tokens use Claims["scp"]).
 // After provider and audience checks, an ended context rejects verification,
 // including cached-key success and cancellation before identity publication.
 // Cancellation/deadline errors retain their identity for errors.Is. The error
@@ -45,17 +47,19 @@ import (
 //			return auth.Identity{}, err
 //		}
 //
+//		scope, _ := external.Claims["scope"].(string)
+//
 //		return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
-//			principal.Scopes(external.Scopes...)
+//			principal.Scopes(strings.Fields(scope)...)
 //		}), nil
 //	})))
-func (client *Client) Verify(ctx context.Context, token string) (Identity, error) {
+func (client *Client) Verify(ctx context.Context, token string) (auth.External, error) {
 	if !client.provider.isOIDC() {
-		return Identity{}, ErrUnsupported
+		return auth.External{}, ErrUnsupported
 	}
 
 	if len(client.config.Audiences) == 0 {
-		return Identity{}, ErrNoAudiences
+		return auth.External{}, ErrNoAudiences
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -63,7 +67,7 @@ func (client *Client) Verify(ctx context.Context, token string) (Identity, error
 			Err: errBearerRejected,
 		})
 
-		return Identity{}, err
+		return auth.External{}, err
 	}
 
 	identity, err := client.verify(ctx, token, client.config.Audiences)
@@ -73,7 +77,7 @@ func (client *Client) Verify(ctx context.Context, token string) (Identity, error
 			Err: errBearerRejected,
 		})
 
-		return Identity{}, err
+		return auth.External{}, err
 	}
 
 	// Reject common ID-token markers. Unmarked JWTs still require distinct
@@ -86,7 +90,7 @@ func (client *Client) Verify(ctx context.Context, token string) (Identity, error
 			Err: errBearerRejected,
 		})
 
-		return Identity{}, err
+		return auth.External{}, err
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -94,7 +98,7 @@ func (client *Client) Verify(ctx context.Context, token string) (Identity, error
 			Err: errBearerRejected,
 		})
 
-		return Identity{}, err
+		return auth.External{}, err
 	}
 
 	return identity, nil
@@ -105,11 +109,11 @@ func (client *Client) Verify(ctx context.Context, token string) (Identity, error
 // audiences explicitly: the client ID for browser ID tokens, or configured API
 // audiences for bearer tokens. Empty audiences accept no token. Verification
 // and provider identity errors retain their causes for the caller to classify.
-func (client *Client) verify(ctx context.Context, raw string, audiences []string) (Identity, error) {
+func (client *Client) verify(ctx context.Context, raw string, audiences []string) (auth.External, error) {
 	ready, err := client.started()
 
 	if err != nil {
-		return Identity{}, err
+		return auth.External{}, err
 	}
 
 	token, err := ready.verifier.Verify(ctx, raw)
@@ -117,33 +121,33 @@ func (client *Client) verify(ctx context.Context, raw string, audiences []string
 	if err != nil {
 		// The native verifier formats some failures without wrapping their
 		// causes. Retain its error and restore the caller's context identity.
-		return Identity{}, fmt.Errorf("verify OIDC token: %w", errors.Join(err, ctx.Err()))
+		return auth.External{}, fmt.Errorf("verify OIDC token: %w", errors.Join(err, ctx.Err()))
 	}
 
 	if !slices.ContainsFunc(token.Audience, func(audience string) bool {
 		return slices.Contains(audiences, audience)
 	}) {
-		return Identity{}, errors.New("OIDC token audience is not accepted")
+		return auth.External{}, errors.New("OIDC token audience is not accepted")
 	}
 
 	claims := make(map[string]any)
 
 	if err := token.Claims(&claims); err != nil {
-		return Identity{}, fmt.Errorf("decode OIDC claims: %w", err)
+		return auth.External{}, fmt.Errorf("decode OIDC claims: %w", err)
 	}
 
-	identity := Identity(provider.FromClaims(claims))
+	identity := provider.FromClaims(claims)
 
 	if check := client.provider.identity; check != nil {
 		identity, err = check(identity)
 
 		if err != nil {
-			return Identity{}, fmt.Errorf("check OIDC identity: %w", err)
+			return auth.External{}, fmt.Errorf("check OIDC identity: %w", err)
 		}
 	}
 
 	if identity.Subject == "" {
-		return Identity{}, errors.New("OIDC identity lacks a stable subject")
+		return auth.External{}, errors.New("OIDC identity lacks a stable subject")
 	}
 
 	return identity, nil

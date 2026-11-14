@@ -4,6 +4,7 @@ import (
 	"net/url"
 
 	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
+	"arkoren.dev/core/auth"
 )
 
 // GoogleBuilderFunc edits one fresh provider draft synchronously, once in order.
@@ -61,8 +62,10 @@ func (definition *GoogleBuilder) HostedDomain(domain string) *GoogleBuilder {
 // email and profile, and reports the issuer "https://accounts.google.com"
 // whether the token carries that form or "accounts.google.com".
 //
-// Identity.Email is set only when Google reports email_verified; otherwise
-// it is empty. Match users on Issuer + Subject, not on email.
+// The External email is set, with EmailVerified true, only when Google reports
+// email_verified; otherwise it is empty. Match users on Issuer + Subject, not
+// on email. The client is named "google" and supports native ID-token login
+// (see [Client.NativeHandler]).
 // Construction callbacks run directly once in order on one fresh GoogleBuilder;
 // nil entries panic and expanded nil or empty slices omit edits. Publication
 // detaches the completed restriction before capturing it in claim validation.
@@ -103,10 +106,14 @@ func google(issuer string, configure ...GoogleBuilderFunc) Provider {
 	result := Provider{
 		issuer: issuer,
 		scopes: []string{"openid", "email", "profile"},
-		identity: func(identity Identity) (Identity, error) {
-			checked, err := provider.Google(provider.Record(identity), issuer, bare, config.hostedDomain)
-
-			return Identity(checked), err
+		name:   "google",
+		identity: func(external auth.External) (auth.External, error) {
+			return provider.Google(external, issuer, bare, config.hostedDomain)
+		},
+		// Google returns the nonce an app passes to Credential Manager or
+		// Google Sign-In unchanged, in the nonce claim.
+		nativeNonce: func(nonce string) string {
+			return nonce
 		},
 	}
 

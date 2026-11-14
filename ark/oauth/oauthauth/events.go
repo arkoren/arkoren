@@ -7,14 +7,17 @@ import (
 	"arkoren.dev/core/event"
 )
 
-// LoginSucceededEvent reports the external identity after local session login.
-// It contains no email or token. Subject and issuer can still identify a person;
-// apply the application's privacy policy before retaining them in observations.
+// LoginSucceededEvent reports the external identity and the local user after
+// local session login, from a browser callback or a native ID-token login. It
+// contains no email or token. Subject, issuer and the local subject can still
+// identify a person; apply the application's privacy policy before retaining
+// them in observations.
 //
 // Example:
 //
 //	_, err := bus.Listen(oauth.LoginSucceeded, func(_ context.Context, outcome oauth.LoginSucceededEvent) error {
 //		_, _ = outcome.Issuer, outcome.Subject // Identify the external account.
+//		_ = outcome.LocalSubject               // The application's user.
 //		return nil
 //	})
 //	if err != nil {
@@ -38,11 +41,21 @@ type LoginSucceededEvent struct {
 	//	outcome := oauth.LoginSucceededEvent{Issuer: "https://id.example.com", Subject: "user-42"}
 	//	_, _ = outcome.Issuer, outcome.Subject
 	Issuer string
+
+	// LocalSubject is the application's subject of the user that the resolver
+	// returned and the guard logged in. Use it to correlate the login with the
+	// application's own records, which Subject and Issuer cannot do.
+	//
+	// Example:
+	//
+	//	outcome := oauth.LoginSucceededEvent{LocalSubject: "user-1", Issuer: "https://id.example.com", Subject: "user-42"}
+	//	_ = outcome.LocalSubject
+	LocalSubject string
 }
 
 // LoginFailedEvent describes a rejected callback without retaining request text
 // or native/application causes. Err is a bounded classification, not the error
-// returned by Callback. Inspect that returned error explicitly for diagnostics;
+// returned by the handler. Inspect that returned error explicitly for diagnostics;
 // its causes can contain credentials or provider-controlled content.
 //
 // Example:
@@ -69,7 +82,7 @@ type LoginFailedEvent struct {
 
 	// Err is a bounded classification: ErrInvalidCallback,
 	// ErrProviderUnavailable, or an opaque local-login failure. It contains
-	// no application/native cause. Callback's returned error retains that cause.
+	// no application/native cause. The handler's returned error retains that cause.
 	// The opaque local-login classification has no exported sentinel or cause;
 	// do not classify it by comparing its diagnostic text.
 	//
@@ -112,8 +125,9 @@ type TokenRejectedEvent struct {
 }
 
 var (
-	// LoginSucceeded is published when [Client.Callback] has stored the user
-	// in the session. Persistence still depends on session middleware completing
+	// LoginSucceeded is published when [Client.CallbackHandler] or
+	// [Client.NativeHandler] has logged the user in. A login parked for a second
+	// factor publishes nothing. Persistence still depends on session middleware completing
 	// the response. Listener errors cannot change the recorded login outcome.
 	//
 	// Example:
@@ -127,7 +141,8 @@ var (
 	//	}
 	LoginSucceeded = event.NewTopic[LoginSucceededEvent]("oauth.login.succeeded")
 
-	// LoginFailed is published when [Client.Callback] rejects a callback: an
+	// LoginFailed is published when [Client.CallbackHandler] or
+	// [Client.NativeHandler] rejects a login: an
 	// invalid login cookie, a provider error or missing code, a
 	// failed code exchange or token check, or an error from the login
 	// function. The payload drops causes and bounds untrusted provider hints;
@@ -144,23 +159,6 @@ var (
 	//		return err
 	//	}
 	LoginFailed = event.NewTopic[LoginFailedEvent]("oauth.login.failed")
-
-	// LoggedOut is published when [Client.Logout] has removed the user from
-	// the local session. It carries no identity and does not assert provider logout
-	// or response-time session persistence.
-	//
-	// Deprecated: it goes away with [Client.Logout]. Subscribe to [auth.LoggedOut],
-	// which guard.LogoutHandler publishes with the subject.
-	//
-	// Example:
-	//
-	//	_, err := bus.Listen(oauth.LoggedOut, func(context.Context, event.Void) error {
-	//		return nil // Count local logout without retaining user identifiers.
-	//	})
-	//	if err != nil {
-	//		return err
-	//	}
-	LoggedOut = event.NewSignal("oauth.logged-out")
 
 	// TokenRejected is published when [Client.Verify] rejects a bearer token.
 	// Its error is a fixed opaque classification without claims or native causes;

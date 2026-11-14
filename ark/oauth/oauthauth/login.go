@@ -14,25 +14,24 @@ import (
 	"arkoren.dev/core/http/router"
 )
 
-// Login starts an Authorization Code login. It redirects to the provider and
-// remembers the optional local return_to query target in a sealed cookie.
+// LoginHandler starts an Authorization Code login. It redirects to the provider
+// and remembers the optional local return_to query target in a sealed cookie.
 // It needs no session.
 //
 // With the query parameter fresh=1 on an OIDC provider, the authorization
 // request also carries prompt=login and max_age=0, which asks the provider to
-// authenticate the user again instead of approving silently. Send step-up flows
-// there: the callback then sees a new auth_time, which satisfies
-// [auth.RequireFresh]. OAuth2 providers have no such request and ignore it. A
-// provider that ignores the request returns an old (or no) auth_time, and the
-// login then does not count as fresh: the callback requires an auth_time from
-// after the login started and otherwise records the factor time as unknown
-// (see [Client.Callback]). Without fresh=1 a login that lacks auth_time is
-// equally never fresh.
+// authenticate the user again instead of approving silently. It is a
+// best-effort hint with no security meaning: a provider may ignore it, and the
+// callback never reads what the provider answers. This server stamps the
+// federated factor with its own clock at the callback, and whether that
+// satisfies [auth.Guard.RequireFresh] depends on the user's step-up methods
+// (see [Client.CallbackHandler]). OAuth2 providers have no such request and
+// ignore the parameter.
 //
 // Example:
 //
-//	r.Get("/login", client.Login()) // supports ?return_to=/local/path&fresh=1
-func (client *Client) Login() router.Handler {
+//	r.Get("/auth/google", client.LoginHandler()) // supports ?return_to=/local/path&fresh=1
+func (client *Client) LoginHandler() router.Handler {
 	return func(writer http.ResponseWriter, httpRequest *http.Request) error {
 		if client.config.RedirectURL == "" {
 			return errors.New("OAuth redirect URL cannot be empty")
@@ -54,7 +53,7 @@ func (client *Client) Login() router.Handler {
 			return invalidLoginRequest(err)
 		}
 
-		state, err := client.newState(returnTo, httpRequest.URL.Query().Get("fresh") == "1")
+		state, err := client.newState(returnTo)
 
 		if err != nil {
 			return err
@@ -68,7 +67,7 @@ func (client *Client) Login() router.Handler {
 
 		options := client.authOptions(state)
 
-		if client.provider.isOIDC() && state.Fresh {
+		if client.provider.isOIDC() && httpRequest.URL.Query().Get("fresh") == "1" {
 			options = append(options, oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", "0"))
 		}
 
@@ -77,7 +76,7 @@ func (client *Client) Login() router.Handler {
 }
 
 // newState creates the random values of one login.
-func (client *Client) newState(returnTo string, fresh bool) (loginState, error) {
+func (client *Client) newState(returnTo string) (loginState, error) {
 	state, err := random()
 
 	if err != nil {
@@ -104,7 +103,6 @@ func (client *Client) newState(returnTo string, fresh bool) (loginState, error) 
 		Nonce:    nonce,
 		Verifier: verifier,
 		ReturnTo: returnTo,
-		Fresh:    fresh,
 		Expires:  time.Now().Add(loginTTL),
 	}, nil
 }

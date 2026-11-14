@@ -1,21 +1,25 @@
 package provider
 
-import "errors"
+import (
+	"errors"
+
+	"arkoren.dev/core/auth"
+)
 
 // Google applies the preset's issuer, Workspace, and verified-email policy to
 // an identity whose signature, expiry, and audience have already been checked.
-func Google(identity Record, issuer, bare, domain string) (Record, error) {
+func Google(identity auth.External, issuer, bare, domain string) (auth.External, error) {
 	if identity.Issuer != issuer && identity.Issuer != bare {
-		return Record{}, errors.New("Google issuer is not accepted")
+		return auth.External{}, errors.New("Google issuer is not accepted")
 	}
 
 	if domain != "" {
 		if hd, _ := identity.Claims["hd"].(string); hd != domain {
-			return Record{}, errors.New("Google hosted domain is not accepted")
+			return auth.External{}, errors.New("Google hosted domain is not accepted")
 		}
 	}
 
-	if verified, _ := identity.Claims["email_verified"].(bool); !verified {
+	if !identity.EmailVerified {
 		identity.Email = ""
 	}
 

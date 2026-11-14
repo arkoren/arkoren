@@ -25,7 +25,9 @@ var ErrInvalidLoginRequest = problem.New(func(details *problem.Builder) {
 // ErrInvalidCallback is returned when a callback cannot be verified: the
 // login cookie is missing, expired or tampered with, an ID-token check fails,
 // the provider reports an error, or the code exchange returns invalid_grant
-// (including a consumed code). Cookie deletion is not a server-side replay cache.
+// (including a consumed code). [Client.NativeHandler] returns it for a native
+// ID token that fails verification or whose nonce is missing, spent, expired or
+// different from the one issued to the session. Cookie deletion is not a server-side replay cache.
 // Returned errors preserve causes; LoginFailed payloads contain only this
 // template when classified as an invalid callback, not those causes.
 //
@@ -97,7 +99,19 @@ var ErrUnsupported = problem.New(func(details *problem.Builder) {
 //	}
 var ErrNoAudiences = errors.New("oauth: Verify requires ClientBuilder.Audiences")
 
-// ErrNoChallengeURL is returned by [Client.Callback] when the login requires a
+// ErrNoNativeAudiences is returned by [Client.NativeHandler] when the client
+// has no accepted native audiences. Configure them with
+// [ClientBuilder.NativeAudiences]: neither the client ID nor an API audience is
+// a default, because a native ID token is issued to the mobile app's own client.
+//
+// Example:
+//
+//	if errors.Is(err, oauth.ErrNoNativeAudiences) {
+//		// Set client.NativeAudiences("com.example.app") in its construction callback.
+//	}
+var ErrNoNativeAudiences = errors.New("oauth: native login requires ClientBuilder.NativeAudiences")
+
+// ErrNoChallengeURL is returned by [Client.CallbackHandler] when the login requires a
 // second factor but [ClientBuilder.ChallengeURL] is unset. The pending login is
 // ended first; the callback never completes a login without its second factor.
 //

@@ -43,7 +43,7 @@ type Config struct {
 	ClientSecret string
 
 	// RedirectURL is the exact callback URL registered with the provider.
-	// It is required by [Client.Login].
+	// It is required by [Client.LoginHandler].
 	//
 	// Example:
 	//
@@ -70,7 +70,7 @@ type Config struct {
 	//	_ = config.String()
 	Audiences []string
 
-	// ChallengeURL is the local path Callback redirects to when the login
+	// ChallengeURL is the local path CallbackHandler redirects to when the login
 	// needs a second factor. It must pass [response.ValidateRedirectTarget].
 	// Empty makes such a callback fail with [ErrNoChallengeURL]. It is not a
 	// secret and appears in formatted output.
@@ -81,14 +81,33 @@ type Config struct {
 	//	_ = config.String()
 	ChallengeURL string
 
-	// Name prefixes the login cookie names. Empty uses "arkoren.oauth".
-	// New rejects names that produce an invalid HTTP cookie name.
+	// Name is the name of this login method, returned by [Client.Name]. An
+	// application with several providers mounts each under its name (for
+	// example "/auth/{name}"), and it prefixes the login cookie names, so
+	// clients of one application need distinct names. Empty uses the preset's
+	// name ("google", "github", "microsoft", "apple") and "oauth" for [OIDC]
+	// and [OAuth2] providers. New rejects names that produce an invalid HTTP
+	// cookie name.
 	//
 	// Example:
 	//
-	//	config := oauth.Config{Name: "login"}
+	//	config := oauth.Config{Name: "corporate"}
 	//	_ = config.String()
 	Name string
+
+	// NativeAudiences are the audiences [Client.NativeHandler] accepts in the
+	// ID tokens that mobile apps obtain from the provider's own SDK. Empty
+	// makes the native handler fail with [ErrNoNativeAudiences]. For Google
+	// list the client ID the app passes as its server client ID, which is
+	// usually the web client ID given to [New], or the iOS or Android client ID
+	// when the SDK is configured without one; for Apple list the app's bundle
+	// ID. Browser callbacks and [Client.Verify] ignore it.
+	//
+	// Example:
+	//
+	//	config := oauth.Config{NativeAudiences: []string{"com.example.app"}}
+	//	_ = config.String()
+	NativeAudiences []string
 
 	// AllowInsecure drops the Secure attribute and the "__Host-" cookie
 	// prefix so login works over plain HTTP. Never enable it in production.
@@ -106,7 +125,7 @@ type Config struct {
 	//	_ = config.String()
 	PKCE bool
 
-	// Events receives [LoginSucceeded], [LoginFailed], [LoggedOut], and
+	// Events receives [LoginSucceeded], [LoginFailed] and
 	// [TokenRejected]. Nil, the default, publishes nothing.
 	// The bus stays shared; failure payloads contain bounded classifications,
 	// not the causes retained by Callback and Verify's returned errors.
@@ -144,7 +163,6 @@ type ClientBuilder struct {
 func configureClient(configure ...ClientBuilderFunc) Config {
 	client := &ClientBuilder{
 		config: Config{
-			Name: defaultName,
 			PKCE: true,
 		},
 	}
@@ -156,6 +174,7 @@ func configureClient(configure ...ClientBuilderFunc) Config {
 	config := client.config
 	config.Scopes = slices.Clone(config.Scopes)
 	config.Audiences = slices.Clone(config.Audiences)
+	config.NativeAudiences = slices.Clone(config.NativeAudiences)
 
 	return config
 }
@@ -224,9 +243,29 @@ func (client *ClientBuilder) Audiences(audiences ...string) *ClientBuilder {
 	return client
 }
 
-// ChallengeURL sets the local path Callback redirects to when the login needs
-// a second factor, and returns the same draft. The path serves the second-factor
-// form and finishes the login with auth.Guard.Complete. Empty, the default,
+// NativeAudiences replaces the accepted audiences of native ID tokens and
+// returns the same draft. Empty, the default, makes [Client.NativeHandler] fail
+// with [ErrNoNativeAudiences]: native tokens are never accepted for an
+// audience the application did not list. For Google list the server client ID
+// the app requests tokens for (the web client ID when it sets one, otherwise
+// the iOS or Android client ID); for Apple list the app's bundle ID. The input
+// slice is copied here and at publication.
+//
+// Example:
+//
+//	configure := func(client *oauth.ClientBuilder) {
+//		client.NativeAudiences("1234-web.apps.googleusercontent.com", "1234-ios.apps.googleusercontent.com")
+//	}
+//	_ = configure
+func (client *ClientBuilder) NativeAudiences(audiences ...string) *ClientBuilder {
+	client.config.NativeAudiences = slices.Clone(audiences)
+
+	return client
+}
+
+// ChallengeURL sets the local path CallbackHandler redirects to when the login
+// needs a second factor, and returns the same draft. The path serves the
+// second-factor form, which posts to core's auth.Guard.ChallengeHandler route. Empty, the default,
 // makes a callback that needs a second factor fail with [ErrNoChallengeURL].
 // New rejects a target that response.ValidateRedirectTarget refuses.
 //
@@ -242,9 +281,12 @@ func (client *ClientBuilder) ChallengeURL(path string) *ClientBuilder {
 	return client
 }
 
-// Name replaces the login cookie prefix and returns the same draft. Empty
-// normalizes to arkoren.oauth; secure clients additionally use the __Host- prefix.
-// New rejects a final prefix that cannot form a valid HTTP cookie name.
+// Name replaces the login method name and returns the same draft. The name is
+// what [Client.Name] reports and it starts the login cookie names; secure
+// clients additionally use the __Host- prefix. Empty, the default, uses the
+// preset's name, or "oauth" for [OIDC] and [OAuth2] providers. New rejects a
+// name that cannot form a valid HTTP cookie name. It replaced the cookie-prefix
+// setting of the same name, which defaulted to "arkoren.oauth".
 //
 // Example:
 //
@@ -290,7 +332,7 @@ func (client *ClientBuilder) PKCE(enabled bool) *ClientBuilder {
 	return client
 }
 
-// Events sets the shared bus receiving login, logout and token outcomes and
+// Events sets the shared bus receiving login and token outcomes and
 // returns the same draft. Nil, the default, disables publication. The bus and
 // its listeners are not copied or invoked during configuration.
 //

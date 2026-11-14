@@ -111,7 +111,7 @@ disabled-account policy, but cannot substitute for provider introspection.
 ## Require Identity
 
 When handlers work directly with the provider identity, wrap `client.Verify` so
-the verified `oauth.Identity` rides in the `auth.Identity` record. Import `auth`
+the verified `auth.External` rides in the `auth.Identity` record. Import `auth`
 from `arkoren.dev/core/auth` and `request` from `arkoren.dev/core/http/request`.
 With your existing API router group `api`:
 
@@ -122,8 +122,10 @@ verifyExternal := func(ctx context.Context, token string) (auth.Identity, error)
 		return auth.Identity{}, err
 	}
 
+	scope, _ := external.Claims["scope"].(string)
+
 	return auth.NewIdentity(external.Subject, func(principal *auth.IdentityBuilder) {
-		principal.Scopes(external.Scopes...)
+		principal.Scopes(strings.Fields(scope)...)
 		principal.Record(auth.UserRecord{Subject: external.Subject, Value: external})
 	}), nil
 }
@@ -143,16 +145,18 @@ with `WWW-Authenticate: Bearer error="invalid_token"`.
 In a handler, read the external identity from the record:
 
 ```go
-external, err := request.User[oauth.Identity](r)
+external, err := request.User[auth.External](r)
 if err != nil {
 	return err
 }
 ```
 
 `external.Issuer` and `external.Subject` identify the external account.
-`*oauth.Identity` and your local `User` are different record value types, not
-alternate views of this value. `Claims`, `Email`, and `Name` remain provider-controlled
-data; do not log arbitrary claims or use email to link local accounts.
+`auth.External` and your local `User` are different record value types, not
+alternate views of this value. The token's scopes are the space-delimited string
+claim `Claims["scope"]` (Microsoft v2 tokens use `Claims["scp"]`). `Claims` and
+`Email` remain provider-controlled data; do not log arbitrary claims or use
+email to link local accounts unless `EmailVerified` is true and your policy allows it.
 
 ## Load Local Accounts
 
@@ -166,7 +170,7 @@ type User struct {
 }
 ```
 
-With standard-library `context` and `strconv`, `accounts.ByIdentity` returning
+With standard-library `context`, `strconv` and `strings`, `accounts.ByIdentity` returning
 your application's `Account`, and a `client` satisfying your provider's purpose
 policy, use:
 
@@ -186,8 +190,10 @@ verifyUser := func(ctx context.Context, token string) (auth.Identity, error) {
 
 	subject := strconv.Itoa(account.ID)
 
+	scope, _ := external.Claims["scope"].(string)
+
 	return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
-		principal.Scopes(external.Scopes...)
+		principal.Scopes(strings.Fields(scope)...)
 		principal.Record(auth.UserRecord{Subject: subject, Value: User{ID: account.ID}})
 	}), nil
 }
