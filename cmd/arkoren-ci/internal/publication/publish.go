@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -72,7 +73,17 @@ func releases(ctx context.Context, client github.Client) (map[string]Release, er
 	return result, nil
 }
 
-// mainSHA reads the current remote branch immediately before validation/writes.
+// mainSHA reads the current remote branch immediately before validation/writes
+// and makes that exact commit available in the local clone.
+//
+// The publisher job checks out main once at job start, while release-notes and
+// Dependabot merges keep advancing the remote branch. Without the commit,
+// [requireAncestor] could not tell "advanced main" from "untrusted history".
+// The commit is fetched by the SHA the API reported, never by branch name, so a
+// second advance between the read and the fetch cannot change what is trusted.
+// The repository is public and the checkout keeps no credentials, so the fetch
+// is anonymous. A commit already present locally skips the network entirely.
+// A fetch failure returns a distinct error naming the SHA, not an ancestry error.
 func mainSHA(ctx context.Context, client github.Client) (string, error) {
 	var ref struct {
 		Object struct {
@@ -86,7 +97,32 @@ func mainSHA(ctx context.Context, client github.Client) (string, error) {
 		return "", fmt.Errorf("invalid remote main identity")
 	}
 
-	return ref.Object.SHA, nil
+	main := ref.Object.SHA
+	if _, err := git(ctx, client.Root, "cat-file", "-e", main+"^{commit}"); err == nil {
+		return main, nil
+	}
+	if _, err := git(ctx, client.Root, "fetch", "--no-tags", "--quiet", "origin", main); err != nil {
+		return "", fmt.Errorf("cannot fetch remote main %s into the publisher checkout: %w", main, err)
+	}
+
+	return main, nil
+}
+
+// requireAncestor checks that commit is an ancestor of main, the fetched
+// API-read tip. Git exits 1 for a genuine non-ancestor, which returns
+// untrusted; any other failure (missing object, unreadable repository) is a
+// distinct operational error, so it is never reported as untrusted history.
+func requireAncestor(ctx context.Context, root, commit, main, untrusted string) error {
+	_, err := git(ctx, root, "merge-base", "--is-ancestor", commit, main)
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &exit) && exit.ExitCode() == 1:
+		return errors.New(untrusted)
+	default:
+		return fmt.Errorf("cannot check ancestry of %s against main %s: %w", commit, main, err)
+	}
 }
 
 // requireEvidence reuses the exact repository/event/latest-attempt Go authority.
@@ -104,8 +140,8 @@ func codeEvidence(ctx context.Context, root, main string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := git(ctx, root, "merge-base", "--is-ancestor", head, main); err != nil {
-		return fmt.Errorf("publisher code is not trusted main history")
+	if err := requireAncestor(ctx, root, head, main, "publisher code is not trusted main history"); err != nil {
+		return err
 	}
 
 	return requireEvidence(ctx, root, head, "publisher-code")
@@ -145,8 +181,8 @@ func fresh(ctx context.Context, root, sha, main string) (Batch, error) {
 
 // Validate recomputes the full plan and forbids stale incomplete tag batches.
 func Validate(ctx context.Context, root, trust, main string, batch Batch) error {
-	if _, err := git(ctx, root, "merge-base", "--is-ancestor", batch.Plan.SHA, main); err != nil {
-		return fmt.Errorf("publication SHA is not trusted main history")
+	if err := requireAncestor(ctx, root, batch.Plan.SHA, main, "publication SHA is not trusted main history"); err != nil {
+		return err
 	}
 	if err := Recompute(ctx, root, batch); err != nil {
 		return err

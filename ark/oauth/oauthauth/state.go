@@ -38,6 +38,10 @@ type loginState struct {
 	// ReturnTo is the local path to redirect to after login.
 	ReturnTo string `json:"return_to"`
 
+	// Fresh is set when the login was started with fresh=1, so the callback
+	// accepts only an auth_time from after the login started.
+	Fresh bool `json:"fresh,omitempty"`
+
 	// Expires is when the login stops being accepted.
 	Expires time.Time `json:"expires"`
 }

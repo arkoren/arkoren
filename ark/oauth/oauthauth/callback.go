@@ -26,11 +26,16 @@ import (
 //
 // The federated factor is stamped with the ID token's auth_time claim, the time
 // the provider says the user really authenticated, so [auth.RequireFresh] is
-// not satisfied by a silent single sign-on approval. Only when the claim is
-// absent (providers that omit it, and OAuth2 providers without an ID token)
-// does the factor fall back to the callback time, which then proves nothing
-// about when the user last entered a credential. To make step-up demand a real
-// prompt, start the login with the fresh query parameter (see [Client.Login]).
+// not satisfied by a silent single sign-on approval. When the claim is absent
+// (providers that omit it, and OAuth2 providers without an ID token) the time
+// is unknown, not now: the factor is stamped with a time in the distant past,
+// so the login signs the user in but never satisfies RequireFresh, including
+// when it re-authenticates a session that is already logged in as the same
+// subject. When the login was started with the fresh query parameter (see
+// [Client.Login]), an auth_time from before the login started, which means the
+// provider ignored the re-authentication request, is treated as unknown too.
+// To make step-up demand a real prompt, use fresh on an OIDC provider that
+// returns auth_time.
 //
 // A completed login publishes [LoginSucceeded] and redirects to the validated
 // return_to target. When login requires a second factor, Begin parks the login
@@ -125,7 +130,7 @@ func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Conte
 			return client.loginFailed(httpRequest, callbackMapperError(err))
 		}
 
-		complete, err := guard.Begin(httpRequest, subject, auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated, At: authTime(external.Claims)})
+		complete, err := guard.Begin(httpRequest, subject, auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated, At: authTime(external.Claims, saved)})
 
 		if errors.Is(err, session.ErrNoSession) {
 			return auth.ErrUnauthenticated
@@ -153,23 +158,40 @@ func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Conte
 	}
 }
 
+// unknownAuthTime is the factor time recorded when the provider does not say
+// when the user authenticated. [auth.Guard.Begin] reads a zero time as now, so
+// unknown needs an explicit, nonzero time that [auth.RequireFresh] rejects for
+// any realistic maximum age.
+var unknownAuthTime = time.Unix(1, 0)
+
+// freshSkew is the clock difference tolerated between this server and the
+// provider when checking an auth_time against the start of a fresh login.
+const freshSkew = time.Minute
+
 // authTime returns when the provider says the user last authenticated: the
 // ID token's auth_time claim (OIDC Core section 2), which providers set to the
 // moment of the real interactive authentication, not of a silent single
 // sign-on approval. [Client.Callback] stamps the federated factor with it so
 // [auth.RequireFresh] reflects a real re-authentication. A missing, non-numeric
-// or non-positive claim returns the zero time, which [auth.Guard.Begin] reads as
-// "now": the fallback for providers that omit auth_time and for OAuth2
-// providers, which have no ID token. A future time is returned unchanged;
-// RequireFresh treats it as not fresh.
-func authTime(claims map[string]any) time.Time {
+// or non-positive claim returns [unknownAuthTime], as does an auth_time before
+// the start of a login that saved.Fresh asked to re-authenticate (the provider
+// ignored the request). A future time is returned unchanged; RequireFresh
+// treats it as not fresh.
+func authTime(claims map[string]any, saved loginState) time.Time {
 	seconds, ok := claims["auth_time"].(float64)
 
 	if !ok || seconds <= 0 {
-		return time.Time{}
+		return unknownAuthTime
 	}
 
-	return time.Unix(int64(seconds), 0)
+	at := time.Unix(int64(seconds), 0)
+	started := saved.Expires.Add(-loginTTL)
+
+	if saved.Fresh && at.Before(started.Add(-freshSkew)) {
+		return unknownAuthTime
+	}
+
+	return at
 }
 
 // callbackMapperError preserves the browser callback's credential rejection

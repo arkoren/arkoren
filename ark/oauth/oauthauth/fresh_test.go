@@ -10,19 +10,54 @@ import (
 	"arkoren.dev/core/auth"
 )
 
-// requireFreshAfterCallback runs a full OIDC login against a provider that adds
-// claims to its ID token and reports whether the logged-in identity satisfies
-// auth.RequireFresh(10 minutes).
-func requireFreshAfterCallback(t *testing.T, claims map[string]any) bool {
+// freshScenario describes a login whose result is checked against RequireFresh.
+type freshScenario struct {
+	// claims are extra ID token claims, such as auth_time.
+	claims map[string]any
+
+	// fresh starts the login with fresh=1.
+	fresh bool
+
+	// signedIn logs the session in as the same subject, with only an old
+	// password factor, before the callback runs.
+	signedIn bool
+}
+
+// requireFreshAfterCallback runs a full OIDC login for scenario and reports
+// whether the logged-in identity satisfies auth.RequireFresh(10 minutes).
+func requireFreshAfterCallback(t *testing.T, scenario freshScenario) bool {
 	t.Helper()
 
 	provider := newTestProvider(t)
-	provider.claims = claims
+	provider.claims = scenario.claims
 	client := newClient(t, OIDC(provider.server.URL))
 	guard := newGuard(t)
 	jar := cookieJar{}
-	query := login(t, client, jar)
+	target := "/login"
+
+	if scenario.fresh {
+		target += "?fresh=1"
+	}
+
+	response := client.Login().Record(jar.attach(httptest.NewRequest(http.MethodGet, target, nil)))
+	location, err := url.Parse(response.Header.Get("Location"))
+
+	if err != nil || response.StatusCode != http.StatusFound {
+		t.Fatalf("login = %d, %v", response.StatusCode, err)
+	}
+
+	jar.apply(response)
+
+	query := location.Query()
 	httpRequest := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
+
+	if scenario.signedIn {
+		old := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge, At: time.Now().Add(-3 * time.Hour)}
+
+		if _, err := guard.Begin(httpRequest, "user-1", old); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if status := client.Callback(guard, idLogin).Record(httpRequest).StatusCode; status != http.StatusFound {
 		t.Fatalf("callback status = %d", status)
@@ -54,29 +89,88 @@ func TestSilentLoginWithOldAuthTimeIsNotFresh(t *testing.T) {
 
 	old := float64(time.Now().Add(-3 * time.Hour).Unix())
 
-	if requireFreshAfterCallback(t, map[string]any{"auth_time": old}) {
+	if requireFreshAfterCallback(t, freshScenario{claims: map[string]any{"auth_time": old}}) {
 		t.Fatal("a silent re-login with an old auth_time passed RequireFresh")
 	}
 }
 
-// TestRecentAuthTimeIsFresh verifies a real, recent authentication passes.
+// TestRecentAuthTimeIsFresh verifies a real, recent authentication passes, for
+// a first login and for a session already logged in as the subject.
 func TestRecentAuthTimeIsFresh(t *testing.T) {
 	t.Parallel()
 
-	recent := float64(time.Now().Add(-time.Minute).Unix())
+	claims := map[string]any{"auth_time": float64(time.Now().Add(-time.Minute).Unix())}
 
-	if !requireFreshAfterCallback(t, map[string]any{"auth_time": recent}) {
+	if !requireFreshAfterCallback(t, freshScenario{claims: claims}) {
 		t.Fatal("a recent auth_time did not pass RequireFresh")
+	}
+
+	if !requireFreshAfterCallback(t, freshScenario{claims: claims, signedIn: true}) {
+		t.Fatal("a recent auth_time on a signed-in session did not pass RequireFresh")
 	}
 }
 
-// TestMissingAuthTimeFallsBackToNow verifies the documented fallback: without
-// the claim the factor is stamped with the callback time.
-func TestMissingAuthTimeFallsBackToNow(t *testing.T) {
+// TestFreshLoginWithRecentAuthTimeIsFresh verifies fresh=1 accepts an
+// auth_time from after the login started.
+func TestFreshLoginWithRecentAuthTimeIsFresh(t *testing.T) {
 	t.Parallel()
 
-	if !requireFreshAfterCallback(t, nil) {
-		t.Fatal("a login without auth_time was not stamped now")
+	claims := map[string]any{"auth_time": float64(time.Now().Unix())}
+
+	if !requireFreshAfterCallback(t, freshScenario{claims: claims, fresh: true, signedIn: true}) {
+		t.Fatal("fresh login with a new auth_time did not pass RequireFresh")
+	}
+}
+
+// TestMissingAuthTimeIsNeverFresh verifies an unknown authentication time is
+// not treated as now: a silent re-login of a signed-in session must not pass
+// RequireFresh, with or without fresh=1.
+func TestMissingAuthTimeIsNeverFresh(t *testing.T) {
+	t.Parallel()
+
+	for _, scenario := range []freshScenario{
+		{signedIn: true},
+		{signedIn: true, fresh: true},
+		{},
+		{fresh: true},
+	} {
+		if requireFreshAfterCallback(t, scenario) {
+			t.Errorf("login without auth_time passed RequireFresh: %+v", scenario)
+		}
+	}
+}
+
+// TestFreshLoginWithStaleAuthTimeIsNotFresh verifies fresh=1 rejects an
+// auth_time that predates the login even when it is within the RequireFresh
+// window, because the provider ignored the re-authentication request.
+func TestFreshLoginWithStaleAuthTimeIsNotFresh(t *testing.T) {
+	t.Parallel()
+
+	claims := map[string]any{"auth_time": float64(time.Now().Add(-5 * time.Minute).Unix())}
+
+	if requireFreshAfterCallback(t, freshScenario{claims: claims, fresh: true, signedIn: true}) {
+		t.Fatal("fresh login with a pre-login auth_time passed RequireFresh")
+	}
+}
+
+// TestFirstLoginWithoutAuthTimeSignsIn verifies providers without auth_time
+// still log a new session in.
+func TestFirstLoginWithoutAuthTimeSignsIn(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestProvider(t)
+	client := newClient(t, OIDC(provider.server.URL))
+	guard := newGuard(t)
+	jar := cookieJar{}
+	query := login(t, client, jar)
+	httpRequest := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
+
+	if status := client.Callback(guard, idLogin).Record(httpRequest).StatusCode; status != http.StatusFound {
+		t.Fatalf("callback status = %d", status)
+	}
+
+	if _, err := guard.Authenticator()(httpRequest); err != nil {
+		t.Fatalf("Authenticator() = %v, want a logged-in identity", err)
 	}
 }
 

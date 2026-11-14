@@ -434,6 +434,7 @@ func ExampleGuard_Fail() {
 	r := exampleRequest()
 	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
+	_, _ = guard.Pending(r)
 	fmt.Println(guard.Fail(r))
 
 	_, err := guard.Pending(r)
@@ -514,6 +515,7 @@ func ExampleGuardBuilder_MaxAttempts() {
 	r := exampleRequest()
 	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
+	_, _ = guard.Pending(r)
 	_ = guard.Fail(r)
 	_, err := guard.Pending(r)
 	fmt.Println(err)

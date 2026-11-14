@@ -24,7 +24,10 @@ import (
 // there: the callback then sees a new auth_time, which satisfies
 // [auth.RequireFresh]. OAuth2 providers have no such request and ignore it. A
 // provider that ignores the request returns an old (or no) auth_time, and the
-// login then does not count as fresh (see [Client.Callback]).
+// login then does not count as fresh: the callback requires an auth_time from
+// after the login started and otherwise records the factor time as unknown
+// (see [Client.Callback]). Without fresh=1 a login that lacks auth_time is
+// equally never fresh.
 //
 // Example:
 //
@@ -51,7 +54,7 @@ func (client *Client) Login() router.Handler {
 			return invalidLoginRequest(err)
 		}
 
-		state, err := client.newState(returnTo)
+		state, err := client.newState(returnTo, httpRequest.URL.Query().Get("fresh") == "1")
 
 		if err != nil {
 			return err
@@ -65,7 +68,7 @@ func (client *Client) Login() router.Handler {
 
 		options := client.authOptions(state)
 
-		if client.provider.isOIDC() && httpRequest.URL.Query().Get("fresh") == "1" {
+		if client.provider.isOIDC() && state.Fresh {
 			options = append(options, oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", "0"))
 		}
 
@@ -74,7 +77,7 @@ func (client *Client) Login() router.Handler {
 }
 
 // newState creates the random values of one login.
-func (client *Client) newState(returnTo string) (loginState, error) {
+func (client *Client) newState(returnTo string, fresh bool) (loginState, error) {
 	state, err := random()
 
 	if err != nil {
@@ -101,6 +104,7 @@ func (client *Client) newState(returnTo string) (loginState, error) {
 		Nonce:    nonce,
 		Verifier: verifier,
 		ReturnTo: returnTo,
+		Fresh:    fresh,
 		Expires:  time.Now().Add(loginTTL),
 	}, nil
 }
