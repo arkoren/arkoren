@@ -3,26 +3,32 @@ package provider
 import (
 	"errors"
 	"strings"
+
+	"arkoren.dev/core/auth"
 )
 
 // Microsoft applies tenant issuer, account-class, immutable-subject, and email
 // verification policy only after the native token verifier has succeeded.
-func Microsoft(identity Record, authority, tenant string) (Record, error) {
+func Microsoft(identity auth.External, authority, tenant string) (auth.External, error) {
 	tid, _ := identity.Claims["tid"].(string)
 	oid, _ := identity.Claims["oid"].(string)
 
 	switch {
 	case tid == "" || oid == "":
-		return Record{}, errors.New("Microsoft token lacks tid or oid")
+		return auth.External{}, errors.New("Microsoft token lacks tid or oid")
 	case identity.Issuer != authority+"/"+tid+"/v2.0":
-		return Record{}, errors.New("Microsoft issuer does not match tid")
+		return auth.External{}, errors.New("Microsoft issuer does not match tid")
 	case !microsoftAcceptsTenant(tenant, tid):
-		return Record{}, errors.New("Microsoft tenant is not accepted")
+		return auth.External{}, errors.New("Microsoft tenant is not accepted")
 	}
 
 	identity.Subject = oid
 
-	if verified, _ := identity.Claims["xms_edov"].(bool); !verified {
+	// Microsoft sends no email_verified claim: xms_edov is the only evidence.
+	verified, _ := identity.Claims["xms_edov"].(bool)
+	identity.EmailVerified = verified && identity.Email != ""
+
+	if !identity.EmailVerified {
 		identity.Email = ""
 	}
 

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"arkoren.dev/core/auth"
+
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 )
@@ -51,7 +53,7 @@ func AppleSecret(key *ecdsa.PrivateKey, teamID, keyID, clientID, issuer string, 
 // AppleName adds the name from the "user" form field of the first
 // authorization. The field is not signed, so only the name is taken from it,
 // never the email.
-func AppleName(request *http.Request, identity Record) Record {
+func AppleName(request *http.Request, identity auth.External) auth.External {
 	var user struct {
 		// Name is the unsigned first-authorization display-name payload.
 		Name struct {
@@ -67,7 +69,11 @@ func AppleName(request *http.Request, identity Record) Record {
 	}
 
 	if name := strings.TrimSpace(user.Name.FirstName + " " + user.Name.LastName); name != "" {
-		identity.Name = name
+		if identity.Claims == nil {
+			identity.Claims = map[string]any{}
+		}
+
+		identity.Claims["name"] = name
 	}
 
 	return identity

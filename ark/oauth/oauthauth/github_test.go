@@ -10,11 +10,13 @@ import (
 	"testing"
 
 	"golang.org/x/oauth2"
+
+	"arkoren.dev/core/auth"
 )
 
 // requireGitHubIdentity serves the given /user and /user/emails bodies and
 // verifies userInfo builds the want identity, sending the GitHub API headers.
-func requireGitHubIdentity(t *testing.T, user, emails string, want Identity) {
+func requireGitHubIdentity(t *testing.T, user, emails string, want auth.External) {
 	t.Helper()
 
 	mux := http.NewServeMux()
@@ -39,7 +41,7 @@ func requireGitHubIdentity(t *testing.T, user, emails string, want Identity) {
 		t.Fatalf("userInfo: %v", err)
 	}
 
-	if got.Issuer != want.Issuer || got.Subject != want.Subject || got.Name != want.Name || got.Email != want.Email {
+	if got.Issuer != want.Issuer || got.Subject != want.Subject || got.Claims["name"] != want.Claims["name"] || got.Email != want.Email || got.EmailVerified != want.EmailVerified {
 		t.Errorf("identity = %+v, want %+v", got, want)
 	}
 }
@@ -52,11 +54,12 @@ func TestGitHubIdentityPrimaryVerified(t *testing.T) {
 	requireGitHubIdentity(t,
 		`{"id": 583231, "login": "octocat", "name": "The Octocat"}`,
 		`[{"email":"a@x.com","primary":false,"verified":true},{"email":"b@x.com","primary":true,"verified":true}]`,
-		Identity{
-			Issuer:  "https://github.com",
-			Subject: "583231",
-			Name:    "The Octocat",
-			Email:   "b@x.com",
+		auth.External{
+			Issuer:        "https://github.com",
+			Subject:       "583231",
+			Email:         "b@x.com",
+			EmailVerified: true,
+			Claims:        map[string]any{"name": "The Octocat"},
 		})
 }
 
@@ -68,10 +71,10 @@ func TestGitHubIdentityUnverifiedIgnoredLoginFallback(t *testing.T) {
 	requireGitHubIdentity(t,
 		`{"id": 7, "login": "octocat", "name": null}`,
 		`[{"email":"b@x.com","primary":true,"verified":false}]`,
-		Identity{
+		auth.External{
 			Issuer:  "https://github.com",
 			Subject: "7",
-			Name:    "octocat",
+			Claims:  map[string]any{"name": "octocat"},
 		})
 }
 
@@ -117,9 +120,9 @@ func TestGitHubFlow(t *testing.T) {
 	sess := newSession()
 	request := callbackRequest(http.MethodGet, jar, sess, query.Get("state"), "code")
 
-	var identity Identity
+	var identity auth.External
 
-	if status := client.Callback(guard, func(_ context.Context, external Identity) (string, error) {
+	if status := client.CallbackHandler(guard, func(_ context.Context, external auth.External) (string, error) {
 		identity = external
 
 		return external.Subject, nil
@@ -131,7 +134,7 @@ func TestGitHubFlow(t *testing.T) {
 		t.Fatalf("user = %q, %v", subject, err)
 	}
 
-	if identity.Subject != "42" || identity.Email != "o@x.com" || len(identity.Scopes) != 1 {
+	if identity.Subject != "42" || identity.Email != "o@x.com" || !identity.EmailVerified || identity.Claims["scope"] != "read:user,user:email" {
 		t.Fatalf("identity = %+v", identity)
 	}
 }
@@ -205,7 +208,7 @@ func TestGitHubCleanupIsBestEffort(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), "code")
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 
-	response := client.Callback(guard, idLogin).Record(request)
+	response := client.CallbackHandler(guard, idLogin).Record(request)
 
 	if response.StatusCode != http.StatusFound || closed != 3 {
 		t.Fatalf("cleanup changed callback: status %d, closes %d", response.StatusCode, closed)
@@ -253,7 +256,7 @@ func TestGitHubCallbackRejectsMissingID(t *testing.T) {
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 	called := false
 
-	response := client.Callback(guard, func(context.Context, Identity) (string, error) {
+	response := client.CallbackHandler(guard, func(context.Context, auth.External) (string, error) {
 		called = true
 
 		return "mapped", nil

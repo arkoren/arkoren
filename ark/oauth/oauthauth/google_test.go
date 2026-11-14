@@ -2,6 +2,8 @@ package oauthauth
 
 import (
 	"testing"
+
+	"arkoren.dev/core/auth"
 )
 
 // TestGoogleBuilderPublishesCompletedRestriction checks ordered callback edits
@@ -30,7 +32,7 @@ func TestGoogleBuilderPublishesCompletedRestriction(t *testing.T) {
 
 	retained.HostedDomain("attacker.example")
 
-	_, err := provider.identity(Identity{
+	_, err := provider.identity(auth.External{
 		Issuer: googleIssuer,
 		Claims: map[string]any{"hd": "example.com"},
 	})

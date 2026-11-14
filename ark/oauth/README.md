@@ -54,8 +54,8 @@ compose.Startup(client.Start)
 
 ## Browser login
 
-Supply your own `resolve` callback (`func(context.Context, oauth.Identity)
-(string, error)`) to map a verified identity to the subject of your application's
+Supply your own `resolve` callback, an `auth.Resolver` (`func(context.Context,
+auth.External) (string, error)`), to map a verified identity to the subject of your application's
 user, for example with the `Subject` method of your typed user driver. Match by
 issuer and subject, never by email alone; see [Identity mapping](#identity-mapping).
 Given an existing `r` router, `store` cache and `provider` (`*auth.UserProvider`),
@@ -70,8 +70,8 @@ if err != nil {
 r.Use(session.Middleware(store))
 r.Use(csrf.Middleware())
 r.Use(auth.Middleware(guard.Authenticator()))
-r.Get("/login", client.Login()) // supports ?return_to=/local/path
-r.Get("/oauth/callback", client.Callback(guard, resolve))
+r.Get("/login", client.LoginHandler()) // supports ?return_to=/local/path
+r.Get("/oauth/callback", client.CallbackHandler(guard, resolve))
 r.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 	logout.Redirect("/")
 }))
@@ -82,7 +82,8 @@ r.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 When `guard` has a registered second-factor check for the user, `Begin` holds the
 login as pending and the callback redirects to the local path set with
 `ClientBuilder.ChallengeURL`, without publishing `LoginSucceeded` or carrying
-`return_to`. Your challenge page finishes the login with `guard.Complete`. Without
+`return_to`. Your challenge page finishes the login through core's challenge route
+(`guard.ChallengeHandler()`). Without
 a challenge URL the callback ends the pending login and fails with
 `ErrNoChallengeURL`; it never signs the user in without the second factor.
 
@@ -102,9 +103,52 @@ with `AddInsecureBypassPattern("POST /oauth/callback")`. Its encrypted login
 state cookie protects that callback; keep CSRF protection on logout and other
 cookie-authenticated state-changing routes.
 
+## Freshness
+
+The federated factor is stamped with this server's clock at the callback; the
+provider's `auth_time` is ignored. Core's rule decides what that means for
+`guard.RequireFresh`: a recent factor from a step-up method counts, or any recent
+factor when the user has no step-up method. `oauth.MethodFederated` is not a
+step-up method, so a user with a password or TOTP is not made fresh by a silent
+re-login, and a user with neither is fresh right after logging in.
+`/login?fresh=1` still adds `prompt=login&max_age=0` to an OIDC authorization
+request, but only as a hint to the provider with no security meaning. To require
+a genuinely new login, for example before exchanging a session for a device
+token, use `guard.RecentLogin`.
+
+## Native login
+
+A mobile app that signs in with Google's or Apple's SDK holds an ID token and no
+authorization code. Two routes on the app's session (its cookie jar) log it in:
+
+```go
+client := compose.Must(oauth.New(oauth.Google(), cipher, webClientID,
+	func(client *oauth.ClientBuilder) {
+		client.NativeAudiences(webClientID, iosClientID)
+	},
+))
+
+r.Get("/auth/google/nonce", client.NonceHandler())
+r.Post("/auth/google/native", client.NativeHandler(guard, resolve))
+```
+
+`NonceHandler` answers `{"nonce"}` and keeps it in the session for ten minutes.
+The app passes the nonce to the SDK and posts `{"id_token"}` to `NativeHandler`,
+which spends the nonce, verifies signature, expiry, issuer, audience and nonce,
+calls `resolve` and `guard.Begin`, and answers `204` (logged in) or `202` with the
+second-factor methods. Accepted audiences are exactly `NativeAudiences`: for
+Google the server client ID the apps set in their SDK, which Google documents as the
+token's audience (normally the web client ID), plus any iOS or Android client ID they
+request tokens for, for Apple the bundle ID.
+Google returns the nonce unchanged. Apple copies the request nonce into the token
+as sent, so the app sends the lowercase hex SHA-256 of the nonce and the handler
+accepts only that. Other presets return `ErrUnsupported`. See the
+[browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/authentication/oauth.md#native-login)
+for the provider facts and their sources.
+
 ## API authentication
 
-`Verify` returns the external `oauth.Identity`, never an `auth.Identity`: the
+`Verify` returns the external `auth.External`, never an `auth.Identity`: the
 application maps issuer and subject to its own subject. First construct a
 dedicated verifier inside the composition callback with the API's registered
 audience, not the browser client ID:
@@ -131,8 +175,10 @@ bearer := auth.Bearer(func(ctx context.Context, token string) (auth.Identity, er
 		return auth.Identity{}, err
 	}
 
+	scope, _ := external.Claims["scope"].(string)
+
 	return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
-		principal.Scopes(external.Scopes...)
+		principal.Scopes(strings.Fields(scope)...)
 	}), nil
 })
 ```
@@ -151,25 +197,25 @@ api.With(gate.Require(gate.HasScopes("posts:write"))).Post("/posts", createPost)
 
 - `oauth.New(provider, cipher, clientID, configure...)`: pure constructor; `client.Start(ctx)` runs OIDC discovery (no-op for OAuth2).
 - `oauth.OIDC(issuerURL)`, `oauth.OAuth2(endpoint, userInfo)`: providers.
-- `client.Login()`, `client.Callback(guard, resolve)`: browser flow handlers. `resolve` maps the external
-  identity to the app's user subject. Mapper errors matching `auth.ErrNoCredentials`
+- `client.Name()`: the login method name (`google`, `github`, `microsoft`, `apple`, else `oauth`).
+- `client.LoginHandler()`, `client.CallbackHandler(guard, resolve)`: browser flow handlers. `resolve` is an
+  `auth.Resolver`: it maps the external `auth.External` identity to the app's user subject. Mapper errors matching `auth.ErrNoCredentials`
   become `ErrInvalidCallback` while retaining their causes; other mapper errors
   pass through. A subject the user provider does not know or has disabled is
   `auth.ErrUnauthenticated` (401); an invalid subject is `auth.ErrInvalidSubject`.
-- `client.Logout(guard)` is deprecated: register `guard.LogoutHandler()` from core, which owns the logout route and
-  publishes `auth.LoggedOut`. The method keeps its 401 without a session, 302 to `/` and `oauth.LoggedOut` behavior
-  and is removed in a later minor release.
-- Callback and logout use the guard's session without default-slot fallback. A
+- `client.NonceHandler()`, `client.NativeHandler(guard, resolve)`: native ID-token login for Google and Apple.
+- The handlers use the guard's session without default-slot fallback (the native handlers use the default session). A
   missing session returns 401 before consuming the login cookie or calling the
   provider or mapper. A nil guard or mapper returns a configuration error before
   those effects. Successful mutation still depends on session middleware for
   response-time persistence.
-- `client.Verify(ctx, token)`: verifies a JWT access token and returns the external `oauth.Identity`; wrap it for `auth.Bearer` as shown above. OIDC only; needs `ClientBuilder.Audiences`
+- `client.Verify(ctx, token)`: verifies a JWT access token and returns the external `auth.External`; wrap it for `auth.Bearer` as shown above. OIDC only; needs `ClientBuilder.Audiences`
   (`ErrNoAudiences` otherwise).
-- Errors: `ErrInvalidLoginRequest`, `ErrInvalidCallback`, `ErrProviderUnavailable`, `ErrNotStarted`, `ErrUnsupported`, `ErrNoAudiences`, `ErrNoChallengeURL`.
+- Errors: `ErrInvalidLoginRequest`, `ErrInvalidCallback`, `ErrProviderUnavailable`, `ErrNotStarted`, `ErrUnsupported`, `ErrNoAudiences`, `ErrNoNativeAudiences`, `ErrNoChallengeURL`.
+- `oauth.MethodFederated` is the `auth.Method` of every login this module proves.
 
-`ClientBuilder` provides `ClientSecret`, `RedirectURL`, `ChallengeURL`, `Scopes`, `Audiences`, `Name`
-(default `arkoren.oauth`), `AllowInsecure(bool)`, `PKCE(bool)` (default on), and `Events`.
+`ClientBuilder` provides `ClientSecret`, `RedirectURL`, `ChallengeURL`, `Scopes`, `Audiences`,
+`NativeAudiences`, `Name` (default: the preset's name, else `oauth`), `AllowInsecure(bool)`, `PKCE(bool)` (default on), and `Events`.
 Callbacks run directly once in order on one fresh draft before validation. Nil entries panic;
 expanded nil or empty slices omit edits. Retained drafts cannot change published settings.
 Scope and audience slices are copied at input and publication; services stay shared.
@@ -194,13 +240,15 @@ wrap `ErrProviderUnavailable`. Original native causes remain inspectable.
 
 ## Identity mapping
 
-Match local users on the pair `Issuer` + `Subject`, which the provider guarantees
-stable and unique. Never link accounts by email: providers differ in whether
-they verify it, so an attacker could register the victim's address at a lax
-provider and take over the account.
-OIDC rejects a missing final subject after provider mapping. The GitHub preset
-requires a positive numeric user ID before the mapper runs. Callback fallback
-scopes are independently copied, so mapper edits cannot change later logins.
+The resolver receives an `auth.External`. Match local users on the pair `Issuer`
++ `Subject`, which the provider guarantees stable and unique. `Email` is set,
+with `EmailVerified` true, only on the provider's positive evidence; never link
+accounts by email otherwise: providers differ in whether they verify it, so an
+attacker could register the victim's address at a lax provider and take over the
+account. `Claims["name"]` is the display name and, for browser logins,
+`Claims["scope"]` holds the granted scopes as a space-delimited string. OIDC
+rejects a missing final subject after provider mapping. The GitHub preset
+requires a positive numeric user ID before the mapper runs.
 
 ## Local development
 
@@ -230,10 +278,10 @@ provider text; do not log returned errors or unwrapped causes indiscriminately.
 ## Observing login outcomes
 
 Set `ClientBuilder.Events(bus)` to share your existing `event.Bus`. Nil publishes
-nothing. Completed logins report subject and issuer through `LoginSucceeded` (a login held
-for a second factor publishes nothing); those identifiers still require your
-application's privacy policy. The deprecated `LoggedOut`
-reports local session mutation, not provider logout or persisted session storage.
+nothing. Completed logins, browser or native, report the external subject and issuer and the
+local subject through `LoginSucceeded` (a login held for a second factor publishes
+nothing); those identifiers still require your application's privacy policy.
+Local logout belongs to core: `guard.LogoutHandler` publishes `auth.LoggedOut`.
 
 `LoginFailed.Err` contains only `ErrInvalidCallback`, `ErrProviderUnavailable`, or
 an opaque local-login failure. It never retains native or mapper causes.
@@ -252,10 +300,10 @@ failures use the shared bus's logger and cannot change the recorded outcome.
 
 | Provider | Setup |
 |---|---|
-| Google | `oauth.Google()`; use `GoogleBuilder.HostedDomain` for one Workspace domain |
+| Google | `oauth.Google()`; use `GoogleBuilder.HostedDomain` for one Workspace domain; native login |
 | Microsoft | `oauth.Microsoft("common")`, or a tenant ID; Subject is the `oid` claim |
 | GitHub | `oauth.GitHub()` (OAuth2; subject is the numeric user ID) |
-| Apple | `oauth.Apple(teamID, keyID, identity)` with `key.Signing` loaded from Apple's `.p8` file, not locally generated (form_post; see CSRF note) |
+| Apple | `oauth.Apple(teamID, keyID, identity)` with `key.Signing` loaded from Apple's `.p8` file, not locally generated (form_post; see CSRF note); native login |
 | Okta | `oauth.OIDC("https://<org>.okta.com")` |
 | Auth0 | `oauth.OIDC("https://<tenant>.auth0.com/")` |
 | Keycloak | `oauth.OIDC("https://<host>/realms/<realm>")` |

@@ -5,6 +5,7 @@ order: 40
 summary:
   - Configure an external provider and complete browser login through the shared guard.
   - Link local accounts by issuer and subject, return their subject, and hand a second factor to its challenge page.
+  - Log in mobile apps with Google or Apple ID tokens, and see how federated logins interact with step-up.
   - Apply each provider's callback and identity requirements and handle bounded outcome events.
 ---
 
@@ -31,14 +32,14 @@ challenge sent by default, not a claim about provider-side enforcement.
 
 ### Compatibility Matrix
 
-| Provider | Browser login | OIDC discovery | PKCE default | Verified-email filter | JWT verification |
-| --- | --- | --- | --- | --- | --- |
-| [Google](#google) | Yes | Yes | Yes | Yes | Yes — Requires explicit API audiences. |
-| [Microsoft](#microsoft) | Yes — Enforces the selected tenant policy. | Yes | Yes | Yes — Requires boolean xms_edov. | Yes — Enforces the selected tenant policy. |
-| [GitHub](#github) | Yes | No | Yes | Yes — Selects the primary verified address. | No |
-| [Apple](#apple) | Yes — Requires a POST callback and key.Signing. | Yes | No | No | Yes — Requires explicit API audiences. |
-| [Generic OIDC](#generic-oidc) | Yes | Yes | Yes | No | Yes — Requires explicit API audiences. |
-| [Generic OAuth2](#generic-oauth2) | Yes | No | Yes | Partial — The application owns user-info validation. | No |
+| Provider | Name | Browser login | Native ID token | OIDC discovery | PKCE default | Verified-email filter | JWT verification |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [Google](#google) | `google` | Yes | Yes — [Native login](#native-login). | Yes | Yes | Yes | Yes — Requires explicit API audiences. |
+| [Microsoft](#microsoft) | `microsoft` | Yes — Enforces the selected tenant policy. | No | Yes | Yes | Yes — Requires boolean xms_edov. | Yes — Enforces the selected tenant policy. |
+| [GitHub](#github) | `github` | Yes | No | No | Yes | Yes — Selects the primary verified address. | No |
+| [Apple](#apple) | `apple` | Yes — Requires a POST callback and key.Signing. | Yes — [Native login](#native-login). | Yes | No | No | Yes — Requires explicit API audiences. |
+| [Generic OIDC](#generic-oidc) | `oauth` | Yes | No | Yes | Yes | No | Yes — Requires explicit API audiences. |
+| [Generic OAuth2](#generic-oauth2) | `oauth` | Yes | No | No | Yes | Partial — The application owns user-info validation. | No |
 
 All clients require an encrypter. JWT verification requires OIDC, explicit API
 audiences, and your provider's token-purpose policy; it is not interchangeable
@@ -79,8 +80,13 @@ its intended recipient. `ClientBuilder.Audiences` configures only
 PKCE starts enabled; disable it only for a provider that cannot support it.
 Apple forces it off independently of this setting.
 
-Use a distinct `ClientBuilder.Name` for each provider client. It prefixes state
-cookies and defaults to `arkoren.oauth`; invalid cookie names fail construction.
+Each client has a name, returned by `client.Name()`: the preset's name from the
+matrix, or `oauth` for generic providers. Set `ClientBuilder.Name` to override it.
+The name prefixes the state cookies, so give each provider client of one
+application a distinct name; invalid cookie names fail construction. Applications
+that mount several providers use it in the route, for example `/auth/{name}`.
+`Name` replaced the cookie-prefix setting of the same name, whose default was
+`arkoren.oauth`.
 Configuration callbacks run once in order, and nil callback entries panic.
 The published client copies its settings and scope/audience slices; retained
 drafts cannot change it, but services and captured application state remain shared.
@@ -112,42 +118,36 @@ available until handlers have finished.
 Use an existing session-enabled, CSRF-protected browser group `web` and the
 `guard` from [Enable Login](session-login.md#enable-login), which already runs
 `auth.Middleware(guard.Authenticator())`. Import `auth` from
-`arkoren.dev/core/auth`. The mapper `mapIdentity` below returns the local
-account's subject:
+`arkoren.dev/core/auth`. The mapper `mapIdentity` below is an `auth.Resolver`:
+it returns the local account's subject.
 
 ```go
-web.Get("/login", client.Login())
-web.Get("/oauth/callback", client.Callback(guard, mapIdentity))
+web.Get("/login", client.LoginHandler())
+web.Get("/oauth/callback", client.CallbackHandler(guard, mapIdentity))
 web.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 	logout.Redirect("/")
 }))
 ```
 
-`Login` redirects to the provider. A successful callback verifies the provider
+`LoginHandler` redirects to the provider. A successful callback verifies the provider
 identity, maps it to a subject, calls `guard.Begin` with a federated factor,
 rotates the session ID, and redirects to the saved local destination. Subsequent
 requests use the normal authenticator. `guard.LogoutHandler` from core owns the logout route: it calls `guard.Logout`, which also
 ends a pending second-factor login, and redirects to `/`; it does not sign the
-person out at the provider. Keep logout CSRF-protected. `client.Logout(guard)`
-still works but is deprecated in favor of `guard.LogoutHandler`.
+person out at the provider. Keep logout CSRF-protected. The client has no logout
+of its own.
 
 If a user who is already logged in as the mapped subject signs in through the
 provider (to connect it or to re-authenticate), `Begin` adds the federated
 factor to their session and does not ask for a second factor again.
 
-The federated factor is stamped with the ID token's `auth_time` claim, the time
-the provider says the user really authenticated, so a silent single sign-on
-approval does not satisfy `auth.RequireFresh`. When the claim is absent
-(providers that omit it, and OAuth2 providers without an ID token) the time is
-unknown, not now: the login still signs in a new session, but its factor never
-satisfies `RequireFresh`, including when it re-authenticates a session that is
-already logged in as the same subject. Such providers cannot back step-up;
-require a password or second factor with `guard.Confirm` instead. For step-up on
-an OIDC provider that returns `auth_time`, send the user to
-`/login?return_to=/path&fresh=1`: this adds `prompt=login` and `max_age=0` to
-the authorization request so the provider asks for credentials again, and the
-callback requires an `auth_time` from after the login started. A provider that
-ignores the request, or omits `auth_time`, leaves the login not fresh.
+The federated factor is stamped with this server's clock at the callback.
+What the provider says about when the user authenticated (`auth_time`) is
+ignored. [Federated logins and step-up](#federated-logins-and-step-up) explains
+what that means for `guard.RequireFresh`. Sending the user to
+`/login?return_to=/path&fresh=1` adds `prompt=login` and `max_age=0` to the
+authorization request of an OIDC provider, which asks it to prompt for
+credentials again; it is a hint, and the callback does not check the answer.
 
 A nil guard or mapper is a configuration error, not a rejected credential. A
 request without a session returns `401` before state consumption or provider
@@ -170,7 +170,7 @@ application's `Account` or an error, and converts the account to its subject wit
 the user `driver` from [Session Login](session-login.md#load-accounts):
 
 ```go
-mapIdentity := func(ctx context.Context, external oauth.Identity) (string, error) {
+mapIdentity := func(ctx context.Context, external auth.External) (string, error) {
 	if external.Issuer == "" || external.Subject == "" {
 		return "", auth.ErrUnauthenticated
 	}
@@ -197,23 +197,28 @@ Mapper errors matching `auth.ErrNoCredentials` become `ErrInvalidCallback`
 > unverified email claims, and even verified addresses can change. An automatic
 > email match can give an attacker another person's existing local account.
 
-`Identity.Email` is optional profile data. Google filters using boolean
-`email_verified`, Microsoft using boolean `xms_edov`, and GitHub using its primary
-verified email record. Generic OIDC and Apple pass email through without that
-filter; generic OAuth2 uses whatever your user-info function returns. If an
-action needs a verified address, enforce that policy separately. Treat `Name`
-as untrusted display text and escape it when rendering.
+`external.Email` is optional profile data, and `external.EmailVerified` says
+whether the provider vouched for it. Google sets both only for boolean
+`email_verified`, Microsoft only for boolean `xms_edov`, and GitHub only for its
+primary verified email record; otherwise the email is empty. Generic OIDC and
+Apple pass the email through and set `EmailVerified` from the `email_verified`
+claim (a boolean, or Apple's string `"true"`); generic OAuth2 uses whatever your
+user-info function returns. Link by email only when `EmailVerified` is true and
+your policy allows it, and still prefer the issuer/subject link. The display name
+is `external.Claims["name"]`, untrusted text to escape when rendering.
 
-For browser callbacks, `Identity.Scopes` comes from the token response. If the
-response omits scopes, the client supplies an independent copy of the requested
-scopes. These are provider grants, not your local account's resource permissions.
+For browser callbacks, `external.Claims["scope"]` holds the granted scopes as a
+space-delimited string taken from the token response. If the response omits
+scopes, it holds the requested scopes. These are provider grants, not your local
+account's resource permissions.
 
 ## Second Factors
 
 If the `guard` has a registered [second-factor check](two-factor.md#hold-a-login)
 for the mapped account, `Begin` holds the login as pending and the request stays
 anonymous. Set the page that asks for the second factor with
-`ClientBuilder.ChallengeURL`, a local path:
+`ClientBuilder.ChallengeURL`, a local path, and mount core's
+[challenge route](two-factor.md#verify-the-second-factor) there:
 
 ```go
 client, err := oauth.New(oauth.Google(), cipher, clientID,
@@ -227,11 +232,28 @@ client, err := oauth.New(oauth.Google(), cipher, clientID,
 
 The callback then redirects to that path without publishing `LoginSucceeded`; the
 `return_to` target is not carried over, so your challenge page chooses the
-destination once `guard.Complete` succeeds. New rejects a challenge URL that is not
+destination once the challenge route has logged the user in. `New` rejects a challenge URL that is not
 a safe local path. Without a challenge URL the callback ends the pending login and
 fails with `ErrNoChallengeURL` (`500`); it never signs the person in without
 the second factor. A federated login counts as one factor and never as
 multi-factor on its own.
+
+## Federated Logins and Step-Up
+
+A federated login is one factor of kind `auth.KindFederated` and method
+`oauth.MethodFederated`, never multi-factor on its own. It is not a step-up method
+unless you register one, so core's [recent-proof rule](two-factor.md#require-recent-proof)
+applies as follows:
+
+- A user with a registered step-up method (password, TOTP) who signs in again
+  silently through the provider is not made fresh by it. `guard.RequireFresh` asks
+  them to [confirm](two-factor.md#handle-step-up) with that method.
+- A user with no step-up method is fresh right after any login, including a
+  federated one, and must log in again when the window passes.
+- To require a genuinely new login, for example before exchanging a session for a
+  device token, call `guard.RecentLogin(r, 5*time.Minute)`: both browser and
+  native federated logins satisfy it, a silent re-login of an open session does
+  not.
 
 ## Protect Login State
 
@@ -264,6 +286,74 @@ Cookies use `Secure` and the `__Host-` prefix by default. Use HTTPS for login
 and registered callbacks. `ClientBuilder.AllowInsecure(true)` removes both
 protections for plain-HTTP development only; never enable it in production.
 Apple's cross-site cookie requires HTTPS even during development.
+
+## Native Login
+
+A mobile app that signs in with the provider's own SDK (Credential Manager or
+Google Sign-In, Sign in with Apple) receives an ID token and no authorization
+code, so it cannot use the browser callback. Google and Apple clients log it in
+with two routes on the same session, which the app keeps in its cookie jar:
+
+```go
+web.Get("/auth/google/nonce", client.NonceHandler())
+web.Post("/auth/google/native", client.NativeHandler(guard, mapIdentity))
+```
+
+`NonceHandler` answers `{"nonce": "..."}` and stores the nonce in the session; it
+is valid for ten minutes and is spent by one attempt. The app gives the nonce to
+the SDK, then posts `{"id_token": "..."}` to `NativeHandler`, which verifies the
+token's signature, expiry, issuer, audience and nonce, calls your mapper and
+`guard.Begin`, and answers like every other login method: `204` when logged in,
+or `202` with the second-factor methods to choose from
+([Hold a login](two-factor.md#hold-a-login)). The session ID rotates and a
+completed login publishes `LoginSucceeded`. Both routes use the default session
+of the session middleware; a failed attempt, including a wrong audience, costs
+the app a new nonce request.
+
+List the audiences your apps request tokens for with `ClientBuilder.NativeAudiences`;
+without them the handlers return `ErrNoNativeAudiences`, and a token for any other
+audience, including the browser client ID, is rejected:
+
+- **Google.** The ID token's audience is the server client ID the app configures
+  in its SDK: Credential Manager's `setServerClientId` on Android and
+  `GIDConfiguration.serverClientID` on iOS. That is normally the web client ID,
+  the one you give `oauth.New`. List it, and any iOS or Android client ID your apps
+  request tokens for; Google's backend guide only requires `aud` to be one of
+  your app's client IDs. The SDK's `nonce` comes back in the token's `nonce`
+  claim, so the app passes the nonce as received.
+- **Apple.** The `aud` is the app's `client_id`, which for a native app is its
+  bundle ID, not the Services ID of browser login. The token carries the nonce
+  that was passed in the authorization request, and Apple does not hash it. This
+  handler requires the app to pass the lowercase hexadecimal SHA-256 of the issued
+  nonce to Apple, so the token never carries the secret held in the session, and
+  accepts only that form. Apple's token has no name: the SDK hands it to the app on
+  the first authorization only, so the app sends it to your API itself.
+
+```go
+client, err := oauth.New(oauth.Google(), cipher, webClientID,
+	func(login *oauth.ClientBuilder) {
+		login.NativeAudiences(webClientID, iosClientID)
+	},
+)
+```
+
+Email and `EmailVerified` follow the same rules as browser login: Google's boolean
+`email_verified` and Apple's `email_verified` (a boolean or `"true"`). Other
+presets return `ErrUnsupported`.
+
+These facts come from the provider documentation:
+
+- Google: [Authenticate with a backend server](https://developers.google.com/identity/sign-in/ios/backend-auth)
+  and [OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect)
+  for `iss`, `aud`, `exp`, `email_verified`, `hd` and the `nonce` claim;
+  [`GetGoogleIdOption.Builder`](https://developers.google.com/identity/android-credential-manager/android/reference/com/google/android/libraries/identity/googleid/GetGoogleIdOption.Builder)
+  and [`GIDConfiguration`](https://developers.google.com/identity/sign-in/ios/reference/Classes/GIDConfiguration)
+  for the server client ID as token audience and the nonce.
+- Apple: [Verifying a user](https://developer.apple.com/documentation/signinwithapple/verifying-a-user)
+  (verify the nonce, `iss`, `aud` as the developer's `client_id` and `exp`) and the
+  [identity token claims](https://developer.apple.com/documentation/signinwithapplejs/authorizationi/id_token)
+  (`nonce`, `nonce_supported`, `email_verified` as a string or Boolean). Native tokens are not accepted by `Verify`,
+which requires `Audiences` for API tokens and rejects tokens that carry a nonce.
 
 ## Google
 
@@ -367,14 +457,15 @@ other state-changing browser routes. With `r` your session-enabled router,
 the callback is:
 
 ```go
-r.Post("/oauth/apple/callback", client.Callback(identity, mapIdentity))
+r.Post("/oauth/apple/callback", client.CallbackHandler(guard, mapIdentity))
 ```
 
 Use an Apple-configured `client`, not the Google baseline. Its encrypted state
 cookie protects this callback and uses `SameSite=None`; HTTPS is required.
-Apple sends the name only on first authorization in an unsigned form field,
-so store it as optional display text, not an authorization claim. Email can be
-a private relay address and is not filtered for verification by this preset.
+Apple sends the name only on first authorization in an unsigned form field;
+it is added as `Claims["name"]` on that login, so store it then, as optional
+display text and not an authorization claim. Email can be a private relay
+address; `EmailVerified` follows the token's `email_verified` claim.
 
 See the [`Apple` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#Apple).
 
@@ -409,7 +500,8 @@ provider := oauth.OAuth2(oauth.Endpoint{
 ```
 
 `loadIdentity` is `oauth.UserInfoFunc`: it receives `context.Context` and an
-authenticated `*http.Client` and returns `oauth.Identity`. It must call the
+authenticated `*http.Client` and returns `auth.External`; put the display name in
+`Claims` and set `EmailVerified` only on positive evidence. It must call the
 provider's user API with that context, check status, close the response body,
 and validate a nonempty stable issuer/subject and any email policy. The generic
 adapter does not impose a provider-specific subject schema.
@@ -441,8 +533,9 @@ policy denial behaves the same way.
 
 If you need outcome events, configure `ClientBuilder.Events` with your existing
 [event bus](../events/overview.md). Nil publishes nothing. Completed logins
-publish issuer and subject, which can identify a person; a login held for a second
-factor publishes nothing until your challenge page completes it. `guard.LogoutHandler` publishes `auth.LoggedOut` with the subject when configured with
+publish the external issuer and subject and the local subject, which can identify a
+person; a login held for a second factor publishes nothing until the challenge
+route completes it. `guard.LogoutHandler` publishes `auth.LoggedOut` with the subject when configured with
 `LogoutBuilder.Events`; it reports local mutation, not provider logout or durable
 session persistence.
 

@@ -351,11 +351,16 @@ dispatched on the body's "method", Fresh/RequireFresh/RecentLogin freshness,
 the Identity.Session marker with RequireSession, and the auth.External and
 auth.Resolver types. Core names only RFC 8176 methods; modules (twofactor,
 oauth) declare their own and publish auth.CredentialEnrolled. There is no
-provider interface in core. Until ark/oauth moves to the new core (its next
-release), it stays on core v0.7.x and must build with GOWORK=off. ark/oauth Callback(guard, resolve)
-returns a subject string to Guard.Begin (federated factor; ChallengeURL on a
-pending second factor) and guard.LogoutHandler() owns the logout route (Client.Logout is deprecated); Verify returns the
-external Identity, which the application maps for auth.Bearer. Session data uses
+provider interface in core. ark/oauth requires core v0.8.x: Client.Name(),
+LoginHandler() and CallbackHandler(guard, auth.Resolver) (with NonceHandler() and
+NativeHandler(guard, auth.Resolver) for Google and Apple ID tokens) match the
+Provider and NativeProvider interfaces that ark/access will declare, so Client
+satisfies them structurally. CallbackHandler passes the verified auth.External to
+the resolver and the returned subject to Guard.Begin with oauth.MethodFederated
+(the guard stamps the factor time; the provider's auth_time is ignored; federated
+is not a step-up method; ChallengeURL on a pending second factor), and
+guard.LogoutHandler() owns the logout route; Verify returns auth.External
+(scopes in Claims["scope"]), which the application maps for auth.Bearer. Session data uses
 shared immutable `Field[T]` definitions; persisted JSON retains its existing
 names and format. Session middleware, not fields or cache namespace TTL, owns
 renewal and absolute lifetime. Guard keeps one session record (arkoren:auth:session) and a pending login

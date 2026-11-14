@@ -10,6 +10,10 @@ import (
 	"testing"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+
+	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/router"
+	"arkoren.dev/foundation/key"
 )
 
 // TestNewRejectsMissingCipher verifies New fails without a cipher.
@@ -72,11 +76,11 @@ func TestClientRejectsUseBeforeStart(t *testing.T) {
 		t.Errorf("Verify error = %v, want ErrNotStarted", err)
 	}
 
-	if err := client.Login()(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/login", nil)); !errors.Is(err, ErrNotStarted) {
+	if err := client.LoginHandler()(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/login", nil)); !errors.Is(err, ErrNotStarted) {
 		t.Errorf("Login error = %v, want ErrNotStarted", err)
 	}
 
-	response := client.Callback(guard, idLogin).
+	response := client.CallbackHandler(guard, idLogin).
 		Record(httptest.NewRequest(http.MethodGet, "/callback", nil))
 
 	if response.StatusCode != http.StatusServiceUnavailable {
@@ -160,4 +164,71 @@ func (body cancelingBody) Read([]byte) (int, error) {
 // Close owns no resource; the body exists only to inject a read failure.
 func (body cancelingBody) Close() error {
 	return nil
+}
+
+// accessProvider and accessNativeProvider copy the provider interfaces that
+// ark/access declares (package access, plan doc 07), using only core types, so
+// that this module fails to compile if a handler signature drifts from them.
+type accessProvider interface {
+	Name() string
+	LoginHandler() router.Handler
+	CallbackHandler(guard *auth.Guard, resolve auth.Resolver) router.Handler
+}
+
+type accessNativeProvider interface {
+	NonceHandler() router.Handler
+	NativeHandler(guard *auth.Guard, resolve auth.Resolver) router.Handler
+}
+
+var (
+	_ accessProvider       = (*Client)(nil)
+	_ accessNativeProvider = (*Client)(nil)
+)
+
+// TestNameDefaultsPerPreset verifies each preset names its client, generic
+// providers use "oauth", the builder overrides the name, and the name starts
+// the login cookie names.
+func TestNameDefaultsPerPreset(t *testing.T) {
+	t.Parallel()
+
+	_, pemKey := appleKey(t)
+	signing, err := key.ParseSigning(pemKey)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, test := range map[string]struct {
+		provider Provider
+		want     string
+	}{
+		"google":    {Google(), "google"},
+		"github":    {GitHub(), "github"},
+		"microsoft": {Microsoft("common"), "microsoft"},
+		"apple":     {Apple("TEAM", "KEYID", signing), "apple"},
+		"oidc":      {OIDC("https://id.example.com"), "oauth"},
+		"oauth2":    {OAuth2(Endpoint{AuthURL: "https://a.example/auth", TokenURL: "https://a.example/token"}, userInfoStub), "oauth"},
+	} {
+		client, err := New(test.provider, testCipher(t), "client")
+
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		if got := client.Name(); got != test.want {
+			t.Errorf("%s: Name() = %q, want %q", name, got, test.want)
+		}
+
+		if !strings.HasPrefix(client.prefix, "__Host-"+test.want+".") {
+			t.Errorf("%s: cookie prefix = %q", name, client.prefix)
+		}
+	}
+
+	client, err := New(Google(), testCipher(t), "client", func(client *ClientBuilder) {
+		client.Name("workspace")
+	})
+
+	if err != nil || client.Name() != "workspace" {
+		t.Fatalf("override: Name() = %q, %v", client.Name(), err)
+	}
 }

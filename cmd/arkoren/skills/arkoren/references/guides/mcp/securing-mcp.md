@@ -150,7 +150,7 @@ token verifier alone is not that complete integration.
 
 `oauthauth.Client.Verify` from `arkoren.dev/ark/oauth/oauthauth` verifies
 OIDC bearer access tokens with configured audiences and returns
-`oauthauth.Identity`. Map it to your application `User` if your policies expect
+`auth.External`. Map it to your application `User` if your policies expect
 that type; the [OIDC bearer guide](../authentication/oidc-bearer.md) owns verifier
 configuration and lifecycle. The adapter is neither a token issuer nor a complete
 MCP authorization server.

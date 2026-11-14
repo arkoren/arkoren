@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +44,7 @@ func TestOIDCLoginSelectsSessionHandle(t *testing.T) {
 	httpRequest := callbackRequest(http.MethodGet, jar, defaultSession, query.Get("state"), query.Get("nonce"))
 	httpRequest = httpRequest.WithContext(session.NewContextFor(httpRequest.Context(), handle, current))
 
-	if status := client.Callback(guard, idLogin).Record(httpRequest).StatusCode; status != http.StatusFound {
+	if status := client.CallbackHandler(guard, idLogin).Record(httpRequest).StatusCode; status != http.StatusFound {
 		t.Fatalf("callback status = %d", status)
 	}
 
@@ -85,7 +84,7 @@ func TestOIDCFlow(t *testing.T) {
 	}
 
 	for name, cookie := range jar {
-		if name != client.cookieName(query.Get("state")) || !strings.HasPrefix(name, "__Host-arkoren.oauth.") || len(name) != len("__Host-arkoren.oauth.")+12 {
+		if name != client.cookieName(query.Get("state")) || !strings.HasPrefix(name, "__Host-oauth.") || len(name) != len("__Host-oauth.")+12 {
 			t.Errorf("cookie name = %q", name)
 		}
 
@@ -98,13 +97,13 @@ func TestOIDCFlow(t *testing.T) {
 	before := sess.ID()
 	httpRequest := callbackRequest(http.MethodGet, jar, sess, query.Get("state"), query.Get("nonce"))
 
-	response := client.Callback(guard, func(_ context.Context, identity Identity) (string, error) {
-		if identity.Name != "Ada" || identity.Issuer == "" {
+	response := client.CallbackHandler(guard, func(_ context.Context, identity auth.External) (string, error) {
+		if name, _ := identity.Claims["name"].(string); name != "Ada" || identity.Issuer == "" {
 			t.Errorf("identity = %+v", identity)
 		}
 
-		if !slices.Equal(identity.Scopes, []string{"openid", "read"}) {
-			t.Errorf("scopes = %v", identity.Scopes)
+		if scope, _ := identity.Claims["scope"].(string); scope != "openid read" {
+			t.Errorf("scope = %q", scope)
 		}
 
 		return identity.Subject, nil
@@ -130,7 +129,7 @@ func TestOIDCFlow(t *testing.T) {
 
 	replay := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 
-	if got := client.Callback(guard, idLogin).Record(replay).StatusCode; got != http.StatusBadRequest {
+	if got := client.CallbackHandler(guard, idLogin).Record(replay).StatusCode; got != http.StatusBadRequest {
 		t.Errorf("replay status = %d, want 400", got)
 	}
 }
@@ -149,7 +148,7 @@ func requireForgedCallbackRejected(t *testing.T, forge func(state, nonce string)
 
 	state, nonce := forge(query.Get("state"), query.Get("nonce"))
 
-	response := client.Callback(guard, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), state, nonce))
+	response := client.CallbackHandler(guard, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), state, nonce))
 
 	if response.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", response.StatusCode)
@@ -190,7 +189,7 @@ func TestParallelLogins(t *testing.T) {
 	}
 
 	for _, query := range []url.Values{second, first} {
-		response := client.Callback(guard, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
+		response := client.CallbackHandler(guard, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
 
 		if response.StatusCode != http.StatusFound {
 			t.Fatalf("status = %d, want 302", response.StatusCode)
@@ -218,7 +217,7 @@ func requireBadCookieRejected(t *testing.T, mutate func(t *testing.T, client *Cl
 
 	mutate(t, client, jar, query)
 
-	response := client.Callback(guard, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
+	response := client.CallbackHandler(guard, idLogin).Record(callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce")))
 
 	if response.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", response.StatusCode)
@@ -317,11 +316,11 @@ func TestFormPostCallback(t *testing.T) {
 	queryOnly := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 	queryOnly.Method = http.MethodPost
 
-	if got := client.Callback(guard, idLogin).Record(queryOnly).StatusCode; got != http.StatusBadRequest {
+	if got := client.CallbackHandler(guard, idLogin).Record(queryOnly).StatusCode; got != http.StatusBadRequest {
 		t.Errorf("query-only POST status = %d, want 400", got)
 	}
 
-	response := client.Callback(guard, idLogin).Record(callbackRequest(http.MethodPost, jar, newSession(), query.Get("state"), query.Get("nonce")))
+	response := client.CallbackHandler(guard, idLogin).Record(callbackRequest(http.MethodPost, jar, newSession(), query.Get("state"), query.Get("nonce")))
 
 	if response.StatusCode != http.StatusFound {
 		t.Errorf("POST status = %d, want 302", response.StatusCode)
@@ -351,9 +350,9 @@ func TestOAuth2Flow(t *testing.T) {
 	sess := newSession()
 	httpRequest := callbackRequest(http.MethodGet, jar, sess, query.Get("state"), "code")
 
-	var identity Identity
+	var identity auth.External
 
-	response := client.Callback(guard, func(_ context.Context, external Identity) (string, error) {
+	response := client.CallbackHandler(guard, func(_ context.Context, external auth.External) (string, error) {
 		identity = external
 
 		return external.Subject, nil
@@ -367,7 +366,7 @@ func TestOAuth2Flow(t *testing.T) {
 		t.Fatalf("user = %q, %v", subject, err)
 	}
 
-	if identity.Issuer != "stub" || len(identity.Scopes) != 2 {
+	if identity.Issuer != "stub" || identity.Claims["scope"] != "openid read" {
 		t.Fatalf("identity = %+v", identity)
 	}
 
@@ -390,7 +389,7 @@ func requireLoginErrorMapped(t *testing.T, mapperErr, want error) {
 
 	httpRequest := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 
-	err := client.Callback(guard, func(context.Context, Identity) (string, error) {
+	err := client.CallbackHandler(guard, func(context.Context, auth.External) (string, error) {
 		return "", mapperErr
 	})(httptest.NewRecorder(), httpRequest)
 
@@ -468,7 +467,7 @@ func TestCallbackUsesClientIDAudienceWithAPIAudiences(t *testing.T) {
 	before := current.ID()
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 
-	response := client.Callback(guard, idLogin).Record(request)
+	response := client.CallbackHandler(guard, idLogin).Record(request)
 
 	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/dash" {
 		t.Fatalf("callback = %d %q, want redirect to /dash", response.StatusCode, response.Header.Get("Location"))
@@ -574,8 +573,9 @@ func TestCallbackChecksSignatureWithAPIAudiences(t *testing.T) {
 	}
 }
 
-// TestCallbackOwnsFallbackScopes ensures mapper-owned identities cannot mutate
-// scope parameters of subsequent authorization requests when scope is omitted.
+// TestCallbackOwnsFallbackScopes ensures the fallback scope claim is a copy:
+// a mapper that rewrites it cannot change the scopes of later authorization
+// requests when the token response omits scope.
 func TestCallbackOwnsFallbackScopes(t *testing.T) {
 	t.Parallel()
 
@@ -594,8 +594,8 @@ func TestCallbackOwnsFallbackScopes(t *testing.T) {
 	})
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 
-	response := client.Callback(guard, func(_ context.Context, identity Identity) (string, error) {
-		identity.Scopes[0] = "admin"
+	response := client.CallbackHandler(guard, func(_ context.Context, identity auth.External) (string, error) {
+		identity.Claims["scope"] = "admin"
 
 		return identity.Subject, nil
 	}).Record(request)
@@ -629,7 +629,7 @@ func TestCallbackInvalidGrantIsNotAnOutage(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), "consumed")
 	request = request.WithContext(context.WithValue(request.Context(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 
-	err := client.Callback(guard, idLogin)(httptest.NewRecorder(), request)
+	err := client.CallbackHandler(guard, idLogin)(httptest.NewRecorder(), request)
 
 	if !errors.Is(err, ErrInvalidCallback) || errors.Is(err, ErrProviderUnavailable) {
 		t.Fatalf("invalid_grant classification = %v", err)
@@ -659,7 +659,7 @@ func TestCallbackSecondFactorRedirectsToChallengeURL(t *testing.T) {
 	query := login(t, client, jar)
 
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
-	response := client.Callback(guard, idLogin).Record(request)
+	response := client.CallbackHandler(guard, idLogin).Record(request)
 
 	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/login/challenge" {
 		t.Fatalf("response = %d %q", response.StatusCode, response.Header.Get("Location"))
@@ -695,7 +695,7 @@ func TestCallbackSecondFactorWithoutChallengeURLFails(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 	writer := httptest.NewRecorder()
 
-	err := client.Callback(guard, idLogin)(writer, request)
+	err := client.CallbackHandler(guard, idLogin)(writer, request)
 
 	if !errors.Is(err, ErrNoChallengeURL) || writer.Header().Get("Location") != "" {
 		t.Fatalf("error = %v, location = %q", err, writer.Header().Get("Location"))
@@ -727,7 +727,7 @@ func TestCallbackLoginRecordsFederatedFactor(t *testing.T) {
 
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 
-	if status := client.Callback(guard, idLogin).Record(request).StatusCode; status != http.StatusFound {
+	if status := client.CallbackHandler(guard, idLogin).Record(request).StatusCode; status != http.StatusFound {
 		t.Fatalf("status = %d", status)
 	}
 
@@ -739,7 +739,7 @@ func TestCallbackLoginRecordsFederatedFactor(t *testing.T) {
 
 	factors := identity.Factors()
 
-	if len(factors) != 1 || factors[0].Method != auth.MethodFederated || factors[0].Kind != auth.KindFederated {
+	if len(factors) != 1 || factors[0].Method != MethodFederated || factors[0].Kind != auth.KindFederated {
 		t.Fatalf("factors = %+v", factors)
 	}
 }
@@ -757,7 +757,7 @@ func TestCallbackUnknownSubjectIsUnauthenticated(t *testing.T) {
 
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 
-	err := client.Callback(guard, func(context.Context, Identity) (string, error) {
+	err := client.CallbackHandler(guard, func(context.Context, auth.External) (string, error) {
 		return "nobody", nil
 	})(httptest.NewRecorder(), request)
 
@@ -783,11 +783,169 @@ func TestCallbackInvalidSubjectFails(t *testing.T) {
 
 	request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
 
-	err := client.Callback(guard, func(context.Context, Identity) (string, error) {
+	err := client.CallbackHandler(guard, func(context.Context, auth.External) (string, error) {
 		return "has space", nil
 	})(httptest.NewRecorder(), request)
 
 	if !errors.Is(err, auth.ErrInvalidSubject) || errors.Is(err, ErrInvalidCallback) {
 		t.Fatalf("error = %v, want ErrInvalidSubject", err)
+	}
+}
+
+// TestCallbackNilGuardHasNoEffects verifies the guard is configuration, not a
+// deferred panic, and the saved flow stays usable after the rejection.
+func TestCallbackNilGuardHasNoEffects(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestProvider(t)
+	bus, events := recordEvents(t)
+	client := newClient(t, OIDC(provider.server.URL), func(application *ClientBuilder) {
+		application.Events(bus)
+	})
+	jar := cookieJar{}
+
+	query := login(t, client, jar)
+
+	current := newSession()
+	current.MarkAsUnchanged()
+	id := current.ID()
+	r := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
+	w := httptest.NewRecorder()
+
+	err := client.CallbackHandler(nil, idLogin)(w, r)
+
+	if err == nil || errors.Is(err, ErrInvalidCallback) || errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("nil guard error = %v", err)
+	}
+
+	if current.ID() != id || current.HasChanged() || len(w.Header()) != 0 {
+		t.Fatal("nil guard caused side effects")
+	}
+
+	if provider.exchanges.Load() != 0 || len(*events) != 0 {
+		t.Fatal("nil guard exchanged a code or published an event")
+	}
+
+	if got := client.CallbackHandler(newGuard(t), idLogin).Record(r).StatusCode; got != http.StatusFound {
+		t.Fatalf("nil guard consumed state: %d", got)
+	}
+}
+
+// TestCallbackNilMapperHasNoEffects verifies the mapper is configuration, not a
+// deferred panic, and the saved flow is still usable after rejection.
+func TestCallbackNilMapperHasNoEffects(t *testing.T) {
+	t.Parallel()
+
+	provider := newTestProvider(t)
+	bus, events := recordEvents(t)
+	client := newClient(t, OIDC(provider.server.URL), func(application *ClientBuilder) {
+		application.Events(bus)
+	})
+	guard := newGuard(t)
+	jar := cookieJar{}
+
+	query := login(t, client, jar)
+
+	current := newSession()
+	current.MarkAsUnchanged()
+	id := current.ID()
+	r := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
+	w := httptest.NewRecorder()
+
+	err := client.CallbackHandler(guard, nil)(w, r)
+
+	if err == nil || errors.Is(err, ErrInvalidCallback) || errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("nil mapper error = %v", err)
+	}
+
+	if current.ID() != id || current.HasChanged() || len(w.Header()) != 0 {
+		t.Fatal("nil mapper caused side effects")
+	}
+
+	if provider.exchanges.Load() != 0 || len(*events) != 0 {
+		t.Fatal("nil mapper exchanged a code or published an event")
+	}
+
+	if got := client.CallbackHandler(guard, idLogin).Record(r).StatusCode; got != http.StatusFound {
+		t.Fatalf("nil mapper consumed state: %d", got)
+	}
+}
+
+// TestCallbackMissingSelectedSessionDoesNotFallback verifies default sessions
+// cannot satisfy a login on a custom handle and rejection leaves state
+// unconsumed.
+func TestCallbackMissingSelectedSessionDoesNotFallback(t *testing.T) {
+	t.Parallel()
+
+	client := newClient(t, OIDC(newTestProvider(t).server.URL))
+	jar := cookieJar{}
+
+	query := login(t, client, jar)
+
+	handle := session.NewHandle()
+	guard := newGuard(t, func(policy *auth.GuardBuilder) {
+		policy.Handle(handle)
+	})
+	r := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
+	w := httptest.NewRecorder()
+
+	err := client.CallbackHandler(guard, idLogin)(w, r)
+
+	if !errors.Is(err, auth.ErrUnauthenticated) || len(w.Header()) != 0 {
+		t.Fatalf("missing selection: error = %v, headers = %v", err, w.Header())
+	}
+
+	r = r.WithContext(session.NewContextFor(r.Context(), handle, newSession()))
+
+	if got := client.CallbackHandler(guard, idLogin).Record(r).StatusCode; got != http.StatusFound {
+		t.Fatalf("missing selection consumed state: %d", got)
+	}
+}
+
+// TestChallengeURLWhenNotComplete verifies a login the guard parks for a second
+// factor redirects to the challenge URL without carrying return_to or
+// publishing LoginSucceeded, and that without a challenge URL the pending
+// login ends with ErrNoChallengeURL.
+func TestChallengeURLWhenNotComplete(t *testing.T) {
+	t.Parallel()
+
+	for _, challengeURL := range []string{"/login/challenge", ""} {
+		bus, seen := recordEvents(t)
+		client := newClient(t, OIDC(newTestProvider(t).server.URL), func(client *ClientBuilder) {
+			client.Events(bus)
+
+			if challengeURL != "" {
+				client.ChallengeURL(challengeURL)
+			}
+		})
+		guard := newGuard(t, withSecondFactor)
+		jar := cookieJar{}
+		query := login(t, client, jar)
+		request := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
+		w := httptest.NewRecorder()
+
+		err := client.CallbackHandler(guard, idLogin)(w, request)
+
+		if _, authErr := userOf(guard, request); !errors.Is(authErr, auth.ErrNoCredentials) {
+			t.Errorf("challenge %q: a parked login authenticated: %v", challengeURL, authErr)
+		}
+
+		if challengeURL == "" {
+			if !errors.Is(err, ErrNoChallengeURL) {
+				t.Errorf("no challenge URL: error = %v, want ErrNoChallengeURL", err)
+			}
+
+			continue
+		}
+
+		if err != nil || w.Code != http.StatusFound || w.Header().Get("Location") != challengeURL {
+			t.Errorf("challenge %q: status = %d, location = %q, error = %v", challengeURL, w.Code, w.Header().Get("Location"), err)
+		}
+
+		for _, name := range *seen {
+			if strings.HasPrefix(name, "succeeded") {
+				t.Errorf("a parked login published %q", name)
+			}
+		}
 	}
 }

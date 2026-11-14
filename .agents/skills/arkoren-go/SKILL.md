@@ -454,9 +454,11 @@ delivery, and lifecycle protocols explicit.
   keep identity, separate allocations differ. NewContextFor/FromContextFor are
   typed low-level forms. Handles do not isolate cookies, storage, or authorization.
   ark/oauth logs in through Guard.Begin with a federated factor:
-  Callback(guard, resolve) maps the external Identity to a subject string and
-  guard.LogoutHandler() owns the logout route (ark/oauth Client.Logout is deprecated); a second factor redirects to
-  ClientBuilder.ChallengeURL or fails with ErrNoChallengeURL.
+  CallbackHandler(guard, resolve) maps the verified auth.External to a subject
+  string (an auth.Resolver), NativeHandler does the same for a Google or Apple
+  ID token after NonceHandler, and guard.LogoutHandler() owns the logout route;
+  a second factor redirects to ClientBuilder.ChallengeURL or fails with
+  ErrNoChallengeURL.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
   preserve the first definition error; nil conversion is a domain error, not

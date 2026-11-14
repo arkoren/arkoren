@@ -1,177 +1,131 @@
 package oauthauth
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
+
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/session"
 )
 
-// freshScenario describes a login whose result is checked against RequireFresh.
-type freshScenario struct {
-	// claims are extra ID token claims, such as auth_time.
-	claims map[string]any
+// freshness runs [auth.Guard.Fresh] for the identity the guard's authenticator
+// builds from the session of r.
+func freshness(guard *auth.Guard, r *http.Request) error {
+	var result error
 
-	// fresh starts the login with fresh=1.
-	fresh bool
-
-	// signedIn logs the session in as the same subject, with only an old
-	// password factor, before the callback runs.
-	signedIn bool
-}
-
-// requireFreshAfterCallback runs a full OIDC login for scenario and reports
-// whether the logged-in identity satisfies auth.RequireFresh(10 minutes).
-func requireFreshAfterCallback(t *testing.T, scenario freshScenario) bool {
-	t.Helper()
-
-	provider := newTestProvider(t)
-	provider.claims = scenario.claims
-	client := newClient(t, OIDC(provider.server.URL))
-	guard := newGuard(t)
-	jar := cookieJar{}
-	target := "/login"
-
-	if scenario.fresh {
-		target += "?fresh=1"
-	}
-
-	response := client.Login().Record(jar.attach(httptest.NewRequest(http.MethodGet, target, nil)))
-	location, err := url.Parse(response.Header.Get("Location"))
-
-	if err != nil || response.StatusCode != http.StatusFound {
-		t.Fatalf("login = %d, %v", response.StatusCode, err)
-	}
-
-	jar.apply(response)
-
-	query := location.Query()
-	httpRequest := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
-
-	if scenario.signedIn {
-		old := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge, At: time.Now().Add(-3 * time.Hour)}
-
-		if _, err := guard.Begin(httpRequest, "user-1", old); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if status := client.Callback(guard, idLogin).Record(httpRequest).StatusCode; status != http.StatusFound {
-		t.Fatalf("callback status = %d", status)
-	}
-
-	identity, err := guard.Authenticator()(httpRequest)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	reached := false
-	next := func(http.ResponseWriter, *http.Request) error {
-		reached = true
+	handler := auth.Middleware(guard.Authenticator())(func(_ http.ResponseWriter, r *http.Request) error {
+		result = guard.Fresh(r)
 
 		return nil
-	}
-	request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(auth.NewContext(t.Context(), identity))
-	_ = auth.RequireFresh(10*time.Minute)(next)(httptest.NewRecorder(), request)
+	})
 
-	return reached
+	if err := handler(httptest.NewRecorder(), r); err != nil {
+		return err
+	}
+
+	return result
 }
 
-// TestSilentLoginWithOldAuthTimeIsNotFresh verifies a provider that approves a
-// login silently, reporting the old authentication, does not satisfy
-// RequireFresh.
-func TestSilentLoginWithOldAuthTimeIsNotFresh(t *testing.T) {
-	t.Parallel()
+// federatedCallback runs a browser login against a fresh offline OIDC provider
+// (usable inside synctest) whose ID tokens carry claims, on the session of current, and returns the callback
+// request, which now holds the logged-in session.
+func federatedCallback(t *testing.T, guard *auth.Guard, current *session.Session, claims map[string]any) *http.Request {
+	t.Helper()
 
-	old := float64(time.Now().Add(-3 * time.Hour).Unix())
-
-	if requireFreshAfterCallback(t, freshScenario{claims: map[string]any{"auth_time": old}}) {
-		t.Fatal("a silent re-login with an old auth_time passed RequireFresh")
-	}
-}
-
-// TestRecentAuthTimeIsFresh verifies a real, recent authentication passes, for
-// a first login and for a session already logged in as the subject.
-func TestRecentAuthTimeIsFresh(t *testing.T) {
-	t.Parallel()
-
-	claims := map[string]any{"auth_time": float64(time.Now().Add(-time.Minute).Unix())}
-
-	if !requireFreshAfterCallback(t, freshScenario{claims: claims}) {
-		t.Fatal("a recent auth_time did not pass RequireFresh")
-	}
-
-	if !requireFreshAfterCallback(t, freshScenario{claims: claims, signedIn: true}) {
-		t.Fatal("a recent auth_time on a signed-in session did not pass RequireFresh")
-	}
-}
-
-// TestFreshLoginWithRecentAuthTimeIsFresh verifies fresh=1 accepts an
-// auth_time from after the login started.
-func TestFreshLoginWithRecentAuthTimeIsFresh(t *testing.T) {
-	t.Parallel()
-
-	claims := map[string]any{"auth_time": float64(time.Now().Unix())}
-
-	if !requireFreshAfterCallback(t, freshScenario{claims: claims, fresh: true, signedIn: true}) {
-		t.Fatal("fresh login with a new auth_time did not pass RequireFresh")
-	}
-}
-
-// TestMissingAuthTimeIsNeverFresh verifies an unknown authentication time is
-// not treated as now: a silent re-login of a signed-in session must not pass
-// RequireFresh, with or without fresh=1.
-func TestMissingAuthTimeIsNeverFresh(t *testing.T) {
-	t.Parallel()
-
-	for _, scenario := range []freshScenario{
-		{signedIn: true},
-		{signedIn: true, fresh: true},
-		{},
-		{fresh: true},
-	} {
-		if requireFreshAfterCallback(t, scenario) {
-			t.Errorf("login without auth_time passed RequireFresh: %+v", scenario)
-		}
-	}
-}
-
-// TestFreshLoginWithStaleAuthTimeIsNotFresh verifies fresh=1 rejects an
-// auth_time that predates the login even when it is within the RequireFresh
-// window, because the provider ignored the re-authentication request.
-func TestFreshLoginWithStaleAuthTimeIsNotFresh(t *testing.T) {
-	t.Parallel()
-
-	claims := map[string]any{"auth_time": float64(time.Now().Add(-5 * time.Minute).Unix())}
-
-	if requireFreshAfterCallback(t, freshScenario{claims: claims, fresh: true, signedIn: true}) {
-		t.Fatal("fresh login with a pre-login auth_time passed RequireFresh")
-	}
-}
-
-// TestFirstLoginWithoutAuthTimeSignsIn verifies providers without auth_time
-// still log a new session in.
-func TestFirstLoginWithoutAuthTimeSignsIn(t *testing.T) {
-	t.Parallel()
-
-	provider := newTestProvider(t)
-	client := newClient(t, OIDC(provider.server.URL))
-	guard := newGuard(t)
+	provider := newOfflineProvider(t)
+	provider.claims = claims
+	ctx := oidc.ClientContext(t.Context(), provider.client())
+	client := newClientAt(t, ctx, OIDC(provider.server.URL))
 	jar := cookieJar{}
 	query := login(t, client, jar)
-	httpRequest := callbackRequest(http.MethodGet, jar, newSession(), query.Get("state"), query.Get("nonce"))
+	httpRequest := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
+	httpRequest = httpRequest.WithContext(oidc.ClientContext(httpRequest.Context(), provider.client()))
 
-	if status := client.Callback(guard, idLogin).Record(httpRequest).StatusCode; status != http.StatusFound {
+	if status := client.CallbackHandler(guard, idLogin).Record(httpRequest).StatusCode; status != http.StatusFound {
 		t.Fatalf("callback status = %d", status)
 	}
 
-	if _, err := guard.Authenticator()(httpRequest); err != nil {
-		t.Fatalf("Authenticator() = %v, want a logged-in identity", err)
-	}
+	return httpRequest
+}
+
+// TestFederatedFactorUsesCallbackTime verifies the federated factor carries
+// this server's clock at the callback and ignores the provider's auth_time,
+// which is three hours old here.
+func TestFederatedFactorUsesCallbackTime(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		guard := newGuard(t)
+		old := float64(time.Now().Add(-3 * time.Hour).Unix())
+		httpRequest := federatedCallback(t, guard, newSession(), map[string]any{"auth_time": old})
+
+		identity, err := guard.Authenticator()(httpRequest)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		factors := identity.Factors()
+
+		if len(factors) != 1 || factors[0].Method != MethodFederated || !factors[0].At.Equal(time.Now()) {
+			t.Fatalf("factors = %+v, want one federated factor stamped %v", factors, time.Now())
+		}
+	})
+}
+
+// TestFederatedOnlyUserIsFreshAfterCallback verifies a user without a step-up
+// method is fresh right after a federated login, whatever auth_time says.
+func TestFederatedOnlyUserIsFreshAfterCallback(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		guard := newGuard(t, func(policy *auth.GuardBuilder) {
+			policy.StepUp(testCredential(auth.MethodPassword, auth.KindKnowledge, false))
+		})
+		old := float64(time.Now().Add(-3 * time.Hour).Unix())
+		httpRequest := federatedCallback(t, guard, newSession(), map[string]any{"auth_time": old})
+
+		if err := freshness(guard, httpRequest); err != nil {
+			t.Fatalf("Fresh after a federated login = %v", err)
+		}
+	})
+}
+
+// TestSilentReloginNotFreshForUserWithTOTP verifies a same-subject federated
+// re-login does not refresh a user who has a step-up method, even when the
+// provider reports a brand-new authentication.
+func TestSilentReloginNotFreshForUserWithTOTP(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		guard := newGuard(t, withStepUp)
+		current := newSession()
+		httpRequest := callbackRequest(http.MethodGet, cookieJar{}, current, "", "")
+
+		if _, err := guard.Begin(httpRequest, "user-1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := freshness(guard, httpRequest); err != nil {
+			t.Fatalf("Fresh after the password login = %v", err)
+		}
+
+		time.Sleep(time.Hour)
+
+		// The provider claims the user authenticated just now; the guard must not care.
+		httpRequest = federatedCallback(t, guard, current, map[string]any{"auth_time": float64(time.Now().Unix())})
+
+		if err := freshness(guard, httpRequest); !errors.Is(err, auth.ErrStepUpRequired) {
+			t.Fatalf("Fresh after a silent federated re-login = %v, want ErrStepUpRequired", err)
+		}
+	})
 }
 
 // TestLoginFreshRequestsReauthentication verifies fresh=1 adds prompt=login and
@@ -182,7 +136,7 @@ func TestLoginFreshRequestsReauthentication(t *testing.T) {
 	client := newClient(t, OIDC(newTestProvider(t).server.URL))
 
 	for target, want := range map[string]bool{"/login?fresh=1": true, "/login": false} {
-		response := client.Login().Record(httptest.NewRequest(http.MethodGet, target, nil))
+		response := client.LoginHandler().Record(httptest.NewRequest(http.MethodGet, target, nil))
 		location, err := url.Parse(response.Header.Get("Location"))
 
 		if err != nil || response.StatusCode != http.StatusFound {
