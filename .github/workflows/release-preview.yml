@@ -48,7 +48,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: '"$RUNNER_TEMP/arkoren-ci" release evidence --output "$RUNNER_TEMP/release-evidence.json"'
       - name: Install checksum-pinned git-cliff
-        uses: taiki-e/install-action@8bf69897abc26b921431feaaa8ca2b47a6c30c00
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: git-cliff@${{ steps.maintenance.outputs.cliff }}
           checksum: 'true'
