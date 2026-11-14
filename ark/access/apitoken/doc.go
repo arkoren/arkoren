@@ -19,7 +19,7 @@
 // gate.HasScopes). It never carries factors and is never a browser session
 // ([auth.Identity.Session] is false), so [auth.RequireLevel] and
 // [auth.Guard.RequireFresh] reject it and every credential handler of this
-// module refuses it: a stolen token cannot enrol a second factor, change a
+// module refuses it: a stolen token cannot enroll a second factor, change a
 // password or mint more tokens. Mount the credential routes on a router with
 // the guard's authenticator and the API routes on one with [Issuer.Authenticator],
 // or on one router with both; the handlers enforce the boundary either way.

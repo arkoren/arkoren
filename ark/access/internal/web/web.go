@@ -23,7 +23,7 @@ func Decode[T any](r *http.Request) (T, error) {
 // Session returns the identity of r when it comes from a browser session, the
 // only identity allowed to change credentials. An anonymous request, or one
 // authenticated by a bearer token, returns [auth.ErrUnauthenticated]: a stolen
-// token must never be able to enrol or change a credential.
+// token must never be able to enroll or change a credential.
 func Session(r *http.Request) (auth.Identity, error) {
 	identity, err := request.Identity(r)
 	if err != nil {
@@ -38,7 +38,7 @@ func Session(r *http.Request) (auth.Identity, error) {
 
 // Fresh returns the session identity of r after guard confirms the user proved
 // themselves recently enough ([auth.Guard.Fresh]). A user without a step-up
-// method is fresh right after any login, so a first enrolment needs nothing
+// method is fresh right after any login, so a first enrollment needs nothing
 // special; otherwise the error is [auth.ErrStepUpRequired] with the methods
 // the client can confirm with, or [auth.ErrNoStepUpMethod].
 func Fresh(guard *auth.Guard, r *http.Request) (auth.Identity, error) {

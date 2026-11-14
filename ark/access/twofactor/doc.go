@@ -4,7 +4,7 @@
 //
 // # Model
 //
-// A user has at most one authenticator. Enrolment is two steps: [Factors.Enroll]
+// A user has at most one authenticator. Enrollment is two steps: [Factors.Enroll]
 // stores a pending secret and returns it with an otpauth:// URI for a QR code,
 // and [Factors.Activate] confirms it with the first code, which also creates the
 // recovery codes and returns them once. Users pick any enrolled method at
@@ -30,7 +30,7 @@
 //     by core; the wrong codes of [Factors.Activate] are counted here (10 per
 //     15 minutes per user).
 //   - Every credential-changing handler requires a browser session and a fresh
-//     login ([auth.Guard.Fresh]); an API token can never enrol or remove a
+//     login ([auth.Guard.Fresh]); an API token can never enroll or remove a
 //     factor. Enabling publishes [Enabled] and the core
 //     [auth.CredentialEnrolled] event.
 //

@@ -5,6 +5,7 @@
 package apptest
 
 import (
+	"context"
 	"encoding/json/v2"
 	"io"
 	"net/http"
@@ -109,7 +110,7 @@ func (client *Client) Do(method, path, body string, headers ...string) Reply {
 	if body != "" {
 		reader = strings.NewReader(body)
 	}
-	request, err := http.NewRequest(method, client.server.URL+path, reader)
+	request, err := http.NewRequestWithContext(context.Background(), method, client.server.URL+path, reader)
 	if err != nil {
 		client.t.Fatalf("request: %v", err)
 	}

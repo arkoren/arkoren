@@ -23,9 +23,9 @@ import (
 type system struct {
 	users    *memoryauth.Driver
 	provider *auth.UserProvider
-	issuer *apitoken.Issuer
-	guard  *auth.Guard
-	client *apptest.Client
+	issuer   *apitoken.Issuer
+	guard    *auth.Guard
+	client   *apptest.Client
 }
 
 // newSystem migrates the issuer on db and serves its handlers. Users "1" and

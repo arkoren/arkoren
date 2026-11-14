@@ -9,7 +9,6 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/database"
-	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/access"
 	"arkoren.dev/ark/access/apitoken"
@@ -21,18 +20,6 @@ func secretOf(body string) string {
 	secret, _, _ := strings.Cut(rest, `"`)
 
 	return secret
-}
-
-// rewind lets the last accepted TOTP step be accepted again.
-func rewind(t *testing.T, db *database.Database, instance string) {
-	t.Helper()
-
-	_, err := db.Exec(testContext(t), query.Table(instance+"_totp_secrets", func(statement *query.Builder) {
-		statement.Unfiltered().Update(map[string]any{"last_step": 0})
-	}))
-	if err != nil {
-		t.Fatalf("rewind: %v", err)
-	}
 }
 
 // TestRegisterVerifyAndRequireVerified verifies registration logs the user in,

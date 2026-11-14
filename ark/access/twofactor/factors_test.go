@@ -28,7 +28,7 @@ func rewind(t *testing.T, db *database.Database, instance string) {
 }
 
 // TestEnrollActivateRoundTrip verifies setup, enable, the recovery codes and
-// the core enrolment event on every database.
+// the core enrollment event on every database.
 func TestEnrollActivateRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -43,7 +43,7 @@ func TestEnrollActivateRoundTrip(t *testing.T) {
 			t.Fatalf("URI = %q", enrollment.URI)
 		}
 		if enabled, _ := sys.factors.Enrolled(ctx, "1"); enabled {
-			t.Fatal("a pending enrolment counts as enrolled")
+			t.Fatal("a pending enrollment counts as enrolled")
 		}
 		codes, err := sys.factors.Activate(ctx, "1", currentCode(t, enrollment.Secret))
 		if err != nil {
@@ -79,7 +79,7 @@ func TestEnrollOtpauthLabelEscaping(t *testing.T) {
 	})
 }
 
-// TestEnrollWhenEnabledConflicts verifies enrolment is refused after enabling
+// TestEnrollWhenEnabledConflicts verifies enrollment is refused after enabling
 // and that a second setup before enabling replaces the pending secret.
 func TestEnrollWhenEnabledConflicts(t *testing.T) {
 	t.Parallel()
@@ -443,7 +443,7 @@ func TestHandlersEnableWrongCodeAndSetupWhenEnabled(t *testing.T) {
 }
 
 // TestHandlersRejectBearerIdentity verifies a token identity can neither
-// enrol, enable, disable nor regenerate.
+// enroll, enable, disable nor regenerate.
 func TestHandlersRejectBearerIdentity(t *testing.T) {
 	t.Parallel()
 

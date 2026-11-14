@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"arkoren.dev/foundation/problem"
 	"arkoren.dev/ark/access/internal/storage"
+	"arkoren.dev/foundation/problem"
 )
 
 // ErrNotMigrated is returned by [Factors.Ping] when the tables do not exist.
@@ -36,7 +36,7 @@ var ErrInvalidCode = problem.New(func(details *problem.Builder) {
 })
 
 // ErrAlreadyEnabled is returned by setup when the user already has an
-// authenticator. Remove it first to enrol another. It is a problem with status
+// authenticator. Remove it first to enroll another. It is a problem with status
 // 409.
 //
 // Example:
@@ -59,7 +59,7 @@ var ErrAlreadyEnabled = problem.New(func(details *problem.Builder) {
 //
 //	_, err := factors.Regenerate(ctx, subject)
 //	if errors.Is(err, twofactor.ErrNotEnabled) {
-//		// enrol first
+//		// enroll first
 //	}
 var ErrNotEnabled = problem.New(func(details *problem.Builder) {
 	details.Type("tag:arkoren.dev,2026-11:ark/access:twofactor:not-enabled")
@@ -80,7 +80,7 @@ var ErrNotEnabled = problem.New(func(details *problem.Builder) {
 //	}
 var ErrNotEnrolling = problem.New(func(details *problem.Builder) {
 	details.Type("tag:arkoren.dev,2026-11:ark/access:twofactor:not-enrolling")
-	details.Title("No enrolment in progress")
+	details.Title("No enrollment in progress")
 	details.Detail("Start the setup before confirming a code.")
 	details.Status(http.StatusConflict)
 })

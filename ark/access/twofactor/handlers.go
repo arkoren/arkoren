@@ -16,11 +16,11 @@ type codesBody struct {
 }
 
 // SetupHandler returns the handler of POST /two-factor/setup. It starts
-// enrolment and answers 200 with {"secret": "...", "uri": "otpauth://..."} for a
+// enrollment and answers 200 with {"secret": "...", "uri": "otpauth://..."} for a
 // QR code; the label is the user's email claim when the record has one, else the
 // subject. It needs a browser session and a fresh login ([auth.Guard.Fresh]); a
 // user without a step-up method is fresh right after any login, so a first
-// enrolment needs nothing special. A user who is already enabled gets
+// enrollment needs nothing special. A user who is already enabled gets
 // [ErrAlreadyEnabled] (409). Calling it again before enabling replaces the
 // pending secret.
 //
@@ -87,7 +87,7 @@ func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
 }
 
 // DisableHandler returns the handler of DELETE /two-factor. It removes the
-// authenticator, a pending enrolment and the recovery codes, and answers 204.
+// authenticator, a pending enrollment and the recovery codes, and answers 204.
 // It needs a browser session and a fresh login, so a user who has an
 // authenticator proves a code first (POST /confirm). A user without an
 // authenticator gets [ErrNotEnabled] (409).

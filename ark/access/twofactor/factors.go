@@ -361,7 +361,7 @@ func (factors *Factors) Status(ctx context.Context, subject string) (Status, err
 	return Status{Enabled: true, EnabledAt: storage.Time(row.ConfirmedAt), RecoveryCodes: remaining}, nil
 }
 
-// Enroll starts enrolment: it stores a new pending secret for subject, replacing
+// Enroll starts enrollment: it stores a new pending secret for subject, replacing
 // an earlier unconfirmed one, and returns it with a provisioning URI. label is
 // what the authenticator app shows (usually the email); a colon in it is
 // replaced by a space, because the URI label cannot carry one. A user who
@@ -399,7 +399,7 @@ func (factors *Factors) Enroll(ctx context.Context, subject, label string) (Enro
 			statement.OnConflict("subject").DoNothing()
 		}))
 		if err == nil && affected == 0 {
-			// Either a concurrent enrolment inserted the pending row first, or the
+			// Either a concurrent enrollment inserted the pending row first, or the
 			// user has a confirmed authenticator. Replacing the pending row again
 			// tells them apart.
 			affected, err = replace()
@@ -505,7 +505,7 @@ func (factors *Factors) Verify(ctx context.Context, subject, code string) (auth.
 	return auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession}, nil
 }
 
-// Activate confirms a pending enrolment with its first code, enables the
+// Activate confirms a pending enrollment with its first code, enables the
 // authenticator and creates the recovery codes, which it returns formatted
 // xxxx-xxxx-xxxx-xxxx and never again. A wrong code is [ErrInvalidCode]; wrong
 // codes are limited to 10 per 15 minutes per user ([ErrThrottled]). A user who
@@ -664,7 +664,7 @@ func (factors *Factors) Regenerate(ctx context.Context, subject string) ([]strin
 	return codes, nil
 }
 
-// Remove deletes the user's authenticator, pending enrolment and recovery
+// Remove deletes the user's authenticator, pending enrollment and recovery
 // codes. It is idempotent, so it also serves an administrator's "reset
 // two-factor". It publishes [Disabled] when something was enabled.
 //

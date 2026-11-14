@@ -60,7 +60,7 @@
 //	Connections GET /connections · POST /connections/{provider} · DELETE /connections/{id}
 //	Account     DELETE /account
 //
-// # Behaviour
+// # Behavior
 //
 //   - A login answers 204 when complete, or 202 {"second_factor": {"methods":
 //     [...]}} when the user must also answer a second factor; the client then
@@ -72,8 +72,8 @@
 //     for step-up, 409 for a conflict, 429 with Retry-After when throttled.
 //   - Every credential-changing handler requires a browser session
 //     ([auth.Identity.Session]) and calls [auth.Guard.Fresh]; an API token can
-//     never enrol, change or remove a credential. A user with no step-up method
-//     is fresh right after logging in, so a first enrolment needs nothing special.
+//     never enroll, change or remove a credential. A user with no step-up method
+//     is fresh right after logging in, so a first enrollment needs nothing special.
 //   - Password login is throttled per identifier and per client address, and an
 //     unknown identifier costs a dummy hash. A password change keeps the caller
 //     and ends the user's other logins; a reset rotates the user, which ends every
