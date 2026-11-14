@@ -65,18 +65,20 @@ func hashVersion(version string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// withFactor returns a copy of factors in which factor replaces the factor of
-// the same method, or is appended, so each method appears once with its latest
-// time. A zero At becomes now, in UTC. It never modifies factors.
+// withFactor returns a copy of factors in which factor replaces the factor with
+// the same method and kind, or is appended, so each (method, kind) pair appears
+// once with its latest time. A passkey can therefore prove possession and
+// inherence at once as two factors, and replacing one leaves the other. The
+// factor's At is always overwritten with now, in UTC: factor time is this
+// server's clock, set when the guard recorded a factor its own code verified.
+// It never modifies factors.
 func withFactor(factors []Factor, factor Factor, now time.Time) []Factor {
-	if factor.At.IsZero() {
-		factor.At = now
-	}
-
-	factor.At = factor.At.UTC()
+	factor.At = now.UTC()
 	factors = slices.Clone(factors)
 
-	if i := slices.IndexFunc(factors, func(existing Factor) bool { return existing.Method == factor.Method }); i >= 0 {
+	if i := slices.IndexFunc(factors, func(existing Factor) bool {
+		return existing.Method == factor.Method && existing.Kind == factor.Kind
+	}); i >= 0 {
 		factors[i] = factor
 
 		return factors

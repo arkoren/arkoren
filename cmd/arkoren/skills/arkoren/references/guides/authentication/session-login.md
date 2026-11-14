@@ -103,7 +103,7 @@ route itself.
 
 `NewGuard` does no I/O. It returns an error for a nil provider or store and for a
 non-positive pending-login lifetime or attempt limit. The guard turns a verified
-credential into a logged-in session; `Require`, `RequireLevel` and `RequireFresh`
+credential into a logged-in session; `Require`, `RequireLevel` and `guard.RequireFresh`
 protect routes with the identity it produces. Missing sessions, absent
 session records, records of another shape and sessions written by earlier
 versions (under `arkoren:auth:user`) are anonymous requests, not errors.
@@ -178,15 +178,12 @@ if err != nil {
 }
 
 factor := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
-complete, err := guard.Begin(r, subject, factor)
+outcome, err := guard.Begin(r, subject, factor)
 if err != nil {
 	return err
 }
-if !complete {
-	return response.Status(w, http.StatusAccepted) // a second factor is needed
-}
 
-return response.Status(w, http.StatusNoContent)
+return outcome.Response(w) // 204, or 202 with the second-factor methods to choose from
 ```
 
 `Begin` is the single entry for every login method, including OAuth, SAML and
@@ -199,15 +196,15 @@ must not report success. Begin preserves other session values, creation time and
 expiry; configure idle and absolute limits in
 [session lifetimes](../http-capabilities/sessions.md#set-lifetimes).
 
-If the session is already logged in as that subject, `Begin` adds the factor to
-the existing login instead, as `Confirm` does: it keeps the other factors and the
-login record, skips the second-factor checks, rotates the ID and returns `true`.
+If the session is already logged in as that subject, `Begin` adds the factors to
+the existing login instead: it keeps the other factors and the login record,
+skips the second-factor rules, rotates the ID and returns a complete outcome.
 A user who connects a provider or re-authenticates through one is therefore never
 challenged again. This changed in core v0.6.0: earlier versions replaced the
 factors and, for an enrolled user, parked the login as pending. A different
 subject and an anonymous session behave as described above.
 
-Without a registered second-factor check `Begin` always returns `true`. See
+Without a registered second-factor credential the outcome is always complete. See
 [Two-Factor Login](two-factor.md) for the pending state, levels and step-up
 middleware.
 

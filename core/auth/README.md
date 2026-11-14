@@ -30,16 +30,22 @@ holding another type is reported as absent.
 
 Install session middleware and CSRF protection before cookie authentication.
 Create one `auth.NewGuard(provider, store)` and share it across authentication,
-login, and logout. Every login method calls `Begin` with the subject and the
-factor it verified; `Begin` logs the user in, or parks a pending login when a
-registered `SecondFactor` check says a second factor is needed (finish with
-`Pending`, `Fail` and `Complete`). A session already logged in as that subject
-keeps its login instead: `Begin` adds the factor like `Confirm` and skips the
-second-factor checks (before v0.6.0 it replaced the factors). `Confirm` records
-a fresh factor on a logged-in session. `web.Post("/logout", guard.LogoutHandler())`
+login, and logout. Modules register `auth.Credential` values with
+`policy.SecondFactor(...)` (may finish a parked login) and `policy.StepUp(...)`
+(may re-prove a logged-in user). Every login method calls `Begin` with the
+subject and the factors it verified and returns `outcome.Response(w)`: 204, or
+202 with the user's second-factor methods when a registered credential says one
+is needed. `guard.PendingHandler()` (GET), `guard.ChallengeHandler()` (POST
+`{"method": ...}`) and `guard.ConfirmHandler()` finish a parked login or confirm
+a logged-in one; they share one per-user attempt count. A session already
+logged in as that subject keeps its login instead: `Begin` adds the factors and
+skips the second-factor rules. `web.Post("/logout", guard.LogoutHandler())`
 owns the logout route: it ends the login, publishes `auth.LoggedOut` and
-answers 204, or 303 with `LogoutBuilder.Redirect`. `RequireLevel` and `RequireFresh` protect routes by the factors
-of the identity, so they also work for tokens. The provider is asked on every
+answers 204, or 303 with `LogoutBuilder.Redirect`. `RequireLevel` and
+`guard.RequireFresh` protect routes by the factors of the identity, so they also
+work for tokens; `auth.RequireSession` keeps credential routes away from tokens.
+Factor time is the server's clock, and a user who has a step-up method is fresh
+only through one of them. The provider is asked on every
 request, so a deleted or disabled user is anonymous. Each login also creates a
 login record, so a user can list devices with `Logins` and log them out with
 `Revoke`, `RevokeOthers` and `RevokeAll`; a revoked device is anonymous on its

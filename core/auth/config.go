@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -117,6 +116,10 @@ const (
 
 	// defaultMaxLogins is how many login records one user keeps.
 	defaultMaxLogins = 50
+
+	// defaultFresh is how recently a factor must have been verified to count as
+	// fresh.
+	defaultFresh = 15 * time.Minute
 )
 
 // guardSettings configures a [Guard].
@@ -127,12 +130,21 @@ type guardSettings struct {
 	// ChallengeTTL is how long a pending login is accepted.
 	ChallengeTTL time.Duration
 
-	// MaxAttempts is the number of [Guard.Fail] calls per user, within one
-	// [GuardBuilder.ChallengeTTL] window, that lock the user out of the second factor.
+	// MaxAttempts is the number of credential checks per user, within one
+	// [GuardBuilder.ChallengeTTL] window, that lock the user out of the second
+	// factor and of step-up.
 	MaxAttempts int
 
-	// SecondFactors are the checks that decide whether a user needs a second factor.
-	SecondFactors []func(ctx context.Context, subject string) (bool, error)
+	// SecondFactors are the credentials that may finish a parked login, in
+	// registration order.
+	SecondFactors []Credential
+
+	// StepUps are the credentials that may re-prove a logged-in user, in
+	// registration order.
+	StepUps []Credential
+
+	// Fresh is how recent a factor must be to count as fresh.
+	Fresh time.Duration
 
 	// Devices selects whether login records keep the user agent and address.
 	Devices bool
@@ -203,11 +215,12 @@ func (policy *GuardBuilder) ChallengeTTL(ttl time.Duration) *GuardBuilder {
 	return policy
 }
 
-// MaxAttempts sets how many second-factor code checks, each reserved by a
-// successful [Guard.Pending], one user gets within a [GuardBuilder.ChallengeTTL]
-// window and across all sessions, before the pending login is discarded and the
-// user is locked out of the second factor until the window ends. The
-// default is five. [NewGuard] rejects a value of zero or less. The setting
+// MaxAttempts sets how many credential checks, each reserved by
+// [Guard.ChallengeHandler] or [Guard.ConfirmHandler] before the credential is
+// verified, one user gets within a [GuardBuilder.ChallengeTTL] window, across
+// all methods and sessions, before a pending login is discarded and the user is
+// locked out of the second factor and of step-up until the window ends. A check
+// that fails with an infrastructure error is refunded. The default is five. [NewGuard] rejects a value of zero or less. The setting
 // replaces the previous value on this draft.
 //
 // Example:
@@ -221,21 +234,59 @@ func (policy *GuardBuilder) MaxAttempts(attempts int) *GuardBuilder {
 	return policy
 }
 
-// SecondFactor registers a check that reports whether subject must present a
-// second factor before [Guard.Begin] logs them in, for example an
-// "is two-factor enrolled" lookup of an ark. Core receives plain functions, so it
-// never imports the package that owns the answer. It may be called several
-// times: one yes from any check is enough to require a second factor, and the
-// first error stops the login and is returned by Begin. A nil check makes
-// [NewGuard] fail.
+// SecondFactor registers credentials that may finish a parked login. A user who
+// is enrolled in any of them, and whose login did not already prove two kinds of
+// factor, must present one of their enrolled methods before [Guard.Begin] logs
+// them in; [Guard.ChallengeHandler] verifies it. Core never imports the module
+// that owns the credential: it receives plain functions in a [Credential]. The
+// call may be repeated; credentials keep registration order, which is the order
+// of [Outcome.Methods]. [NewGuard] rejects a duplicate method within this
+// registry, an empty method and a nil [Credential.Enrolled]. The same credential
+// may also be registered with [GuardBuilder.StepUp].
 //
 // Example:
 //
 //	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
-//		policy.SecondFactor(factors.Enrolled)
+//		policy.SecondFactor(totp.Credential())
 //	})
-func (policy *GuardBuilder) SecondFactor(check func(ctx context.Context, subject string) (bool, error)) *GuardBuilder {
-	policy.settings.SecondFactors = append(policy.settings.SecondFactors, check)
+func (policy *GuardBuilder) SecondFactor(credentials ...Credential) *GuardBuilder {
+	policy.settings.SecondFactors = append(policy.settings.SecondFactors, credentials...)
+
+	return policy
+}
+
+// StepUp registers credentials that may re-prove a logged-in user:
+// [Guard.ConfirmHandler] verifies one and records the factor on the session, and
+// [Guard.Fresh] counts only these methods as fresh when the user has one
+// enrolled. Register the methods a user can use to prove themselves again, such
+// as the password and an authenticator, not a federated login. The call may be
+// repeated; credentials keep registration order, which is the order of the
+// methods in [ErrStepUpRequired]. [NewGuard] applies the same checks as for
+// [GuardBuilder.SecondFactor].
+//
+// Example:
+//
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
+//		policy.StepUp(passwords.Credential(), totp.Credential())
+//	})
+func (policy *GuardBuilder) StepUp(credentials ...Credential) *GuardBuilder {
+	policy.settings.StepUps = append(policy.settings.StepUps, credentials...)
+
+	return policy
+}
+
+// FreshFor sets how recent a factor must be for [Guard.Fresh] to accept it. The
+// default is 15 minutes. [Guard.RequireFresh] takes its own window per route.
+// [NewGuard] rejects a value of zero or less. The setting replaces the previous
+// value on this draft.
+//
+// Example:
+//
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
+//		policy.FreshFor(5 * time.Minute)
+//	})
+func (policy *GuardBuilder) FreshFor(window time.Duration) *GuardBuilder {
+	policy.settings.Fresh = window
 
 	return policy
 }
@@ -314,11 +365,13 @@ func (policy *GuardBuilder) SessionLifetime(lifetime time.Duration) *GuardBuilde
 }
 
 // newGuardSettings applies the callbacks once on a draft holding the defaults
-// and returns the completed settings. The check slice is owned by the result.
+// and returns the completed settings. The credential slices are owned by the
+// result only after [NewGuard] clones them.
 func newGuardSettings(configure ...GuardBuilderFunc) guardSettings {
 	policy := &GuardBuilder{settings: guardSettings{
 		ChallengeTTL: defaultChallengeTTL,
 		MaxAttempts:  defaultMaxAttempts,
+		Fresh:        defaultFresh,
 
 		Devices:         true,
 		ClientIP:        remoteHost,

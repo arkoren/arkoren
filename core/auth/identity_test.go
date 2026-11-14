@@ -14,7 +14,7 @@ var (
 	otp       = auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession}
 	hardware  = auth.Factor{Method: auth.MethodHardwareKey, Kind: auth.KindPossession}
 	biometric = auth.Factor{Method: "fpt", Kind: auth.KindInherence}
-	federated = auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated}
+	federated = auth.Factor{Method: federatedMethod, Kind: auth.KindFederated}
 )
 
 // levelOf builds an identity with factors and returns its level.
@@ -268,8 +268,8 @@ func ExampleKind() {
 }
 
 func ExampleMethod() {
-	fmt.Println(auth.MethodPassword, auth.MethodOTP, auth.MethodHardwareKey, auth.MethodSoftwareKey, auth.MethodRecovery, auth.MethodFederated)
-	// Output: pwd otp hwk swk recovery federated
+	fmt.Println(auth.MethodPassword, auth.MethodOTP, auth.MethodHardwareKey, auth.MethodSoftwareKey)
+	// Output: pwd otp hwk swk
 }
 
 func ExampleLevel() {

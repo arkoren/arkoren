@@ -3,8 +3,8 @@ title: Two-Factor Login
 description: Hold a login until a second factor passes, require a level or recent proof for sensitive routes, and handle the step-up problem.
 order: 25
 summary:
-  - Park a login after the first factor, verify the second, and complete it with both factors recorded.
-  - Require a multi-factor level or a recent confirmation before sensitive routes.
+  - Register credentials, park a login after the first factor and finish it through the core challenge route.
+  - Require a multi-factor level or a recent confirmation, and confirm through the core step-up route.
   - Handle the 403 step-up problem and end other sessions when credentials change.
 ---
 
@@ -23,20 +23,29 @@ authentication middleware installed. Import `auth` from `arkoren.dev/core/auth`.
 
 ## Record Factors
 
-Every login method ends in `guard.Begin` with the subject and the factor it
-verified:
+Every login method ends in `guard.Begin` with the subject and every factor it
+verified, then answers with the outcome:
 
 ```go
 factor := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
-complete, err := guard.Begin(r, subject, factor)
+outcome, err := guard.Begin(r, subject, factor)
+if err != nil {
+	return err
+}
+
+return outcome.Response(w) // 204, or 202 with the methods to choose from
 ```
 
 A factor has a `Method` (how it was verified), a `Kind` (what it proves) and a
-time, which `Begin` sets to now when you leave it zero. The provided methods are
-`MethodPassword`, `MethodOTP`, `MethodHardwareKey`, `MethodSoftwareKey`,
-`MethodRecovery` and `MethodFederated`; `pwd`, `otp`, `hwk` and `swk` are the RFC
-8176 names, while `recovery` and `federated` are Arkoren's own. Kinds are
-`KindKnowledge`, `KindPossession`, `KindInherence` and `KindFederated`.
+time. The time is always the server's clock: the guard stamps it when it records
+the factor, whatever the login method reports, so a provider cannot make an old
+login look fresh. Core names only the RFC 8176 methods `MethodPassword` (`pwd`),
+`MethodOTP` (`otp`), `MethodHardwareKey` (`hwk`) and `MethodSoftwareKey` (`swk`).
+A module that verifies something else, such as a recovery code or a federated
+login, declares its own `auth.Method`. Kinds are `KindKnowledge`,
+`KindPossession`, `KindInherence` and `KindFederated`. A new factor replaces an
+older one with the same method and kind, so a passkey can prove possession and
+inherence at once.
 
 ## Choose Levels
 
@@ -52,89 +61,101 @@ Two passwords stay `LevelSingle`. A federated login (OAuth, SAML) is
 `LevelSingle` and never counts toward `LevelMulti`, even combined with a
 password, because Arkoren cannot see which factors the provider required.
 
-## Hold a Login
+## Register Credentials
 
-Tell the guard which users need a second factor by registering checks. A check
-is a plain function, so core never imports the package that knows the answer;
-pass an enrollment lookup such as an ark's `Enrolled`:
+Tell the guard how a user can prove a second factor by registering an
+`auth.Credential` for each method. A module that owns a method (a TOTP
+authenticator, a passkey) exports its credential; core receives plain functions,
+so it never imports that module:
 
 ```go
 guard, err := auth.NewGuard(provider, store, func(policy *auth.GuardBuilder) {
-	policy.SecondFactor(enrolled) // func(ctx context.Context, subject string) (bool, error)
+	policy.SecondFactor(authenticator.Credential()) // may finish a parked login
+	policy.StepUp(password.Credential(), authenticator.Credential()) // may re-prove a signed-in user
 })
 ```
 
-You may register several checks; one yes from any is enough, and the first error
-fails the login. `Begin` then logs the user in and returns `true` when no check
-says yes. Otherwise it parks a pending login, rotates the session ID and returns
-`false`. Until the login completes, the request is anonymous: the authenticator
-and `auth.Middleware` see no user, so `auth.Require` rejects it.
+A credential has a `Method`, a `Kind`, an `Enrolled` function that says whether a
+user has it and a `Verify` function that checks the request input. Both registries
+keep registration order, and `NewGuard` rejects a duplicate method within one, an
+empty method and a nil `Enrolled`. Register the same credential in both when it
+serves both purposes. A credential without `Verify` is a redirect method: it is
+listed, but completed through its own route.
 
-The checks do not run when the session is already logged in as that subject:
-`Begin` then adds the factor to the existing login, like `Confirm`, and returns
-`true`. A logged-in user who re-authenticates through a provider keeps their
-factors and is not challenged again. This changed in core v0.6.0; earlier
-versions replaced the factors and parked the login.
+## Hold a Login
 
-```go
-if !complete {
-	return response.Status(w, http.StatusAccepted)
-}
+`Begin` asks every second-factor credential whether the user is enrolled. When
+the factors it received already reach `LevelMulti`, or no credential says yes, it
+logs the user in. Otherwise it parks a pending login, rotates the session ID and
+returns an outcome that is not complete: `outcome.Response(w)` answers `202` with
+the methods to choose from, in registration order:
+
+```json
+{"second_factor": {"methods": ["otp", "hwk"]}}
 ```
+
+Until the login completes, the request is anonymous: the authenticator and
+`auth.Middleware` see no user, so `auth.Require` rejects it. A failing `Enrolled`
+fails the login with its error.
+
+The second-factor rules do not run when the session is already logged in as that
+subject: `Begin` then adds the factors to the existing login and keeps its login
+record. A logged-in user who re-authenticates through a provider keeps their
+factors and is not challenged again.
 
 A pending login expires after five minutes by default; set it with
 `policy.ChallengeTTL(10 * time.Minute)`. Session renewal does not extend it.
 
 ## Verify the Second Factor
 
-In the route that receives the code, `Pending` returns the waiting user so you
-can look up their secret. After the code verifies, `Complete` signs them in with
-the first factor plus the new one:
+Core owns the two routes that finish a pending login, so every module answers
+alike:
 
 ```go
-user, err := guard.Pending(r)
-if err != nil {
-	return err // auth.ErrUnauthenticated: no pending login, or it expired
-}
-if !verifyCode(user.Subject, in.Code) {
-	if err := guard.Fail(r); err != nil {
-		return err
-	}
-
-	return auth.ErrUnauthenticated
-}
-
-otp := auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession}
-
-return guard.Complete(r, otp)
+web.Get("/login/second-factor", guard.PendingHandler())
+web.Post("/login/second-factor", guard.ChallengeHandler())
 ```
 
-`verifyCode` is your check, for example with
-[`foundation/totp`](https://pkg.go.dev/arkoren.dev/foundation/totp). Reject a
-code whose time step you already accepted for that user, since a six-digit code
-stays valid for its whole period.
+`PendingHandler` answers `200` with `{"methods": ["otp"]}`, the methods this user
+can use. It spends nothing, so a page can call it freely; `guard.Pending(r)` is
+the same read for Go code. The client then posts the chosen method and its input
+to `ChallengeHandler`:
 
-Each successful `Pending` reserves one attempt per user in the guard's cache
-store before you check the code, so a new login, a new session or parallel
-requests on one pending cookie do not reset it, and racing requests cannot check
-more codes than the limit. At most five codes are checked within the challenge
-window (`policy.MaxAttempts(n)`, window `policy.ChallengeTTL(d)`); after that the
-pending login is discarded and that user cannot pass the second factor, in any
-session, until the window ends. A successful `Complete` clears the count, and
-`Fail` only reports the wrong code and rotates the session ID. Call `Pending`
-once per code check, in the route that verifies the code: calling it to render a
-form spends an attempt. The lockout lets anyone who knows a
-subject delay that user, so also
-[rate limit](../abuse-prevention/rate-limiting.md) this route by address. Use the
-same `auth.ErrUnauthenticated` for every failure so the
-response does not reveal which part was wrong.
+```json
+{"method": "otp", "code": "123456"}
+```
 
-`Complete` is single use: it consumes the pending login and rotates the ID, so a
-second call returns `ErrUnauthenticated`. A user deleted or disabled meanwhile
+The handler finds the registered credential, passes the rest of the body to its
+`Verify` and, when it succeeds, logs the user in with the first factor plus the
+verified one and answers `204`. It never trusts the client's method name: an
+unregistered method, a missing one and a redirect method answer
+`auth.ErrUnknownMethod` (`422`) without costing an attempt, and a method the user
+is not enrolled in answers `auth.ErrInvalidCredential` (`403`), exactly like a
+wrong code, so a client cannot probe which methods a user has.
+
+The handler reserves one attempt per user in the guard's cache store before it
+verifies anything, so a new login, a new session or parallel requests on one
+pending cookie do not reset it, and racing requests cannot check more codes than
+the limit. One count covers every method. At most five attempts are allowed
+within the challenge window (`policy.MaxAttempts(n)`, window
+`policy.ChallengeTTL(d)`); after that the pending login is discarded and that
+user cannot pass the second factor, in any session, until the window ends. A wrong
+code (`Verify` returns an error wrapping `auth.ErrInvalidCredential`) keeps its
+attempt; any other `Verify` error is an infrastructure failure, so the attempt
+is refunded and the error passes through. A successful challenge clears the
+count. The lockout lets anyone who knows a subject delay that user, so also
+[rate limit](../abuse-prevention/rate-limiting.md) the routes by address.
+
+The challenge is single use: it consumes the pending login and rotates the ID, so
+a second call returns `ErrUnauthenticated`. A user deleted or disabled meanwhile
 also returns it and discards the pending login, and so does a changed
 `UserRecord.Version`: if the password changes while the user is on the second
-step, they must start the login again. `Pending` applies the same check. Every `Begin`, `Complete`,
-`Fail`, `Confirm` and `Logout` regenerates the session ID.
+step, they must start the login again. Every `Begin`, challenge, confirmation
+and `Logout` regenerates the session ID.
+
+A module that cannot work unless the guard accepts its method calls
+`guard.MustAccept(method)` while composing the application. It panics at startup
+when the method is in neither registry.
 
 ## Require a Level
 
@@ -151,37 +172,64 @@ problem below.
 
 ## Require Recent Proof
 
-`RequireFresh` admits a request only when some factor was verified within the
-given age:
+`guard.RequireFresh` admits a request only when the user proved themselves
+recently enough:
 
 ```go
-web.With(auth.RequireFresh(10 * time.Minute)).Delete("/account", destroy)
+web.With(guard.RequireFresh(10 * time.Minute)).Delete("/account", destroy)
 ```
 
-A factor with an unknown or future time is never fresh, and an age of zero or
-less admits nothing. When it rejects, ask the user to re-enter a factor, verify
-it, and call `Confirm`, which records it with the current time and rotates the
-ID:
+Inside a handler, `guard.Fresh(r)` makes the same check with the window of
+`policy.FreshFor(d)`, 15 minutes by default. The rule depends on how the user can
+step up. If they are enrolled in a registered step-up method, fresh means a factor
+of one of those methods was verified within the window; a silent re-login through
+a provider adds a factor that is not a step-up method, so it never refreshes
+them. If they are enrolled in none, any factor within the window counts, so a user
+who only signs in through a provider is fresh right after signing in. A factor
+with an unknown or future time is never fresh, and a window of zero or less admits
+nothing. A failing `Enrolled` returns its error instead of relaxing the rule.
+
+When the user is not fresh, ask them to prove themselves again and post the
+method and input to the confirm route:
 
 ```go
-password := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
-if err := guard.Confirm(r, password); err != nil {
-	return err
-}
+web.With(auth.RequireSession()).Post("/confirm", guard.ConfirmHandler())
 ```
 
-A factor with the same method replaces the old one, so each method appears once
-with its latest time. `Confirm` verifies nothing and returns
-`auth.ErrUnauthenticated` without a signed-in user. Use it also to add a second
-factor to a single-factor session so `RequireLevel` then passes.
+`ConfirmHandler` works like the challenge against the step-up credentials, with
+the same body and attempt count, and requires a signed-in browser session. On
+success it records the factor with the current time, rotates the ID and answers
+`204`. A user who used up their attempts gets `auth.ErrInvalidCredential`, like a
+wrong code. A factor with the same method and kind replaces the old one, so each
+pair appears once with its latest time, and confirming a second kind lifts a
+single-factor session so `RequireLevel` then passes.
+
+`auth.RequireSession` rejects identities that did not come from
+`guard.Authenticator()`. Mount every route that enrolls, changes or confirms a
+credential behind it: `identity.Session()` is true only for a browser session, so
+a bearer token can never change credentials.
 
 ## Handle Step-Up
 
-Both middleware return `auth.ErrStepUpRequired`, a `403` problem of type
-`tag:arkoren.dev,2026-11:core:auth:step-up-required`. It is `403`, not `401`,
-because the user is signed in and a `401` invites login redirects that would
-discard the session. Have your client match the type, prompt for the factor and
-retry.
+`RequireLevel` and the freshness check return `auth.ErrStepUpRequired`, a `403`
+problem of type `tag:arkoren.dev,2026-11:core:auth:step-up-required`. The freshness
+check adds a `methods` member listing the user's enrolled step-up methods in
+registration order, which the client offers and posts to the confirm route. When
+the user has no step-up method and is not fresh, it returns
+`auth.ErrNoStepUpMethod` (`403`, type
+`tag:arkoren.dev,2026-11:core:auth:no-step-up-method`): the only way forward is
+to log in again. Both are `403`, not `401`, because the user is signed in and a
+`401` invites login redirects that would discard the session. Have your client
+match the type and retry.
+
+To require a new login rather than freshness, for example before exchanging a
+session for a long-lived device token, call `guard.RecentLogin(r, 5*time.Minute)`.
+It checks when the session's login was created: a silent re-login by the same
+user keeps that login, so it cannot extend the window, and a stale login returns
+`auth.ErrNoStepUpMethod`.
+
+After a user enrolls a credential, a module can publish `auth.CredentialEnrolled`
+with the subject and method so the application can notify them.
 
 ## End Other Sessions
 
