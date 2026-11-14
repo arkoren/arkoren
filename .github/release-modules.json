@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "public": [
+    "ark/access",
     "ark/mcp",
     "ark/oauth",
     "cmd/arkoren",
@@ -47,6 +48,6 @@
     "foundation/totp",
     "foundation/validate"
   ],
-  "development": ["cmd/arkoren-ci"],
+  "development": ["cmd/arkoren-ci", "cmd/arkoren-wiring"],
   "retired": ["driver/mcp", "driver/oauth"]
 }

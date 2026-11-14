@@ -459,6 +459,12 @@ delivery, and lifecycle protocols explicit.
   ID token after NonceHandler, and guard.LogoutHandler() owns the logout route;
   a second factor redirects to ClientBuilder.ChallengeURL or fails with
   ErrNoChallengeURL.
+  ark/access composes the guard, the packages and the routes: `access.New(db, store,
+  func(iam *access.Builder) { ... })` (variable `iam`, builder `iam`), `iam.Mount(web)`
+  and `iam.XHandler()` for custom paths. Its packages (account, password, twofactor,
+  apitoken, federation) take a `*auth.UserProvider` and never import each other;
+  their handlers take `*auth.Guard`, require `Identity.Session()` and call
+  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
   preserve the first definition error; nil conversion is a domain error, not

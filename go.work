@@ -6,6 +6,7 @@ use (
 	./ark/oauth
 	./cmd/arkoren
 	./cmd/arkoren-ci
+	./cmd/arkoren-wiring
 	./core
 	./driver/aes
 	./driver/argon2

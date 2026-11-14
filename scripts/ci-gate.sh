@@ -22,7 +22,7 @@ jq -es --argjson plan "${PLAN:?PLAN is required}" --arg tested "${CI_TESTED_SHA:
       .base_sha == "" and .modules == $modules and .integration == $integration and .website
     else
       (.base_sha | test("^[0-9a-f]{40}$")) and
-      ((.modules | length) == 0 or .website or .modules == ["cmd/arkoren-ci"])
+      ((.modules | length) == 0 or .website or all(.modules[]; . == "cmd/arkoren-ci" or . == "cmd/arkoren-wiring"))
     end)) and
   length == 1 and (.[0] |
     keys == ["check", "discovery", "integration", "tooling"] and
