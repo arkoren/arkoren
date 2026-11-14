@@ -838,6 +838,15 @@ emergency retry, not a routine release approval. Missing/pending evidence has a
 bounded wait; failed/cancelled evidence blocks. No upstream artifacts or caches
 are executed. The preview remains independently read-only.
 
+Every phase reads the current remote main SHA through the API and fetches that
+exact commit (`git fetch --no-tags origin <sha>`, anonymous; the repository is
+public and the checkout keeps no credentials) when the job-start checkout lacks
+it, because release-notes and Dependabot merges advance main mid-run. Ancestry of
+the publisher code and batch SHA is checked against that API-read main only. Git
+exit 1 is untrusted history; any other git failure or a failed fetch is a
+distinct operational error. A fully tagged older batch therefore still finishes
+its prereleases after main advances; `fresh` still refuses stale new proposals.
+
 The public module inventory must match `.github/release-modules.json`'s `public`
 array; `development` modules never enter plans or namespaces. New modules need
 a reviewed allowlist, baseline policy and administrative creation-ruleset update;
