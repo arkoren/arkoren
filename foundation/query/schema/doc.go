@@ -91,6 +91,12 @@
 // [query.Raw], so a "?" outside quotes in a raw expression is a placeholder
 // and fails; a "?" inside a quoted default is fine.
 //
+// [Column.Bytewise] makes a string or text column compare byte for byte
+// (COLLATE "C" on PostgreSQL, BINARY on SQLite, utf8mb4_0900_bin on MySQL 8),
+// so unique indexes distinguish case, accents, and trailing spaces. It fails
+// compilation on ANSI with [query.ErrUnsupported] and construction on other
+// column types.
+//
 // MySQL parenthesizes defaults on text, blob, and json columns (MySQL 8.0.13
 // or later) and has no time zone aware timestamp: TimestampTZ renders
 // datetime(6), so store UTC. SQLite stores SmallInteger as INTEGER and Char

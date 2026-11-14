@@ -198,3 +198,81 @@ func TestDropForeignRejectsLongGeneratedName(t *testing.T) {
 
 	requireInvalid(t, operation)
 }
+
+// TestBytewiseRendersBinaryCollationPerDialect verifies the collation clause
+// for a bounded string and for text on every dialect with a binary collation.
+func TestBytewiseRendersBinaryCollationPerDialect(t *testing.T) {
+	t.Parallel()
+
+	operation := schema.Create("identities", func(table *schema.Table) {
+		table.String("subject", 255).Bytewise()
+		table.Text("note").Bytewise().Nullable().Default("x")
+	})
+
+	requireSQL(t, operation, query.Postgres,
+		`CREATE TABLE "identities" ("subject" varchar(255) COLLATE "C" NOT NULL, "note" text COLLATE "C" DEFAULT 'x')`)
+	requireSQL(t, operation, query.MySQL,
+		"CREATE TABLE `identities` (`subject` varchar(255) COLLATE utf8mb4_0900_bin NOT NULL, `note` text COLLATE utf8mb4_0900_bin DEFAULT ('x'))")
+	requireSQL(t, operation, query.SQLite,
+		`CREATE TABLE "identities" ("subject" TEXT COLLATE BINARY NOT NULL, "note" TEXT COLLATE BINARY DEFAULT 'x')`)
+	requireUnsupported(t, operation, query.ANSI)
+}
+
+// TestBytewiseCombinesWithUniqueAndIndex verifies the indexes follow the
+// column, which carries the collation, and that modifier order is irrelevant.
+func TestBytewiseCombinesWithUniqueAndIndex(t *testing.T) {
+	t.Parallel()
+
+	operation := schema.Create("identities", func(table *schema.Table) {
+		table.String("subject", 255).Unique().Bytewise()
+		table.String("issuer", 100).Bytewise()
+		table.Index("issuer", "subject")
+	})
+
+	requireSQL(t, operation, query.MySQL,
+		"CREATE TABLE `identities` (`subject` varchar(255) COLLATE utf8mb4_0900_bin NOT NULL, `issuer` varchar(100) COLLATE utf8mb4_0900_bin NOT NULL)",
+		"CREATE UNIQUE INDEX `identities_subject_key` ON `identities` (`subject`)",
+		"CREATE INDEX `identities_issuer_subject_index` ON `identities` (`issuer`, `subject`)")
+}
+
+// TestBytewiseOnAddedColumn verifies ALTER ... ADD COLUMN carries the collation.
+func TestBytewiseOnAddedColumn(t *testing.T) {
+	t.Parallel()
+
+	operation := schema.Alter("users", func(table *schema.Table) {
+		table.String("subject", 64).Bytewise().Nullable()
+	})
+
+	requireSQL(t, operation, query.Postgres,
+		`ALTER TABLE "users" ADD COLUMN "subject" varchar(64) COLLATE "C"`)
+	requireSQL(t, operation, query.SQLite,
+		`ALTER TABLE "users" ADD COLUMN "subject" TEXT COLLATE BINARY`)
+}
+
+// TestBytewiseRejectsNonTextColumns verifies the construction error on types
+// that have no collation, including fixed-length and raw types.
+func TestBytewiseRejectsNonTextColumns(t *testing.T) {
+	t.Parallel()
+
+	declarations := map[string]func(table *schema.Table) *schema.Column{
+		"integer": func(table *schema.Table) *schema.Column { return table.Integer("value") },
+		"char":    func(table *schema.Table) *schema.Column { return table.Char("value", 2) },
+		"raw":     func(table *schema.Table) *schema.Column { return table.Column("value", "citext") },
+	}
+
+	for name, declare := range declarations {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			operation := schema.Create("users", func(table *schema.Table) {
+				declare(table).Bytewise()
+			})
+
+			requireInvalid(t, operation)
+
+			if !strings.Contains(operation.Err().Error(), `column "value": Bytewise needs a string or text column`) {
+				t.Fatal(operation.Err())
+			}
+		})
+	}
+}

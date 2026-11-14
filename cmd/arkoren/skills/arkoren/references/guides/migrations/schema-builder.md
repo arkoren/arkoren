@@ -46,6 +46,26 @@ Use `Default(value)` for scalar literal defaults and `DefaultRaw(expression)`
 only for trusted database expressions. DDL defaults are rendered into SQL, not
 bound parameters. Never pass request text to raw types or expressions.
 
+Database default collations often compare text case-insensitively (MySQL) or
+by locale (PostgreSQL), so `"abc"` and `"ABC"` may collide under a unique
+index. Call `Bytewise()` on a `String` or `Text` column to compare byte for
+byte, case, accents and trailing spaces included. Use it for identifiers that
+must match exactly, such as the subject an auth module stores for a user:
+
+```go
+identities := schema.Create("identities", func(table *schema.Table) {
+	table.ID()
+	table.String("subject", 255).Bytewise().Unique()
+})
+```
+
+It renders `COLLATE "C"` on PostgreSQL, `COLLATE BINARY` on SQLite and
+`COLLATE utf8mb4_0900_bin` on MySQL 8, a no-pad collation so `"abc "` differs
+from `"abc"`. MariaDB lacks that collation, and ANSI has no portable name, so
+compiling for it returns `query.ErrUnsupported`. Other column types are
+construction errors. MySQL cannot index `Text` without a prefix length, so
+index bytewise columns declared with `String` and a length of at most 768.
+
 ## Keys and Indexes
 
 If email must be unique per tenant rather than globally, use this alternative
