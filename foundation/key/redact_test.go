@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json/v2"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
@@ -45,8 +46,16 @@ func assertHidden(t *testing.T, what, output string, secrets []string) {
 func checkNestedFormatting[T any](t *testing.T, value T, secrets []string) {
 	t.Helper()
 
-	for _, verb := range []string{"%v", "%+v", "%#v"} {
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%q", "%d"} {
 		assertHidden(t, "nested "+verb, fmt.Sprintf(verb, holder[T]{secret: value}), secrets)
+		assertHidden(t, "nested pointer "+verb, fmt.Sprintf(verb, &holder[T]{secret: value}), secrets)
+	}
+
+	// encoding/json/v2 has no hook on these types and rejects them with an
+	// error; either way the output must not contain the material.
+	for name, v := range map[string]any{"field": struct{ Secret T }{value}, "pointer": &struct{ Secret T }{value}, "key": value} {
+		encoded, _ := json.Marshal(v)
+		assertHidden(t, "json "+name, string(encoded), secrets)
 	}
 }
 

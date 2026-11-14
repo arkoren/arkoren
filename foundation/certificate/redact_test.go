@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json/v2"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
@@ -63,9 +64,16 @@ func TestIdentityNestedFormattingRedacted(t *testing.T) {
 
 	identity, secrets := privateSecrets(t)
 
-	for _, verb := range []string{"%v", "%+v", "%#v"} {
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%q", "%d"} {
 		assertHidden(t, "nested "+verb, fmt.Sprintf(verb, holder{secret: identity}), secrets)
+		assertHidden(t, "nested pointer "+verb, fmt.Sprintf(verb, &holder{secret: identity}), secrets)
 	}
+
+	// encoding/json/v2 rejects the type with an error; the output must still be
+	// free of key material.
+	encoded, _ := json.Marshal(struct{ Identity certificate.Identity }{identity})
+
+	assertHidden(t, "json", string(encoded), secrets)
 }
 
 func TestIdentityNestedLoggingRedacted(t *testing.T) {
