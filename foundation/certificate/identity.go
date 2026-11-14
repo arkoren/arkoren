@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"log/slog"
 )
 
@@ -28,8 +29,11 @@ type Identity struct {
 	// public owns the certificate DER; sharing it is safe because it is immutable.
 	public Bundle
 
-	// private owns canonical unencrypted PKCS #8 DER as an immutable string.
-	private string
+	// private owns canonical unencrypted PKCS #8 DER as an immutable string. It
+	// is a pointer so fmt and slog, which cannot call methods on unexported
+	// fields, print an address instead of the DER. The pointee is never
+	// mutated; copies share it.
+	private *string
 }
 
 // ParseIdentity imports a matching RSA, ECDSA, or Ed25519 identity. Certificates
@@ -80,7 +84,9 @@ func ParseIdentity(certPEM, keyPEM []byte) (Identity, error) {
 		return Identity{}, err
 	}
 
-	return Identity{public: bundleFrom(certs), private: string(der)}, nil
+	derString := string(der)
+
+	return Identity{public: bundleFrom(certs), private: &derString}, nil
 }
 
 // validateKey binds a parsed signing key to the first certificate using native
@@ -164,7 +170,7 @@ func LoadIdentity(certPath, keyPath string) (Identity, error) {
 //		// Provision or load the identity before using it.
 //	}
 func (identity Identity) Err() error {
-	if identity.private == "" {
+	if identity.private == nil {
 		return ErrInvalid
 	}
 
@@ -229,11 +235,11 @@ func (identity Identity) Bundle() Bundle {
 //	secretPEM := identity.PrivatePEM()
 //	_ = secretPEM // Pass only to protected key storage, not logging.
 func (identity Identity) PrivatePEM() []byte {
-	if identity.private == "" {
+	if identity.private == nil {
 		return nil
 	}
 
-	return encodePEM("PRIVATE KEY", []byte(identity.private))
+	return encodePEM("PRIVATE KEY", []byte(*identity.private))
 }
 
 // String redacts all identity material, including public identifying names.
@@ -245,6 +251,22 @@ func (identity Identity) PrivatePEM() []byte {
 //	fmt.Println(identity.String()) // certificate.Identity([REDACTED])
 func (identity Identity) String() string {
 	return "certificate.Identity([REDACTED])"
+}
+
+// Format writes the same constant redacted text as String for every verb,
+// including %d, %x and %q, which would otherwise print the underlying value.
+// Verbs, flags, width and precision never change the output, even for a zero
+// identity. Redaction also holds when an Identity sits in an unexported struct
+// field, because the private key is held behind a pointer that reflection-based
+// printing reports as an address. The public chain is not secret and is not
+// redacted by that path.
+//
+// Example:
+//
+//	var identity certificate.Identity
+//	fmt.Printf("%x", identity) // certificate.Identity([REDACTED])
+func (identity Identity) Format(state fmt.State, verb rune) {
+	_, _ = io.WriteString(state, identity.String())
 }
 
 // GoString prevents %#v from exposing the private fields of Identity. It has

@@ -319,8 +319,9 @@ Behavior to know:
 - `SeenAt` is refreshed at most once every five minutes, on a best-effort basis:
   a failed refresh write never fails the request, so it can lag by more. Ordinary
   requests stay read-only.
-- A device whose record was revoked is anonymous, so it cannot call `Logins` or
-  `RevokeOthers` either. Records older than `SessionLifetime` are never listed
+- A device whose record was revoked, whose user was disabled or deleted, or
+  whose session predates a `Version` change is anonymous, so it cannot call
+  `Logins` or `RevokeOthers` either. Records older than `SessionLifetime` are never listed
   and every write removes them, because no session outlives that age. Only a
   session that ended earlier, by idle timeout without a logout, can still be
   listed, until its record reaches that age or the 50-record limit drops it.

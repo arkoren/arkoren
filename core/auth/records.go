@@ -241,8 +241,10 @@ func (guard *Guard) seen(ctx context.Context, subject, id string) (bool, error) 
 
 // Logins returns the login records of the request's user, oldest first, with
 // [LoginRecord.Current] set on the record of this request's own login. It
-// returns [ErrUnauthenticated] when the session holds no logged-in user or its
-// own login was revoked, and [session.ErrNoSession] without a session. Mount it
+// returns [ErrUnauthenticated] when the session holds no logged-in user, its
+// user was deleted or disabled, its credential version no longer matches
+// [UserRecord.Version] (the checks of [Guard.Authenticator]) or its own login was
+// revoked, and [session.ErrNoSession] without a session. Mount it
 // behind [Require].
 //
 // Example:
@@ -253,15 +255,9 @@ func (guard *Guard) seen(ctx context.Context, subject, id string) (bool, error) 
 //	}
 //	return response.JSON(w, http.StatusOK, records)
 func (guard *Guard) Logins(r *http.Request) ([]LoginRecord, error) {
-	current, err := guard.session(r)
+	stored, _, err := guard.valid(r)
 
-	if err != nil {
-		return nil, err
-	}
-
-	stored, err := current.Get(sessionField)
-
-	if missing(err) {
+	if errors.Is(err, ErrNoCredentials) {
 		return nil, ErrUnauthenticated
 	}
 
@@ -329,8 +325,10 @@ func (guard *Guard) Revoke(ctx context.Context, subject string, ids ...string) e
 }
 
 // RevokeOthers logs every device of the request's user out except the one that
-// made the request. It returns [ErrUnauthenticated] when the session holds no
-// logged-in user or its own login was revoked (nothing is revoked then), and
+// made the request. It returns [ErrUnauthenticated], revoking nothing, when the
+// session holds no logged-in user, its user was deleted or disabled, its
+// credential version no longer matches [UserRecord.Version] or its own login was
+// revoked, and
 // [session.ErrNoSession] without a session.
 //
 // Example:
@@ -339,15 +337,9 @@ func (guard *Guard) Revoke(ctx context.Context, subject string, ids ...string) e
 //		return err
 //	}
 func (guard *Guard) RevokeOthers(r *http.Request) error {
-	current, err := guard.session(r)
+	stored, _, err := guard.valid(r)
 
-	if err != nil {
-		return err
-	}
-
-	stored, err := current.Get(sessionField)
-
-	if missing(err) {
+	if errors.Is(err, ErrNoCredentials) {
 		return ErrUnauthenticated
 	}
 

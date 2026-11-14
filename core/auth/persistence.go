@@ -55,9 +55,6 @@ type pendingLogin struct {
 	// Version is the hex SHA-256 of [UserRecord.Version] seen at [Guard.Begin].
 	// The pending login is discarded when the user's version no longer matches.
 	Version string `json:"version"`
-
-	// Attempts counts the wrong second factors reported by [Guard.Fail].
-	Attempts int `json:"attempts"`
 }
 
 // hashVersion returns the hex SHA-256 of a [UserRecord.Version]. All hashes have
