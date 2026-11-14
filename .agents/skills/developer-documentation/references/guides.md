@@ -63,7 +63,7 @@ pkg.go.dev module pages by family; do not add a parallel local API corpus.
 | HTTP | `http-networking` | 46 | Running the HTTP server and making outgoing HTTP calls. |
 | Security | `browser-security` | 52 | Overview, secure headers, CORS, and CSRF protection. |
 | Security | `abuse-prevention` | 55 | Overview, rate limiting, and CAPTCHA. |
-| Security | `authentication` | 60 | Overview, session login, API tokens, OAuth login, and OIDC bearer verification. |
+| Security | `authentication` | 60 | Overview, the access module and its feature pages, session login, two-factor, API tokens, OAuth login, and OIDC bearer verification. |
 | Security | `authorization` | 65 | Overview (rules and the gate), policies, row-level access, denials. |
 | Security | `hashing` | 70 | Overview, choosing the cost, upgrading hashes, drivers. |
 | Security | `keys` | 72 | Typed application keys, provisioning, and loading. |

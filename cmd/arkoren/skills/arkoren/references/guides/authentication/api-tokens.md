@@ -10,6 +10,11 @@ summary:
 
 # API Tokens
 
+> [!NOTE]
+> The [Access](access.md) module issues, stores, scopes and revokes these tokens
+> for you: see [Access Tokens](access-tokens.md). This page shows the bearer
+> seam you use for credentials of your own.
+
 A program authenticates by sending a secret token with each request, rather
 than signing in through a browser form. `auth.Bearer` extracts that token and
 delegates verification to your application. It does not issue tokens, maintain

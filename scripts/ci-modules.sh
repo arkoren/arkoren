@@ -37,7 +37,7 @@ require_directory() {
 # manifests. A Compose marker must also be a real file, not a redirected path.
 validate_module() {
   local module="$1"
-  local canonical='^(core|cmd/arkoren|cmd/arkoren-ci|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$'
+  local canonical='^(core|cmd/arkoren|cmd/arkoren-ci|cmd/arkoren-wiring|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$'
 
   [[ "$module" =~ $canonical ]] || fail "invalid module: $module"
   require_directory "$module"
@@ -63,7 +63,7 @@ jq -e '(keys - ["retired"]) == ["development","public","schema"] and .schema == 
   (.public | type == "array" and length > 0) and
   (.development | type == "array") and
   all(.public[]; type == "string" and test("^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$")) and
-  all(.development[]; . == "cmd/arkoren-ci") and
+  all(.development[]; . == "cmd/arkoren-ci" or . == "cmd/arkoren-wiring") and
   ((.retired // []) | all(.[]; type == "string" and test("^(driver|foundation|ark)/[a-z0-9][a-z0-9-]*$"))) and
   ((.public + .development + (.retired // [])) | length == (unique | length))' \
   .github/release-modules.json >/dev/null || fail 'invalid module policy'
@@ -87,7 +87,7 @@ while IFS= read -r module; do
 done <<< "$development"
 for root in cmd/*; do
   if [[ -d "$root" || -L "$root" ]]; then
-    [[ "$root" == cmd/arkoren || "$root" == "$development" ]] \
+    [[ "$root" == cmd/arkoren ]] || grep -Fxq -- "$root" <<< "$development" \
       || fail "unreviewed command module: $root"
   fi
 done

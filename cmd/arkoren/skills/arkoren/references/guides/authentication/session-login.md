@@ -10,6 +10,10 @@ summary:
 
 # Session Login
 
+> [!NOTE]
+> To get registration, login, password reset and the rest as ready-made routes,
+> use the [Access](access.md) module. This page builds them by hand.
+
 A browser login checks credentials once, then stores the account's subject in
 the session. On later requests, `auth.Guard` asks your **user provider** whether
 that subject still exists and publishes an `auth.Identity` whose subject is the

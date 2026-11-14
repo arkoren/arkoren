@@ -14,10 +14,14 @@ summary:
 Authentication establishes who sent a request. Arkoren resolves a session or
 bearer credential into an `auth.Identity`: the user's subject, how they were
 authenticated, their scopes, and optionally your own user value. It supplies no
-user table, registration flow, or login screen. [Authorization](../authorization/overview.md)
+user table, registration flow, or login screen unless you add the
+[Access](access.md) module, which supplies all three as JSON routes.
+[Authorization](../authorization/overview.md)
 then decides what that identity may do.
 
-Use [Session Login](session-login.md) for passwords and browser sessions,
+Use [Access](access.md) for ready-made registration, login, two-factor, tokens
+and social sign-in. To build login yourself, use
+[Session Login](session-login.md) for passwords and browser sessions,
 [API Tokens](api-tokens.md) for application-issued keys, [OAuth Login](oauth.md)
 for external browser sign-in, or [OIDC Tokens](oidc-bearer.md) for provider-issued
 JWTs. All four use the same request identity model.

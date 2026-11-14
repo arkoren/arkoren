@@ -26,6 +26,11 @@ type Policy struct {
 	Retired []string `json:"retired,omitempty"`
 }
 
+// developmentRoots are the reviewed development-only module roots: the
+// maintenance command and the wiring module that tests the public modules
+// together. Anything else under cmd needs a boundary review first.
+var developmentRoots = []string{"cmd/arkoren-ci", "cmd/arkoren-wiring"}
+
 // canonical matches public module roots, never arbitrary command directories.
 var canonical = regexp.MustCompile(`^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$`)
 
@@ -49,7 +54,7 @@ func ParsePolicy(data []byte) (Policy, error) {
 		seen[directory] = true
 	}
 	for _, directory := range policy.Development {
-		if seen[directory] || directory != "cmd/arkoren-ci" {
+		if seen[directory] || !slices.Contains(developmentRoots, directory) {
 			return Policy{}, fmt.Errorf("unreviewed or duplicate development module: %s", directory)
 		}
 		seen[directory] = true
