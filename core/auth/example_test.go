@@ -695,6 +695,18 @@ func ExampleGuardBuilder_ClientIP() {
 	// Output: 198.51.100.2
 }
 
+// ExampleGuard_rateLimitKey pins the rate-limit key the package documentation
+// recommends: the client IP without its ephemeral port.
+func ExampleGuard_rateLimitKey() {
+	key := ratelimit.TrustedProxyKey()
+	first, second := exampleRequest(), exampleRequest()
+	first.RemoteAddr = "198.51.100.7:40001"
+	second.RemoteAddr = "198.51.100.7:40002"
+
+	fmt.Println("ip:"+key(first), key(first) == key(second))
+	// Output: ip:198.51.100.7 true
+}
+
 func ExampleGuardBuilder_MaxLogins() {
 	guard := exampleGuard(func(policy *auth.GuardBuilder) {
 		policy.MaxLogins(1)
