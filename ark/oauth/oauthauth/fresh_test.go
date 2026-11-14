@@ -41,7 +41,7 @@ func requireFreshAfterCallback(t *testing.T, claims map[string]any) bool {
 		return nil
 	}
 	request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(auth.NewContext(t.Context(), identity))
-	_ = auth.RequireFresh(10 * time.Minute)(next)(httptest.NewRecorder(), request)
+	_ = auth.RequireFresh(10*time.Minute)(next)(httptest.NewRecorder(), request)
 
 	return reached
 }
