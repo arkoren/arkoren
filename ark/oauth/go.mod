@@ -3,7 +3,7 @@ module arkoren.dev/ark/oauth
 go 1.27
 
 require (
-	arkoren.dev/core v0.5.0
+	arkoren.dev/core v0.7.0
 	arkoren.dev/foundation/key v0.1.0
 	arkoren.dev/foundation/problem v0.1.0
 	github.com/coreos/go-oidc/v3 v3.21.0

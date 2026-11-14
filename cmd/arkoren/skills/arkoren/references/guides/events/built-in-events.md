@@ -107,7 +107,7 @@ The client in `arkoren.dev/ark/oauth/oauthauth` uses `ClientBuilder.Events`:
 | --- | --- | --- |
 | `oauthauth.LoginSucceeded` | `oauth.login.succeeded` | `LoginSucceededEvent{Subject, Issuer}` after a completed local login; a login held for a second factor publishes nothing. |
 | `oauthauth.LoginFailed` | `oauth.login.failed` | `LoginFailedEvent{ProviderError, Err}` for a rejected callback. |
-| `oauthauth.LoggedOut` | `oauth.logged-out` | Signal after removing the user from the local session. |
+| `oauthauth.LoggedOut` | `oauth.logged-out` | Deprecated signal from `Client.Logout`; use `auth.LoggedOut`. |
 | `oauthauth.TokenRejected` | `oauth.token.rejected` | `TokenRejectedEvent{Err}` for bearer rejection. |
 
 Callback rejection covers invalid/replayed login cookies, provider errors, missing
