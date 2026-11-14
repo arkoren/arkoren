@@ -61,6 +61,16 @@ func Serve(t *testing.T, store *cache.Cache, authenticators []auth.Authenticator
 		policy.AllowInsecure(true)
 	}), auth.Middleware(authenticators...))
 	mount(r)
+
+	return ServeRouter(t, r)
+}
+
+// ServeRouter starts a server for r, which must already run its own session
+// middleware, and returns a cookie-keeping client. The server stops with the
+// test.
+func ServeRouter(t *testing.T, r *router.Router) *Client {
+	t.Helper()
+
 	server := httptest.NewServer(r)
 	t.Cleanup(server.Close)
 	jar, err := cookiejar.New(nil)

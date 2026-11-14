@@ -1,7 +1,6 @@
 package twofactor
 
 import (
-	"context"
 	"net/http"
 
 	"arkoren.dev/core/auth"
@@ -52,7 +51,7 @@ func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
 // two-factor, creates the recovery codes and answers 200 with
 // {"recovery_codes": [...]}, the only time they are shown. The session records
 // the code as a fresh factor, so the user stays fresh for the next credential
-// change; both writes happen in one transaction. A wrong code is
+// change. A wrong code is
 // [ErrInvalidCode] (422), too many are [ErrThrottled] (429), and a user who
 // never ran setup gets [ErrNotEnrolling] (409). It needs a browser session and a
 // fresh login.
@@ -70,21 +69,18 @@ func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
 		if err != nil {
 			return err
 		}
-		var codes []string
-		err = factors.db.WithTransaction(r.Context(), func(ctx context.Context) error {
-			var err error
-			if codes, err = factors.Activate(ctx, identity.Subject(), body.Code); err != nil {
-				return err
-			}
-			// Begin on the session of the same subject keeps the login and records
-			// the code as a factor from now on.
-			_, err = guard.Begin(r, identity.Subject(), auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
-
-			return err
-		})
+		codes, err := factors.Activate(r.Context(), identity.Subject(), body.Code)
 		if err != nil {
 			return err
 		}
+		// Begin on the session of the same subject keeps the login and records
+		// the code as a factor from now on, so the user stays fresh. It runs after
+		// Activate committed, not inside its transaction: it reads credential
+		// state through the request context, which must not wait for a connection
+		// the transaction holds. The recovery codes are shown only once, so a
+		// session-store failure here must not turn into an error that loses them;
+		// the user is merely asked to confirm again before the next change.
+		_, _ = guard.Begin(r, identity.Subject(), auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
 
 		return response.JSON(w, http.StatusOK, codesBody{RecoveryCodes: codes})
 	}
