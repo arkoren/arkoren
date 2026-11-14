@@ -59,6 +59,11 @@ type Guard struct {
 	// lifetime as its TTL.
 	records cache.Namespace[[]LoginRecord]
 
+	// attempts names the counter of each subject's wrong second factors. The
+	// counter lives in the shared store, not the session, so neither a new
+	// session nor a forked one resets it.
+	attempts cache.Namespace[int64]
+
 	// settings are the completed construction settings.
 	settings guardSettings
 }
@@ -118,7 +123,7 @@ func NewGuard(provider *UserProvider, store *cache.Cache, configure ...GuardBuil
 
 	guard := &Guard{provider: provider, store: store, settings: settings, records: cache.NewNamespace[[]LoginRecord]("arkoren:auth:logins", func(space *cache.NamespaceBuilder) {
 		space.TTL(settings.SessionLifetime)
-	})}
+	}), attempts: cache.NewNamespace[int64]("arkoren:auth:attempts")}
 
 	provider.OnForget(guard.RevokeAll)
 
@@ -218,34 +223,14 @@ func (guard *Guard) start(r *http.Request, current *session.Session, user UserRe
 //	r.Use(session.Middleware(store), auth.Middleware(guard.Authenticator()))
 func (guard *Guard) Authenticator() Authenticator {
 	return func(r *http.Request) (Identity, error) {
-		current, err := guard.session(r)
+		stored, user, err := guard.valid(r)
 
-		if err != nil {
-			return Identity{}, ErrNoCredentials
-		}
-
-		stored, err := current.Get(sessionField)
-
-		if missing(err) {
+		if errors.Is(err, session.ErrNoSession) {
 			return Identity{}, ErrNoCredentials
 		}
 
 		if err != nil {
 			return Identity{}, err
-		}
-
-		user, err := guard.provider.Find(r.Context(), stored.Subject)
-
-		if gone(err) {
-			return Identity{}, ErrNoCredentials
-		}
-
-		if err != nil {
-			return Identity{}, err
-		}
-
-		if subtle.ConstantTimeCompare([]byte(stored.Version), []byte(hashVersion(user.Version))) != 1 {
-			return Identity{}, ErrNoCredentials
 		}
 
 		active, err := guard.seen(r.Context(), stored.Subject, stored.LoginID)
@@ -263,6 +248,48 @@ func (guard *Guard) Authenticator() Authenticator {
 			principal.Record(user)
 		}), nil
 	}
+}
+
+// valid returns the logged-in session record of r and its user, after the
+// checks every credential-bearing operation must pass: the session holds a
+// readable record, the provider still finds an enabled user and the stored
+// credential version matches [UserRecord.Version] (constant time). A missing
+// session is [session.ErrNoSession]; an absent record, a gone or disabled user
+// and a version mismatch are [ErrNoCredentials]; other errors pass through. It
+// does not check the login record, which [Guard.Authenticator] and the records
+// methods own.
+func (guard *Guard) valid(r *http.Request) (sessionRecord, UserRecord, error) {
+	current, err := guard.session(r)
+
+	if err != nil {
+		return sessionRecord{}, UserRecord{}, err
+	}
+
+	stored, err := current.Get(sessionField)
+
+	if missing(err) {
+		return stored, UserRecord{}, ErrNoCredentials
+	}
+
+	if err != nil {
+		return stored, UserRecord{}, err
+	}
+
+	user, err := guard.provider.Find(r.Context(), stored.Subject)
+
+	if gone(err) {
+		return stored, UserRecord{}, ErrNoCredentials
+	}
+
+	if err != nil {
+		return stored, UserRecord{}, err
+	}
+
+	if subtle.ConstantTimeCompare([]byte(stored.Version), []byte(hashVersion(user.Version))) != 1 {
+		return stored, UserRecord{}, ErrNoCredentials
+	}
+
+	return stored, user, nil
 }
 
 // Begin is the single entry for every login method. Call it after the method
@@ -402,7 +429,8 @@ func (guard *Guard) pending(current *session.Session) (pendingLogin, error) {
 // pendingUser returns the pending login of current and its user, loaded from the
 // provider. A user deleted or disabled during the challenge, or whose
 // [UserRecord.Version] differs from the one seen at [Guard.Begin] (compared in
-// constant time), discards the pending login and is [ErrUnauthenticated].
+// constant time), discards the pending login and is [ErrUnauthenticated]. So
+// does a subject locked out by [Guard.Fail], whatever session holds the login.
 func (guard *Guard) pendingUser(r *http.Request, current *session.Session) (pendingLogin, UserRecord, error) {
 	waiting, err := guard.pending(current)
 
@@ -424,6 +452,20 @@ func (guard *Guard) pendingUser(r *http.Request, current *session.Session) (pend
 		return waiting, UserRecord{}, ErrUnauthenticated
 	}
 
+	failures, err := guard.store.Get(r.Context(), guard.attempts.Key(waiting.Subject))
+
+	if err != nil && !errors.Is(err, cache.ErrNotFound) {
+		return waiting, UserRecord{}, err
+	}
+
+	if failures >= int64(guard.settings.MaxAttempts) {
+		if err := current.Delete(pendingField); err != nil {
+			return waiting, UserRecord{}, err
+		}
+
+		return waiting, UserRecord{}, ErrUnauthenticated
+	}
+
 	return waiting, user, nil
 }
 
@@ -431,8 +473,10 @@ func (guard *Guard) pendingUser(r *http.Request, current *session.Session) (pend
 // [Guard.Begin]. It returns [ErrUnauthenticated] when there is no pending login,
 // it expired (which also clears it) or the user was deleted, disabled or had its
 // [UserRecord.Version] changed, for example by a password change, in the
-// meantime (which discards it). Other provider errors pass through. Pending does
-// not consume the login, so a handler can read the user, check a code and report
+// meantime (which discards it). It is also [ErrUnauthenticated], discarding the
+// login, while the user is locked out after [GuardBuilder.MaxAttempts] wrong
+// second factors (see [Guard.Fail]). Other provider and store errors pass
+// through. Pending does not consume the login, so a handler can read the user, check a code and report
 // a wrong one with [Guard.Fail].
 //
 // Example:
@@ -460,7 +504,8 @@ func (guard *Guard) Pending(r *http.Request) (UserRecord, error) {
 // does, regenerates the session ID and consumes the pending login, so a second
 // call returns [ErrUnauthenticated]. The errors are those of [Guard.Pending]
 // plus the cache and lock errors of the record store; on any error nothing is
-// logged in.
+// logged in. A successful Complete also clears the user's failed-attempt count
+// (see [Guard.Fail]).
 //
 // Complete does not verify the factor: call it only after it checked out.
 //
@@ -486,15 +531,29 @@ func (guard *Guard) Complete(r *http.Request, factor Factor) error {
 		return err
 	}
 
-	return guard.start(r, current, user, withFactor(waiting.Factors, factor, time.Now()))
+	if err := guard.start(r, current, user, withFactor(waiting.Factors, factor, time.Now())); err != nil {
+		return err
+	}
+
+	return guard.store.Delete(r.Context(), guard.attempts.Key(waiting.Subject))
 }
 
-// Fail counts one wrong second-factor attempt on the pending login and
-// regenerates the session ID. When the count reaches [GuardBuilder.MaxAttempts]
-// the pending login is discarded and the next [Guard.Pending] returns
-// [ErrUnauthenticated]. It returns [ErrUnauthenticated] when there is no pending
-// login. The count lives in the session, so it limits one browser session only;
-// rate-limit by user or address as well.
+// Fail counts one wrong second-factor attempt against the pending login's user
+// and regenerates the session ID. The count is per user, kept in the guard's
+// cache store with an atomic increment, so it survives a new [Guard.Begin], a
+// new session and requests that fork one pending-session cookie in parallel.
+// The first failure starts a window of [GuardBuilder.ChallengeTTL]; once
+// [GuardBuilder.MaxAttempts] failures fall in the window the user is locked out
+// of the second factor until it ends: the pending login is discarded and
+// [Guard.Pending] and [Guard.Complete] return [ErrUnauthenticated] in every
+// session. A successful [Guard.Complete] clears the count. Fail returns
+// [ErrUnauthenticated] when there is no pending login, and store errors
+// unchanged (the attempt is then not counted).
+//
+// The limit is exact for failures recorded here, but a request that passed
+// [Guard.Pending] before the limit was reached can still finish its one code
+// check. A lockout lets anyone who knows the subject delay that user's second
+// factor, so also rate-limit by address.
 //
 // Example:
 //
@@ -517,16 +576,18 @@ func (guard *Guard) Fail(r *http.Request) error {
 		return err
 	}
 
-	waiting.Attempts++
-
-	if waiting.Attempts >= guard.settings.MaxAttempts {
-		err = current.Delete(pendingField)
-	} else {
-		err = current.Put(pendingField, waiting)
-	}
+	failures, _, err := guard.store.IncrementWithTTL(r.Context(), guard.attempts.Key(waiting.Subject), 1, guard.settings.ChallengeTTL)
 
 	if err != nil {
 		return err
+	}
+
+	if failures >= int64(guard.settings.MaxAttempts) {
+		err = current.Delete(pendingField)
+
+		if err != nil {
+			return err
+		}
 	}
 
 	current.Regenerate()

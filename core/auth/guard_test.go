@@ -585,28 +585,6 @@ func TestFailDiscardsPendingAtMaxAttempts(t *testing.T) {
 	}
 }
 
-// TestBeginResetsAttempts verifies a new pending login starts counting again.
-func TestBeginResetsAttempts(t *testing.T) {
-	t.Parallel()
-
-	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)), func(policy *auth.GuardBuilder) {
-		policy.MaxAttempts(2)
-	})
-	r := sessionRequest(newSession())
-
-	for range 2 {
-		begin(t, guard, r, "7")
-
-		if err := guard.Fail(r); err != nil {
-			t.Fatal(err)
-		}
-
-		if _, err := guard.Pending(r); err != nil {
-			t.Fatalf("attempt count leaked into the next login: %v", err)
-		}
-	}
-}
-
 // TestConfirmRequiresLogin verifies Confirm on an anonymous or pending session
 // is ErrUnauthenticated.
 func TestConfirmRequiresLogin(t *testing.T) {

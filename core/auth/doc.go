@@ -61,7 +61,11 @@
 //				return "user:" + current.Subject()
 //			}
 //
-//			return "ip:" + r.RemoteAddr
+//			// Key on the client IP, never on r.RemoteAddr: its ephemeral port
+//			// gives every connection its own budget. With no trusted proxies
+//			// this is the limiter's default key; behind a proxy pass its
+//			// prefixes to ratelimit.TrustedProxyKey.
+//			return "ip:" + ratelimit.TrustedProxyKey()(r)
 //		})
 //	}))
 //
@@ -83,8 +87,9 @@
 // whether a user is enrolled. If none says yes the user is logged in and Begin
 // returns true. Otherwise the login is parked as pending and the request stays
 // anonymous: the handler asks for the second factor, reads the user with
-// [Guard.Pending], reports a wrong code with [Guard.Fail] (the pending login is
-// discarded after [GuardBuilder.MaxAttempts]) and finishes with [Guard.Complete],
+// [Guard.Pending], reports a wrong code with [Guard.Fail] (the user is locked out
+// of the second factor after [GuardBuilder.MaxAttempts] failures within the
+// challenge window, in every session) and finishes with [Guard.Complete],
 // which is single use. [GuardBuilder.ChallengeTTL] bounds the wait.
 // [Guard.Confirm] records a fresh factor on a logged-in session, such as a
 // re-entered password. Every transition regenerates the session ID.
