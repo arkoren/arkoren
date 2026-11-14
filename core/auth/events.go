@@ -73,3 +73,35 @@ type RejectedEvent struct {
 //	}
 //	defer unsubscribe()
 var Rejected = event.NewTopic[RejectedEvent]("http.auth.rejected")
+
+// CredentialEnrolledEvent reports that a user registered a credential. It
+// carries only the subject and the method, never the credential's secret or
+// any personal data.
+//
+// Example:
+//
+//	unsubscribe, err := events.Listen(auth.CredentialEnrolled, func(ctx context.Context, enrolled auth.CredentialEnrolledEvent) error {
+//		return notify(ctx, enrolled.Subject, string(enrolled.Method))
+//	})
+type CredentialEnrolledEvent struct {
+	// Subject is the user who enrolled the credential.
+	Subject string
+
+	// Method is the method of the enrolled credential, such as [MethodOTP].
+	Method Method
+}
+
+// CredentialEnrolled is published by the modules that enroll credentials (a
+// TOTP authenticator, a passkey, a password) after a first or a new enrolment,
+// with [event.Bus.Emit], so an application can tell users that a way to prove
+// their identity was added to their account. Core itself never publishes it:
+// only the module knows when an enrolment succeeded. Emit logs listener errors,
+// so listeners cannot change the outcome of the enrolment.
+//
+// Example:
+//
+//	events.Emit(ctx, auth.CredentialEnrolled, auth.CredentialEnrolledEvent{
+//		Subject: subject,
+//		Method:  auth.MethodOTP,
+//	})
+var CredentialEnrolled = event.NewTopic[CredentialEnrolledEvent]("auth.credential.enrolled")

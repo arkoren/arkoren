@@ -36,10 +36,12 @@ const (
 	KindFederated Kind = "federated"
 )
 
-// Method names how a [Factor] was verified. The values "pwd", "otp", "hwk" and
-// "swk" are the Authentication Method Reference values of RFC 8176;
-// [MethodRecovery] and [MethodFederated] are Arkoren's own values, which RFC 8176
-// does not define. Applications may use further strings.
+// Method names how a [Factor] was verified. The constants of this package are
+// Authentication Method Reference values of RFC 8176 ("pwd", "otp", "hwk",
+// "swk"). Core defines no other names: a module that verifies something RFC 8176
+// does not cover, such as a recovery code or a federated login, declares its own
+// Method constant. Before v0.8.0 core also defined MethodRecovery and
+// MethodFederated. Applications may use further strings.
 //
 // Example:
 //
@@ -60,14 +62,6 @@ const (
 	// MethodSoftwareKey is proof of possession of a software-stored key
 	// ("swk", RFC 8176).
 	MethodSoftwareKey Method = "swk"
-
-	// MethodRecovery is a single-use recovery code. It is an Arkoren value, not
-	// an RFC 8176 one.
-	MethodRecovery Method = "recovery"
-
-	// MethodFederated is authentication by an external identity provider. It is
-	// an Arkoren value, not an RFC 8176 one.
-	MethodFederated Method = "federated"
 )
 
 // Factor records one verified proof of identity.
@@ -86,7 +80,10 @@ type Factor struct {
 	// Kind is what the factor proves. [Identity.Level] is derived from it.
 	Kind Kind `json:"kind"`
 
-	// At is when the factor was verified. The zero time means unknown.
+	// At is when this server verified the factor. [Guard] sets it from its own
+	// clock whatever the caller passed, so a provider's claim about when the user
+	// authenticated never makes a factor fresh. The zero time (an identity built
+	// by hand) means unknown and is never fresh.
 	At time.Time `json:"at"`
 }
 
@@ -144,6 +141,11 @@ type Identity struct {
 
 	// record is what the user provider knows about the user.
 	record UserRecord
+
+	// session is true only for identities built by [Guard.Authenticator]. There
+	// is no builder method for it, so no other authenticator, such as a bearer
+	// token verifier, can claim to be a browser session.
+	session bool
 }
 
 // IdentityBuilder configures [NewIdentity] before publication. Callbacks run
@@ -295,7 +297,7 @@ func (identity Identity) Factors() []Factor {
 // Example:
 //
 //	identity := auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
-//		principal.Factors(auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated})
+//		principal.Factors(auth.Factor{Method: "federated", Kind: auth.KindFederated})
 //	})
 //	fmt.Println(identity.Level() == auth.LevelSingle)
 func (identity Identity) Level() Level {
@@ -319,6 +321,20 @@ func (identity Identity) Level() Level {
 	}
 
 	return LevelSingle
+}
+
+// Session reports whether the identity comes from a browser session, which only
+// [Guard.Authenticator] can set. Credential routes of every module check it
+// (see [RequireSession] and [Guard.ConfirmHandler]) because an identity carried
+// by a bearer token must not enroll, change or confirm credentials. An identity
+// built with [NewIdentity] is never a session.
+//
+// Example:
+//
+//	identity := auth.NewIdentity("42")
+//	fmt.Println(identity.Session()) // false
+func (identity Identity) Session() bool {
+	return identity.session
 }
 
 // Scopes returns a copy of the granted scopes.

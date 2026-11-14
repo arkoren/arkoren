@@ -80,7 +80,7 @@ func TestCompleteCreatesRecord(t *testing.T) {
 		t.Fatal("pending login has a record")
 	}
 
-	if err := guard.Complete(r, password); err != nil {
+	if err := challenge(guard, r, goodOTP); err != nil {
 		t.Fatal(err)
 	}
 
@@ -289,7 +289,7 @@ func TestRotationKeepsRecord(t *testing.T) {
 	before := loginsOf(t, guard, "7")[0].ID
 	id := current.ID()
 
-	if err := guard.Confirm(r, password); err != nil {
+	if _, err := guard.Begin(r, "7", password); err != nil {
 		t.Fatal(err)
 	}
 

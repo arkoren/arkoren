@@ -48,7 +48,9 @@
 //	if err != nil {
 //		return err
 //	}
-//	guard, err := auth.NewGuard(users, store)
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
+//		policy.SecondFactor(totp.Credential()).StepUp(passwords.Credential(), totp.Credential())
+//	})
 //	if err != nil {
 //		return err
 //	}
@@ -70,7 +72,10 @@
 //	}))
 //
 //	r.Post("/login", signIn)
+//	r.Get("/login/second-factor", guard.PendingHandler())
+//	r.Post("/login/second-factor", guard.ChallengeHandler())
 //	r.Post("/logout", guard.LogoutHandler())
+//	r.With(auth.RequireSession()).Post("/confirm", guard.ConfirmHandler())
 //
 //	private := r.With(auth.Require())
 //	private.Get("/me", me)
@@ -80,25 +85,35 @@
 //
 // [Guard] turns "this person proved X" into a logged-in session. Every login
 // method (password, OAuth, SAML, passkey) verifies its own credential and then
-// calls [Guard.Begin] with the subject and the verified [Factor]. Begin looks
+// calls [Guard.Begin] with the subject and every [Factor] it verified. Begin looks
 // the user up with the provider (a deleted or disabled user is
-// [ErrUnauthenticated]) and asks each check registered with
-// [GuardBuilder.SecondFactor], so core never imports the package that knows
-// whether a user is enrolled. If none says yes the user is logged in and Begin
-// returns true. Otherwise the login is parked as pending and the request stays
-// anonymous: the handler asks for the second factor, reads the user with
-// [Guard.Pending], reports a wrong code with [Guard.Fail] (the user is locked out
-// of the second factor after [GuardBuilder.MaxAttempts] failures within the
-// challenge window, in every session) and finishes with [Guard.Complete],
-// which is single use. [GuardBuilder.ChallengeTTL] bounds the wait.
-// [Guard.Confirm] records a fresh factor on a logged-in session, such as a
-// re-entered password. Every transition regenerates the session ID.
+// [ErrUnauthenticated]) and, unless the factors already reach [LevelMulti], asks
+// each [Credential] registered with [GuardBuilder.SecondFactor] whether the user
+// is enrolled, so core never imports the package that owns the method. With no
+// enrolled method the user is logged in. Otherwise the login is parked as pending
+// and the request stays anonymous. Begin returns an [Outcome] whose
+// [Outcome.Response] answers 204, or 202 with the methods to choose from, the
+// same for every login method.
+//
+// A pending login is finished by two core routes. [Guard.PendingHandler] (GET)
+// lists the user's methods and spends nothing. [Guard.ChallengeHandler] (POST
+// {"method": "otp", ...}) finds the registered credential, reserves one of the
+// user's [GuardBuilder.MaxAttempts] attempts, calls [Credential.Verify] with the
+// rest of the body and logs the user in, once. The attempt count is per user,
+// shared by all methods, sessions and requests; a wrong code costs the attempt, an
+// infrastructure error refunds it ([ErrInvalidCredential]). A user over the limit
+// is locked out of the second factor until the challenge window
+// ([GuardBuilder.ChallengeTTL]) ends. A logged-in user proves themselves again
+// with [Guard.ConfirmHandler], the same route shape over the methods registered
+// with [GuardBuilder.StepUp]; it requires a browser session ([Identity.Session]).
+// Modules that need their method accepted call [Guard.MustAccept] at composition.
+// Every transition regenerates the session ID.
 //
 // A session that is already logged in as the subject keeps its login: Begin
-// then adds the factor like Confirm and skips the second-factor checks, so a
-// logged-in user who connects a provider or re-authenticates through one is not
-// challenged again and keeps the factors they have. Releases before v0.6.0
-// replaced the factors and parked the login instead. [Guard.LogoutHandler]
+// then adds the factors, keeps the login record and skips the second-factor
+// rules, so a logged-in user who connects a provider or re-authenticates through
+// one is not challenged again and keeps the factors they have. Releases before
+// v0.6.0 replaced the factors and parked the login instead. [Guard.LogoutHandler]
 // returns the handler of the logout route: it ends the login with
 // [Guard.Logout], publishes [LoggedOut] and answers 204, or 303 with
 // [LogoutBuilder.Redirect].
@@ -111,7 +126,7 @@
 //
 // # Devices
 //
-// Every login (Begin without a second factor, and Complete) creates a
+// Every login (Begin without a second factor, and a successful challenge) creates a
 // [LoginRecord] with a random ID that survives session ID rotation. All records
 // of a user live in one entry of the cache given to [NewGuard], under
 // "arkoren:auth:logins", whose lifetime is [GuardBuilder.SessionLifetime] (set it
@@ -135,10 +150,28 @@
 // retry. A flushed cache logs everyone out, and each authenticated session
 // request costs one extra cache read.
 //
-// [RequireLevel] and [RequireFresh] protect routes by the factors of the identity
-// in the context, so they also work for tokens that carry factors. Too weak or
-// too old is [ErrStepUpRequired] (403); no identity is rejected like [Require].
-// A factor dated in the future is not fresh.
+// # Freshness
+//
+// [RequireLevel] and [Guard.RequireFresh] protect routes by the factors of the
+// identity in the context, so they also work for tokens that carry factors. No
+// identity is rejected like [Require]. Factor time is this server's clock: the
+// guard stamps every factor when it records it, whatever the login method
+// reports, and a factor dated in the future is not fresh. The rule of
+// [Guard.Fresh]: fresh means a factor of an enrolled [GuardBuilder.StepUp] method
+// within [GuardBuilder.FreshFor] (15 minutes by default); a user with no step-up
+// method counts any recent factor. Too weak or too old is [ErrStepUpRequired]
+// (403) with the user's step-up methods in its "methods" extension, or
+// [ErrNoStepUpMethod] (403) when the user must log in again. A silent re-login
+// through a provider therefore refreshes a federated-only user but not one with a
+// password. [Guard.RecentLogin] instead checks the age of the login record, which
+// a same-subject Begin does not reset, for actions that need a new login.
+//
+// A [Factor] replaces an older one with the same [Method] and [Kind]. Core names
+// only the RFC 8176 methods ([MethodPassword], [MethodOTP], [MethodHardwareKey],
+// [MethodSoftwareKey]); modules declare their own, and publish
+// [CredentialEnrolled] after an enrolment. [RequireSession] and [Identity.Session]
+// keep credential routes away from bearer tokens. [External] and [Resolver] are
+// the shared types for identities asserted by another system.
 //
 // Hash passwords with the hash package. Precompute dummyHash at startup with
 // the same hasher and cost as real passwords. Checking it for unknown emails
@@ -183,19 +216,16 @@
 //		}
 //
 //		factor := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
-//		complete, err := guard.Begin(r, subject, factor)
+//		outcome, err := guard.Begin(r, subject, factor)
 //		if err != nil {
 //			return err
 //		}
-//		if !complete {
-//			return response.Status(w, http.StatusAccepted) // ask for the second factor
-//		}
 //
-//		return response.Status(w, http.StatusNoContent)
+//		return outcome.Response(w) // 204, or 202 with the methods to choose from
 //	}
 //
 //	r.With(auth.RequireLevel(auth.LevelMulti)).Post("/payouts", payout)
-//	r.With(auth.RequireFresh(10 * time.Minute)).Delete("/account", destroy)
+//	r.With(guard.RequireFresh(10 * time.Minute)).Delete("/account", destroy)
 //
 // # Cookie authentication needs CSRF protection
 //

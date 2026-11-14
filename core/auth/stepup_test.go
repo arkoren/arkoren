@@ -78,7 +78,7 @@ func TestRequireLevelMulti(t *testing.T) {
 
 	admitted(t, middleware, withFactors(password, otp))
 	stepUpRequired(t, middleware, withFactors(password))
-	stepUpRequired(t, middleware, withFactors(password, auth.Factor{Method: auth.MethodRecovery, Kind: auth.KindKnowledge}))
+	stepUpRequired(t, middleware, withFactors(password, auth.Factor{Method: "recovery", Kind: auth.KindKnowledge}))
 	stepUpRequired(t, middleware, withFactors(password, federated))
 }
 
@@ -87,7 +87,8 @@ func TestRequireLevelMulti(t *testing.T) {
 func TestRequireLevelRejectsAnonymous(t *testing.T) {
 	t.Parallel()
 
-	for _, middleware := range []router.Middleware{auth.RequireLevel(auth.LevelSingle), auth.RequireFresh(time.Minute)} {
+	guard := freshGuard(t)
+	for _, middleware := range []router.Middleware{auth.RequireLevel(auth.LevelSingle), guard.RequireFresh(time.Minute)} {
 		if reached, err := guarded(middleware, nil); !errors.Is(err, auth.ErrUnauthenticated) || reached {
 			t.Fatalf("reached = %v, err = %v", reached, err)
 		}
@@ -124,11 +125,12 @@ func TestRequireLevelWithBearerIdentity(t *testing.T) {
 func TestRequireFreshWindow(t *testing.T) {
 	t.Parallel()
 
+	guard := freshGuard(t)
 	synctest.Test(t, func(t *testing.T) {
 		at := func(offset time.Duration) auth.Factor {
 			return auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge, At: time.Now().Add(offset)}
 		}
-		middleware := auth.RequireFresh(time.Minute)
+		middleware := guard.RequireFresh(time.Minute)
 
 		admitted(t, middleware, withFactors(at(0)))
 		admitted(t, middleware, withFactors(at(-time.Minute)))
@@ -143,10 +145,11 @@ func TestRequireFreshWindow(t *testing.T) {
 func TestRequireFreshRejectsFutureFactor(t *testing.T) {
 	t.Parallel()
 
+	guard := freshGuard(t)
 	synctest.Test(t, func(t *testing.T) {
 		future := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge, At: time.Now().Add(time.Nanosecond)}
 
-		stepUpRequired(t, auth.RequireFresh(time.Hour), withFactors(future))
+		stepUpRequired(t, guard.RequireFresh(time.Hour), withFactors(future))
 	})
 }
 
@@ -155,7 +158,8 @@ func TestRequireFreshRejectsFutureFactor(t *testing.T) {
 func TestRequireFreshRejectsUnknownTime(t *testing.T) {
 	t.Parallel()
 
-	stepUpRequired(t, auth.RequireFresh(1000*time.Hour), withFactors(password))
+	guard := freshGuard(t)
+	stepUpRequired(t, guard.RequireFresh(1000*time.Hour), withFactors(password))
 }
 
 // TestRequireFreshZeroAgeAdmitsNothing verifies a non-positive age admits no
@@ -163,11 +167,12 @@ func TestRequireFreshRejectsUnknownTime(t *testing.T) {
 func TestRequireFreshZeroAgeAdmitsNothing(t *testing.T) {
 	t.Parallel()
 
+	guard := freshGuard(t)
 	synctest.Test(t, func(t *testing.T) {
 		now := auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge, At: time.Now()}
 
-		stepUpRequired(t, auth.RequireFresh(0), withFactors(now))
-		stepUpRequired(t, auth.RequireFresh(-time.Minute), withFactors(now))
+		stepUpRequired(t, guard.RequireFresh(0), withFactors(now))
+		stepUpRequired(t, guard.RequireFresh(-time.Minute), withFactors(now))
 	})
 }
 
@@ -176,11 +181,12 @@ func TestRequireFreshZeroAgeAdmitsNothing(t *testing.T) {
 func TestRequireFreshWithBearerIdentity(t *testing.T) {
 	t.Parallel()
 
+	guard := freshGuard(t)
 	synctest.Test(t, func(t *testing.T) {
 		fresh := withFactors(auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession, At: time.Now()})
 
-		admitted(t, auth.RequireFresh(time.Minute), fresh)
-		stepUpRequired(t, auth.RequireFresh(time.Minute), withFactors())
+		admitted(t, guard.RequireFresh(time.Minute), fresh)
+		stepUpRequired(t, guard.RequireFresh(time.Minute), withFactors())
 	})
 }
 
@@ -189,13 +195,14 @@ func TestRequireFreshWithBearerIdentity(t *testing.T) {
 func TestStepUpRunsCallbacksOnce(t *testing.T) {
 	t.Parallel()
 
+	guard := freshGuard(t)
 	calls := 0
 	configure := func(policy *auth.MiddlewareBuilder) {
 		calls++
 	}
 
 	auth.RequireLevel(auth.LevelSingle, configure)
-	auth.RequireFresh(time.Minute, configure)
+	guard.RequireFresh(time.Minute, configure)
 
 	if calls != 2 {
 		t.Fatalf("callbacks ran %d times for 2 middleware", calls)
@@ -217,7 +224,7 @@ func TestConfirmSatisfiesFreshness(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		guard, _ := newGuard(t)
+		guard := freshGuard(t)
 		r := sessionRequest(newSession())
 		begin(t, guard, r, "7")
 
@@ -230,7 +237,7 @@ func TestConfirmSatisfiesFreshness(t *testing.T) {
 				return err
 			}
 
-			_, err = guarded(auth.RequireFresh(time.Minute), &identity)
+			_, err = guarded(guard.RequireFresh(time.Minute), &identity)
 
 			return err
 		}
@@ -239,7 +246,7 @@ func TestConfirmSatisfiesFreshness(t *testing.T) {
 			t.Fatalf("stale session = %v", err)
 		}
 
-		if err := guard.Confirm(r, password); err != nil {
+		if err := confirm(guard, r, `{"method":"pwd","code":"ok"}`); err != nil {
 			t.Fatal(err)
 		}
 
