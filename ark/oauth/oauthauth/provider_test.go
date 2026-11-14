@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"encoding/json/v2"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -41,6 +42,10 @@ type testProvider struct {
 	// exchanges counts token requests across the test server's goroutines.
 	// Configuration-failure tests assert that this remains zero.
 	exchanges atomic.Int64
+
+	// claims are extra ID token claims the token endpoint adds, such as
+	// auth_time. Set them before the first callback.
+	claims map[string]any
 }
 
 // newTestProvider starts a provider serving discovery, JWKS and token endpoints.
@@ -110,7 +115,9 @@ func (provider *testProvider) discovery(w http.ResponseWriter, _ *http.Request) 
 // token serves the token endpoint.
 func (provider *testProvider) token(w http.ResponseWriter, r *http.Request) {
 	provider.exchanges.Add(1)
-	idToken := provider.sign(map[string]any{"nonce": r.FormValue("code"), "name": "Ada"})
+	claims := map[string]any{"nonce": r.FormValue("code"), "name": "Ada"}
+	maps.Copy(claims, provider.claims)
+	idToken := provider.sign(claims)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.MarshalWrite(w, map[string]any{
 		"access_token": "opaque",
