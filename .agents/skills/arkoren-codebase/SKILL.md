@@ -344,7 +344,15 @@ never replaying user policies. Session middleware owns cookie/persistence policy
 auth.NewGuard owns the session login state machine (type Guard, renamed from Login in core v0.7.0) and GuardBuilder.Handle;
 request lookup owns per-call WithSessionHandle. Share one session.NewHandle()
 across those roles; zero selects the default context slot. Handles do not isolate
-cookies, cache records, or authorization. ark/oauth Callback(guard, resolve)
+cookies, cache records, or authorization. Core owns the auth seams, not the
+methods: auth.Credential registries (GuardBuilder.SecondFactor and StepUp),
+Guard.Begin returning an Outcome, one challenge and one confirm handler
+dispatched on the body's "method", Fresh/RequireFresh/RecentLogin freshness,
+the Identity.Session marker with RequireSession, and the auth.External and
+auth.Resolver types. Core names only RFC 8176 methods; modules (twofactor,
+oauth) declare their own and publish auth.CredentialEnrolled. There is no
+provider interface in core. Until ark/oauth moves to the new core (its next
+release), it stays on core v0.7.x and must build with GOWORK=off. ark/oauth Callback(guard, resolve)
 returns a subject string to Guard.Begin (federated factor; ChallengeURL on a
 pending second factor) and guard.LogoutHandler() owns the logout route (Client.Logout is deprecated); Verify returns the
 external Identity, which the application maps for auth.Bearer. Session data uses

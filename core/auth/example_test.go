@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"time"
 
 	"arkoren.dev/core/auth"
@@ -338,10 +339,9 @@ func exampleRequest() *http.Request {
 	return sessionRequest(session.New(time.Now().Add(time.Hour), map[string]any{}))
 }
 
-// needsSecondFactor is a second-factor check that every user needs.
-func needsSecondFactor(context.Context, string) (bool, error) {
-	return true, nil
-}
+// exampleOTP is a second-factor credential every user is enrolled in; its Verify
+// accepts the code "ok".
+var exampleOTP = secondFactor(true, nil)
 
 func ExampleNewGuard() {
 	users, err := auth.NewUserProvider(exampleDriver())
@@ -362,10 +362,10 @@ func ExampleGuard() {
 	guard := exampleGuard()
 	r := exampleRequest()
 
-	complete, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	outcome, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 	identity, _ := guard.Authenticator()(r)
 
-	fmt.Println(complete, err, identity.Subject(), identity.Level() == auth.LevelSingle)
+	fmt.Println(outcome.Complete(), err, identity.Subject(), identity.Level() == auth.LevelSingle)
 	// Output: true <nil> 1 true
 }
 
@@ -389,71 +389,14 @@ func ExampleGuard_Begin() {
 	guard := exampleGuard()
 	r := exampleRequest()
 
-	complete, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
-	fmt.Println(complete, err)
+	outcome, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	fmt.Println(outcome.Complete(), err)
 
 	_, err = guard.Begin(r, "2", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
 	// Output:
 	// true <nil>
 	// true
-}
-
-func ExampleGuard_Pending() {
-	guard := exampleGuard(func(policy *auth.GuardBuilder) {
-		policy.SecondFactor(needsSecondFactor)
-	})
-	r := exampleRequest()
-	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
-
-	user, err := guard.Pending(r)
-
-	fmt.Println(user.Subject, err)
-	// Output: 1 <nil>
-}
-
-func ExampleGuard_Complete() {
-	guard := exampleGuard(func(policy *auth.GuardBuilder) {
-		policy.SecondFactor(needsSecondFactor)
-	})
-	r := exampleRequest()
-	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
-
-	err := guard.Complete(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
-	identity, _ := guard.Authenticator()(r)
-
-	fmt.Println(err, identity.Level() == auth.LevelMulti)
-	// Output: <nil> true
-}
-
-func ExampleGuard_Fail() {
-	guard := exampleGuard(func(policy *auth.GuardBuilder) {
-		policy.SecondFactor(needsSecondFactor)
-		policy.MaxAttempts(1)
-	})
-	r := exampleRequest()
-	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
-
-	_, _ = guard.Pending(r)
-	fmt.Println(guard.Fail(r))
-
-	_, err := guard.Pending(r)
-	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
-	// Output:
-	// <nil>
-	// true
-}
-
-func ExampleGuard_Confirm() {
-	guard := exampleGuard()
-	r := exampleRequest()
-	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
-
-	err := guard.Confirm(r, auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
-	identity, _ := guard.Authenticator()(r)
-
-	fmt.Println(err, len(identity.Factors()))
-	// Output: <nil> 2
 }
 
 func ExampleGuard_Logout() {
@@ -472,12 +415,12 @@ func ExampleGuard_Logout() {
 
 func ExampleGuardBuilder() {
 	guard := exampleGuard(func(policy *auth.GuardBuilder) {
-		policy.ChallengeTTL(time.Minute).MaxAttempts(3).SecondFactor(needsSecondFactor)
+		policy.ChallengeTTL(time.Minute).MaxAttempts(3).SecondFactor(exampleOTP)
 	})
 
-	complete, err := guard.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	outcome, err := guard.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	fmt.Println(complete, err)
+	fmt.Println(outcome.Complete(), err)
 	// Output: false <nil>
 }
 
@@ -490,41 +433,44 @@ func ExampleGuardBuilder_Handle() {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r = r.WithContext(session.NewContextFor(r.Context(), handle, session.New(time.Now().Add(time.Hour), map[string]any{})))
 
-	complete, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	outcome, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	fmt.Println(complete, err)
+	fmt.Println(outcome.Complete(), err)
 	// Output: true <nil>
 }
 
 func ExampleGuardBuilder_ChallengeTTL() {
 	guard := exampleGuard(func(policy *auth.GuardBuilder) {
-		policy.SecondFactor(needsSecondFactor).ChallengeTTL(10 * time.Minute)
+		policy.SecondFactor(exampleOTP).ChallengeTTL(10 * time.Minute)
 	})
 	r := exampleRequest()
 
-	complete, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	outcome, err := guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	fmt.Println(complete, err)
+	fmt.Println(outcome.Complete(), err)
 	// Output: false <nil>
 }
 
 func ExampleGuardBuilder_MaxAttempts() {
 	guard := exampleGuard(func(policy *auth.GuardBuilder) {
-		policy.SecondFactor(needsSecondFactor).MaxAttempts(2)
+		policy.SecondFactor(exampleOTP).MaxAttempts(2)
 	})
 	r := exampleRequest()
 	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	_, _ = guard.Pending(r)
-	_ = guard.Fail(r)
-	_, err := guard.Pending(r)
-	fmt.Println(err)
+	handler := guard.ChallengeHandler()
+	wrong := func() error {
+		body := strings.NewReader(`{"method":"otp","code":"bad"}`)
 
-	_ = guard.Fail(r)
-	_, err = guard.Pending(r)
-	fmt.Println(errors.Is(err, auth.ErrUnauthenticated))
+		return handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", body).WithContext(r.Context()))
+	}
+
+	fmt.Println(errors.Is(wrong(), auth.ErrInvalidCredential))
+	fmt.Println(errors.Is(wrong(), auth.ErrInvalidCredential))
+	fmt.Println(errors.Is(wrong(), auth.ErrUnauthenticated))
 	// Output:
-	// <nil>
+	// true
+	// true
 	// true
 }
 
@@ -532,14 +478,14 @@ func ExampleGuardBuilder_SecondFactor() {
 	enrolled := map[string]bool{"1": true}
 
 	guard := exampleGuard(func(policy *auth.GuardBuilder) {
-		policy.SecondFactor(func(_ context.Context, subject string) (bool, error) {
+		policy.SecondFactor(credential(auth.MethodOTP, auth.KindPossession, func(subject string) (bool, error) {
 			return enrolled[subject], nil
-		})
+		}))
 	})
 
-	complete, err := guard.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+	outcome, err := guard.Begin(exampleRequest(), "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 
-	fmt.Println(complete, err)
+	fmt.Println(outcome.Complete(), err)
 	// Output: false <nil>
 }
 
@@ -567,8 +513,9 @@ func ExampleRequireLevel() {
 	// Output: true
 }
 
-func ExampleRequireFresh() {
-	handler := auth.RequireFresh(10 * time.Minute)(router.Handler(func(http.ResponseWriter, *http.Request) error {
+func ExampleGuard_RequireFresh() {
+	guard := exampleGuard()
+	handler := guard.RequireFresh(10 * time.Minute)(router.Handler(func(http.ResponseWriter, *http.Request) error {
 		return nil
 	}))
 
@@ -728,8 +675,8 @@ func ExampleGuardBuilder_SessionLifetime() {
 		policy.SessionLifetime(7 * 24 * time.Hour)
 	})
 
-	complete, err := guard.Begin(exampleRequest(), "1", examplePassword)
+	outcome, err := guard.Begin(exampleRequest(), "1", examplePassword)
 
-	fmt.Println(complete, err)
+	fmt.Println(outcome.Complete(), err)
 	// Output: true <nil>
 }

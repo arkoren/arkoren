@@ -59,8 +59,8 @@ func TestLoginSurvivesReload(t *testing.T) {
 		})
 
 		id := runStep(t, driver, "", func(r *http.Request) {
-			if complete, err := guard.Begin(r, "7", password); err != nil || complete {
-				t.Fatalf("complete = %v, err = %v", complete, err)
+			if outcome, err := guard.Begin(r, "7", password); err != nil || outcome.Complete() {
+				t.Fatalf("outcome = %v, err = %v", outcome, err)
 			}
 		})
 
@@ -73,7 +73,7 @@ func TestLoginSurvivesReload(t *testing.T) {
 				t.Fatalf("pending = %+v, %v", waiting, err)
 			}
 
-			if err := guard.Complete(r, otp); err != nil {
+			if err := challenge(guard, r, goodOTP); err != nil {
 				t.Fatal(err)
 			}
 		})

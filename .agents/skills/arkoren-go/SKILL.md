@@ -422,12 +422,19 @@ delivery, and lifecycle protocols explicit.
   security headers. Store request hooks; do not invoke them during construction
   or replay user callbacks through delegating constructors. Share immutable
   one auth.NewGuard(provider, store) across Authenticator, Begin, Pending,
-  Complete, Fail, Confirm and Logout; guard.LogoutHandler(...LogoutBuilderFunc) is the logout handler (a method, following the XHandler convention; there is no package-level auth.Logout). Begin on a session already logged in as that subject adds the factor like Confirm and skips second-factor checks. Guard owns session state: one session
+  PendingHandler, ChallengeHandler, ConfirmHandler, Fresh, RecentLogin and Logout; guard.LogoutHandler(...LogoutBuilderFunc) is the logout handler (a method, following the XHandler convention; there is no package-level auth.Logout). Complete, Fail and Confirm are unexported: a module registers auth.Credential values and core's handlers verify them. Begin(r, subject, factors...) returns an Outcome (Complete, Methods, Challenge, Response); on a session already logged in as that subject it adds the factors and skips second-factor checks. Guard owns session state: one session
   record under arkoren:auth:session, a pending login under arkoren:auth:pending,
   every transition regenerating the ID, and the provider asked on every request
   (not found or disabled is ErrNoCredentials, a changed UserRecord.Version too).
-  Second factors are plain GuardBuilder.SecondFactor functions so core never
-  imports an ark. Each login also creates a LoginRecord (random ID kept in
+  Credentials (Method, Kind, Enrolled, Verify with a jsontext.Value input) are
+  plain GuardBuilder.SecondFactor and StepUp values so core never imports an
+  ark; both registries keep registration order and reject duplicate methods.
+  The attempt counter is reserved atomically before Verify and shared across
+  methods; ErrInvalidCredential keeps the attempt, any other Verify error
+  refunds it. Factor time is the guard's clock and factors replace by (Method,
+  Kind). Fresh needs an enrolled StepUp method's factor (any recent factor when
+  the user has none); Identity.Session is set only by Guard.Authenticator and
+  RequireSession guards credential routes. Each login also creates a LoginRecord (random ID kept in
   the session record's login_id) in one cache entry per subject under
   arkoren:auth:logins, written under a per-subject cache lock with bounded
   CompareAndPut and living for GuardBuilder.SessionLifetime, which must equal the
@@ -435,7 +442,7 @@ delivery, and lifecycle protocols explicit.
   The authenticator treats a missing record as ErrNoCredentials; Logins,
   Revoke*, RevokeAll and the forget hook manage them. Records hold the user agent
   and client address (Devices(false) drops both): personal data that never enters
-  telemetry or events. RequireLevel and RequireFresh read the Identity from the
+  telemetry or events. RequireLevel and Guard.RequireFresh read the Identity from the
   context, so tokens with factors work; ErrStepUpRequired is 403. Authenticators,
   Middleware, Require and Bearer are non-generic over auth.Identity; the
   application user rides in Record().Value and is read with
