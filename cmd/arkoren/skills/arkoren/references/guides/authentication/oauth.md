@@ -132,8 +132,20 @@ person out at the provider. Keep logout CSRF-protected. `client.Logout(guard)`
 still works but is deprecated in favor of `guard.LogoutHandler`.
 
 If a user who is already logged in as the mapped subject signs in through the
-provider (to connect it or to refresh their proof), `Begin` adds the federated
+provider (to connect it or to re-authenticate), `Begin` adds the federated
 factor to their session and does not ask for a second factor again.
+
+The federated factor is stamped with the ID token's `auth_time` claim, the time
+the provider says the user really authenticated, so a silent single sign-on
+approval does not satisfy `auth.RequireFresh`. Only when the claim is absent
+(providers that omit it, and OAuth2 providers without an ID token) is the factor
+stamped with the callback time, which proves nothing about when the user last
+entered a credential; do not rely on `RequireFresh` after such a login. For
+step-up, send the user to `/login?return_to=/path&fresh=1`: on an OIDC provider
+this adds `prompt=login` and `max_age=0` to the authorization request so the
+provider asks for credentials again, and the callback then sees a new
+`auth_time`. A provider that ignores the request returns the old `auth_time` and
+the login stays not fresh.
 
 A nil guard or mapper is a configuration error, not a rejected credential. A
 request without a session returns `401` before state consumption or provider

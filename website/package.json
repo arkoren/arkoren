@@ -26,14 +26,14 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/markdown-satteri": "^0.4.6",
-    "@astrojs/mdx": "^8.1.2",
+    "@astrojs/markdown-satteri": "^0.4.8",
+    "@astrojs/mdx": "^8.1.4",
     "@astrojs/sitemap": "^3.7.4",
     "@resvg/resvg-js": "^2.6.2",
-    "@tailwindcss/vite": "^4.3.4",
+    "@tailwindcss/vite": "^4.3.5",
     "astro": "^7.4.12",
     "satori": "^0.63.2",
-    "satteri": "^0.10.5",
+    "satteri": "^0.11.7",
     "tailwindcss": "^4.3.3",
     "three": "^0.187.0"
   },
@@ -45,14 +45,14 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.12",
-    "@astrojs/compiler-rs": "^0.5.2",
-    "@playwright/test": "^1.64.1",
+    "@astrojs/compiler-rs": "^0.5.3",
+    "@playwright/test": "^1.65.0",
     "@types/three": "^0.187.0",
     "happy-dom": "^21.0.4",
-    "oxfmt": "^0.76.0",
+    "oxfmt": "^0.78.0",
     "pagefind": "^1.6.0",
     "typescript": "^6.0.3",
-    "wrangler": "^4.157.0"
+    "wrangler": "^4.160.0"
   },
   "overrides": {
     "satori": {

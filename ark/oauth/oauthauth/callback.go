@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -22,6 +23,14 @@ import (
 // calls resolve to map the external [Identity] to the application's user
 // subject and hands that subject to login.Begin with a federated factor, which
 // logs the user in and regenerates the session ID.
+//
+// The federated factor is stamped with the ID token's auth_time claim, the time
+// the provider says the user really authenticated, so [auth.RequireFresh] is
+// not satisfied by a silent single sign-on approval. Only when the claim is
+// absent (providers that omit it, and OAuth2 providers without an ID token)
+// does the factor fall back to the callback time, which then proves nothing
+// about when the user last entered a credential. To make step-up demand a real
+// prompt, start the login with the fresh query parameter (see [Client.Login]).
 //
 // A completed login publishes [LoginSucceeded] and redirects to the validated
 // return_to target. When login requires a second factor, Begin parks the login
@@ -116,7 +125,7 @@ func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Conte
 			return client.loginFailed(httpRequest, callbackMapperError(err))
 		}
 
-		complete, err := guard.Begin(httpRequest, subject, auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated})
+		complete, err := guard.Begin(httpRequest, subject, auth.Factor{Method: auth.MethodFederated, Kind: auth.KindFederated, At: authTime(external.Claims)})
 
 		if errors.Is(err, session.ErrNoSession) {
 			return auth.ErrUnauthenticated
@@ -142,6 +151,25 @@ func (client *Client) Callback(guard *auth.Guard, resolve func(ctx context.Conte
 
 		return response.SafeRedirect(writer, http.StatusFound, client.config.ChallengeURL)
 	}
+}
+
+// authTime returns when the provider says the user last authenticated: the
+// ID token's auth_time claim (OIDC Core section 2), which providers set to the
+// moment of the real interactive authentication, not of a silent single
+// sign-on approval. [Client.Callback] stamps the federated factor with it so
+// [auth.RequireFresh] reflects a real re-authentication. A missing, non-numeric
+// or non-positive claim returns the zero time, which [auth.Guard.Begin] reads as
+// "now": the fallback for providers that omit auth_time and for OAuth2
+// providers, which have no ID token. A future time is returned unchanged;
+// RequireFresh treats it as not fresh.
+func authTime(claims map[string]any) time.Time {
+	seconds, ok := claims["auth_time"].(float64)
+
+	if !ok || seconds <= 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(int64(seconds), 0)
 }
 
 // callbackMapperError preserves the browser callback's credential rejection
