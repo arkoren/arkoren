@@ -3,13 +3,19 @@
 //
 //	import oauth "arkoren.dev/ark/oauth/oauthauth"
 //
-// It builds on [arkoren.dev/core/auth]: [Client.Login] and [Client.Callback]
-// run the browser Authorization Code flow with PKCE and log the user in through
-// auth.Guard.Begin with a federated factor, so a registered second factor is
-// honored; auth.Guard.LogoutHandler ends the login; [Client.Verify] verifies JWT access
-// tokens and returns the external [Identity], which the application maps to its
-// own subject for auth.Bearer. Authorization is done with gate rules such as
-// gate.HasScopes.
+// It builds on [arkoren.dev/core/auth]: [Client.LoginHandler] and
+// [Client.CallbackHandler] run the browser Authorization Code flow with PKCE and
+// log the user in through auth.Guard.Begin with a federated factor
+// ([MethodFederated]), so a registered second factor is honored;
+// [Client.NonceHandler] and [Client.NativeHandler] log in a mobile app that
+// signed in with Google or Apple's own SDK; auth.Guard.LogoutHandler ends the
+// login; [Client.Verify] verifies JWT access tokens and returns the external
+// [auth.External], which the application maps to its own subject for
+// auth.Bearer. Authorization is done with gate rules such as gate.HasScopes.
+//
+// A Client satisfies the Provider and NativeProvider interfaces of ark/access
+// structurally: Name, LoginHandler and CallbackHandler, and NonceHandler and
+// NativeHandler, each taking only core types.
 //
 // The login state (state, nonce, PKCE verifier, return target) lives in a
 // short-lived, encrypted, HttpOnly cookie per login, not in the session, so
@@ -52,7 +58,7 @@
 //
 //	// Find or create the local user of an external identity and return its
 //	// subject, the string the application's user provider knows it by.
-//	resolve := func(ctx context.Context, external oauth.Identity) (string, error) {
+//	resolve := func(ctx context.Context, external auth.External) (string, error) {
 //		user, err := users.UpsertByIdentity(ctx, external.Issuer, external.Subject, external.Email)
 //		if err != nil {
 //			return "", err
@@ -72,8 +78,8 @@
 //
 //		auth.Middleware(guard.Authenticator()),
 //	)
-//	web.Get("/login", client.Login()) // supports ?return_to=/local/path
-//	web.Get("/oauth/callback", client.Callback(guard, resolve))
+//	web.Get("/login", client.LoginHandler()) // supports ?return_to=/local/path
+//	web.Get("/oauth/callback", client.CallbackHandler(guard, resolve))
 //	web.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 //		logout.Redirect("/")
 //	}))
@@ -92,8 +98,10 @@
 //			return auth.Identity{}, err
 //		}
 //
+//		scope, _ := external.Claims["scope"].(string)
+//
 //		return auth.NewIdentity(subject, func(principal *auth.IdentityBuilder) {
-//			principal.Scopes(external.Scopes...)
+//			principal.Scopes(strings.Fields(scope)...)
 //		}), nil
 //	})
 //	api := r.With(auth.Middleware(bearer))
@@ -101,30 +109,77 @@
 //
 // # Second factors
 //
-// A login that needs a second factor is parked as pending by auth.Guard.Begin.
-// Callback then redirects to [ClientBuilder.ChallengeURL] and publishes no
-// [LoginSucceeded]; return_to is not carried over. The challenge page verifies
-// the factor and calls auth.Guard.Complete. Without a challenge URL Callback ends
-// the pending login and fails with [ErrNoChallengeURL]; it never logs in
-// without the second factor.
+// A login that needs a second factor is parked as pending by auth.Guard.Begin,
+// which returns an auth.Outcome that is not complete. CallbackHandler then
+// redirects to [ClientBuilder.ChallengeURL] and publishes no [LoginSucceeded];
+// return_to is not carried over. The page there finishes the login through the
+// core challenge route (auth.Guard.ChallengeHandler). Without a challenge URL
+// CallbackHandler ends the pending login and fails with [ErrNoChallengeURL]; it
+// never logs in without the second factor. [Client.NativeHandler] needs no
+// challenge URL: it answers with outcome.Response, 202 and the methods to
+// choose from.
+//
+// # Freshness
+//
+// The federated factor is stamped with this server's clock at the callback.
+// The provider's auth_time claim is ignored, so a silent single sign-on
+// approval looks exactly like a fresh login. Core decides what that means for
+// auth.Guard.RequireFresh: a recent factor from a step-up method counts, or any
+// recent factor when the user has no step-up method. [MethodFederated] is not a
+// step-up method unless the application registers one, so a user with a
+// password or TOTP is not made fresh by a silent re-login, and a user with
+// neither is fresh right after logging in. The fresh=1 query parameter of
+// [Client.LoginHandler] only asks the provider to authenticate again
+// (prompt=login, max_age=0); it is a hint with no security meaning. Exchanging a
+// session for a device token should use auth.Guard.RecentLogin, which a native
+// or browser login satisfies and a silent re-login of an open session does not.
+//
+// # Native login
+//
+// A mobile app that signs in with the provider's SDK (Credential Manager or
+// Google Sign-In, Sign in with Apple) holds an ID token and no authorization
+// code. Google and Apple clients log it in in two steps on the app's session
+// cookie: GET [Client.NonceHandler] returns {"nonce"}; the app gives the SDK
+// that nonce (SHA-256 hex of it for Apple), then POSTs {"id_token"} to
+// [Client.NativeHandler], which verifies signature, expiry, issuer, audience and
+// nonce, calls the resolver and auth.Guard.Begin, and answers
+// outcome.Response. The nonce is single use. Accepted audiences are exactly
+// [ClientBuilder.NativeAudiences]: for Google the server client ID the apps
+// configure in their SDK, which Google documents as the token's audience
+// (usually the web client ID), plus any iOS or Android client ID they request
+// tokens for; for Apple the app's bundle ID.
+//
+//	client := compose.Must(oauth.New(oauth.Google(), cipher, webClientID, func(client *oauth.ClientBuilder) {
+//		client.NativeAudiences(webClientID, iosClientID)
+//	}))
+//	web.Get("/auth/google/nonce", client.NonceHandler())
+//	web.Post("/auth/google/native", client.NativeHandler(guard, resolve))
+//
+// Both handlers use the default session of session.Middleware. Other presets
+// return [ErrUnsupported].
 //
 // # Identity mapping
 //
-// Callback checks the session before side effects: a request without one
+// CallbackHandler checks the session before side effects: a request without one
 // returns auth.ErrUnauthenticated without consuming state. A nil guard or
 // resolver is a configuration error. Resolver errors matching
 // auth.ErrNoCredentials become ErrInvalidCallback, while other resolver errors
 // pass through. A subject the user provider does not know or has disabled is
 // auth.ErrUnauthenticated; an invalid subject is auth.ErrInvalidSubject.
 //
-// Match local users on the pair Issuer + Subject, which the provider guarantees
-// stable and unique. Never link accounts by email: providers differ in whether
-// they verify it, so an attacker could register the victim's address at a lax
-// provider and take over the account.
+// The resolver receives an [auth.External]: Issuer and Subject name the external
+// account; Email and EmailVerified are set only on the provider's positive
+// evidence; Claims holds the verified token claims, with the display name in
+// Claims["name"] and the granted scopes as the string claim "scope" (browser
+// logins; Verify keeps the token's own claims). Match local users on the pair
+// Issuer + Subject, which the provider guarantees stable and unique. Never link
+// accounts by email unless EmailVerified is true and your policy allows it:
+// providers differ in whether they verify it, so an attacker could register the
+// victim's address at a lax provider and take over the account.
 // OIDC rejects an empty final subject after provider-specific mapping; the GitHub
 // preset requires a positive numeric user ID before invoking the local mapper.
 // If the token endpoint rejects an invalid or consumed code with invalid_grant,
-// Callback wraps ErrInvalidCallback, not ErrProviderUnavailable. Native causes
+// CallbackHandler wraps ErrInvalidCallback, not ErrProviderUnavailable. Native causes
 // remain available through errors.Is/As; they are not safe to log indiscriminately.
 //
 // # Local development
@@ -153,17 +208,17 @@
 //
 // # Events
 //
-// With [ClientBuilder.Events], [Client.Callback] publishes [LoginSucceeded]
-// ("oauth.login.succeeded") with the subject and issuer, or [LoginFailed]
-// ("oauth.login.failed"); deprecated Client.Logout publishes [LoggedOut]
-// ("oauth.logged-out"); and [Client.Verify] publishes [TokenRejected]
+// With [ClientBuilder.Events], [Client.CallbackHandler] and
+// [Client.NativeHandler] publish [LoginSucceeded] ("oauth.login.succeeded") with
+// the external subject and issuer and the local subject, or [LoginFailed]
+// ("oauth.login.failed"); and [Client.Verify] publishes [TokenRejected]
 // ("oauth.token.rejected"). Payloads never carry tokens, claims, or email.
 // LoginFailed.Err is ErrInvalidCallback, ErrProviderUnavailable, or a fixed opaque
 // local-login failure without causes. ProviderError accepts only the seven RFC
 // 6749 authorization-error hints; absent or unknown strings become empty. It is
 // untrusted request metadata, not an authenticated provider diagnosis.
 // TokenRejected.Err is a fixed opaque rejection with no native cause. These event
-// errors are not the errors returned by Callback or Verify; returned causes are
+// errors are not the errors returned by the handlers or Verify; returned causes are
 // preserved for explicit inspection. Configuration exits before verification or
 // cookie consumption do not publish outcome events. The optional bus stays
 // shared, and its logger handles listener failures without changing outcomes.
@@ -172,7 +227,7 @@
 //
 //	| Provider | Setup |
 //	|---|---|
-//	| Google | oauth.Google(); use GoogleBuilder.HostedDomain for one Workspace domain |
+//	| Google | oauth.Google(); use GoogleBuilder.HostedDomain for one Workspace domain; native login |
 //	| Microsoft | `oauth.Microsoft("common")`, or a tenant ID; Subject is the `oid` claim |
 //	| GitHub | `oauth.GitHub()` (OAuth2; subject is the numeric user ID) |
 //	| Apple | `oauth.Apple(teamID, keyID, identity)` with an Apple-issued key.Signing (form_post; see CSRF note) |
@@ -196,7 +251,7 @@
 // cannot change published clients or providers. Scopes and audiences are copied
 // on input and publication; service pointers and function captures stay shared.
 // Other provider presets have no optional settings or construction callbacks.
-// New validates the final cookie-name prefix before serving requests. PKCE starts
+// New validates the final client name as a cookie-name prefix before serving requests. PKCE starts
 // enabled; explicit false disables it unless a provider disables it regardless.
 // Client has no Stop method and does not own its shared cipher or event bus.
 // Keep constructor pointers rather than copying atomic Client state. Formatting
@@ -207,9 +262,16 @@
 // Register the callback outside csrf.Middleware, or use csrf.Builder.Protection
 // with an http.CrossOriginProtection that calls
 // AddInsecureBypassPattern("POST /auth/apple/callback"). The login state and
-// cookie are the CSRF defense of that route.
+// cookie are the CSRF defense of that route. The Apple preset also supports
+// native login.
 //
-// The package supports local logout only. It does not support multiple
-// providers per client, token refresh, opaque-token introspection, provider
-// logout, back-channel logout, JARM, PAR, or DPoP.
+// Each client has a name ([Client.Name]): "google", "github", "microsoft" or
+// "apple" for the presets, "oauth" for [OIDC] and [OAuth2], or the value of
+// [ClientBuilder.Name]. It starts the login cookie names, so give clients of
+// one application distinct names when they share a provider kind.
+//
+// Local logout belongs to core (auth.Guard.LogoutHandler); this package has no
+// logout of its own. It does not support multiple providers per client, token refresh, opaque-token introspection, provider
+// logout, back-channel logout, JARM, PAR, DPoP, or the browser handoff of a
+// system-browser login (RFC 8252) for mobile apps.
 package oauthauth

@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"maps"
@@ -32,8 +33,12 @@ import (
 // testProvider is an in-process OIDC provider. Its token endpoint treats the
 // authorization code as the nonce to embed in the ID token.
 type testProvider struct {
-	// server owns the local discovery, key-set, and token endpoints.
+	// server owns the local discovery, key-set, and token endpoints. An
+	// offline provider has only its URL.
 	server *httptest.Server
+
+	// mux serves the endpoints; offline providers are reached through it.
+	mux *http.ServeMux
 	// signer signs fixture tokens with the key advertised by discovery.
 	signer jose.Signer
 	// key is the public verification key exposed by the JWKS endpoint.
@@ -50,6 +55,35 @@ type testProvider struct {
 
 // newTestProvider starts a provider serving discovery, JWKS and token endpoints.
 func newTestProvider(t *testing.T) *testProvider {
+	t.Helper()
+
+	return buildTestProvider(t, true)
+}
+
+// newOfflineProvider returns a provider that opens no socket. Reach it through
+// [testProvider.client], which routes requests to its handlers in process.
+// Tests that run inside testing/synctest use it, because connections of the
+// shared default transport cannot cross a synctest bubble.
+func newOfflineProvider(t *testing.T) *testProvider {
+	t.Helper()
+
+	return buildTestProvider(t, false)
+}
+
+// client returns an HTTP client that serves requests to the provider's
+// handlers without a network. Pass it to Start and to callback requests with
+// oidc.ClientContext.
+func (provider *testProvider) client() *http.Client {
+	return &http.Client{Transport: protocolTransport(func(request *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		provider.mux.ServeHTTP(recorder, request)
+
+		return recorder.Result(), nil
+	})}
+}
+
+// buildTestProvider creates the provider; online starts a real test server.
+func buildTestProvider(t *testing.T, online bool) *testProvider {
 	t.Helper()
 
 	private, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -86,8 +120,14 @@ func newTestProvider(t *testing.T) *testProvider {
 	}
 
 	mux := http.NewServeMux()
-	provider.server = httptest.NewServer(mux)
-	t.Cleanup(provider.server.Close)
+	provider.mux = mux
+
+	if online {
+		provider.server = httptest.NewServer(mux)
+		t.Cleanup(provider.server.Close)
+	} else {
+		provider.server = &httptest.Server{URL: "https://idp.test"}
+	}
 
 	mux.HandleFunc("/.well-known/openid-configuration", provider.discovery)
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
@@ -129,10 +169,16 @@ func (provider *testProvider) token(w http.ResponseWriter, r *http.Request) {
 
 // sign returns a JWT for client "cid" and subject "user-1" with extra claims.
 func (provider *testProvider) sign(extra map[string]any) string {
+	return provider.signFor("cid", extra)
+}
+
+// signFor returns a JWT for subject "user-1" issued to audience, with extra
+// claims. Native login tests use it to mint tokens for a mobile app's client.
+func (provider *testProvider) signFor(audience string, extra map[string]any) string {
 	claims := jwt.Claims{
 		Issuer:   provider.server.URL,
 		Subject:  "user-1",
-		Audience: jwt.Audience{"cid"},
+		Audience: jwt.Audience{audience},
 		Expiry:   jwt.NewNumericDate(time.Now().Add(time.Hour)),
 	}
 
@@ -146,12 +192,12 @@ func (provider *testProvider) sign(extra map[string]any) string {
 }
 
 // userInfoStub is a [UserInfoFunc] returning a fixed identity.
-func userInfoStub(_ context.Context, client *http.Client) (Identity, error) {
+func userInfoStub(_ context.Context, client *http.Client) (auth.External, error) {
 	if client == nil {
-		return Identity{}, errors.New("no client")
+		return auth.External{}, errors.New("no client")
 	}
 
-	return Identity{
+	return auth.External{
 		Issuer:  "stub",
 		Subject: "stub-1",
 		Email:   "ada@example.com",
@@ -218,6 +264,14 @@ func testCipher(t *testing.T) *crypto.Encrypter {
 func newClient(t *testing.T, provider Provider, configure ...func(*ClientBuilder)) *Client {
 	t.Helper()
 
+	return newClientAt(t, t.Context(), provider, configure...)
+}
+
+// newClientAt is like newClient but starts the client with ctx, which can carry
+// the HTTP client of an offline provider.
+func newClientAt(t *testing.T, ctx context.Context, provider Provider, configure ...func(*ClientBuilder)) *Client {
+	t.Helper()
+
 	policies := append([]func(*ClientBuilder){func(client *ClientBuilder) {
 		client.ClientSecret("secret")
 		client.RedirectURL("http://app.test/callback")
@@ -231,7 +285,7 @@ func newClient(t *testing.T, provider Provider, configure ...func(*ClientBuilder
 		t.Fatalf("New: %v", err)
 	}
 
-	if err := client.Start(t.Context()); err != nil {
+	if err := client.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
@@ -269,7 +323,7 @@ func login(t *testing.T, client *Client, jar cookieJar) url.Values {
 	t.Helper()
 
 	request := jar.attach(httptest.NewRequest(http.MethodGet, "/login?return_to=/dash", nil))
-	response := client.Login().Record(request)
+	response := client.LoginHandler().Record(request)
 
 	location, err := url.Parse(response.Header.Get("Location"))
 
@@ -307,7 +361,7 @@ func newSession() *session.Session {
 }
 
 // idLogin maps the identity subject to the user identifier.
-func idLogin(_ context.Context, identity Identity) (string, error) {
+func idLogin(_ context.Context, identity auth.External) (string, error) {
 	return identity.Subject, nil
 }
 
@@ -344,11 +398,33 @@ func newGuard(t *testing.T, configure ...auth.GuardBuilderFunc) *auth.Guard {
 	return guard
 }
 
+// testCredential returns a credential of method that accepts any input. Every
+// user has it enrolled when enrolled is true and none has otherwise.
+func testCredential(method auth.Method, kind auth.Kind, enrolled bool) auth.Credential {
+	return auth.Credential{
+		Method: method,
+		Kind:   kind,
+		Enrolled: func(context.Context, string) (bool, error) {
+			return enrolled, nil
+		},
+		Verify: func(*http.Request, string, jsontext.Value) (auth.Factor, error) {
+			return auth.Factor{Method: method, Kind: kind}, nil
+		},
+	}
+}
+
 // withSecondFactor requires a second factor for every login.
 func withSecondFactor(policy *auth.GuardBuilder) {
-	policy.SecondFactor(func(context.Context, string) (bool, error) {
-		return true, nil
-	})
+	policy.SecondFactor(testCredential(auth.MethodOTP, auth.KindPossession, true))
+}
+
+// withStepUp registers a password and a TOTP step-up method that every user
+// has, so freshness follows those methods and not the federated login.
+func withStepUp(policy *auth.GuardBuilder) {
+	policy.StepUp(
+		testCredential(auth.MethodPassword, auth.KindKnowledge, true),
+		testCredential(auth.MethodOTP, auth.KindPossession, true),
+	)
 }
 
 // userOf returns the subject logged in on the session of request.

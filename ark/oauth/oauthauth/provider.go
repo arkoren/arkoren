@@ -3,6 +3,8 @@ package oauthauth
 import (
 	"context"
 	"net/http"
+
+	"arkoren.dev/core/auth"
 )
 
 // Endpoint holds the authorization and token URLs of an OAuth2 provider that
@@ -44,45 +46,48 @@ type Endpoint struct {
 	TokenURL string
 }
 
-// UserInfoFunc loads the [Identity] of a user from an OAuth2 provider. The
-// client is authenticated with the user's access token.
+// UserInfoFunc loads the [auth.External] identity of a user from an OAuth2
+// provider. The client is authenticated with the user's access token.
 // Use ctx on each request and close response bodies. The function owns stable
-// subject and issuer validation and any email-verification policy: the generic
-// OAuth2 adapter does not impose a provider-specific schema. Native/client
-// dependencies remain shared; returned errors retain causes and can be sensitive.
+// subject and issuer validation and any email-verification policy: set
+// EmailVerified only on positive evidence from the provider, because the
+// resolver trusts it when linking accounts. Put display data such as the name
+// in Claims. The generic OAuth2 adapter does not impose a provider-specific
+// schema. Native/client dependencies remain shared; returned errors retain
+// causes and can be sensitive.
 //
 // Example:
 //
-//	var userInfo oauth.UserInfoFunc = func(ctx context.Context, client *http.Client) (oauth.Identity, error) {
+//	var userInfo oauth.UserInfoFunc = func(ctx context.Context, client *http.Client) (auth.External, error) {
 //		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.example.com/user", nil)
 //		if err != nil {
-//			return oauth.Identity{}, err
+//			return auth.External{}, err
 //		}
 //		response, err := client.Do(request)
 //		if err != nil {
-//			return oauth.Identity{}, err
+//			return auth.External{}, err
 //		}
 //		defer func() {
 //			// Cleanup cannot undo the authoritative response classification.
 //			_ = response.Body.Close()
 //		}()
 //		if response.StatusCode != http.StatusOK {
-//			return oauth.Identity{}, errors.New("user info unavailable")
+//			return auth.External{}, errors.New("user info unavailable")
 //		}
 //
 //		var user struct {
 //			ID string `json:"id"`
 //		}
 //		if err := json.UnmarshalRead(response.Body, &user); err != nil {
-//			return oauth.Identity{}, err
+//			return auth.External{}, err
 //		}
 //		if user.ID == "" {
-//			return oauth.Identity{}, errors.New("missing user subject")
+//			return auth.External{}, errors.New("missing user subject")
 //		}
 //
-//		return oauth.Identity{Issuer: "https://api.example.com", Subject: user.ID}, nil
+//		return auth.External{Issuer: "https://api.example.com", Subject: user.ID}, nil
 //	}
-type UserInfoFunc = func(ctx context.Context, client *http.Client) (Identity, error)
+type UserInfoFunc = func(ctx context.Context, client *http.Client) (auth.External, error)
 
 // Provider describes how to log in with one identity provider. Build it with
 // [OIDC] or [OAuth2]; presets in this package fill the optional fields.
@@ -94,6 +99,11 @@ type UserInfoFunc = func(ctx context.Context, client *http.Client) (Identity, er
 type Provider struct {
 	// issuer is the OIDC issuer URL used for discovery. Empty for OAuth2.
 	issuer string
+
+	// name is the provider name a preset gives its client, such as "google". It
+	// is the default of [Client.Name] and of the login cookie prefix. Empty for
+	// [OIDC] and [OAuth2].
+	name string
 
 	// endpoint holds the OAuth2 URLs. Unused for OIDC.
 	endpoint Endpoint
@@ -122,12 +132,20 @@ type Provider struct {
 	// receives the verified identity and returns the identity to use, or
 	// an error that rejects it. It may rewrite Issuer, Subject and Email.
 	// OIDC only.
-	identity func(Identity) (Identity, error)
+	identity func(auth.External) (auth.External, error)
 
 	// formIdentity completes the identity from the form_post callback
 	// request, for data the provider sends only there. It never sees the
 	// request of a GET callback.
-	formIdentity func(*http.Request, Identity) Identity
+	formIdentity func(*http.Request, auth.External) auth.External
+
+	// nativeNonce maps the nonce this client issued to the value the provider's
+	// ID token carries in its nonce claim, for providers that support native
+	// ID-token login. Google returns the nonce unchanged; Apple returns the
+	// token nonce as the app sent it, which this client requires to be the
+	// lowercase hex SHA-256 of the issued nonce. Nil means the provider has no
+	// native login and the native handlers return [ErrUnsupported].
+	nativeNonce func(nonce string) string
 
 	// clientSecret derives the secret sent at the token endpoint from the
 	// client ID and the configured secret, for providers that need a

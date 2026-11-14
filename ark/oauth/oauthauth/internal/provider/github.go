@@ -1,21 +1,24 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"strconv"
+
+	"arkoren.dev/core/auth"
 )
 
-// githubIssuer is the issuer reported in the [Identity] of GitHub users.
+// githubIssuer is the issuer reported in the identity of GitHub users.
 const githubIssuer = "https://github.com"
 
 // GitHubUser loads the user and the primary verified email from the API at apiURL.
 // A positive numeric ID is required before requesting emails or returning an
 // identity; login is only a display-name fallback. Failures return a zero identity
 // with the original wrapped HTTP/decoder cause. The authenticated client is borrowed.
-func GitHubUser(ctx context.Context, client *http.Client, apiURL string) (Record, error) {
+func GitHubUser(ctx context.Context, client *http.Client, apiURL string) (auth.External, error) {
 	var user struct {
 		// ID is the stable numeric subject identifier, independent of login changes.
 		ID int64 `json:"id"`
@@ -26,11 +29,11 @@ func GitHubUser(ctx context.Context, client *http.Client, apiURL string) (Record
 	}
 
 	if err := githubGet(ctx, client, apiURL+"/user", &user); err != nil {
-		return Record{}, err
+		return auth.External{}, err
 	}
 
 	if user.ID <= 0 {
-		return Record{}, fmt.Errorf("GitHub identity lacks a positive numeric ID")
+		return auth.External{}, fmt.Errorf("GitHub identity lacks a positive numeric ID")
 	}
 
 	var emails []struct {
@@ -43,22 +46,19 @@ func GitHubUser(ctx context.Context, client *http.Client, apiURL string) (Record
 	}
 
 	if err := githubGet(ctx, client, apiURL+"/user/emails", &emails); err != nil {
-		return Record{}, err
+		return auth.External{}, err
 	}
 
-	identity := Record{
+	identity := auth.External{
 		Issuer:  githubIssuer,
 		Subject: strconv.FormatInt(user.ID, 10),
-		Name:    user.Name,
-	}
-
-	if identity.Name == "" {
-		identity.Name = user.Login
+		Claims:  map[string]any{"name": cmp.Or(user.Name, user.Login)},
 	}
 
 	for _, email := range emails {
 		if email.Primary && email.Verified {
 			identity.Email = email.Email
+			identity.EmailVerified = true
 
 			break
 		}

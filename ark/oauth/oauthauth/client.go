@@ -17,8 +17,9 @@ import (
 	"arkoren.dev/core/service/crypto"
 )
 
-// defaultName is the login cookie name used when [Config.Name] is empty.
-const defaultName = "arkoren.oauth"
+// defaultName is the client name of [OIDC] and [OAuth2] providers that
+// [Config.Name] leaves empty. Presets bring their own name.
+const defaultName = "oauth"
 
 // Client logs users in through one provider and verifies its bearer tokens.
 // New publishes immutable settings; Start performs OIDC discovery before use. The
@@ -122,7 +123,7 @@ func New(
 		config.Scopes = []string{oidc.ScopeOpenID}
 	}
 
-	config.Name = cmp.Or(config.Name, defaultName)
+	config.Name = cmp.Or(config.Name, provider.name, defaultName)
 
 	client := &Client{
 		provider: provider,
@@ -154,6 +155,24 @@ func New(
 	}
 
 	return client, nil
+}
+
+// Name returns the name of this login method: [Config.Name] if the client
+// builder set one, otherwise the preset's name ("google", "github",
+// "microsoft" or "apple"), otherwise "oauth". Applications with several
+// providers use it to mount and look up clients (for example under
+// "/auth/{name}"), and ark/access reads it through its Provider interface.
+//
+// Example:
+//
+//	client, err := oauth.New(oauth.Google(), cipher, "web")
+//	if err != nil {
+//		return err
+//	}
+//	name := client.Name() // "google"
+//	_ = name
+func (client *Client) Name() string {
+	return client.config.Name
 }
 
 // validateClientInputs checks required values in their established error order.

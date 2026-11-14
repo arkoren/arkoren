@@ -110,7 +110,7 @@ func TestClientEmptyCallbackSlicesKeepSecureDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !client.config.PKCE || client.prefix != "__Host-arkoren.oauth." {
+	if !client.config.PKCE || client.prefix != "__Host-oauth." {
 		t.Fatal("nil expansion changed secure defaults")
 	}
 
@@ -189,7 +189,7 @@ func TestClientBuilderSettings(t *testing.T) {
 		t.Fatalf("config = %#v", config)
 	}
 
-	if defaults := configureClient(); defaults.Name != "arkoren.oauth" || !defaults.PKCE {
+	if defaults := configureClient(); defaults.Name != "" || !defaults.PKCE {
 		t.Errorf("defaults = %#v", defaults)
 	}
 }

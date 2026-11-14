@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+
+	"arkoren.dev/core/auth"
 )
 
 // microsoftIssuer returns the v2.0 issuer URL of tenant id tid on the test authority.
@@ -102,7 +104,7 @@ func TestMicrosoftOtherTenant(t *testing.T) {
 }
 
 // requireMicrosoftEmail verifies a token carrying claims and returns the
-// resulting Identity.Email.
+// resulting auth.External.Email.
 func requireMicrosoftEmail(t *testing.T, extra map[string]any) string {
 	t.Helper()
 
@@ -446,7 +448,7 @@ func TestMicrosoftPolicyOrganizationsRejectsPersonalCallback(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	response := httptest.NewRecorder()
 
-	err := client.Callback(guard, func(_ context.Context, _ Identity) (string, error) {
+	err := client.CallbackHandler(guard, func(_ context.Context, _ auth.External) (string, error) {
 		t.Fatal("Callback invoked the mapper for a rejected personal account")
 
 		return "", nil
@@ -483,7 +485,7 @@ func TestMicrosoftPolicyConsumersRejectsOrganizationCallback(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	response := httptest.NewRecorder()
 
-	err := client.Callback(guard, func(_ context.Context, _ Identity) (string, error) {
+	err := client.CallbackHandler(guard, func(_ context.Context, _ auth.External) (string, error) {
 		t.Fatal("Callback invoked the mapper for a rejected organizational account")
 
 		return "", nil
@@ -521,7 +523,7 @@ func TestMicrosoftPolicyConsumersAcceptsPersonalCallback(t *testing.T) {
 	request := callbackRequest(http.MethodGet, jar, current, query.Get("state"), query.Get("nonce"))
 	response := httptest.NewRecorder()
 
-	if err := client.Callback(guard, idLogin)(response, request); err != nil {
+	if err := client.CallbackHandler(guard, idLogin)(response, request); err != nil {
 		t.Fatalf("Callback rejected personal account: %v", err)
 	}
 

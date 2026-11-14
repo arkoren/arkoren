@@ -56,7 +56,7 @@ func TestLoginRejectsUnsafeReturnTo(t *testing.T) {
 	client := newClient(t, OIDC(newTestProvider(t).server.URL))
 	request := httptest.NewRequest(http.MethodGet, "/login?return_to=//evil.example", nil)
 
-	if got := client.Login().Record(request).StatusCode; got != http.StatusBadRequest {
+	if got := client.LoginHandler().Record(request).StatusCode; got != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", got)
 	}
 }
