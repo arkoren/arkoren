@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/service/crypto"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
 
@@ -137,7 +138,8 @@ func TestActivateThrottlesWrongCodes(t *testing.T) {
 	})
 }
 
-// TestVerifyRejectsReplayedStep verifies a code works once.
+// TestVerifyRejectsReplayedStep verifies a code works once: the string that
+// was accepted is refused when submitted again.
 func TestVerifyRejectsReplayedStep(t *testing.T) {
 	t.Parallel()
 
@@ -145,19 +147,21 @@ func TestVerifyRejectsReplayedStep(t *testing.T) {
 		ctx := testContext(t)
 		sys := newSystem(t, db, instance, nil)
 		enrollment, _ := sys.factors.Enroll(ctx, "1", "a")
-		if _, err := sys.factors.Activate(ctx, "1", currentCode(t, enrollment.Secret)); err != nil {
+		activation := currentCode(t, enrollment.Secret)
+		if _, err := sys.factors.Activate(ctx, "1", activation); err != nil {
 			t.Fatalf("Activate: %v", err)
 		}
-		// The activation code is spent: the same code is a replay.
-		if _, err := sys.factors.Verify(ctx, "1", currentCode(t, enrollment.Secret)); !errors.Is(err, twofactor.ErrInvalidCode) {
+		// The activation code is spent: submitting the same string is a replay.
+		if _, err := sys.factors.Verify(ctx, "1", activation); !errors.Is(err, twofactor.ErrInvalidCode) {
 			t.Fatalf("replayed code error = %v", err)
 		}
 		rewind(t, db, instance)
-		factor, err := sys.factors.Verify(ctx, "1", currentCode(t, enrollment.Secret))
+		code := currentCode(t, enrollment.Secret)
+		factor, err := sys.factors.Verify(ctx, "1", code)
 		if err != nil || factor.Method != auth.MethodOTP || factor.Kind != auth.KindPossession {
 			t.Fatalf("Verify = %+v, %v", factor, err)
 		}
-		if _, err := sys.factors.Verify(ctx, "1", currentCode(t, enrollment.Secret)); !errors.Is(err, twofactor.ErrInvalidCode) {
+		if _, err := sys.factors.Verify(ctx, "1", code); !errors.Is(err, twofactor.ErrInvalidCode) {
 			t.Fatalf("second Verify error = %v", err)
 		}
 	})
@@ -356,8 +360,8 @@ func TestSecretKeyRotationReencrypts(t *testing.T) {
 		_, _ = oldSys.factors.Activate(ctx, "1", currentCode(t, enrollment.Secret))
 		rewind(t, db, instance)
 
-		newCipher, _ := newCipher(t, oldDriver)
-		rotated, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), newCipher, "Example", func(factors *twofactor.Builder) {
+		rotatedCipher, newDriver := newCipher(t, oldDriver)
+		rotated, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), rotatedCipher, "Example", func(factors *twofactor.Builder) {
 			factors.Instance(instance)
 		})
 		if err != nil {
@@ -367,7 +371,11 @@ func TestSecretKeyRotationReencrypts(t *testing.T) {
 			t.Fatalf("Verify with the rotated key: %v", err)
 		}
 		// After resealing, a cipher that knows only the new key still reads it.
-		onlyNew, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), newCipher, "Example", func(factors *twofactor.Builder) {
+		onlyNewCipher, err := crypto.New(newDriver)
+		if err != nil {
+			t.Fatalf("crypto.New: %v", err)
+		}
+		onlyNew, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), onlyNewCipher, "Example", func(factors *twofactor.Builder) {
 			factors.Instance(instance)
 		})
 		if err != nil {

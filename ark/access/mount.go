@@ -31,10 +31,12 @@ import (
 // /confirm a registered step-up method, and the email routes the built-in users
 // and [Builder.Deliver]. /logout and the session routes are always mounted.
 //
-// r must already run [Access.Middleware]; mount on a sub-router to add a prefix
-// (r.Group("/account", iam.Mount)). Custom paths use the XHandler methods.
-// Mounting twice, or on a router that already has these patterns, panics like
-// any duplicate route.
+// r must already run [Access.Middleware]. The routes live at the paths above:
+// the connect handler redirects to "/auth/<name>" and the providers' callbacks
+// are mounted there, so do not mount under a prefix. To serve other paths, register
+// the XHandler methods yourself; for another connect target use
+// [federation.Links.ConnectHandler] on [Access.Links]. Mounting twice, or on a
+// router that already has these patterns, panics like any duplicate route.
 //
 // Example:
 //

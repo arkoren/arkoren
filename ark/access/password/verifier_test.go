@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
 
@@ -213,6 +214,34 @@ func TestChangePasswordKeepsCallerEndsOthers(t *testing.T) {
 		}
 		if reply := loginAda(sys.client.NewDevice(), "brand new horse"); reply.Status != http.StatusNoContent {
 			t.Fatalf("login with the new password = %d", reply.Status)
+		}
+	})
+}
+
+// TestChangePasswordLeavesLoginThrottleAlone verifies a password change does
+// not refund attempts it never counted against the client address.
+func TestChangePasswordLeavesLoginThrottleAlone(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newSystem(t, db, instance)
+		sys.registerAda(t, sys.client)
+		other := sys.client.NewDevice()
+		for range 3 {
+			loginAda(other, "wrong horse!")
+		}
+		key := cache.NewKey[int64]("access:" + instance + ":password:ip:127.0.0.1")
+		before, err := sys.store.Get(ctx, key)
+		if err != nil || before != 3 {
+			t.Fatalf("client counter = %d, %v; want 3", before, err)
+		}
+		change := sys.client.Do(http.MethodPut, "/password", `{"current_password":"correct horse","password":"brand new horse"}`)
+		if change.Status != http.StatusNoContent {
+			t.Fatalf("change = %d %s", change.Status, change.Body)
+		}
+		if after, _ := sys.store.Get(ctx, key); after != before {
+			t.Fatalf("client counter after a change = %d, want %d", after, before)
 		}
 	})
 }

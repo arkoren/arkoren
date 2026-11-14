@@ -53,9 +53,15 @@ const (
 	//	fmt.Println(password.MaxLength) // 72
 	MaxLength = 72
 
-	// maxFailures is how many login attempts per identifier and per client IP
-	// are allowed within throttleWindow.
+	// maxFailures is how many login attempts per identifier are allowed within
+	// throttleWindow.
 	maxFailures = 10
+
+	// maxClientFailures is how many login attempts per client address are
+	// allowed within throttleWindow: ten times the identifier limit, so one
+	// attacker cannot lock out an office behind a shared address by guessing
+	// ten times, while a credential-stuffing run is still stopped.
+	maxClientFailures = 100
 
 	// throttleWindow is the lifetime of an attempt counter.
 	throttleWindow = 15 * time.Minute
@@ -768,28 +774,24 @@ func (verifier *Verifier) emit(ctx context.Context, topic event.Topic[UserEvent]
 	})
 }
 
-// attempts reserves one attempt on each key and fails with [ErrThrottled] and a
-// Retry-After header when any counter exceeds its limit.
-func (verifier *Verifier) attempts(ctx context.Context, keys ...cache.Key[int64]) error {
-	for _, key := range keys {
-		wait, err := throttle.Reserve(ctx, verifier.store, key, maxFailures, throttleWindow)
-		if err != nil {
-			return err
-		}
-		if wait > 0 {
-			return throttle.Reject(ErrThrottled, wait)
-		}
+// attempt reserves one attempt on key and fails with [ErrThrottled] and a
+// Retry-After header when the counter exceeds limit.
+func (verifier *Verifier) attempt(ctx context.Context, key cache.Key[int64], limit int64) error {
+	wait, err := throttle.Reserve(ctx, verifier.store, key, limit, throttleWindow)
+	if err != nil {
+		return err
+	}
+	if wait > 0 {
+		return throttle.Reject(ErrThrottled, wait)
 	}
 
 	return nil
 }
 
-// release forgets the attempts of a successful login: the identifier's counter
-// is cleared and the client's is refunded one attempt.
-func (verifier *Verifier) release(ctx context.Context, identifier, client cache.Key[int64]) {
-	// Counters expire on their own; a failed cleanup only keeps a stale count.
-	_ = verifier.store.Delete(ctx, identifier)
-	_, _ = verifier.store.Decrement(ctx, client, 1)
+// clear forgets the attempts counted on key after a success. Counters expire on
+// their own, so a failed cleanup only keeps a stale count.
+func (verifier *Verifier) clear(ctx context.Context, key cache.Key[int64]) {
+	_ = verifier.store.Delete(ctx, key)
 }
 
 // identifierKey is the counter key of one identifier, lowercased and hashed so

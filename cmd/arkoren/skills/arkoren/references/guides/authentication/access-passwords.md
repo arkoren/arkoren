@@ -44,11 +44,11 @@ a wrong password, a user without a password and a disabled user look the same,
 and an unknown email still costs one dummy hash, so response time does not reveal
 which accounts exist.
 
-Login is throttled before any hashing: 10 attempts per identifier and 10 per
+Login is throttled before any hashing: 10 attempts per identifier and 100 per
 client address in 15 minutes. The next attempt is `429` with `Retry-After`; a
 successful login clears the identifier's count. Behind a reverse proxy set
-`iam.ClientIP(ratelimit.TrustedProxyKey(...))`, or every user shares the proxy's
-address. Also put a [rate limit](../abuse-prevention/rate-limiting.md) in front
+`iam.ClientIP(ratelimit.TrustedProxyKey(...))`: otherwise every user shares the
+proxy's address, and 100 failed attempts from anyone lock login for everyone. Also put a [rate limit](../abuse-prevention/rate-limiting.md) in front
 of `/register`, `/password/forgot` and the other routes that can send email.
 
 ## Confirm and Change

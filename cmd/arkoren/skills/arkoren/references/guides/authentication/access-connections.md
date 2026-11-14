@@ -39,7 +39,8 @@ Concurrent first logins of one identity create one user.
 
 A login with a second factor enrolled is held pending like any other: the callback
 redirects to the OAuth client's challenge URL, where the page posts to
-`/login/challenge`.
+`/login/challenge`. Set `ChallengeURL` on every OAuth client whose users may have
+two-factor on; without it the callback ends the pending login and fails.
 
 ## Connect a Provider
 

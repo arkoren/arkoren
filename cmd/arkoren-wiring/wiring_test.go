@@ -241,14 +241,14 @@ func TestNativeLoginThenDeviceTokenThenMe(t *testing.T) {
 // TestSilentReloginNotFreshForTOTPUser verifies a provider login that
 // re-uses a session does not make a user with an authenticator fresh again: only
 // a code (a step-up method) does. The window is shortened so the user's own
-// proof goes stale after a real 0.3 seconds, because a server round trip is the
+// proof goes stale after a real 1.2 seconds, because a server round trip is the
 // only clock this end-to-end test has.
 func TestSilentReloginNotFreshForTOTPUser(t *testing.T) {
 	t.Parallel()
 
 	sys := newSystem(t, func(iam *access.Builder) {
 		iam.Guard(func(policy *auth.GuardBuilder) {
-			policy.FreshFor(300 * time.Millisecond)
+			policy.FreshFor(time.Second)
 		})
 	})
 	register(t, sys.browser)
@@ -260,7 +260,7 @@ func TestSilentReloginNotFreshForTOTPUser(t *testing.T) {
 		t.Fatalf("connecting callback = %d %s", r.status, r.body)
 	}
 
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(1200 * time.Millisecond)
 	if r := sys.browser.do(http.MethodDelete, "/two-factor", ""); r.status != http.StatusForbidden || !strings.Contains(r.body, `"otp"`) {
 		t.Fatalf("stale proof = %d %s, want 403 listing otp", r.status, r.body)
 	}

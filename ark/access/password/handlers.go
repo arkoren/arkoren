@@ -38,8 +38,9 @@ var passwordFactor = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKno
 // ([ErrThrottled], 429, with Retry-After), authenticates, and hands the user to
 // [auth.Guard.Begin]: 204 when logged in, or 202 with the second-factor methods
 // when the user has to answer a challenge (POST /login/challenge). A failure is
-// [ErrInvalidCredentials] (422), the same for every cause. A successful login
-// clears the identifier's counter.
+// [ErrInvalidCredentials] (422), the same for every cause. The limits are 10
+// attempts per identifier and 100 per client address in 15 minutes; a
+// successful login clears the identifier's counter and refunds the address's.
 //
 // Example:
 //
@@ -56,14 +57,19 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 		}
 		ctx := r.Context()
 		identifierKey, clientKey := verifier.identifierKey(identifier), verifier.clientKey(r)
-		if err := verifier.attempts(ctx, identifierKey, clientKey); err != nil {
+		if err := verifier.attempt(ctx, identifierKey, maxFailures); err != nil {
+			return err
+		}
+		if err := verifier.attempt(ctx, clientKey, maxClientFailures); err != nil {
 			return err
 		}
 		subject, err := verifier.Authenticate(ctx, identifier, body.Password)
 		if err != nil {
 			return err
 		}
-		verifier.release(ctx, identifierKey, clientKey)
+		verifier.clear(ctx, identifierKey)
+		// A success is not an attempt against the address: refund it.
+		_, _ = verifier.store.Decrement(ctx, clientKey, 1)
 		outcome, err := guard.Begin(r, subject, passwordFactor)
 		if err != nil {
 			return err
@@ -161,13 +167,13 @@ func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
 		}
 		if has {
 			subjectKey := verifier.identifierKey("subject:" + subject)
-			if err := verifier.attempts(ctx, subjectKey); err != nil {
+			if err := verifier.attempt(ctx, subjectKey, maxFailures); err != nil {
 				return err
 			}
 			if err := verifier.Check(ctx, subject, body.Current); err != nil {
 				return err
 			}
-			verifier.release(ctx, subjectKey, verifier.clientKey(r))
+			verifier.clear(ctx, subjectKey)
 		}
 		if err := verifier.save(ctx, subject, body.Password); err != nil {
 			return err

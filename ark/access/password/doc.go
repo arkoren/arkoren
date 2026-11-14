@@ -17,9 +17,9 @@
 //   - Login answers one [ErrInvalidCredentials] (422) for an unknown user, a
 //     wrong password, a user without a password and a disabled user, and runs a
 //     dummy hash for the unknown ones so response times match.
-//   - [Verifier.LoginHandler] counts attempts per identifier and per client IP
-//     (10 per 15 minutes) before hashing and answers [ErrThrottled] (429) with
-//     Retry-After when a counter is exhausted. [Verifier.Authenticate] itself
+//   - [Verifier.LoginHandler] counts attempts per identifier (10 per 15
+//     minutes) and per client address (100) before hashing and answers
+//     [ErrThrottled] (429) with Retry-After when a counter is exhausted. [Verifier.Authenticate] itself
 //     does not throttle: it is for code that has its own limits.
 //   - A password change keeps the caller's session and ends the user's other
 //     logins. A reset calls [Users.Rotate], which ends every session, pending

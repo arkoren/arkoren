@@ -65,6 +65,12 @@ sessions and, when tokens are enabled, bearer tokens. Protect your own routes
 with `auth.Require()` as usual. `iam.Ping(ctx)` checks, read-only, that every
 enabled table exists and names the migrations when one does not.
 
+> [!WARNING]
+> These routes change state with a session cookie. Install
+> [CSRF protection](../browser-security/csrf-protection.md) on the router before `iam.Mount`,
+> as in [Session Login](session-login.md); native clients that send no `Origin`
+> header pass it, and bearer tokens need no cookie.
+
 The facade owns both the session middleware and the guard and keeps them on one
 lifetime: set it with `iam.SessionLifetime`, not on each. It uses the default
 session handle, which the provider handlers require.
@@ -72,8 +78,10 @@ session handle, which the provider handlers require.
 ## Routes
 
 `iam.Mount(r)` registers these routes. Only the routes of enabled features are
-mounted, and each has an `iam.XHandler()` method when you need another path or
-a prefix (`web.Group("/account", iam.Mount)` prefixes all of them).
+mounted, and each has an `iam.XHandler()` method when you need another path.
+Mount at the root: the connect handler redirects to `/auth/{name}`, so a prefix
+would break it. For a provider at another path, build the connect handler with
+`iam.Links().ConnectHandler(iam.Guard(), targets)`.
 
 | Area | Routes |
 | --- | --- |
