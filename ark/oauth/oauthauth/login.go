@@ -18,9 +18,17 @@ import (
 // remembers the optional local return_to query target in a sealed cookie.
 // It needs no session.
 //
+// With the query parameter fresh=1 on an OIDC provider, the authorization
+// request also carries prompt=login and max_age=0, which asks the provider to
+// authenticate the user again instead of approving silently. Send step-up flows
+// there: the callback then sees a new auth_time, which satisfies
+// [auth.RequireFresh]. OAuth2 providers have no such request and ignore it. A
+// provider that ignores the request returns an old (or no) auth_time, and the
+// login then does not count as fresh (see [Client.Callback]).
+//
 // Example:
 //
-//	r.Get("/login", client.Login()) // supports ?return_to=/local/path
+//	r.Get("/login", client.Login()) // supports ?return_to=/local/path&fresh=1
 func (client *Client) Login() router.Handler {
 	return func(writer http.ResponseWriter, httpRequest *http.Request) error {
 		if client.config.RedirectURL == "" {
@@ -55,7 +63,13 @@ func (client *Client) Login() router.Handler {
 			return err
 		}
 
-		return response.Redirect(writer, http.StatusFound, ready.oauth.AuthCodeURL(state.State, client.authOptions(state)...))
+		options := client.authOptions(state)
+
+		if client.provider.isOIDC() && httpRequest.URL.Query().Get("fresh") == "1" {
+			options = append(options, oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", "0"))
+		}
+
+		return response.Redirect(writer, http.StatusFound, ready.oauth.AuthCodeURL(state.State, options...))
 	}
 }
 
