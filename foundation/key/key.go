@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -35,8 +36,10 @@ const maxFileSize = 64 * 1024
 //	}
 //	_ = material.Bytes()
 type Shared struct {
-	// material owns the raw secret independently of its input.
-	material string
+	// material owns the raw secret independently of its input. It is a pointer
+	// so fmt and slog, which cannot call methods on unexported fields, print an
+	// address instead of the bytes. The pointee is never mutated; copies share it.
+	material *string
 }
 
 // NewShared validates and copies exactly 32 bytes of raw symmetric key material.
@@ -56,7 +59,9 @@ func NewShared(raw []byte) (Shared, error) {
 		return Shared{}, ErrInvalid
 	}
 
-	return Shared{material: string(raw)}, nil
+	material := string(raw)
+
+	return Shared{material: &material}, nil
 }
 
 // GenerateShared provisions 32 independent random bytes using crypto/rand.
@@ -129,7 +134,7 @@ func LoadShared(path string) (Shared, error) {
 //		fmt.Println("configure a shared key")
 //	}
 func (secret Shared) Err() error {
-	if len(secret.material) != 32 {
+	if secret.material == nil || len(*secret.material) != 32 {
 		return ErrInvalid
 	}
 
@@ -147,7 +152,11 @@ func (secret Shared) Err() error {
 //	}
 //	_ = material.Bytes()
 func (secret Shared) Bytes() []byte {
-	return []byte(secret.material)
+	if secret.material == nil {
+		return []byte{}
+	}
+
+	return []byte(*secret.material)
 }
 
 // Base64 explicitly exports the symmetric secret in padded standard base64.
@@ -173,6 +182,20 @@ func (secret Shared) Base64() string {
 //	fmt.Println(key.Shared{}) // [REDACTED shared key]
 func (secret Shared) String() string {
 	return "[REDACTED shared key]"
+}
+
+// Format writes the same constant redaction marker as String for every verb,
+// including %d, %x and %q, which would otherwise print the underlying value.
+// Verbs, flags, width and precision never change the output, and it never
+// includes material, even for a zero value. Redaction also holds when the
+// value sits in an unexported struct field, because the material is held
+// behind a pointer that reflection-based printing reports as an address.
+//
+// Example:
+//
+//	fmt.Printf("%x", key.Shared{}) // [REDACTED shared key]
+func (secret Shared) Format(state fmt.State, verb rune) {
+	_, _ = io.WriteString(state, secret.String())
 }
 
 // GoString redacts secret material in Go-syntax formatting.

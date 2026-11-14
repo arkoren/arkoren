@@ -61,7 +61,7 @@ jobs:
           GOWORK=off go -C cmd/arkoren-ci build -o "$RUNNER_TEMP/arkoren-ci" .
           echo "cliff=$("$RUNNER_TEMP/arkoren-ci" release tool | jq -r .git_cliff)" >> "$GITHUB_OUTPUT"
       - name: Install checksum-pinned git-cliff for planner fixtures
-        uses: taiki-e/install-action@8bf69897abc26b921431feaaa8ca2b47a6c30c00
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: git-cliff@${{ steps.maintenance.outputs.cliff }}
           checksum: 'true'
