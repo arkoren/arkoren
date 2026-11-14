@@ -72,7 +72,11 @@ func RequireLevel(level Level, configure ...MiddlewareBuilderFunc) router.Middle
 // identity's factors was verified within maxAge, so a long-lived session cannot
 // delete an account without a recent password or second factor; [Guard.Confirm]
 // records such a factor. A factor with an unknown (zero) or future time is not
-// fresh. A maxAge of zero or less admits nothing. Anonymous requests and
+// fresh. A maxAge of zero or less admits nothing. Freshness is only as honest as
+// the factor times: a login method must stamp [Factor.At] with when the user
+// really proved the factor. A federated login that a provider approves silently
+// proves no recent credential, so pass the provider's authentication time (the
+// OIDC auth_time claim) as [Factor.At] instead of leaving it zero (now). Anonymous requests and
 // failures are those of [RequireLevel].
 //
 // Example:
