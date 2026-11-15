@@ -29,8 +29,17 @@ const (
 	DefaultPrefix = "ark"
 
 	// touchInterval is the shortest time between two writes of a token's
-	// last-used time.
-	touchInterval = 5 * time.Minute
+	// last-used time. It is far below any sensible idle lifetime, so the stored
+	// time lags the real use by at most an hour.
+	touchInterval = time.Hour
+
+	// DefaultDeviceIdleTTL is how long a device token may go unused before it
+	// stops working, unless [Builder.DeviceIdleTTL] says otherwise.
+	//
+	// Example:
+	//
+	//	fmt.Println(apitoken.DefaultDeviceIdleTTL) // 2160h0m0s
+	DefaultDeviceIdleTTL = 90 * 24 * time.Hour
 
 	// maxNameLength bounds a token's name, in bytes.
 	maxNameLength = 255
@@ -95,7 +104,7 @@ type Token struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// LastUsedAt is when the token last authenticated a request, at a precision
-	// of about five minutes; zero if never.
+	// of about an hour; zero if never.
 	LastUsedAt time.Time `json:"last_used_at,omitzero"`
 
 	// ExpiresAt is when the token stops working; zero means it never does.
@@ -149,7 +158,11 @@ type Issuer struct {
 	catalog  []string
 	prefix   string
 	maxTTL   time.Duration
-	verified func(context.Context, string) (bool, error)
+
+	// deviceIdle is how long a device token may stay unused; zero disables the
+	// limit.
+	deviceIdle time.Duration
+	verified   func(context.Context, string) (bool, error)
 }
 
 // NewIssuer returns a token issuer. provider finds users (to check that they
@@ -186,7 +199,9 @@ func NewIssuer(provider *auth.UserProvider, db *database.Database, configure ...
 		catalog:  catalog,
 		prefix:   settings.prefix,
 		maxTTL:   settings.maxTTL,
-		verified: settings.verified,
+
+		deviceIdle: settings.deviceIdle(),
+		verified:   settings.verified,
 	}
 	provider.OnForget(issuer.RevokeAll)
 
@@ -347,8 +362,9 @@ func (issuer *Issuer) expiry(requested, now time.Time) (time.Time, error) {
 }
 
 // IssueDevice creates a device token for subject: it carries every scope of the
-// catalog and does not expire, and its holder is expected to revoke it at
-// logout ([Issuer.DeleteCurrentHandler]). device names the device in the user's
+// catalog and expires after [Builder.MaxTTL] when one is set, and after going
+// unused for [Builder.DeviceIdleTTL] (90 days by default); its holder is also
+// expected to revoke it at logout ([Issuer.DeleteCurrentHandler]). device names the device in the user's
 // list (for example "Pixel 9"). It returns the token with its secret text,
 // shown once. Call it after a fresh login only; [Issuer.ExchangeHandler] does.
 // It publishes [Issued].
@@ -362,7 +378,12 @@ func (issuer *Issuer) IssueDevice(ctx context.Context, subject, device string) (
 		return Token{}, "", err
 	}
 
-	return issuer.issue(ctx, subject, KindDevice, name, slices.Clone(issuer.catalog), time.Time{})
+	expiresAt, err := issuer.expiry(time.Time{}, time.Now())
+	if err != nil {
+		return Token{}, "", err
+	}
+
+	return issuer.issue(ctx, subject, KindDevice, name, slices.Clone(issuer.catalog), expiresAt)
 }
 
 // issue writes the token row and returns the token with its text.

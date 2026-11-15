@@ -49,11 +49,12 @@ The answer is `201` with the token and its secret, which is shown once:
 A name is required, at most 255 bytes. An empty name, a scope outside the catalog
 or an expiry in the past is `422`. `expires_at` is optional. To cap lifetimes, set
 `tokens.MaxTTL(d)`: a longer expiry is `422`, and a token without one expires
-after the cap.
+after the cap. The cap applies to device tokens too, but only when you set it:
+with no `MaxTTL` (the default) a token without an expiry never expires by date.
 
 `GET /tokens` lists the user's tokens, newest first, without secrets. Each entry
 carries `id`, `kind`, `name`, `scopes`, `created_at`, `last_used_at` (accurate to
-about five minutes) and `expires_at`. `DELETE /tokens/{id}` revokes one and
+about an hour) and `expires_at`. `DELETE /tokens/{id}` revokes one and
 answers `204`, or `404` for another user's token. Both need a browser session.
 
 ## Authenticating Requests
@@ -95,8 +96,13 @@ jar only for the login:
 
 The login must be at most five minutes old, and a silent re-login does not extend
 that; otherwise the answer is `403` and the user logs in again. A device token
-carries every scope of the catalog and does not expire by itself, so the app must
-revoke it at logout. Exchanging a login for a device token needs a verified email,
+carries every scope of the catalog. It stops working after 90 days without use,
+which you change with `tokens.DeviceIdleTTL(d)` (a negative value turns the limit
+off), and the app should still revoke it at logout. The idle time counts from the
+last use, or from creation for a token never used. The last use is written at most
+once an hour, so a token can lapse up to an hour early, and every request after a
+lapse is `401` with no way to revive it: the user logs in again. `MaxTTL`, when
+set, also ends a device token at a fixed date. Exchanging a login for a device token needs a verified email,
 like creating a personal token.
 
 A password change, enabling two-factor and a password reset revoke all the user's
