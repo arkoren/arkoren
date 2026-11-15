@@ -46,7 +46,7 @@ Use callback aliases (`server.BuilderFunc`) in parameters/slices/returns; litera
    Before wrapping native clients/hooks, check ownership, applicable settings, validation, SDK loading, zero/false, and timing in the driver's guide and source documentation. [Configuration](references/guides/first-steps/configuration.md)
 3. Build facades from drivers; native access uses `Driver()`, `DriverAs[T]()` or `NewFrom`. See [facades](references/guides/core-concepts/facades-and-drivers.md), [typed cache keys](references/guides/cache/overview.md), and [typed session fields](references/guides/http-capabilities/sessions.md).
     Authenticators return a non-generic `auth.Identity` (`arkoren.dev/core/auth`); attach your user to its record, read it with `request.Identity`/`request.User[User]`. Build one `auth.NewGuard(provider, store)` over a `UserProvider` (subjects are strings; deleted or disabled users are anonymous) and share it across authentication and login/logout; `guard.LogoutHandler()` owns the logout route; every login method calls `guard.Begin` with the verified `auth.Factor`s and answers `outcome.Response(w)` (a session already logged in as that subject keeps its login and gains the factor), and `RequireLevel`/`guard.RequireFresh` protect routes by factors, `guard.ChallengeHandler()`/`ConfirmHandler()` verify registered `auth.Credential` values (see [two-factor](references/guides/authentication/two-factor.md)); check mutation errors. Default wiring is handle-free. Read [session login](references/guides/authentication/session-login.md) and [custom session selection](references/guides/authentication/session-login.md#select-sessions) before selecting handles or composing multiple sessions: context slots are not cookie, storage, identity, or authorization isolation.
-    Ready-made login: `arkoren.dev/ark/access` (first release pending; no install command yet) composes the guard, passwords, TOTP, tokens and provider connections: `iam, err := access.New(db, store, func(iam *access.Builder) { iam.Password(hasher); iam.TwoFactor(cipher, "App"); iam.Tokens(); iam.Provider(google); iam.Deliver(send) })`, `migrator.Add(iam.Migrations()...)`, `web := routes.With(iam.Middleware())`, `iam.Mount(web)`. Every credential route needs a browser session and `guard.Fresh`; tokens never carry factors. Read [Access](references/guides/authentication/access.md) before writing hand-rolled login.
+    Ready-made login: `arkoren.dev/ark/access` (`go get arkoren.dev/ark/access`) composes the guard, passwords, TOTP, tokens and provider connections: `iam, err := access.New(db, store, func(iam *access.Builder) { iam.Password(hasher); iam.TwoFactor(cipher, "App"); iam.Tokens(); iam.Provider(google); iam.Deliver(send) })`, `migrator.Add(iam.Migrations()...)`, `web := routes.With(iam.Middleware())`, `iam.Mount(web)`. Every credential route needs a browser session and `guard.Fresh`; tokens never carry factors. Read [Access](references/guides/access/overview.md) before writing hand-rolled login.
     Before upgrading session writers or supplying a custom cache driver, read [Sessions](references/guides/http-capabilities/sessions.md) for atomic guarded persistence and coordinated writer rollout. Unguarded writes bypass retirement protection.
     Share `feature.NewFlag(name, fallback)` across evaluation and memory `Set`/`SetFor`. Read JSON secrets with `secret.NewSecret[T](name)` and `Get(ctx, definition)`; raw `Reference`/`Value` stay unchanged. Invalid definitions fail before I/O; external schemas and JSON-compatible drift still need runtime checks. Read the service guide before namespace use: cache/feature/session default to `":"`; secret requires a separator. Keep deployed cache dots with `Separator(".")`.
     Before pinning secret versions, read [Managing Secrets](references/guides/secrets/managing.md#version-lifetimes). Pinning requires retention of the same logical secret and does not fence permanent deletion and recreation.
@@ -90,7 +90,7 @@ Use callback aliases (`server.BuilderFunc`) in parameters/slices/returns; litera
      Before using Child or upgrading workflows that call it, read [Workflow Drivers](references/guides/workflows/drivers.md) for create-only cancellation ownership, unsupported providers, and replay rollout. Spawn is detached work, not an equivalent fallback.
     Schedule EntryBuilder requires positional names/functions and final When validation. Nil execution functions are domain errors; invalid specs retain the first error. Overlap defaults on; zero timeout is unlimited and negative is invalid. Retained entry drafts cannot change published settings. Spec and scalar/composite/object-wide schemas stay immutable.
     Per-call, SDK and suite options stay separate, including WithTransaction/WithSession. Before workflow telemetry, read [Workflows](references/guides/workflows/overview.md): configure each pod independently, instrument attempts not replay, and upgrade Temporal workers first. [Migrations](references/guides/migrations/overview.md), [Diagnostic Tools](references/guides/diagnostics/diagnostic-tools.md), [Running Agents](references/guides/llm/running-agents.md)
-12. MCP: `core/mcp` defines tools; `ark/mcp/mcpserver` serves HTTP. Start with [a first server and client connection](references/guides/mcp/first-server.md); direct `Tool.Call` is for unit tests.
+12. MCP: `core/mcp` defines tools; `ark/mcp/mcpserver` serves HTTP. Start with [a first server and client connection](references/guides/mcp-server/first-server.md); direct `Tool.Call` is for unit tests.
     Register explicitly with `mcpserver.Builder.Tools`. Admit with `auth.Middleware(auth.Bearer(verifyAccessToken))`, then `auth.Require()` before `routes.Mount("/mcp", endpoint)`; the verifier returns an `auth.Identity` whose record holds the `User` policies read. Optional `gate.Require(canUseMCP)` gates the endpoint. CLI `ARKOREN_MCP_TOKEN` supplies an existing bearer credential; acquisition/refresh is external. Keep SDK imports in composition/adapter; ark factories are application patterns.
     Authenticate HTTP; shared service handlers authorize resources with Gate. App-owned `Available` runs before decode and filters complete unpaginated discovery; policy errors fail closed, even wrapped `ToolError`. Annotations are hints. Input parses once; adapter validates output; no replay. MCP tools/list is the only catalog. CLIInfo/Role/Cursor/Positional/Example are optional namespaced metadata; ToolFailure is approved result metadata outside successful output. Native additions are unmanaged; OAuth metadata/challenges need separate setup. [MCP overview](references/guides/mcp/overview.md)
 
@@ -201,16 +201,9 @@ opaque to inference.
 #### Authentication
 
 - [Authentication Overview](references/guides/authentication/overview.md): Resolve credentials into an identity and choose which routes require it.
-- [Access](references/guides/authentication/access.md): Add registration, login, two-factor, tokens and social sign-in to an application with one facade and a default set of JSON routes.
-- [Access Passwords](references/guides/authentication/access-passwords.md): Register, log in, confirm, change and reset passwords, and verify emails, with the access facade.
 - [Session Login](references/guides/authentication/session-login.md): Check application-owned credentials, rotate the browser session, and revoke account sessions.
 - [Two-Factor Login](references/guides/authentication/two-factor.md): Hold a login until a second factor passes, require a level or recent proof for sensitive routes, and handle the step-up problem.
-- [Access Two-Factor](references/guides/authentication/access-two-factor.md): Enroll an authenticator app, finish logins with a code or a recovery code, and manage both, with the access facade.
 - [API Tokens](references/guides/authentication/api-tokens.md): Accept bearer credentials and manage application-issued API keys with hashed storage and revocation.
-- [Access Tokens](references/guides/authentication/access-tokens.md): Issue personal access tokens and device tokens, authenticate API requests with them and revoke them, with the access facade.
-- [OAuth Login](references/guides/authentication/oauth.md): Complete external browser sign-in and map the provider identity to a local account safely.
-- [Access Connections](references/guides/authentication/access-connections.md): Sign in with external providers, connect them to existing accounts and handle native mobile login, with the access facade.
-- [OIDC Tokens](references/guides/authentication/oidc-bearer.md): Verify provider-issued JWTs for an API and resolve the exact request identity your handlers need.
 
 #### Authorization
 
@@ -406,10 +399,8 @@ opaque to inference.
 
 #### MCP
 
-- [Overview](references/guides/mcp/overview.md): Expose typed application operations as discoverable MCP tools while retaining application-owned policy and HTTP serving.
-- [First Server](references/guides/mcp/first-server.md): Build a local HTTP MCP server and discover and call its first tool with an MCP client.
-- [Tools](references/guides/mcp/tools.md): Define typed tool operations, validate their wire contracts, and register them with application-owned HTTP serving.
-- [Securing MCP](references/guides/mcp/securing-mcp.md): Protect the MCP HTTP boundary with verified identity, TLS, Host and Origin policy, and deliberate OAuth integration.
+- [Overview](references/guides/mcp/overview.md): Define typed application operations as SDK-independent MCP tools while retaining application-owned policy and serving.
+- [Tools](references/guides/mcp/tools.md): Define typed tool operations, validate their input and output contracts, return safe failures, and test them directly.
 - [Capability Access](references/guides/mcp/availability-and-authorization.md): Filter tool availability by caller capability while enforcing resource authorization in shared application operations.
 
 #### Skills
@@ -465,4 +456,29 @@ opaque to inference.
 - [Queues and Operations](references/guides/asyncapi/queues-and-operations.md): Describe shared queue destinations and select the jobs each application produces or consumes.
 - [Bindings and Security](references/guides/asyncapi/bindings-and-security.md): Describe broker endpoints, authentication requirements, and protocol bindings without changing runtime infrastructure.
 - [Serving Documentation](references/guides/asyncapi/serving.md): Export messaging contract files or serve protected JSON with explicit snapshot, caching, and failure behavior.
+
+#### Access
+
+- [Access Overview](references/guides/access/overview.md): Compose registration, login, two-factor, tokens and provider sign-in into one facade, then install its middleware and mount its routes.
+- [Routes](references/guides/access/routes.md): Read the default route table of the access facade, the responses and problems clients receive, and how to serve routes on other paths.
+- [Passwords](references/guides/access/passwords.md): Register, log in, confirm, change and reset passwords, and verify emails, with the access facade.
+- [Two-Factor](references/guides/access/two-factor.md): Enroll an authenticator app, finish logins with a code or a recovery code, and manage both, with the access facade.
+- [API Tokens](references/guides/access/tokens.md): Issue personal access tokens and device tokens, authenticate API requests with them and revoke them, with the access facade.
+- [Connections](references/guides/access/connections.md): Sign in with external providers, connect them to existing accounts and handle native mobile login, with the access facade.
+- [Sessions and Accounts](references/guides/access/accounts.md): List and end logins, delete an account, and see how the facade protects credential changes with fresh logins and verified emails.
+- [Your Own Users](references/guides/access/own-users.md): Replace the built-in users table with your own users and keep the access facade's email rules.
+
+#### OAuth
+
+- [OAuth Overview](references/guides/oauth/overview.md): Install the OAuth ark, configure a provider client, start discovery, and see how it plugs into core authentication.
+- [Browser Login](references/guides/oauth/browser-login.md): Connect the login and callback routes, map provider identities to local accounts, and handle second factors, step-up, failures and events.
+- [Native Login](references/guides/oauth/native-login.md): Log in mobile apps that sign in with the Google or Apple SDK by verifying their ID token against a one-time nonce.
+- [Providers](references/guides/oauth/providers.md): Compare the shipped provider adapters and set up Google, Microsoft, GitHub, Apple, generic OIDC and generic OAuth2.
+- [OIDC Tokens](references/guides/oauth/bearer-tokens.md): Verify provider-issued JWTs for an API and resolve the exact request identity your handlers need.
+
+#### MCP Server
+
+- [First Server](references/guides/mcp-server/first-server.md): Build a local HTTP MCP server and discover and call its first tool with an MCP client.
+- [Serving Tools](references/guides/mcp-server/serving.md): Register typed tools with the MCP Server ark, mount its HTTP endpoint, and understand its transport, availability, telemetry, and native SDK behavior.
+- [Securing MCP](references/guides/mcp-server/securing.md): Protect the MCP HTTP boundary with verified identity, TLS, Host and Origin policy, and deliberate OAuth integration.
 <!-- toc:end -->

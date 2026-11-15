@@ -32,7 +32,7 @@ receive the outer request context. The SDK bounds bodies to 4 MiB by default.
 Managed calls never replay a handler after an output-validation failure.
 Bind a nonsensitive local demonstration to loopback; require authentication,
 Host/Origin policy, and TLS before exposing private tools or remote access.
-Follow [Your First MCP Server](../../../cmd/arkoren/skills/arkoren/references/guides/mcp/first-server.md)
+Follow [Your First MCP Server](../../../cmd/arkoren/skills/arkoren/references/guides/mcp-server/first-server.md)
 for a complete process and a client-verified tool result.
 
 This module pins `github.com/modelcontextprotocol/go-sdk v1.8.0`. Managed output

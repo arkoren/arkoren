@@ -1,25 +1,26 @@
 ---
 title: Tools
-description: Define typed tool operations, validate their wire contracts, and register them with application-owned HTTP serving.
-order: 30
+description: Define typed tool operations, validate their input and output contracts, return safe failures, and test them directly.
+order: 20
 summary:
   - Define a typed shipping quote with input validation and encoded-output checks.
   - Understand strict schema limits, safe failures, and effects that validation cannot undo.
-  - Register tools with your HTTP service and distinguish core tests from transport tests.
-  - Add payload-free telemetry and CLI metadata and recognize native SDK bypasses.
+  - Test a tool definition directly with Tool.Call.
+  - Attach CLI presentation metadata without changing the protocol name.
 ---
 
 # Tools
 
-After your [first MCP connection](first-server.md), expose an operation your
-application owns. Keep its typed handler independent of MCP transport, then
-publish a tool definition and register it at your HTTP composition boundary.
-The endpoint does not discover service methods automatically.
+Expose an operation your application owns as a tool. Keep its typed handler
+independent of MCP transport, then publish an immutable definition with
+`arkoren.dev/core/mcp`. A definition opens no port and discovers nothing by
+itself: the [MCP Server ark](../mcp-server/serving.md) registers the definitions
+you select and serves them over HTTP.
 
 The examples use `context` and `encoding/json/jsontext` from the standard
-library, plus `arkoren.dev/core/mcp`, `arkoren.dev/foundation/validate`, and
-`arkoren.dev/ark/mcp/mcpserver`. Focused fragments omit routine error
-propagation; complete functions handle errors.
+library, plus `arkoren.dev/core/mcp` and `arkoren.dev/foundation/validate`.
+Focused fragments omit routine error propagation; complete functions handle
+errors.
 
 ## Application Operation
 
@@ -114,8 +115,9 @@ var output = validate.Struct(func(object *validate.StructBuilder[Quote]) {
 })
 ```
 
-Add `action.Output(output)` inside the tool's construction callback. The adapter
-checks the encoded result against the published schema. It does not run output
+Add `action.Output(output)` inside the tool's construction callback. A protocol
+adapter such as the [MCP Server ark](../mcp-server/serving.md) checks the encoded
+result against the published schema. It does not run output
 `Parse`, trim values, insert defaults, or execute custom `Check` callbacks. Only
 JSON-expressible output rules participate. A successful 1200-gram quote returns
 the same object as `structuredContent` and text content:
@@ -127,7 +129,7 @@ the same object as `structuredContent` and text content:
 ```
 
 Output checks happen after execution. They do not make effects transactional,
-and the adapter never retries the handler. Put transactions and business
+and the MCP Server ark never retries the handler. Put transactions and business
 idempotency in your service. Pass context to dependencies; cancellation is
 cooperative and does not roll back completed effects.
 
@@ -138,7 +140,7 @@ concurrent calls.
 
 ### Schema Limits
 
-Managed output uses `validate.FromJSONSchemaStrict`, a bounded validator for
+The MCP Server ark validates emitted output with `validate.FromJSONSchemaStrict`, a bounded validator for
 draft-07 and 2020-12. It preserves missing members, `null`, and zero as different
 states. Defaults and formats are annotations, not transformations or format
 assertions. Local references are supported; external references fail without
@@ -167,7 +169,7 @@ proves invalid business output nor undoes effects. See
 [FromJSONSchemaStrict](https://pkg.go.dev/arkoren.dev/foundation/validate#FromJSONSchemaStrict)
 for vocabulary and dialect details.
 
-The pinned SDK separately probes numeric literals in both advertised schemas.
+The MCP Server ark's SDK separately probes numeric literals in both advertised schemas.
 For example, a schema containing `"default":1e1000` exceeds that probe's decoder
 range and fails construction. The probe does not replace schema bytes or impose
 a `float64` range on emitted raw JSON. Client decoders can still round or reject
@@ -188,7 +190,7 @@ quote without exposing its upstream error:
 return Quote{}, mcp.ToolError("shipping quotes are temporarily unavailable")
 ```
 
-The adapter returns a failed tool result with that exact approved message,
+The MCP Server ark returns a failed tool result with that exact approved message,
 without wrapping context. Plain ToolError text is capped at 4096 UTF-8 bytes,
 truncated at a code-point boundary; empty text stays empty and malformed UTF-8
 becomes `tool failed`. Core retains the original error for local inspection.
@@ -211,54 +213,6 @@ but not violation parameters, input values, or decoder diagnostics. Keep schema
 messages free of secrets. Original errors and panic values are logged locally;
 protect log storage and access even though client responses are redacted.
 
-## Endpoint Registration
-
-Assemble the selected tools at application composition time:
-
-```go
-endpoint, err := mcpserver.New("shipping", "1.0.0", func(listener *mcpserver.Builder) {
-	listener.Tools(shipping)
-})
-```
-
-Handle `err` before mounting `endpoint` at `/mcp` in your HTTP service.
-Construction opens no port and rejects invalid declarations, duplicate names,
-and unsupported output schemas before registering any tool with the SDK.
-`Tools` appends registrations and copies supplied slices. Importing a package or
-calling its `MCPTools(prefix)` factory does not expose anything by itself.
-
-Follow the [HTTP mount](first-server.md#http-mount) for the public local sample,
-or [authenticated mounting](securing-mcp.md#typed-authentication) for private
-tools. Authentication, Host/Origin checks, request deadlines, and listener
-timeouts remain application responsibilities.
-
-The MCP endpoint has no lifecycle resources or `Start`/`Stop` methods. Retain
-your existing HTTP listener's startup, serving runner, and cleanup ownership.
-With Arkoren composition, register the listener's `Start`, `Serve`, and `Stop`,
-not the endpoint; [HTTP Server](../http-networking/server.md) covers that wiring.
-There is no adapter tool-duration setting, and a write timeout alone does not
-stop application work.
-
-## Transport Behavior
-
-The adapter uses stateless Streamable HTTP with JSON responses and the SDK's
-default 4 MiB request-body limit. It issues no persistent session ID, stores no
-events for resumable delivery, and returns 405 for GET/DELETE and 413 for
-oversized bodies. It does not serve legacy HTTP+SSE or managed server-initiated
-requests.
-
-The module pins Go MCP SDK v1.8.0, supporting protocol versions 2026-07-28,
-2025-11-25, 2025-06-18, 2025-03-26, and 2024-11-05. Adapter tests exercise
-2026-07-28 and 2025-06-18 clients. Request-cancellation propagation is enabled,
-but the SDK applies it only to 2026-07-28 and later: an older client's disconnect
-does not necessarily cancel its tool. Outer request context values remain
-available to managed handlers.
-
-The SDK's localhost DNS-rebinding protection is enabled. It is not a public
-Host allowlist or an Origin policy. The adapter offers no custom body-limit,
-OAuth, or execution-timeout setting; configure these at the appropriate
-[outer HTTP boundary](securing-mcp.md).
-
 ## Focused Tests
 
 After verifying an actual MCP connection, test operation behavior directly.
@@ -277,22 +231,9 @@ if string(result) != `{"price_cents":900}` {
 This checks typed decoding, input parsing, and the handler. Add tests for invalid
 weights, denied capabilities, cancellation, and resource policy. Direct core
 calls preserve error identities and propagate panics; they do not exercise
-adapter recovery, redaction, or advertised-output validation. Use an SDK client
-against the HTTP handler for those boundaries, as in the
-[adapter HTTP tests](https://github.com/arkoren/arkoren/blob/main/ark/mcp/mcpserver/server_test.go).
-
-## Call Telemetry
-
-With an existing telemetry service named `signals`, add
-`listener.Telemetry(signals)` inside endpoint construction. Omitted or nil
-telemetry follows `telemetry.Default()` per call. Managed tools emit
-`mcp call_tool` spans, call counts, and durations in seconds labeled by registered
-tool name and success/error outcome. They capture no arguments, output, raw
-errors, or model-inference attributes.
-
-Protected error logs remain separate; `listener.Logger(logger)` selects an
-existing `*slog.Logger`. Configure [telemetry export](../observability/telemetry.md)
-and [diagnostic capture](../diagnostics/capture-setup.md) separately.
+adapter recovery, redaction, or advertised-output validation. Test those
+boundaries with an MCP client against the HTTP handler, as described in
+[Testing Over HTTP](../mcp-server/serving.md#testing-over-http).
 
 ## CLI Presentation
 
@@ -305,7 +246,7 @@ action.Positional("weight_grams")
 action.Example("Quote a 1200-gram parcel", `{"weight_grams":1200}`)
 ```
 
-The adapter advertises this under tool `_meta["arkoren.dev/cli"]` in
+The MCP Server ark advertises this under tool `_meta["arkoren.dev/cli"]` in
 `tools/list`, the only catalog. Examples are checked for typed JSON compatibility
 during construction, not executed as calls or parsed through contextual rules.
 The [Arkoren CLI installation](../cli/overview.md#installing-arkoren) and
@@ -314,21 +255,9 @@ follow output is NDJSON, as detailed in
 [Output Formats](../cli/reference.md#output-formats). See
 [Failure Diagnostics](../cli/reference.md#failure-diagnostics) for failure records.
 
-The adapter serializes schemas, CLI metadata, approved failure details, and raw
-JSON output without routing their number tokens through `float64`. This does
-not guarantee precision after a client decodes those records generically.
+The MCP Server ark serializes schemas, CLI metadata, approved failure details,
+and raw JSON output without routing their number tokens through `float64`. This
+does not guarantee precision after a client decodes those records generically.
 
-## Native Extensions
+For declarations, see the [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp).
 
-`endpoint.Server()` exposes the native SDK server for resources, prompts,
-native tools, or another SDK transport such as stdio. Arkoren has no typed
-resources/prompts facade or managed stdio adapter.
-
-Native tools remain visible in discovery but bypass managed availability,
-typed validation, safe-error mapping, recovery, telemetry, and CLI metadata.
-Do not replace managed registrations or their list middleware through this
-accessor: doing so can bypass guards or leave metadata stale.
-
-For exact declarations and transport settings, see the
-[core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp) and
-[MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).

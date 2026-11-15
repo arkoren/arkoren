@@ -11,8 +11,8 @@ summary:
 # API Tokens
 
 > [!NOTE]
-> The [Access](access.md) module issues, stores, scopes and revokes these tokens
-> for you: see [Access Tokens](access-tokens.md). This page shows the bearer
+> The [Access](../access/overview.md) ark issues, stores, scopes and revokes these tokens
+> for you: see [Access Tokens](../access/tokens.md). This page shows the bearer
 > seam you use for credentials of your own.
 
 A program authenticates by sending a secret token with each request, rather
@@ -23,7 +23,7 @@ a token store, or implement a JWT verification policy.
 If you already have a verifier, connect it directly. If your service issues its
 own credentials, a random **API key** backed by a stored hash gives you a
 per-key revocation point. For identity-provider JWTs, use
-[OIDC Tokens](oidc-bearer.md) instead of building another verifier.
+[OIDC Tokens](../oauth/bearer-tokens.md) instead of building another verifier.
 
 ## Accept Bearer Credentials
 
@@ -197,7 +197,7 @@ If the same routes deliberately accept both credentials, configure the
 [authenticator order](overview.md#resolve-credentials). Both authenticators must
 return the same identity type; the first successful one wins even if the request
 also carries another credential. For MCP, reuse the verifier and follow
-[endpoint security](../mcp/securing-mcp.md) for protocol and tool-access rules.
+[endpoint security](../mcp-server/securing.md) for protocol and tool-access rules.
 
 For all functions and options, see the
 [`auth` API reference](https://pkg.go.dev/arkoren.dev/core/auth).

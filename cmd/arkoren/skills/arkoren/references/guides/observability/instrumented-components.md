@@ -301,7 +301,7 @@ wrapping it again duplicates observations.
 Arguments, results, raw errors, unknown tool names, and model-inference fields
 are omitted. Native SDK registrations bypass this instrumentation. This does
 not make the tool result itself private; diagnostic tools can return raw logs
-and attributes. See [managed MCP observation](../mcp/tools.md#call-telemetry)
+and attributes. See [managed MCP observation](../mcp-server/serving.md#call-telemetry)
 and [protected diagnostic registration](../diagnostics/capture-setup.md#protect-registration).
 
 ## Language Models

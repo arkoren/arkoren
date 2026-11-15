@@ -107,7 +107,7 @@ application-level coordination if that concurrency would be unsafe.
 For remote operations, `scheduler.MCPTools("jobs")` supplies an `entries` tool
 for definitions and next calendar matches, and a `run` tool that waits for
 `RunNow`. Select tools explicitly on a
-[protected MCP endpoint](../mcp/securing-mcp.md); omit `run` for read-only callers.
+[protected MCP endpoint](../mcp-server/securing.md); omit `run` for read-only callers.
 Availability policy does not replace resource authorization in application code.
 
 ## Inspecting Entries

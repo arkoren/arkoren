@@ -12,7 +12,7 @@ summary:
 
 > [!NOTE]
 > To get registration, login, password reset and the rest as ready-made routes,
-> use the [Access](access.md) module. This page builds them by hand.
+> use the [Access](../access/overview.md) ark. This page builds them by hand.
 
 A browser login checks credentials once, then stores the account's subject in
 the session. On later requests, `auth.Guard` asks your **user provider** whether
@@ -190,8 +190,8 @@ if err != nil {
 return outcome.Response(w) // 204, or 202 with the second-factor methods to choose from
 ```
 
-`Begin` is the single entry for every login method, including OAuth, SAML and
-passkeys. It looks the account up through the provider (a deleted or disabled
+`Begin` is the single entry for every login method, including federated
+logins such as OAuth and SAML, and passkeys. It looks the account up through the provider (a deleted or disabled
 account is `auth.ErrUnauthenticated`), writes one session record with the
 subject, factors and credential version, and then regenerates the session ID.
 Rotation protects against **session fixation**, where an attacker knows an ID

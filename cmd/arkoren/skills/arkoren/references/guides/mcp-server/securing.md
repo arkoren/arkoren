@@ -1,7 +1,7 @@
 ---
 title: Securing MCP
 description: Protect the MCP HTTP boundary with verified identity, TLS, Host and Origin policy, and deliberate OAuth integration.
-order: 40
+order: 30
 summary:
   - Protect the HTTP endpoint with TLS, Host and Origin policy, and a verified typed user.
   - Distinguish endpoint admission, browser CORS, and cookie CSRF protection.
@@ -11,8 +11,8 @@ summary:
 # Securing MCP
 
 A private MCP tool needs an authenticated caller before protocol dispatch.
-`mcpserver` verifies no credentials and issues no tokens: keep admission in your
-HTTP service. Tool availability decides which operations to offer after admission;
+The MCP Server ark (`mcpserver`) verifies no credentials and issues no tokens:
+keep admission in your HTTP service. Tool availability decides which operations to offer after admission;
 shared application services still authorize the records those operations use.
 
 The [first server](first-server.md) intentionally exposes only a fixed public
@@ -46,14 +46,14 @@ that proxy. A private proxy address alone does not make client headers trusted.
 
 ## Typed Authentication
 
-Use your existing [bearer verifier](../authentication/api-tokens.md) to resolve
+Use your existing [bearer verifier](../access/tokens.md) to resolve
 the application's user, not merely decode claims. Assume `User` is your user
 type and `verifyAccessToken` has signature
 `func(context.Context, string) (auth.Identity, error)`. It attaches the `User`
 to the identity's record when policies need it.
 
 Import `arkoren.dev/core/auth` and add authentication to the router above
-before mounting the checked `endpoint` from [tool registration](tools.md#endpoint-registration):
+before mounting the checked `endpoint` from [tool registration](serving.md#endpoint-registration):
 
 ```go
 routes.Use(auth.Middleware(auth.Bearer(verifyAccessToken)))
@@ -88,7 +88,7 @@ routes.Use(gate.Require(canUseMCP))
 
 `canUseMCP` is your existing `func(context.Context, User) (bool, error)` rule.
 This admits a caller to the whole endpoint; it does not authorize individual
-tools or records. [Capability Access](availability-and-authorization.md) handles
+tools or records. [Capability Access](../mcp/availability-and-authorization.md) handles
 those separate decisions.
 
 ## Browser Access
@@ -136,7 +136,7 @@ option. Pass request context into dependencies: a write timeout or client
 disconnect is not a universal guarantee that work stops, and cancellation
 does not undo completed effects.
 
-The [transport contract](tools.md#transport-behavior) specifies the 4 MiB body
+The [transport contract](serving.md#transport-behavior) specifies the 4 MiB body
 limit and protocol-dependent disconnect cancellation. Configure any stricter
 body limit at your gateway or HTTP boundary. Managed error redaction protects
 tool responses, not arbitrary admission responses or application logs.
@@ -151,7 +151,7 @@ token verifier alone is not that complete integration.
 `oauthauth.Client.Verify` from `arkoren.dev/ark/oauth/oauthauth` verifies
 OIDC bearer access tokens with configured audiences and returns
 `auth.External`. Map it to your application `User` if your policies expect
-that type; the [OIDC bearer guide](../authentication/oidc-bearer.md) owns verifier
+that type; the [OIDC bearer guide](../oauth/bearer-tokens.md) owns verifier
 configuration and lifecycle. The adapter is neither a token issuer nor a complete
 MCP authorization server.
 

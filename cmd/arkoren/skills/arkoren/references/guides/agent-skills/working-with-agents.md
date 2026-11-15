@@ -28,7 +28,7 @@ does not connect to your service, supply credentials, or authorize file edits,
 dependency changes, migrations, or remote operations. Keep those actions within
 your agent's configured permissions and your explicit task. Runtime access has
 separate setup through the [CLI connection](../cli/connecting.md) or an
-[MCP client](../mcp/first-server.md).
+[MCP client](../mcp-server/first-server.md).
 
 ## Installing Skills
 

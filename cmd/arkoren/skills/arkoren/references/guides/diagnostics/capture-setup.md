@@ -16,7 +16,7 @@ then publish only the owner-provided tools your operators need. Capture does not
 mount an endpoint, install authentication, or turn REST routes into MCP tools.
 
 Start with your existing [application composition](../application/composition.md)
-and [MCP server](../mcp/first-server.md). Transport construction and client setup
+and [MCP server](../mcp-server/first-server.md). Transport construction and client setup
 stay there; exporter configuration stays in [Telemetry](../observability/telemetry.md).
 
 ## Attach Capture
@@ -150,7 +150,7 @@ listener.Telemetry(telemetry)
 
 Keep the admin listener private, authenticate and admit requests before the
 `/mcp` mount, and apply the Host/Origin and TLS controls in
-[Securing MCP](../mcp/securing-mcp.md). A loopback listener with an authenticated
+[Securing MCP](../mcp-server/securing.md). A loopback listener with an authenticated
 tunnel limits reachability, but the tunnel does not replace endpoint
 authentication. Tool construction creates no inspection token or access policy.
 

@@ -126,7 +126,7 @@ native cause. Count that outcome rather than trying to unwrap diagnostics.
 untrusted callback hint, not an authenticated diagnosis. `Callback` and `Verify`
 return errors with original causes separately; those causes can expose credentials
 or claims. `Subject` and `Issuer` can identify a person even without email or tokens.
-See [OAuth Login](../authentication/oauth.md#events) for configuration.
+See [OAuth Login](../oauth/browser-login.md#events) for configuration.
 
 ## Database
 

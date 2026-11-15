@@ -19,13 +19,13 @@ contract for one backend.
 
 ## Current Availability
 
-Three arks exist:
+Three arks exist. Each has its own group in the Arks section of these guides:
 
 | Ark | Ships |
 | --- | --- |
-| `arkoren.dev/ark/access` | Registration, login, two-factor, API tokens, social connections and their routes, with their tables. Its first release is pending. See [Access](../authentication/access.md). |
-| `arkoren.dev/ark/oauth` | An OAuth 2 and OpenID Connect client for browser and native login. See [OAuth Login](../authentication/oauth.md). |
-| `arkoren.dev/ark/mcp` | An MCP server over HTTP. See [MCP](../mcp/first-server.md). |
+| `arkoren.dev/ark/access` | Registration, login, two-factor, API tokens, social connections and their routes, with their tables. See [Access](../access/overview.md). |
+| `arkoren.dev/ark/oauth` | An OAuth 2 and OpenID Connect client for browser and native login and for verifying bearer tokens. See [OAuth](../oauth/overview.md). |
+| `arkoren.dev/ark/mcp` | An MCP server over HTTP for the tools you define with core. See [MCP Server](../mcp-server/first-server.md). |
 
 The report feature below illustrates the boundary; it is not an installable
 integration or a promised API.
