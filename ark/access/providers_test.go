@@ -140,7 +140,7 @@ func TestProviderNeverLinksByEmail(t *testing.T) {
 			iam.Password(hasher())
 			iam.Provider(fakeProvider{name: "fake"})
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		device := sys.client.NewDevice()
 		reply := device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
 		if reply.Status != http.StatusConflict {
@@ -162,7 +162,7 @@ func TestConnectFlowLinksAndListsAndDisconnects(t *testing.T) {
 			iam.Password(hasher())
 			iam.Provider(fakeProvider{name: "fake"})
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		connect := sys.client.Post("/connections/fake", "")
 		if connect.Status != http.StatusSeeOther || connect.Header.Get("Location") != "/auth/fake" {
 			t.Fatalf("connect = %d %q", connect.Status, connect.Header.Get("Location"))
@@ -216,7 +216,7 @@ func TestSilentFederatedReloginNotFreshForUserWithPassword(t *testing.T) {
 			iam.Password(hasher())
 			iam.Provider(fakeProvider{name: "fake"})
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		sys.client.Post("/connections/fake", "")
 		sys.client.Do(http.MethodGet, callbackPath("fake", "g1", "", false), "")
 

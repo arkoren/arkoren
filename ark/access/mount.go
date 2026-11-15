@@ -35,7 +35,11 @@ import (
 // the connect handler redirects to "/auth/<name>" and the providers' callbacks
 // are mounted there, so do not mount under a prefix. To serve other paths, register
 // the XHandler methods yourself; for another connect target use
-// [federation.Links.ConnectHandler] on [Access.Links]. Mounting twice, or on a
+// [federation.Links.ConnectHandler] on [Access.Links]. The connect, token,
+// two-factor setup and enable handlers enforce the verified-email rule
+// themselves, so they are gated on every path, including the package handlers
+// of [Access.Links], [Access.Issuer] and [Access.Factors] used directly.
+// Mounting twice, or on a
 // router that already has these patterns, panics like any duplicate route.
 //
 // Example:

@@ -97,8 +97,10 @@ func (iam *Access) ConfirmHandler() router.Handler {
 }
 
 // VerifyEmailHandler returns the handler of POST /email/verify; see
-// [account.Directory.VerifyHandler]. It panics without the built-in directory or
-// without [Builder.Deliver].
+// [account.Directory.VerifyHandler]. It needs a browser session of the account
+// the link belongs to (the user opens the link while logged in), so someone
+// else's click cannot verify an account they do not hold. It panics without the
+// built-in directory or without [Builder.Deliver].
 //
 // Example:
 //
@@ -111,7 +113,8 @@ func (iam *Access) VerifyEmailHandler() router.Handler {
 
 // ResendVerificationHandler returns the handler of POST /email/verify/resend;
 // see [account.Directory.ResendHandler]. It panics without the built-in
-// directory or without [Builder.Deliver].
+// directory or without [Builder.Deliver]. It is throttled per user and per
+// client address and sends in the background ([Access.Wait]).
 //
 // Example:
 //
@@ -124,7 +127,8 @@ func (iam *Access) ResendVerificationHandler() router.Handler {
 
 // ForgotPasswordHandler returns the handler of POST /password/forgot; see
 // [password.Verifier.ForgotHandler]. It panics unless [Builder.Password] and
-// [Builder.Deliver] are set.
+// [Builder.Deliver] are set. The email is sent in the background ([Access.Wait])
+// and the answer is an empty 202 whatever happens.
 //
 // Example:
 //
@@ -165,6 +169,10 @@ func (iam *Access) ChangePasswordHandler() router.Handler {
 // [twofactor.Factors.SetupHandler]. It panics unless [Builder.TwoFactor] is
 // enabled.
 //
+// An unverified email is 403 [account.ErrEmailUnverified]: whoever registered
+// an address first must not attach this before its owner proves it (with your
+// own users, see [Users.Verified]).
+//
 // Example:
 //
 //	web.Post("/two-factor/setup", iam.SetupTwoFactorHandler())
@@ -177,6 +185,9 @@ func (iam *Access) SetupTwoFactorHandler() router.Handler {
 // EnableTwoFactorHandler returns the handler of POST /two-factor; see
 // [twofactor.Factors.EnableHandler]. It panics unless [Builder.TwoFactor] is
 // enabled.
+//
+// An unverified email is 403 [account.ErrEmailUnverified] (see
+// [Users.Verified] with your own users). Enabling ends the user's other logins.
 //
 // Example:
 //
@@ -229,6 +240,9 @@ func (iam *Access) ListTokensHandler() router.Handler {
 // [apitoken.Issuer.CreateHandler]. It panics unless [Builder.Tokens] is
 // enabled.
 //
+// An unverified email is 403 [account.ErrEmailUnverified] (see
+// [Users.Verified] with your own users).
+//
 // Example:
 //
 //	web.Post("/tokens", iam.CreateTokenHandler())
@@ -255,6 +269,9 @@ func (iam *Access) DeleteTokenHandler() router.Handler {
 // fresh login for a device token and ends the session; see
 // [apitoken.Issuer.ExchangeHandler]. It panics unless [Builder.Tokens] is
 // enabled.
+//
+// An unverified email is 403 [account.ErrEmailUnverified] (see
+// [Users.Verified] with your own users).
 //
 // Example:
 //
@@ -358,6 +375,9 @@ func (iam *Access) ListConnectionsHandler() router.Handler {
 // connecting the provider to the logged-in user and redirects (303) to
 // "/auth/<name>"; see [federation.Links.ConnectHandler]. It panics unless
 // [Builder.Provider] is used.
+//
+// An unverified email is 403 [account.ErrEmailUnverified] (see
+// [Users.Verified] with your own users).
 //
 // Example:
 //

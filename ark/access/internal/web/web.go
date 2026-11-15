@@ -4,11 +4,42 @@
 package web
 
 import (
+	"context"
 	"net/http"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/request"
+	"arkoren.dev/foundation/problem"
 )
+
+// ErrEmailUnverified is the 403 problem a handler answers to a user whose email
+// is not verified. account.ErrEmailUnverified is this value, so every package
+// of the module answers with the same stable type.
+var ErrEmailUnverified = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:account:email-unverified")
+	details.Title("Email not verified")
+	details.Detail("Verify your email address to continue.")
+	details.Status(http.StatusForbidden)
+})
+
+// Verified returns [ErrEmailUnverified] when verified, the Verified setting of
+// a package, says subject's email is not verified, and passes its errors
+// through. A nil verified admits everyone: the package then has no way to
+// know, which the facade only allows for the application's own users.
+func Verified(ctx context.Context, verified func(context.Context, string) (bool, error), subject string) error {
+	if verified == nil {
+		return nil
+	}
+	ok, err := verified(ctx, subject)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrEmailUnverified
+	}
+
+	return nil
+}
 
 // MaxBody is the largest JSON body a handler of this module reads, in bytes.
 // Every request of the module carries a handful of short strings.

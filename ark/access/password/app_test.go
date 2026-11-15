@@ -42,16 +42,16 @@ func newFakeUsers() *fakeUsers {
 }
 
 // Lookup is [password.Users.Lookup].
-func (users *fakeUsers) Lookup(_ context.Context, identifier string) (string, error) {
+func (users *fakeUsers) Lookup(_ context.Context, identifier string) (string, string, error) {
 	users.mu.Lock()
 	defer users.mu.Unlock()
 
 	subject, ok := users.subjects[identifier]
 	if !ok {
-		return "", fmt.Errorf("fake: %w", auth.ErrUserNotFound)
+		return "", "", fmt.Errorf("fake: %w", auth.ErrUserNotFound)
 	}
 
-	return subject, nil
+	return subject, identifier, nil
 }
 
 // Create is [password.Users.Create].
@@ -91,6 +91,15 @@ type system struct {
 	sent     *[]password.Message
 }
 
+// settle waits for the reset emails the forgot handler sends in the background.
+func (sys *system) settle(t *testing.T) {
+	t.Helper()
+
+	if err := sys.verifier.Wait(testContext(t)); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+}
+
 // secondFactor is a SecondFactor credential that accepts the code "ok" for the
 // users in enrolled.
 func secondFactor(enrolled map[string]bool) auth.Credential {
@@ -114,6 +123,14 @@ func secondFactor(enrolled map[string]bool) auth.Credential {
 func newSystem(t *testing.T, db *database.Database, instance string, second ...auth.Credential) *system {
 	t.Helper()
 
+	return newConfiguredSystem(t, db, instance, nil, second...)
+}
+
+// newConfiguredSystem is [newSystem] with one more builder callback, applied
+// after the harness's own, for a test that needs a hook.
+func newConfiguredSystem(t *testing.T, db *database.Database, instance string, configure password.BuilderFunc, second ...auth.Credential) *system {
+	t.Helper()
+
 	users := newFakeUsers()
 	provider, err := auth.NewUserProvider(users.driver)
 	if err != nil {
@@ -135,6 +152,9 @@ func newSystem(t *testing.T, db *database.Database, instance string, second ...a
 
 			return nil
 		})
+		if configure != nil {
+			configure(passwords)
+		}
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)

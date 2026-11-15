@@ -32,7 +32,12 @@
 //   - Every credential-changing handler requires a browser session and a fresh
 //     login ([auth.Guard.Fresh]); an API token can never enroll or remove a
 //     factor. Enabling publishes [Enabled] and the core
-//     [auth.CredentialEnrolled] event.
+//     [auth.CredentialEnrolled] event, and ends the user's other logins.
+//   - Weakening two-factor needs more than freshness, which a password alone
+//     satisfies: [Factors.DisableHandler] and [Factors.RecoveryCodesHandler]
+//     require an authenticator or recovery code this session verified within
+//     [Builder.StepUpWindow] and answer [auth.ErrStepUpRequired] with methods
+//     ["otp"] otherwise.
 //
 // # Storage
 //

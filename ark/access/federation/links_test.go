@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -277,6 +278,68 @@ func TestDeleteLastLink(t *testing.T) {
 			if !hasFallback && !errors.Is(err, federation.ErrLastLink) {
 				t.Errorf("Unlink without a fallback error = %v, want ErrLastLink", err)
 			}
+		}
+	})
+}
+
+// TestConcurrentUnlinkKeepsOneWayIn verifies two concurrent unlinks of a
+// user's two connections, with no other way to log in, cannot both succeed:
+// each would see the other still present if the rows were not locked.
+func TestConcurrentUnlinkKeepsOneWayIn(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newSystem(t, db, instance, false, false)
+		for round := range 10 {
+			subject := "r" + strconv.Itoa(round)
+			_ = sys.links.Link(ctx, subject, auth.External{Issuer: google, Subject: "g" + subject})
+			_ = sys.links.Link(ctx, subject, auth.External{Issuer: "https://github.com", Subject: "h" + subject})
+			listed, _ := sys.links.List(ctx, subject)
+			errs := make([]error, len(listed))
+			var wg sync.WaitGroup
+			for i, link := range listed {
+				wg.Go(func() {
+					errs[i] = sys.links.Unlink(ctx, subject, link.ID)
+				})
+			}
+			wg.Wait()
+			succeeded := 0
+			for _, err := range errs {
+				if err == nil {
+					succeeded++
+				} else if !errors.Is(err, federation.ErrLastLink) {
+					t.Fatalf("round %d: Unlink error = %v", round, err)
+				}
+			}
+			if remaining, _ := sys.links.List(ctx, subject); succeeded != 1 || len(remaining) != 1 {
+				t.Fatalf("round %d: %d unlinks succeeded and %d connections remain, want 1 and 1", round, succeeded, len(remaining))
+			}
+		}
+	})
+}
+
+// TestUnlinkAllRemovesEveryConnection verifies the purge a reset uses.
+func TestUnlinkAllRemovesEveryConnection(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newSystem(t, db, instance, false, false)
+		_ = sys.links.Link(ctx, "1", auth.External{Issuer: google, Subject: "g1"})
+		_ = sys.links.Link(ctx, "1", auth.External{Issuer: "https://github.com", Subject: "h1"})
+		_ = sys.links.Link(ctx, "2", auth.External{Issuer: google, Subject: "g2"})
+		if err := sys.links.UnlinkAll(ctx, "1"); err != nil {
+			t.Fatalf("UnlinkAll: %v", err)
+		}
+		if err := sys.links.UnlinkAll(ctx, "1"); err != nil {
+			t.Fatalf("second UnlinkAll: %v", err)
+		}
+		if listed, _ := sys.links.List(ctx, "1"); len(listed) != 0 {
+			t.Fatalf("connections = %+v, want none", listed)
+		}
+		if listed, _ := sys.links.List(ctx, "2"); len(listed) != 1 {
+			t.Fatalf("another user's connections = %+v, want one", listed)
 		}
 	})
 }
