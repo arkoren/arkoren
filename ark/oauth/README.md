@@ -156,7 +156,7 @@ request tokens for, for Apple the bundle ID.
 Google returns the nonce unchanged. Apple copies the request nonce into the token
 as sent, so the app sends the lowercase hex SHA-256 of the nonce and the handler
 accepts only that. Other presets return `ErrUnsupported`. See the
-[browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/authentication/oauth.md#native-login)
+[native login guide](../../cmd/arkoren/skills/arkoren/references/guides/oauth/native-login.md)
 for the provider facts and their sources.
 
 ## API authentication
@@ -337,6 +337,6 @@ Google callbacks use the same direct ordered once-only rules and detach the comp
 OIDC, OAuth2, Apple, Microsoft, and GitHub have no optional builders.
 
 For provider-specific email handling, Apple callback setup, and event payloads,
-follow the [browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/authentication/oauth.md).
+follow the [browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/oauth/overview.md).
 For every exported identifier, see the
 [`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth).

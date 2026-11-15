@@ -158,10 +158,10 @@ allows any authenticated identity.
 
 The OAuth adapter has no scope rule of its own. Wrap its verifier so the
 granted scopes ride on the `auth.Identity`, as shown in
-[OIDC Tokens](../authentication/oidc-bearer.md#require-identity), and use
+[OIDC Tokens](../oauth/bearer-tokens.md#require-identity), and use
 `gate.HasScopes` as above. It neither authenticates nor checks local team
 membership. Map verified issuer-and-subject identity to your local actor before local
-resource decisions, following [OIDC bearer verification](../authentication/oidc-bearer.md).
+resource decisions, following [OIDC bearer verification](../oauth/bearer-tokens.md).
 [API keys](../authentication/api-tokens.md#issue-keys) also need their credential
 permissions intersected with the actor's authority.
 

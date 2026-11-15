@@ -84,7 +84,7 @@ they are not interchangeable backend drivers.
 | Capability | What's included |
 | --- | --- |
 | [HTTP](cmd/arkoren/skills/arkoren/references/guides/http-fundamentals/routing.md) | Routing, error-returning handlers, request / response helpers, and middleware on `net/http` |
-| [Authentication](cmd/arkoren/skills/arkoren/references/guides/authentication/oauth.md) | OAuth 2 / OpenID Connect login and bearer tokens |
+| [Authentication](cmd/arkoren/skills/arkoren/references/guides/authentication/overview.md) | Session logins, second factors and API tokens; OAuth, OpenID Connect and ready-made login live in the [arks](cmd/arkoren/skills/arkoren/references/guides/core-concepts/arks.md) |
 | [Sessions](cmd/arkoren/skills/arkoren/references/guides/http-capabilities/sessions.md) | Session state backed by your chosen cache; no separate session driver |
 | [Events](cmd/arkoren/skills/arkoren/references/guides/events/overview.md) | In-process application events; separate from cross-process broadcasting |
 | [Secure links](cmd/arkoren/skills/arkoren/references/guides/http-capabilities/secure-links.md) | Signed links, with storage only when single-use enforcement needs it |

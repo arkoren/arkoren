@@ -1,10 +1,10 @@
 ---
 title: Overview
-description: Expose typed application operations as discoverable MCP tools while retaining application-owned policy and HTTP serving.
+description: Define typed application operations as SDK-independent MCP tools while retaining application-owned policy and serving.
 order: 10
 summary:
   - Understand how MCP clients discover and call typed application operations.
-  - Separate managed tool protections from HTTP serving and business authorization.
+  - Separate tool definitions from HTTP serving and business authorization.
   - Choose the server walkthrough or diagnostic capture path for your application.
 ---
 
@@ -25,14 +25,15 @@ operations:
 AI host → MCP client → HTTP endpoint → typed operation
 ```
 
-`arkoren.dev/core/mcp` defines immutable tools without depending on a protocol
-SDK. `arkoren.dev/ark/mcp/mcpserver` registers selected definitions with the
-official Go MCP SDK and returns an `http.Handler`. Your application mounts that
-handler and owns the listener, authentication, deadlines, and shutdown.
+`arkoren.dev/core/mcp` defines the last step: immutable tools that do not depend
+on a protocol SDK. Serving them is a separate task owned by the
+[MCP Server ark](../mcp-server/first-server.md), which registers selected
+definitions with the official Go MCP SDK and returns an `http.Handler` that your
+application mounts.
 
-Serving tools does not require a model API key or a model conversation in your
+Defining tools does not require a model API key or a model conversation in your
 Go process. If your application needs to run the model itself, use
-[Running Agents](../llm/running-agents.md) instead. MCP serving, LLM agents, and
+[Running Agents](../llm/running-agents.md) instead. MCP tools, LLM agents, and
 the [documentation skill](../agent-skills/working-with-agents.md) are separate tasks.
 
 ## Typed Operations
@@ -68,26 +69,25 @@ constraints. Tool names are static protocol identifiers, not per-user routes.
 Read-only and other annotations are descriptive hints, not permission checks.
 
 The [Tools guide](tools.md) completes this example with weight validation,
-output checks, registration, and focused tests. Its fragments keep error results
+output checks, and focused tests. Its fragments keep error results
 visible while omitting routine propagation; complete functions and programs
 handle their errors.
 
-## Managed Serving
+## Core Responsibilities
+
+A tool definition owns typed argument decoding, input validation, and an
+optional availability policy that runs before decoding. It also distinguishes
+errors safe to show a client (`mcp.ToolError`, `mcp.ToolFailure`) from internal
+ones. Your application keeps authentication, resource authorization, and
+business effects.
 
 A definition becomes remotely accessible only when you explicitly register it
-with `mcpserver.Builder.Tools` and mount the endpoint. These **managed tools**
-receive typed input parsing, validation of encoded output, safe error mapping,
-panic recovery, and optional payload-free call telemetry.
-
-The endpoint uses stateless Streamable HTTP, not a client-launched stdio command.
-It does not own an HTTP listener or retry handlers. Output validation happens
-after execution, so a failed result does not undo business effects.
-
-Follow [First Server](first-server.md) for a complete loopback server and a real
-client discovery/call path. Before serving private operations or remote traffic,
-configure [Securing MCP](securing-mcp.md). Then use
-[Capability Access](availability-and-authorization.md) to distinguish offering an
-operation from authorizing its selected records.
+with the MCP Server ark. Follow its [First Server](../mcp-server/first-server.md)
+walkthrough for a loopback server and a real client call, then
+[Serving Tools](../mcp-server/serving.md) and [Securing MCP](../mcp-server/securing.md)
+before exposing private operations. Use
+[Capability Access](availability-and-authorization.md) to distinguish offering
+an operation from authorizing its selected records.
 
 ## Diagnostic Tools
 
@@ -103,8 +103,7 @@ for individual operation names and result boundaries.
 
 The [Arkoren CLI](../cli/overview.md) is an optional MCP client, not a second
 catalog or protocol. MCP resources, prompts, native tools, and other transports
-require the [native SDK boundary](tools.md#native-extensions); they do not gain
+require the [native SDK boundary](../mcp-server/serving.md#native-extensions); they do not gain
 managed protections automatically.
 
-For declarations and adapter settings, see the [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp)
-and [MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).
+For declarations, see the [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp).

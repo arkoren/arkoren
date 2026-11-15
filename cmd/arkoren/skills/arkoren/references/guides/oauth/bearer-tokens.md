@@ -12,13 +12,14 @@ summary:
 
 An API can accept an existing JWT issued by a trusted OpenID Connect provider
 without browser routes or a session. `oauthauth.Client.Verify` validates the
-token and returns an external identity; `auth.Bearer` connects that result to
-request authentication.
+token and returns an external identity; core's `auth.Bearer`, described in
+[API Tokens](../authentication/api-tokens.md), connects that result to request
+authentication.
 
 The provider or a separate client flow acquires and refreshes tokens. This
 adapter does not implement a token endpoint, authorization server, opaque-token
 introspection, or provider revocation checks. Plain OAuth2 adapters, including
-GitHub, cannot use `Verify`. For browser sign-in, use [OAuth Login](oauth.md).
+GitHub, cannot use `Verify`. For browser sign-in, use [Browser Login](browser-login.md).
 
 ## Prepare Verification
 
@@ -29,7 +30,7 @@ Use a trusted issuer from application configuration, never from unverified
 request claims.
 
 Install `arkoren.dev/ark/oauth` as shown in
-[OAuth client setup](oauth.md#configure-clients). With an existing
+[OAuth Overview](overview.md#configure-clients). With an existing
 `cipher *crypto.Encrypter` from [Encryption](../encryption/overview.md) and your
 registered `clientID`, configure the verifier:
 
@@ -72,7 +73,7 @@ hook and does not stop its shared encrypter.
 `Verify` checks the JWT signature, expiry, trusted issuer, and whether at least
 one token audience matches a configured API audience. It requires a nonempty
 final subject after any provider-specific mapping. Google and Microsoft apply
-their [preset identity checks](oauth.md#choose-providers); generic OIDC does not
+their [preset identity checks](providers.md); generic OIDC does not
 infer tenant restrictions or email-verification policy.
 
 The discovered provider supplies signing keys through its JWKS endpoint, a
@@ -203,7 +204,7 @@ The repository must reject unknown links with an error other than
 `auth.ErrNoCredentials`. That sentinel would permit credential fallback, not
 reject the presented token. An identity returned with nil error counts as a success.
 Do not create or merge accounts automatically from the email claim; see
-[local-account linkage](oauth.md#link-local-accounts).
+[local-account linkage](browser-login.md#link-local-accounts).
 
 Wire the mapped verifier, not the external one:
 
@@ -231,14 +232,14 @@ Through `auth.Bearer`, verifier errors become an invalid-token HTTP response,
 without exposing the error message to the client. The attached cause can still
 reach diagnostics. Native errors can contain provider-controlled claims, so
 inspect deliberately instead of logging entire chains. Optional
-[token-rejection events](oauth.md#events) contain a bounded opaque error instead;
+[token-rejection events](browser-login.md#events) contain a bounded opaque error instead;
 they do not retain the native cause.
 
 One started OIDC client can handle browser callbacks and APIs, but each uses
 its own audience rule: callbacks require the positional client ID, while
 `Verify` uses configured API audiences. For MCP, apply the same bearer and
 required-user middleware outside the mount and follow
-[MCP endpoint security](../mcp/securing-mcp.md) for challenges, admission, and
+[MCP endpoint security](../mcp-server/securing.md) for challenges, admission, and
 tool/resource authorization. The CLI sends existing credentials; it does not
 acquire or refresh them.
 

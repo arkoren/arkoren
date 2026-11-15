@@ -63,7 +63,7 @@ pkg.go.dev module pages by family; do not add a parallel local API corpus.
 | HTTP | `http-networking` | 46 | Running the HTTP server and making outgoing HTTP calls. |
 | Security | `browser-security` | 52 | Overview, secure headers, CORS, and CSRF protection. |
 | Security | `abuse-prevention` | 55 | Overview, rate limiting, and CAPTCHA. |
-| Security | `authentication` | 60 | Overview, the access module and its feature pages, session login, two-factor, API tokens, OAuth login, and OIDC bearer verification. |
+| Security | `authentication` | 60 | Core authentication only: overview, session login, two-factor, API tokens. Ark-provided login features live in the Arks section. |
 | Security | `authorization` | 65 | Overview (rules and the gate), policies, row-level access, denials. |
 | Security | `hashing` | 70 | Overview, choosing the cost, upgrading hashes, drivers. |
 | Security | `keys` | 72 | Typed application keys, provisioning, and loading. |
@@ -87,7 +87,7 @@ pkg.go.dev module pages by family; do not add a parallel local API corpus.
 | Background | `scheduled-tasks` | 150 | Overview, drivers, calendar schedules, deferred tasks, time zones and DST, error handling. |
 | Background | `workflows` | 160 | Overview, drivers, workflow steps, signals and waiting, running workflows, worker hosts shared with Scheduling, errors, testing. Pending vendor development notes stay outside consumer navigation. |
 | AI | `llm` | 165 | Facade overview, drivers, conversation history, running agents, defining tools, structured output, streaming replies, embeddings, local development, testing. |
-| AI | `mcp` | 167 | Overview, first HTTP server through client verification, tools (definition and serving together), endpoint security, and availability/resource authorization. Keep direct Go calls in testing, after a working MCP connection. |
+| AI | `mcp` | 167 | Core MCP tool definitions only: overview, tools (definition, validation, safe failures, core tests, CLI metadata), and availability/resource authorization. Serving through the SDK adapter lives in `mcp-server`. |
 | AI | `agent-skills` | 169 | Installing and using the Arkoren documentation skill and website Markdown indexes. |
 | Operations | `observability` | 170 | Telemetry, drivers, instrumented components, request logging, request tracing, privacy. |
 | Operations | `diagnostics` | 172 | Capture setup, application diagnosis, diagnostic tool lookup. |
@@ -95,6 +95,9 @@ pkg.go.dev module pages by family; do not add a parallel local API corpus.
 | Operations | `testing` | 180 | Overview, HTTP tests, testing auth, fakes, time, integration tests, driver conformance. |
 | Documentation | `openapi` | 190 | HTTP contract overview, operation descriptions, JSON and Swagger serving, and built-in handler annotations. |
 | Documentation | `asyncapi` | 200 | Messaging contract overview, messages and schemas, queue operations, bindings and security, and JSON serving. |
+| Arks | `access` | 210 | `ark/access`: overview, routes, passwords, two-factor, API tokens, connections, sessions and accounts, your own users. |
+| Arks | `oauth` | 220 | `ark/oauth`: overview, browser login, native login, providers with the compatibility matrix, OIDC bearer tokens. |
+| Arks | `mcp-server` | 230 | `ark/mcp`: first server, serving tools (registration, transport, telemetry, native extensions), securing the endpoint. |
 
 A service with several distinct reader tasks can justify its own group. Follow
 [Category Review](page-writing.md#category-review) to decide its pages and order;
@@ -103,6 +106,17 @@ setup where the reader needs it rather than always last. A small service can
 remain one page in the group whose theme it fits, with a `Drivers` section when
 needed. A new group needs an agreed decision; add its row here in an existing
 section when one fits. A new section is rare: use a short subject label.
+
+Core and arks are documented apart. Guides for `arkoren.dev/core`,
+`foundation/*` and drivers stay in the core sections above. Each
+`arkoren.dev/ark/<name>` module gets its own group in the **Arks** section,
+which comes after every core group. Do not put ark pages inside a core group.
+A core page links to the ark group at the point where a reader would reach for
+the ready-made feature. A capability split between core and an ark is
+documented in both places: define the core contract in its core group, and
+describe serving or composing it in the ark group, for example
+`mcp` (core tools) and `mcp-server` (`ark/mcp`). Write ark pages as released
+modules, using `go get arkoren.dev/ark/<name>`.
 
 Organize guides by reader task, not implementation mechanism. Middleware
 composition belongs in HTTP Fundamentals; individual middleware guides belong

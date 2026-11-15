@@ -11,8 +11,8 @@ summary:
 # Two-Factor Login
 
 > [!NOTE]
-> The [Access](access.md) module ships this flow, with TOTP, recovery codes and
-> their routes: see [Access Two-Factor](access-two-factor.md). This page explains
+> The [Access](../access/overview.md) ark ships this flow, with TOTP, recovery codes and
+> their routes: see [Access Two-Factor](../access/two-factor.md). This page explains
 > the guard seams it is built on, which you use directly for other factors.
 
 A password alone may not be enough to sign someone in, or to let them delete an
@@ -161,7 +161,7 @@ count. The lockout lets anyone who knows a subject delay that user, so also
 
 Each lockout publishes `auth.SecondFactorLocked` with the subject and the end of
 the lockout, once, when the guard has a bus (`policy.Events(bus)`). Subscribe to
-it yourself: `ark/access` does not yet. Count it as a failed login in the
+it yourself and count it as a failed login in the
 throttle of your login route, otherwise an attacker who knows the first factor
 can keep starting pending logins after every lockout at no cost.
 

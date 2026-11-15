@@ -16,7 +16,7 @@ instructions, available tools, and the final output type. `Model.Run` performs
 the loop; the agent itself holds no conversation state.
 
 This is an execution loop in your service, not an installed coding-agent skill
-or an [MCP server](../mcp/first-server.md). The examples use `llm` from
+or an [MCP server](../mcp-server/first-server.md). The examples use `llm` from
 `arkoren.dev/core/service/llm`, standard `errors` and `fmt`, a configured `model`,
 and a caller-specific `ctx`. [Drivers](drivers.md) owns provider setup.
 

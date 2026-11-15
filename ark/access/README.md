@@ -38,7 +38,7 @@ web := routes.With(iam.Middleware())
 iam.Mount(web)
 ```
 
-Read the [Access guide](../../cmd/arkoren/skills/arkoren/references/guides/authentication/access.md)
+Read the [Access guide](../../cmd/arkoren/skills/arkoren/references/guides/access/overview.md)
 for the route table, the responses and the security rules, and the API on
 [pkg.go.dev](https://pkg.go.dev/arkoren.dev/ark/access).
 

@@ -155,7 +155,7 @@ images. No inline script permission is required.
 [Diagnostic route tools](../diagnostics/capture-setup.md) are a separate operator
 interface. They inspect registered routes; they do not mutate OpenAPI schemas or
 turn REST endpoints into MCP tools. Publishing a contract does not replace an
-[MCP server](../mcp/first-server.md).
+[MCP server](../mcp-server/first-server.md).
 
 For document export and settings, see the
 [`router` API reference](https://pkg.go.dev/arkoren.dev/core/http/router).

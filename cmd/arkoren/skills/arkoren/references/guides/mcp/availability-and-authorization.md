@@ -1,7 +1,7 @@
 ---
 title: Capability Access
 description: Filter tool availability by caller capability while enforcing resource authorization in shared application operations.
-order: 50
+order: 30
 summary:
   - Offer tools by a shared capability rule without granting access to every resource.
   - Authorize selected records inside shared application service methods.
@@ -16,7 +16,7 @@ A plan may unlock shipment tracking without granting access to every shipment.
 record. Use a tool availability policy for the first decision and a shared
 application service for the second.
 
-Start with [typed authentication](securing-mcp.md#typed-authentication) already
+Start with [typed authentication](../mcp-server/securing.md#typed-authentication) already
 storing your application user in context. Admission to `/mcp` is not permission
 to use every tool or read every record. Reuse your existing
 [Gate rules](../authorization/overview.md), not a separate MCP permission model.
@@ -141,15 +141,10 @@ the library your authentication model.
 
 ## Request Evaluation
 
-The adapter evaluates availability for every managed tool during `tools/list`.
-It evaluates availability again on every call, before argument decoding and
-validation. Guessing a hidden name cannot bypass this check, and a prior list
-does not grant a durable permission. Register one static catalog; do not cache
-per-user servers to implement discovery filtering.
-
-Discovery returns the complete filtered catalog without pagination or a next
-cursor. A nonempty cursor is rejected. Native SDK tools remain visible without
-managed availability; see [Native Extensions](tools.md#native-extensions).
+Core evaluates availability when a protocol adapter asks, before argument decoding
+and validation. A prior listing grants no durable permission, and guessing a hidden
+name cannot bypass the check. The [MCP Server ark](../mcp-server/serving.md#availability-checks)
+asks for every tool on each `tools/list` and again on each call.
 
 `Tool.Available(ctx)` can check policy directly without decoding or invoking
 the handler. It validates the declaration and cancellation first, checks
@@ -159,21 +154,21 @@ Core also checks cancellation after input parsing, before handler execution.
 ## Evaluation Failures
 
 A `false, nil` policy result is an ordinary denial. Direct `Tool.Call` returns
-`mcp.ErrUnavailable`; the endpoint returns a failed tool result with message
+`mcp.ErrUnavailable`; the MCP Server ark returns a failed tool result with message
 `tool unavailable`. A policy error preserves its cause under
 `mcp.ErrAvailability` in core, but becomes `tool failed` on the wire, even if it
 wraps `mcp.ToolError` or `mcp.ToolFailure`.
 
-A policy error or panic during listing fails the entire request with
-`tool listing failed`, not a partial catalog. Core propagates policy and handler
-panics; the adapter recovers them. Original errors and panic values stay in
-protected local logs. [Safe Failures](tools.md#safe-failures) explains the other
-redaction boundaries.
+Core propagates policy and handler panics. Through the MCP Server ark, a policy
+error or panic during listing fails the entire request with `tool listing failed`,
+not a partial catalog, and the adapter recovers panics. Original errors and
+panic values stay in protected local logs. [Safe Failures](tools.md#safe-failures)
+explains the other redaction boundaries.
 
 Test that denied callers never reach decoding or the handler, and that a
 permitted capability still cannot read another tenant's resource. Direct core
-tests cover policy/service behavior; SDK HTTP tests cover discovery, identity
-propagation, and safe responses.
+tests cover policy/service behavior; [HTTP tests](../mcp-server/serving.md#testing-over-http)
+cover discovery, identity propagation, and safe responses.
 
 ## Shared LLM Policy
 
@@ -185,5 +180,4 @@ has its own checks. See [Offering Capabilities](../llm/defining-tools.md#offerin
 for that boundary.
 
 For exact declaration and policy contracts, see the
-[core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp) and
-[MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).
+[core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp).
