@@ -68,6 +68,23 @@ var ErrInvalidToken = problem.New(func(details *problem.Builder) {
 //	router.With(account.RequireVerified()).Post("/posts", create)
 var ErrEmailUnverified = web.ErrEmailUnverified
 
+// ErrWrongAccount is returned by [Directory.VerifyFor] and the verify handler
+// when the verification token belongs to another account than the logged-in
+// one. The token is not consumed. It is a problem with status 403.
+//
+// Example:
+//
+//	_, err := directory.VerifyFor(ctx, subject, token)
+//	if errors.Is(err, account.ErrWrongAccount) {
+//		// ask the user to log in as the account the email was sent for
+//	}
+var ErrWrongAccount = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:account:verify-wrong-account")
+	details.Title("Wrong account")
+	details.Detail("This verification link belongs to another account. Log in as that account and open it again.")
+	details.Status(http.StatusForbidden)
+})
+
 // ErrThrottled is returned by [Directory.ResendHandler] when a user or a client
 // address asked for too many verification emails. It is a problem with status
 // 429 and a Retry-After header.

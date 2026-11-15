@@ -15,11 +15,15 @@ const (
 	// long, whatever happens to the request that started it.
 	Timeout = time.Minute
 
-	// Limit is how many jobs may run at once. Beyond it a job is logged and
-	// dropped: an attacker who floods a throttled route must not be able to
-	// grow the process without bound, and the request must not block on a slow
-	// mail server either.
+	// Limit is how many jobs run at once.
 	Limit = 16
+
+	// QueueSize is how many jobs wait for a free worker. A burst of requests
+	// (a mail server that slows down for a minute) is absorbed here; only when
+	// the queue is full too is a job dropped and logged, so a flood of throttled
+	// requests can never grow the process without bound and a request never
+	// blocks on a slow mail server.
+	QueueSize = 256
 )
 
 // Group tracks the jobs started with [Group.Go] so a shutdown, or a test, can
@@ -27,22 +31,30 @@ const (
 type Group struct {
 	mu      sync.Mutex
 	running int
+	queue   []func(ctx context.Context)
 	idle    chan struct{}
 }
 
-// Go runs job in a new goroutine and reports whether it started. The job gets a
-// fresh context limited to [Timeout]: it carries nothing from the request that
-// started it (no cancellation, no transaction, no session), so the request's
-// end cannot cancel it and a finished transaction is never reused. A panic in
-// the job is recovered and logged. When [Limit] jobs are already running the
-// job is logged and dropped, and Go returns false.
+// Go runs job on one of [Limit] workers, or queues it behind them, and reports
+// whether it was accepted. The job gets a fresh context limited to [Timeout]: it
+// carries nothing from the request that started it (no cancellation, no
+// transaction, no session), so the request's end cannot cancel it and a finished
+// transaction is never reused. A panic in the job is recovered and logged. When
+// all workers are busy and [QueueSize] jobs already wait, the job is dropped,
+// logged at error level, and Go returns false.
 func (group *Group) Go(job func(ctx context.Context)) bool {
 	group.mu.Lock()
 	if group.running >= Limit {
-		group.mu.Unlock()
-		slog.ErrorContext(context.Background(), "access: background queue is full, a job was dropped")
+		if len(group.queue) >= QueueSize {
+			group.mu.Unlock()
+			slog.ErrorContext(context.Background(), "access: background queue is full, a job was dropped")
 
-		return false
+			return false
+		}
+		group.queue = append(group.queue, job)
+		group.mu.Unlock()
+
+		return true
 	}
 	if group.running == 0 {
 		group.idle = make(chan struct{})
@@ -50,37 +62,49 @@ func (group *Group) Go(job func(ctx context.Context)) bool {
 	group.running++
 	group.mu.Unlock()
 
-	go func() {
-		defer group.finish()
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(context.Background(), "access: background job panicked", "panic", recovered)
-			}
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-		defer cancel()
-		job(ctx)
-	}()
+	go group.work(job)
 
 	return true
 }
 
-// finish records the end of one job and releases the waiters when it was the
-// last.
-func (group *Group) finish() {
-	group.mu.Lock()
-	defer group.mu.Unlock()
+// work runs job and then the queued jobs, until none is left; the last worker
+// to finish releases the waiters.
+func (group *Group) work(job func(ctx context.Context)) {
+	for job != nil {
+		group.run(job)
 
-	group.running--
-	if group.running == 0 {
-		close(group.idle)
+		group.mu.Lock()
+		if len(group.queue) > 0 {
+			job = group.queue[0]
+			group.queue[0] = nil
+			group.queue = group.queue[1:]
+		} else {
+			job = nil
+			group.running--
+			if group.running == 0 {
+				close(group.idle)
+			}
+		}
+		group.mu.Unlock()
 	}
 }
 
-// Wait blocks until no job is running, or returns the error of ctx when it ends
-// first; it leaves nothing behind either way. Jobs started while Wait is
-// blocked may or may not be waited for: call it after the last request, as a
-// shutdown does.
+// run executes one job with a fresh context, recovering a panic.
+func (group *Group) run(job func(ctx context.Context)) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.ErrorContext(context.Background(), "access: background job panicked", "panic", recovered)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	job(ctx)
+}
+
+// Wait blocks until no job is running or queued, or returns the error of ctx
+// when it ends first; it leaves nothing behind either way. Jobs started while
+// Wait is blocked may or may not be waited for: call it after the last request,
+// as a shutdown does.
 func (group *Group) Wait(ctx context.Context) error {
 	group.mu.Lock()
 	if group.running == 0 {

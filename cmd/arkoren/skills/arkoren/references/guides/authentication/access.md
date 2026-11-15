@@ -87,7 +87,7 @@ would break it. For a provider at another path, build the connect handler with
 | --- | --- |
 | Login | `POST /register`, `POST /login`, `POST /login/challenge`, `GET /login/pending`, `POST /logout` |
 | Step-up | `POST /confirm` |
-| Email | `POST /email/verify`, `POST /email/verify/resend` |
+| Email | `POST /email/verify` (log in, then post the token), `POST /email/verify/resend` |
 | Password | `POST /password/forgot`, `POST /password/reset`, `PUT /password` |
 | Two-factor | `POST /two-factor/setup`, `POST /two-factor`, `DELETE /two-factor`, `POST /two-factor/recovery-codes` |
 | Tokens | `GET /tokens`, `POST /tokens`, `DELETE /tokens/{id}`, `POST /device-tokens`, `DELETE /device-tokens/current` |

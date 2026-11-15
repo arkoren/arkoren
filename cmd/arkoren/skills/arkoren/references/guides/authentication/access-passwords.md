@@ -132,10 +132,13 @@ provider verified the email and must fail on an existing identifier.
 
 ## Verify Emails
 
-`POST /email/verify` takes `{"token": "..."}` from the link and answers `204`;
-it needs a browser session of the user the link belongs to, so the user opens
-the link while logged in, as with GitHub. A click while logged out, or as
-another user, is `401` and consumes nothing: otherwise an attacker could
+`POST /email/verify` takes `{"token": "..."}` from the link and answers `204`.
+The flow is: the user logs in, then your verify page posts the token. It needs a
+browser session of the user the link belongs to, as with GitHub, so a page that
+receives the link while logged out should send the user to log in first and
+then post the token. Without a session the answer is `401`; a session of another
+user is `403` (`account:verify-wrong-account`). Neither consumes the token:
+otherwise an attacker could
 register your address with their own password and let your click verify it.
 Only a password reset, which also deletes whatever the registrant attached,
 proves ownership of such an account.
@@ -151,7 +154,9 @@ Verification never blocks login. Require it where it matters:
 posts := web.With(auth.Require(), iam.RequireVerified())
 ```
 
-`RequireVerified` answers `403` to a user whose email is not verified. A user
+`RequireVerified` answers `403` to a user whose email is not verified. It reads
+the claim recorded at login, so a user who verified since their last login
+passes only after logging in again. A user
 created by a provider whose email the provider verified starts verified.
 
 For every function and option, see

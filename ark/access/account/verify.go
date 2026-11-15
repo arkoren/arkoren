@@ -126,8 +126,8 @@ func (directory *Directory) Verify(ctx context.Context, token string) (string, e
 }
 
 // VerifyFor is [Directory.Verify] for a token that must belong to subject, the
-// logged-in user: a token of anyone else returns an error wrapping
-// [auth.ErrUnauthenticated] and is not consumed. [Directory.VerifyHandler] uses
+// logged-in user: a token of anyone else returns [ErrWrongAccount] and is not
+// consumed. [Directory.VerifyHandler] uses
 // it, because a link opened by someone who is not logged in as the account
 // proves nothing about who holds the account's password: an attacker can
 // register a victim's address, and the victim's click on the genuine email must
@@ -161,7 +161,7 @@ func (directory *Directory) verify(ctx context.Context, only, token string) (str
 			return err
 		}
 		if only != "" && pending.Subject != only {
-			return fmt.Errorf("account: verification token of another user: %w", auth.ErrUnauthenticated)
+			return fmt.Errorf("account: verification token of another user: %w", ErrWrongAccount)
 		}
 		// The delete is the single-use gate: of two concurrent requests with
 		// the same token only one removes the row.
@@ -185,7 +185,7 @@ func (directory *Directory) verify(ctx context.Context, only, token string) (str
 		if errors.Is(err, ErrInvalidToken) {
 			return "", ErrInvalidToken
 		}
-		if errors.Is(err, auth.ErrUnauthenticated) {
+		if errors.Is(err, ErrWrongAccount) {
 			return "", err
 		}
 
@@ -199,12 +199,13 @@ func (directory *Directory) verify(ctx context.Context, only, token string) (str
 // VerifyHandler returns the handler of POST /email/verify. The body is
 // {"token": "..."}; success is 204. It needs a browser session
 // ([auth.Identity.Session]) of the user the token belongs to, as GitHub's links
-// do: the user opens the link while logged in. Anyone else, including a user
-// who is not logged in, gets [auth.ErrUnauthenticated] (401) and the token is
-// not consumed, so the owner of an address cannot be tricked into verifying an
-// account someone else registered and holds the password of (a link opened
-// while logged out proves nothing about who controls the account). A bad token
-// is [ErrInvalidToken] (422).
+// do: the user opens the link while logged in. Without a session the answer is
+// [auth.ErrUnauthenticated] (401); a session of another user is
+// [ErrWrongAccount] (403). Either way the token is not consumed, so the owner
+// of an address cannot be tricked into verifying an account someone else
+// registered and holds the password of (a link opened while logged out proves
+// nothing about who controls the account). A bad token is [ErrInvalidToken]
+// (422).
 //
 // Example:
 //
@@ -285,6 +286,11 @@ func (directory *Directory) ResendHandler() router.Handler {
 // [ErrEmailUnverified] (403). Install it after auth middleware. It reads the
 // claim the directory sets, so it fits only applications that use the
 // directory; with their own users, applications check their own state.
+//
+// The claim is the one the session recorded at login, so a user who verified
+// the email since their last login passes only after logging in again. The
+// handlers of the other packages that gate on verification (connect, tokens,
+// two-factor setup) read the table at request time and are not affected.
 //
 // Example:
 //

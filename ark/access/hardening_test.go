@@ -57,8 +57,8 @@ func TestVictimsVerifyClickDoesNotVerifyTheAttackersAccount(t *testing.T) {
 		if reply := victim.Post("/register", `{"email":"other@example.com","password":"correct horse"}`); reply.Status != http.StatusCreated {
 			t.Fatalf("register other = %d", reply.Status)
 		}
-		if reply := victim.Post("/email/verify", `{"token":"`+token+`"}`); reply.Status != http.StatusUnauthorized {
-			t.Fatalf("verify as another user = %d, want 401", reply.Status)
+		if reply := victim.Post("/email/verify", `{"token":"`+token+`"}`); reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "account:verify-wrong-account") {
+			t.Fatalf("verify as another user = %d %s, want 403 verify-wrong-account", reply.Status, reply.Body)
 		}
 
 		// Only the reset proves the mailbox, and it purges.

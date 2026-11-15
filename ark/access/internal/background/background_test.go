@@ -2,6 +2,7 @@ package background_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,20 +25,27 @@ func TestGoRecoversPanicsAndWaitSettles(t *testing.T) {
 	}
 }
 
-// TestGoDropsBeyondTheLimit verifies the bound: jobs past the limit are
-// refused, not queued, and accepted again once slots free up.
-func TestGoDropsBeyondTheLimit(t *testing.T) {
+// TestQueueAbsorbsABurstAndDropsBeyondIt verifies the bounds: with every worker
+// busy, QueueSize jobs wait and all of them run; the next one is dropped, and
+// jobs are accepted again once the work drained.
+func TestQueueAbsorbsABurstAndDropsBeyondIt(t *testing.T) {
 	t.Parallel()
 
 	var group background.Group
 	release := make(chan struct{})
+	var ran atomic.Int64
 	for range background.Limit {
 		if !group.Go(func(context.Context) { <-release }) {
-			t.Fatal("Go refused a job below the limit")
+			t.Fatal("Go refused a job below the worker limit")
 		}
 	}
-	if group.Go(func(context.Context) {}) {
-		t.Fatal("Go accepted a job beyond the limit")
+	for range background.QueueSize {
+		if !group.Go(func(context.Context) { ran.Add(1) }) {
+			t.Fatal("Go refused a job that fits in the queue")
+		}
+	}
+	if group.Go(func(context.Context) { ran.Add(1) }) {
+		t.Fatal("Go accepted a job beyond workers and queue")
 	}
 	close(release)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -45,8 +53,11 @@ func TestGoDropsBeyondTheLimit(t *testing.T) {
 	if err := group.Wait(ctx); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
+	if got := ran.Load(); got != background.QueueSize {
+		t.Fatalf("%d queued jobs ran, want %d", got, background.QueueSize)
+	}
 	if !group.Go(func(context.Context) {}) {
-		t.Fatal("Go still refuses after the jobs finished")
+		t.Fatal("Go still refuses after the work drained")
 	}
 }
 
