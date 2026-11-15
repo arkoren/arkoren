@@ -17,9 +17,11 @@ const (
 	// [GuardBuilder.MaxAttempts]), unless the challenge window is longer.
 	maxLockout = 24 * time.Hour
 
-	// levelTTL is how long the lockout level of a subject is remembered after the
-	// last lockout ends, so the escalation resets after a quiet day.
-	levelTTL = 24 * time.Hour
+	// budgetTTL is the lifetime of a subject's failure budget, counted from its
+	// first failure. The budget sets how long the next lockout lasts, so the
+	// escalation resets once a day passes since the first counted failure, or
+	// earlier on a successful challenge or [Guard.Unlock].
+	budgetTTL = 24 * time.Hour
 )
 
 // Guard turns "this person proved X" into a logged-in browser session. Every
@@ -82,9 +84,9 @@ type Guard struct {
 	// Its lifetime is the lockout, so the entry vanishes when the lockout does.
 	locks cache.Namespace[time.Time]
 
-	// levels names how many lockouts a subject recently earned, kept for
-	// the lockout plus [levelTTL]. It sets how long the next lockout lasts.
-	levels cache.Namespace[int64]
+	// budgets names the counter of a subject's wrong second factors over
+	// [budgetTTL], across windows. It decides how long the next lockout lasts.
+	budgets cache.Namespace[int64]
 
 	// settings are the completed construction settings.
 	settings guardSettings
@@ -156,8 +158,8 @@ func NewGuard(provider *UserProvider, store *cache.Cache, configure ...GuardBuil
 	guard := &Guard{provider: provider, store: store, settings: settings, records: cache.NewNamespace[[]LoginRecord]("arkoren:auth:logins", func(space *cache.NamespaceBuilder) {
 		space.TTL(settings.SessionLifetime)
 	}), attempts: cache.NewNamespace[int64]("arkoren:auth:attempts"),
-		locks:  cache.NewNamespace[time.Time]("arkoren:auth:lockouts"),
-		levels: cache.NewNamespace[int64]("arkoren:auth:lockout-levels", func(space *cache.NamespaceBuilder) { space.TTL(levelTTL) })}
+		locks:   cache.NewNamespace[time.Time]("arkoren:auth:lockouts"),
+		budgets: cache.NewNamespace[int64]("arkoren:auth:failure-budgets")}
 
 	provider.OnForget(guard.RevokeAll)
 
