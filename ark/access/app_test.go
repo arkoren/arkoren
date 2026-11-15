@@ -106,8 +106,15 @@ type app struct {
 func newApp(t *testing.T, db *database.Database, instance string, configure ...access.BuilderFunc) *app {
 	t.Helper()
 
+	return newAppOn(t, db, instance, cache.New(memorycache.New()), configure...)
+}
+
+// newAppOn is [newApp] over the given cache, for tests that break part of it.
+func newAppOn(t *testing.T, db *database.Database, instance string, store *cache.Cache, configure ...access.BuilderFunc) *app {
+	t.Helper()
+
 	box := &outbox{}
-	iam, err := access.New(db, cache.New(memorycache.New()), append([]access.BuilderFunc{func(iam *access.Builder) {
+	iam, err := access.New(db, store, append([]access.BuilderFunc{func(iam *access.Builder) {
 		iam.Instance(instance)
 		iam.Deliver(box.send)
 		iam.Session(func(cookies *session.Builder) {

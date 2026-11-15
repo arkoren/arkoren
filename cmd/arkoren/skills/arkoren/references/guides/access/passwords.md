@@ -76,8 +76,10 @@ identifier across all addresses and 100 per client address. The next attempt is
 The refund stops while the user is in a second-factor lockout. A correct password
 then only parks a pending login that cannot finish, so the facade keeps the attempt
 counted: someone who knows the password cannot start pending logins after every
-lockout at no cost. The facade listens for `auth.SecondFactorLocked` itself, on
-the bus you set with `iam.Events` or on a private one, so it needs no setup.
+lockout at no cost. The login asks the guard (`guard.LockedOut`) after a correct
+password, so it needs no event bus and no setup. If the guard cannot read the
+lockout, for example because the cache is down, the login fails with `500` and
+the attempt stays counted.
 
 Keying the first limit on the address too means someone failing from elsewhere
 cannot lock the real user out. The looser 50 still stops a distributed guess at

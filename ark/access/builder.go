@@ -83,9 +83,9 @@ func (iam *Builder) Instance(name string) *Builder {
 // Events publishes the events of every package on bus: account, password,
 // two-factor, token and connection changes, and the core
 // [auth.CredentialEnrolled]. Events carry subjects only, never tokens, codes or
-// email addresses. A nil bus publishes nothing, except that the facade listens
-// on a private bus for [auth.SecondFactorLocked] (see [Builder.Password]); the
-// guard publishes that event on this bus too, for your own listeners.
+// email addresses. A nil bus publishes nothing. The guard publishes
+// [auth.SecondFactorLocked] on it too, for your own listeners; the facade never
+// depends on events, because a failing listener must not change a decision.
 //
 // Example:
 //
@@ -112,12 +112,11 @@ func (iam *Builder) Users(users Users) *Builder {
 // Password enables registration, login, password confirmation, change, forgot
 // and reset, hashing with hasher. configure customizes the password package (the
 // policy, the reset lifetime); the facade has already set the instance, the
-// events and the client address. Every second-factor lockout of a user (see
-// [auth.SecondFactorLocked]) counts against the login throttle: while it lasts,
-// a correct password of that user is not refunded, so starting pending logins
-// that cannot finish keeps costing throttle budget. The facade subscribes to
-// the guard's event bus itself, the application's [Builder.Events] bus or a
-// private one when there is none; it needs no setup.
+// events and the client address. While a user is in a second-factor lockout
+// ([auth.Guard.LockedOut]), a correct password of that user is not refunded by
+// the login throttle, so starting pending logins that cannot finish keeps
+// costing throttle budget. The login asks the guard, so it needs no bus and
+// fails closed if the lockout cannot be read.
 //
 // Example:
 //

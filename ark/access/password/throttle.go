@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/cache"
 
 	"arkoren.dev/ark/access/internal/storage"
@@ -77,14 +77,15 @@ func (verifier *Verifier) reserveLogin(ctx context.Context, counters loginCounte
 
 // settleLogin undoes the counting of a successful login: it clears the
 // identifier-and-address counter and refunds the other two. A subject in a
-// second-factor lockout (see [Verifier.CountLockout]) is not settled: its
-// correct password only opened a pending login that cannot finish, so the
-// attempt stays counted as the failure it is. A failing lookup of the lockout
-// is returned, and the login fails closed.
-func (verifier *Verifier) settleLogin(ctx context.Context, counters loginCounters, subject string) error {
-	locked, err := verifier.lockedOut(ctx, subject)
+// second-factor lockout ([auth.Guard.LockedOut]) is not settled: its correct
+// password only opens a pending login that cannot finish, so the attempt stays
+// counted as the failure it is, and someone who knows the password cannot start
+// pending logins after every lockout at no cost. The guard keeps the lockout, not
+// an event, so a failing lookup is returned and the login fails closed.
+func (verifier *Verifier) settleLogin(ctx context.Context, guard *auth.Guard, counters loginCounters, subject string) error {
+	locked, err := guard.LockedOut(ctx, subject)
 	if err != nil {
-		return err
+		return fmt.Errorf("access: read second-factor lockout: %w", err)
 	}
 	if locked {
 		return nil
@@ -94,48 +95,6 @@ func (verifier *Verifier) settleLogin(ctx context.Context, counters loginCounter
 	verifier.refund(ctx, counters.client.key)
 
 	return nil
-}
-
-// CountLockout records that subject is locked out of the second factor until
-// until, so that every password login of the subject during the lockout stays
-// counted as a failure on the login throttle instead of being refunded. Without
-// it someone who knows the password could start a new pending login after every
-// lockout at no throttle cost (see [auth.SecondFactorLocked]). It writes one
-// counter per subject that expires with the lockout, never shorter than a
-// second, and keeps no address or secret.
-//
-// ark/access calls it for every [auth.SecondFactorLocked] event; call it
-// yourself only when you wire the packages without the facade. An error means the
-// lockout was not recorded.
-//
-// Example:
-//
-//	_, err := events.Listen(auth.SecondFactorLocked, func(ctx context.Context, locked auth.SecondFactorLockedEvent) error {
-//		return verifier.CountLockout(ctx, locked.Subject, locked.Until)
-//	})
-func (verifier *Verifier) CountLockout(ctx context.Context, subject string, until time.Time) error {
-	_, _, err := verifier.store.IncrementWithTTL(ctx, verifier.lockoutKey(subject), 1, max(time.Until(until), time.Second))
-	if err != nil {
-		return fmt.Errorf("access: count second-factor lockout: %w", err)
-	}
-
-	return nil
-}
-
-// lockedOut reports whether [Verifier.CountLockout] recorded a lockout of
-// subject that has not ended.
-func (verifier *Verifier) lockedOut(ctx context.Context, subject string) (bool, error) {
-	locked, err := verifier.store.Has(ctx, verifier.lockoutKey(subject))
-	if err != nil {
-		return false, fmt.Errorf("access: read second-factor lockout: %w", err)
-	}
-
-	return locked, nil
-}
-
-// lockoutKey is the counter key of the second-factor lockout of one subject.
-func (verifier *Verifier) lockoutKey(subject string) cache.Key[int64] {
-	return cache.NewKey[int64]("access:" + verifier.instance + ":password:locked:" + storage.Hash(subject))
 }
 
 // identifierKey is the counter key of one identifier, lowercased and hashed so

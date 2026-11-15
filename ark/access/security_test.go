@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/access"
@@ -562,8 +565,7 @@ func lockSecondFactor(t *testing.T, sys *app) {
 
 // TestSecondFactorLockoutCountsAgainstTheLoginThrottle verifies that after a
 // lockout a correct password is no longer refunded, so starting pending logins
-// ends in 429 instead of costing nothing, even when the application's Guard
-// callback tried to drop the event bus and the application set no bus.
+// ends in 429 instead of costing nothing, with no event bus set.
 func TestSecondFactorLockoutCountsAgainstTheLoginThrottle(t *testing.T) {
 	t.Parallel()
 
@@ -571,7 +573,6 @@ func TestSecondFactorLockoutCountsAgainstTheLoginThrottle(t *testing.T) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
 			iam.TwoFactor(cipher(t), "Example")
-			iam.Guard(func(policy *auth.GuardBuilder) { policy.Events(nil) })
 		})
 		lockSecondFactor(t, sys)
 		for i := range 12 {
@@ -615,6 +616,42 @@ func TestSecondFactorLockoutReachesTheApplicationBus(t *testing.T) {
 			}
 		default:
 			t.Fatal("the application's bus did not receive SecondFactorLocked")
+		}
+	})
+}
+
+// brokenLockouts is a cache driver whose reads of lockout entries fail once
+// armed, as when the cache is down.
+type brokenLockouts struct {
+	cache.Driver
+	armed atomic.Bool
+}
+
+// Get fails for a lockout entry once armed.
+func (driver *brokenLockouts) Get(ctx context.Context, key string) ([]byte, error) {
+	if driver.armed.Load() && strings.HasPrefix(key, "arkoren:auth:lockouts") {
+		return nil, errors.New("cache down")
+	}
+
+	return driver.Driver.Get(ctx, key)
+}
+
+// TestLoginFailsClosedWhenTheLockoutCannotBeRead verifies a correct password is
+// not accepted, and its attempt is not refunded, when the guard cannot say
+// whether the user is locked out.
+func TestLoginFailsClosedWhenTheLockoutCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		driver := &brokenLockouts{Driver: memorycache.New()}
+		sys := newAppOn(t, db, instance, cache.New(driver), func(iam *access.Builder) {
+			iam.Password(hasher())
+		})
+		register(t, sys.client, "ada@example.com")
+		driver.armed.Store(true)
+		reply := sys.client.NewDevice().Post("/login", `{"email":"ada@example.com","password":"correct horse"}`)
+		if reply.Status != http.StatusInternalServerError {
+			t.Fatalf("login with an unreadable lockout = %d %s, want 500", reply.Status, reply.Body)
 		}
 	})
 }

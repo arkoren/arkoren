@@ -23,7 +23,7 @@
 //     15 minutes. Past a limit it answers [ErrThrottled] (429) with Retry-After.
 //     [Verifier.Authenticate] itself does not throttle: it is for code that has
 //     its own limits. While the user is in a second-factor lockout
-//     ([Verifier.CountLockout]) a correct password is not refunded either, so
+//     ([auth.Guard.LockedOut]) a correct password is not refunded either, so
 //     starting pending logins that cannot finish keeps costing throttle budget.
 //     Register and forgot are counted too, per identifier as
 //     typed and per client address, before any lookup.

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
-	"arkoren.dev/core/event"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/database/migrate"
@@ -181,29 +180,26 @@ func (iam *Access) buildLinks(settings *Builder, users Users) error {
 // buildGuard builds the guard with the credential registries, and the
 // middleware chain around it. The application's [Builder.Guard] callbacks run
 // first and the facade's own settings last, so what the facade owns (the
-// session lifetime, the default session handle, the event bus, the credential
-// registries and the client address) cannot be overridden. Registries only
-// append, so credentials a callback registers directly stay in front of the
-// facade's; see [Builder.Guard].
-//
-// The guard always has an event bus, the application's or a private one, because
-// the facade listens for [auth.SecondFactorLocked] to charge the password login
-// throttle.
+// session lifetime, the default session handle, the credential registries and
+// the client address) cannot be overridden. Registries only append, so
+// credentials a callback registers directly stay in front of the facade's; see
+// [Builder.Guard]. The event bus of [Builder.Events] is set before the
+// callbacks and is not re-asserted: the facade does not depend on it, so a
+// callback may replace it.
 func (iam *Access) buildGuard(settings *Builder) error {
 	secondFactor, stepUp := iam.credentials(settings)
 	iam.secondFactor, iam.stepUp = len(secondFactor) > 0, len(stepUp) > 0
 	lifetime := cmp.Or(settings.sessionLifetime, session.DefaultMaxLifetime)
-	bus := cmp.Or(settings.events, event.New())
-	if err := iam.chargeLockouts(bus); err != nil {
-		return err
-	}
 	configure := append(slices.Clone(settings.guard), func(policy *auth.GuardBuilder) {
-		policy.Handle(session.Handle{}).SessionLifetime(lifetime).Events(bus)
+		policy.Handle(session.Handle{}).SessionLifetime(lifetime)
 		policy.SecondFactor(secondFactor...).StepUp(stepUp...)
 		if settings.clientIP != nil {
 			policy.ClientIP(settings.clientIP)
 		}
 	})
+	// The bus goes first: nothing in the facade depends on it, so an application's
+	// Guard callback may replace it.
+	configure = append([]auth.GuardBuilderFunc{func(policy *auth.GuardBuilder) { policy.Events(settings.events) }}, configure...)
 	guard, err := auth.NewGuard(iam.provider, iam.store, configure...)
 	if err != nil {
 		return err
@@ -212,21 +208,6 @@ func (iam *Access) buildGuard(settings *Builder) error {
 	iam.middleware = iam.chain(settings, lifetime)
 
 	return nil
-}
-
-// chargeLockouts makes every second-factor lockout count as a failed password
-// login of its subject, see [password.Verifier.CountLockout]. Without
-// [Builder.Password] there is no login throttle to charge. The subscription
-// lives as long as the bus.
-func (iam *Access) chargeLockouts(bus *event.Bus) error {
-	if iam.verifier == nil {
-		return nil
-	}
-	_, err := bus.Listen(auth.SecondFactorLocked, func(ctx context.Context, locked auth.SecondFactorLockedEvent) error {
-		return iam.verifier.CountLockout(ctx, locked.Subject, locked.Until)
-	})
-
-	return err
 }
 
 // credentials returns the second-factor and step-up registries: the built-in
