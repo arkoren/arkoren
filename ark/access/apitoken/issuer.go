@@ -144,6 +144,7 @@ type Builder struct {
 	scopes   []string
 	prefix   string
 	maxTTL   time.Duration
+	verified func(context.Context, string) (bool, error)
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -219,6 +220,23 @@ func (tokens *Builder) MaxTTL(ttl time.Duration) *Builder {
 	return tokens
 }
 
+// Verified sets the check that tells whether a user's email is verified.
+// [Issuer.CreateHandler] and [Issuer.ExchangeHandler] then answer 403 (the
+// problem of account.ErrEmailUnverified) to an unverified user, so whoever
+// registered an address first cannot mint a credential before its owner proves
+// the address. Without it the handlers admit everyone, which is only right when
+// the application enforces the rule itself; the facade always sets it with the
+// built-in users. [Issuer.Issue] and [Issuer.IssueDevice] are not gated.
+//
+// Example:
+//
+//	tokens.Verified(directory.Verified)
+func (tokens *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
+	tokens.verified = check
+
+	return tokens
+}
+
 // Issuer issues, authenticates and revokes API tokens. It is safe for
 // concurrent use. Create it with [NewIssuer].
 //
@@ -245,6 +263,7 @@ type Issuer struct {
 	catalog  []string
 	prefix   string
 	maxTTL   time.Duration
+	verified func(context.Context, string) (bool, error)
 }
 
 // NewIssuer returns a token issuer. provider finds users (to check that they
@@ -290,6 +309,7 @@ func NewIssuer(provider *auth.UserProvider, db *database.Database, configure ...
 		catalog:  catalog,
 		prefix:   settings.prefix,
 		maxTTL:   settings.maxTTL,
+		verified: settings.verified,
 	}
 	provider.OnForget(issuer.RevokeAll)
 

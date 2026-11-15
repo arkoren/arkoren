@@ -53,7 +53,8 @@ user out; the looser 50 still stops a distributed guess at one account, and
 that user waits for the window or resets the password. Behind a reverse proxy
 set `iam.ClientIP(ratelimit.TrustedProxyKey(...))`: otherwise every user shares
 the proxy's address, and 100 failed attempts from anyone lock login for
-everyone. `/register`, `/password/forgot` and `/email/verify/resend` are
+everyone. IPv6 clients are counted per /64, because one subscriber controls a
+whole /64. `/register`, `/password/forgot` and `/email/verify/resend` are
 throttled too (see below); still put a
 [rate limit](../abuse-prevention/rate-limiting.md) in front of them.
 
@@ -120,14 +121,24 @@ registered the victim's address before the victim did could have attached them
 (the pre-registration hijack). Until an email is verified, the account cannot
 connect a provider, enroll two-factor or create tokens (`403` email-unverified).
 With your own users (`iam.Users`) the facade does this only if you give
-`Users.Verified` (the gate) and `Users.ProveEmail` (the purge); `Users.Lookup`
+`Users.Verified` (the gate) and `Users.ProveEmail` (the purge), together, and
+both are required when you set `Users.Create`. The checks live in the connect,
+token and two-factor handlers themselves, so they hold on custom paths too. A
+completed reset also clears the failed-login count kept against the address
+across clients. If `AfterChange` fails during a password change the answer is
+`500` after the other logins already ended; repeat the change. `Users.Lookup`
 returns the stored address to mail, and `Users.Create` receives whether the
 provider verified the email and must fail on an existing identifier.
 
 ## Verify Emails
 
 `POST /email/verify` takes `{"token": "..."}` from the link and answers `204`;
-it needs no login, because the link is usually opened on another device.
+it needs a browser session of the user the link belongs to, so the user opens
+the link while logged in, as with GitHub. A click while logged out, or as
+another user, is `401` and consumes nothing: otherwise an attacker could
+register your address with their own password and let your click verify it.
+Only a password reset, which also deletes whatever the registrant attached,
+proves ownership of such an account.
 `POST /email/verify/resend` sends a new link to the logged-in user's stored
 address: an empty `202` as above, at most 5 per user and 20 per client address
 in 15 minutes. Registration is limited to 5 per identifier as typed and 30 per

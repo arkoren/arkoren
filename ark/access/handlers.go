@@ -18,21 +18,6 @@ func need(enabled bool, handler, requirement string) {
 	}
 }
 
-// verified puts the email-verified gate in front of handler. Connecting a
-// provider, enrolling two-factor and creating tokens are what someone who
-// registered another person's address would use to keep access after the real
-// owner resets the password, so unverified users get 403
-// [account.ErrEmailUnverified] there. The gate is the built-in directory's
-// verified flag, or [Users.Verified]; without either (own users that gave no
-// hook) it is absent and the handler is returned as is.
-func (iam *Access) verified(handler router.Handler) router.Handler {
-	if iam.gate == nil {
-		return handler
-	}
-
-	return iam.gate(handler)
-}
-
 // RegisterHandler returns the handler of POST /register; see
 // [password.Verifier.RegisterHandler]. With the built-in directory a new user
 // gets a verification email when [Builder.Deliver] is set. It panics unless
@@ -112,8 +97,10 @@ func (iam *Access) ConfirmHandler() router.Handler {
 }
 
 // VerifyEmailHandler returns the handler of POST /email/verify; see
-// [account.Directory.VerifyHandler]. It panics without the built-in directory or
-// without [Builder.Deliver].
+// [account.Directory.VerifyHandler]. It needs a browser session of the account
+// the link belongs to (the user opens the link while logged in), so someone
+// else's click cannot verify an account they do not hold. It panics without the
+// built-in directory or without [Builder.Deliver].
 //
 // Example:
 //
@@ -192,7 +179,7 @@ func (iam *Access) ChangePasswordHandler() router.Handler {
 func (iam *Access) SetupTwoFactorHandler() router.Handler {
 	need(iam.factors != nil, "SetupTwoFactorHandler", "Builder.TwoFactor")
 
-	return iam.verified(iam.factors.SetupHandler(iam.guard))
+	return iam.factors.SetupHandler(iam.guard)
 }
 
 // EnableTwoFactorHandler returns the handler of POST /two-factor; see
@@ -208,7 +195,7 @@ func (iam *Access) SetupTwoFactorHandler() router.Handler {
 func (iam *Access) EnableTwoFactorHandler() router.Handler {
 	need(iam.factors != nil, "EnableTwoFactorHandler", "Builder.TwoFactor")
 
-	return iam.verified(iam.factors.EnableHandler(iam.guard))
+	return iam.factors.EnableHandler(iam.guard)
 }
 
 // DisableTwoFactorHandler returns the handler of DELETE /two-factor; see
@@ -262,7 +249,7 @@ func (iam *Access) ListTokensHandler() router.Handler {
 func (iam *Access) CreateTokenHandler() router.Handler {
 	need(iam.issuer != nil, "CreateTokenHandler", "Builder.Tokens")
 
-	return iam.verified(iam.issuer.CreateHandler(iam.guard))
+	return iam.issuer.CreateHandler(iam.guard)
 }
 
 // DeleteTokenHandler returns the handler of DELETE /tokens/{id}; see
@@ -292,7 +279,7 @@ func (iam *Access) DeleteTokenHandler() router.Handler {
 func (iam *Access) ExchangeHandler() router.Handler {
 	need(iam.issuer != nil, "ExchangeHandler", "Builder.Tokens")
 
-	return iam.verified(iam.issuer.ExchangeHandler(iam.guard))
+	return iam.issuer.ExchangeHandler(iam.guard)
 }
 
 // DeleteDeviceTokenHandler returns the handler of DELETE /device-tokens/current,
@@ -402,7 +389,7 @@ func (iam *Access) ConnectHandler() router.Handler {
 		targets[provider.Name()] = "/auth/" + provider.Name()
 	}
 
-	return iam.verified(iam.links.ConnectHandler(iam.guard, targets))
+	return iam.links.ConnectHandler(iam.guard, targets)
 }
 
 // DeleteConnectionHandler returns the handler of DELETE /connections/{id}; see

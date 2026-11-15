@@ -123,6 +123,14 @@ func secondFactor(enrolled map[string]bool) auth.Credential {
 func newSystem(t *testing.T, db *database.Database, instance string, second ...auth.Credential) *system {
 	t.Helper()
 
+	return newConfiguredSystem(t, db, instance, nil, second...)
+}
+
+// newConfiguredSystem is [newSystem] with one more builder callback, applied
+// after the harness's own, for a test that needs a hook.
+func newConfiguredSystem(t *testing.T, db *database.Database, instance string, configure password.BuilderFunc, second ...auth.Credential) *system {
+	t.Helper()
+
 	users := newFakeUsers()
 	provider, err := auth.NewUserProvider(users.driver)
 	if err != nil {
@@ -144,6 +152,9 @@ func newSystem(t *testing.T, db *database.Database, instance string, second ...a
 
 			return nil
 		})
+		if configure != nil {
+			configure(passwords)
+		}
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)

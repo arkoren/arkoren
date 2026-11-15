@@ -158,15 +158,18 @@ iam.Users(access.Users{
 	Lookup:   lookup,   // identifier to subject and the stored address to mail
 	Create:   create,   // optional: (ctx, identifier, verified) for registration and first provider login
 	Rotate:   rotate,   // bump UserRecord.Version
-	Verified: verified, // optional: gate connect, two-factor setup and tokens on a verified email
-	ProveEmail: prove,  // optional: a reset proves the mailbox; purge what an earlier holder attached
+	Verified: verified, // gate connect, two-factor setup and tokens on a verified email
+	ProveEmail: prove,  // a reset proves the mailbox; return whether it was unverified, to purge
 })
 ```
 
 `Create` must fail on an existing identifier and never return the existing user.
-Without `Verified` and `ProveEmail` the facade cannot tell whether an email is
-verified, so it neither gates those routes nor purges on reset: enforce the same
-rules in your application.
+`Verified` and `ProveEmail` come together, and both are required when you set
+`Create`, because users it makes start unverified. Without them (users created
+elsewhere) the facade can neither gate those routes nor purge on reset: enforce
+the same rules in your application. `iam.OnEmailProven(hook)` runs inside the
+reset, after the built-in purge, so you can delete credentials of modules the
+facade does not know (a passkey package, say).
 
 No users table is migrated. A password reset calls `Rotate`, so make the user's
 `Version` change: that ends every session, pending login and API token of the

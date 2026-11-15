@@ -1,8 +1,10 @@
 package password_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -382,6 +384,70 @@ func TestResetTokensKeepThreeAndDieTogether(t *testing.T) {
 			if _, err := sys.verifier.Reset(ctx, token, "other horse ok"); !errors.Is(err, password.ErrInvalidToken) {
 				t.Fatalf("a token outlived a completed reset: %v", err)
 			}
+		}
+	})
+}
+
+// TestChangeEndsOtherLoginsEvenWhenTheHookFails verifies a failing AfterChange
+// hook is returned to the client only after the other logins ended, and that a
+// change deletes the user's live reset links.
+func TestChangeEndsOtherLoginsEvenWhenTheHookFails(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
+			passwords.AfterChange(func(context.Context, string) error { return errors.New("hook down") })
+		})
+		sys.registerAda(t, sys.client)
+		other := sys.client.NewDevice()
+		if reply := loginAda(other, "correct horse"); reply.Status != http.StatusNoContent {
+			t.Fatalf("other login = %d", reply.Status)
+		}
+		if err := sys.verifier.SendReset(ctx, "ada@example.com"); err != nil {
+			t.Fatalf("SendReset: %v", err)
+		}
+		reply := sys.client.Do(http.MethodPut, "/password", `{"current_password":"correct horse","password":"changed horse ok"}`)
+		if reply.Status != http.StatusInternalServerError {
+			t.Fatalf("change with a failing hook = %d %s, want 500", reply.Status, reply.Body)
+		}
+		if reply := other.Do(http.MethodGet, "/me", ""); reply.Status != http.StatusUnauthorized {
+			t.Fatalf("the other login after a failed hook = %d, want it ended", reply.Status)
+		}
+		if _, err := sys.verifier.Reset(ctx, (*sys.sent)[0].Token, "reset horse ok"); !errors.Is(err, password.ErrInvalidToken) {
+			t.Fatalf("a reset link survived the change: %v", err)
+		}
+	})
+}
+
+// TestResetClearsTheIdentifierLockout verifies a completed reset clears the
+// failures counted against the address across all clients.
+func TestResetClearsTheIdentifierLockout(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
+			passwords.ClientIP(func(r *http.Request) string { return r.Header.Get("X-Test-IP") })
+		})
+		sys.registerAda(t, sys.client)
+		login := func(secret, ip string) int {
+			return sys.client.NewDevice().Do(http.MethodPost, "/login", `{"email":"ada@example.com","password":"`+secret+`"}`, "X-Test-IP: "+ip).Status
+		}
+		for i := range 50 {
+			login("wrong horse!", "10.0."+strconv.Itoa(i/10)+"."+strconv.Itoa(i%10))
+		}
+		if got := login("correct horse", "10.1.0.1"); got != http.StatusTooManyRequests {
+			t.Fatalf("login after the failures = %d, want 429", got)
+		}
+		if err := sys.verifier.SendReset(ctx, "ada@example.com"); err != nil {
+			t.Fatalf("SendReset: %v", err)
+		}
+		if _, err := sys.verifier.Reset(ctx, (*sys.sent)[0].Token, "reset horse ok"); err != nil {
+			t.Fatalf("Reset: %v", err)
+		}
+		if got := login("reset horse ok", "10.1.0.2"); got != http.StatusNoContent {
+			t.Fatalf("login after the reset = %d, want 204", got)
 		}
 	})
 }

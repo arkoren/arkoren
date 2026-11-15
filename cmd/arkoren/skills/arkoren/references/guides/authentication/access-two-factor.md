@@ -49,8 +49,10 @@ This is the only time they are shown. A wrong code is `422`, ten wrong codes in
 15 minutes are `429`, and enabling without setup is `409`. The session records
 the code, so the user stays fresh for the next change. Enabling also ends every
 other login of the user, so a session an attacker opened before the second
-factor existed does not outlive it, and an unverified email is `403`
-(email-unverified). Enabling publishes the
+factor existed does not outlive it, as do the user's device tokens; all of that
+happens in the same transaction as the activation, so if it fails the answer is
+`500`, two-factor stays off and no recovery code was shown. An unverified email
+is `403` (email-unverified). Enabling publishes the
 `twofactor` enabled event and core's `auth.CredentialEnrolled`.
 
 ## Log In With a Code
@@ -83,8 +85,11 @@ enabled. Both need a fresh login and, on top of that, an authenticator or
 recovery code this session verified recently (15 minutes by default,
 `twofactor.Builder.StepUpWindow`; set the same value as the guard's `FreshFor`
 if you changed it). A recent password alone, which makes core's check pass, is
-`403` with `"methods": ["otp"]`: the client posts `{"method": "otp", ...}` to
-`/confirm` and retries. Someone holding a password and an old session therefore
+`403` listing the user's enrolled second-factor methods the confirm route
+accepts (`"methods": ["otp"]`, plus any registered with
+`iam.SecondFactor`): the client posts `{"method": "otp", ...}` to `/confirm` and
+retries. A recent proof of any of those methods, or a recovery code spent at
+login, counts. Someone holding a password and an old session therefore
 cannot turn two-factor off. Read the state for your account page with `iam.Factors().Status(ctx,
 subject)`.
 

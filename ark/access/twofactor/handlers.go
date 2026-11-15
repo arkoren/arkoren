@@ -1,8 +1,9 @@
 package twofactor
 
 import (
-	"log/slog"
+	"context"
 	"net/http"
+	"slices"
 	"time"
 
 	"arkoren.dev/core/auth"
@@ -18,23 +19,39 @@ type codesBody struct {
 	RecoveryCodes []string `json:"recovery_codes"`
 }
 
-// requireSecondFactor returns [auth.ErrStepUpRequired] with methods ["otp"]
-// unless the session holds an authenticator or recovery code this server
-// verified within the step-up window. A recent password, which core's freshness
-// accepts, is deliberately not enough: whoever has the password and an old
-// session must not be able to weaken the second factor. The user proves a code
-// with POST /confirm and retries.
-func (factors *Factors) requireSecondFactor(identity auth.Identity) error {
+// requireSecondFactor returns nil when the session holds a factor of a
+// second-factor method (the authenticator, a recovery code, or one registered
+// with [Builder.Methods]) that this server verified within the step-up window,
+// and otherwise [auth.ErrStepUpRequired] whose "methods" lists the user's
+// enrolled second-factor methods the confirm route accepts: the authenticator
+// and the registered ones, not recovery codes, which only a login can spend. A
+// recent password, which core's freshness accepts, is deliberately not enough:
+// whoever has the password and an old session must not be able to weaken the
+// second factor. The user proves a code with POST /confirm and retries.
+func (factors *Factors) requireSecondFactor(ctx context.Context, identity auth.Identity) error {
+	accepted := []auth.Method{auth.MethodOTP, MethodRecovery}
+	for _, credential := range factors.extra {
+		accepted = append(accepted, credential.Method)
+	}
 	now := time.Now()
 	for _, factor := range identity.Factors() {
-		if (factor.Method == auth.MethodOTP || factor.Method == MethodRecovery) &&
-			!factor.At.IsZero() && !factor.At.After(now) && now.Sub(factor.At) <= factors.window {
+		if slices.Contains(accepted, factor.Method) && !factor.At.IsZero() && !factor.At.After(now) && now.Sub(factor.At) <= factors.window {
 			return nil
+		}
+	}
+	methods := []auth.Method{auth.MethodOTP}
+	for _, credential := range factors.extra {
+		enrolled, err := credential.Enrolled(ctx, identity.Subject())
+		if err != nil {
+			return err
+		}
+		if enrolled {
+			methods = append(methods, credential.Method)
 		}
 	}
 
 	return auth.ErrStepUpRequired.Derive(func(details *problem.Builder) {
-		details.Extension("methods", []auth.Method{auth.MethodOTP})
+		details.Extension("methods", methods)
 	})
 }
 
@@ -54,6 +71,9 @@ func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
+			return err
+		}
+		if err := web.Verified(r.Context(), factors.verified, identity.Subject()); err != nil {
 			return err
 		}
 		label := identity.Subject()
@@ -89,26 +109,40 @@ func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
 		if err != nil {
 			return err
 		}
+		if err := web.Verified(r.Context(), factors.verified, identity.Subject()); err != nil {
+			return err
+		}
 		body, err := web.Decode[codeBody](r)
 		if err != nil {
 			return err
 		}
-		codes, err := factors.Activate(r.Context(), identity.Subject(), body.Code)
+		// Enabling two-factor ends every other login and runs OnEnable in the
+		// same transaction as the activation: a session an attacker opened before
+		// the user had a second factor must not outlive it, and if ending it
+		// fails nothing was activated, so two-factor stays off and no recovery
+		// code was shown and lost. The request carries the transaction's context
+		// so the guard's reads join it instead of waiting for another connection.
+		var codes []string
+		err = factors.db.WithTransaction(r.Context(), func(ctx context.Context) error {
+			var err error
+			if codes, err = factors.Activate(ctx, identity.Subject(), body.Code); err != nil {
+				return err
+			}
+			if err := guard.RevokeOthers(r.WithContext(ctx)); err != nil {
+				return err
+			}
+			if factors.enabled == nil {
+				return nil
+			}
+
+			return factors.enabled(ctx, identity.Subject())
+		})
 		if err != nil {
 			return err
 		}
-		// Enabling two-factor ends every other login: a session an attacker
-		// opened before the user had a second factor must not outlive it.
-		// The recovery codes are shown only once, so a store failure here is
-		// logged and does not turn into an error that loses them.
-		if err := guard.RevokeOthers(r); err != nil {
-			slog.ErrorContext(r.Context(), "access: ending other logins after enabling two-factor failed", "subject", identity.Subject(), "error", err)
-		}
 		// Begin on the session of the same subject keeps the login and records
 		// the code as a factor from now on, so the user stays fresh. It runs after
-		// Activate committed, not inside its transaction: it reads credential
-		// state through the request context, which must not wait for a connection
-		// the transaction holds. The recovery codes are shown only once, so a
+		// the transaction committed. The recovery codes are shown only once, so a
 		// session-store failure here must not turn into an error that loses them;
 		// the user is merely asked to confirm again before the next change.
 		_, _ = guard.Begin(r, identity.Subject(), auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
@@ -141,7 +175,7 @@ func (factors *Factors) DisableHandler(guard *auth.Guard) router.Handler {
 		if !enabled {
 			return ErrNotEnabled
 		}
-		if err := factors.requireSecondFactor(identity); err != nil {
+		if err := factors.requireSecondFactor(r.Context(), identity); err != nil {
 			return err
 		}
 		if err := factors.Remove(r.Context(), identity.Subject()); err != nil {
@@ -175,7 +209,7 @@ func (factors *Factors) RecoveryCodesHandler(guard *auth.Guard) router.Handler {
 		if !enabled {
 			return ErrNotEnabled
 		}
-		if err := factors.requireSecondFactor(identity); err != nil {
+		if err := factors.requireSecondFactor(r.Context(), identity); err != nil {
 			return err
 		}
 		codes, err := factors.Regenerate(r.Context(), identity.Subject())

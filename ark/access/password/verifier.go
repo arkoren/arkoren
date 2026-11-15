@@ -465,6 +465,7 @@ func (verifier *Verifier) Migrations() []migrate.Definition {
 				table.String("subject", 255).Bytewise()
 				table.BigInteger("expires_at")
 				table.BigInteger("created_at")
+				table.String("address", 255).Bytewise()
 				table.Index("subject")
 			})))
 			migration.Down(migrate.Schema(schema.Drop(verifier.resets)))
@@ -750,9 +751,19 @@ func (verifier *Verifier) SendReset(ctx context.Context, identifier string) erro
 	}
 	expiresAt := time.Now().Add(verifier.resetTTL)
 	err = verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
+		// Lock the user's existing tokens first (a no-op update) so concurrent
+		// requests count and trim one after the other and the limit holds. With
+		// no token yet there is nothing to lock; then the throttle, not this
+		// lock, bounds a burst, and the next request trims the surplus.
+		_, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
+			statement.Where("subject", subject).Update(map[string]any{"subject": subject})
+		}))
+		if err != nil {
+			return err
+		}
 		// Expired tokens are dead weight; of the live ones keep the newest
 		// maxLiveResets-1 so the new token makes at most maxLiveResets.
-		_, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
+		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
 			statement.Where("subject", subject).Where("expires_at", "<=", time.Now().Unix()).Delete()
 		}))
 		if err != nil {
@@ -784,6 +795,7 @@ func (verifier *Verifier) SendReset(ctx context.Context, identifier string) erro
 				"token_hash": storage.Hash(token),
 				"expires_at": expiresAt.Unix(),
 				"created_at": time.Now().UnixNano(),
+				"address":    address,
 			})
 		}))
 
@@ -817,13 +829,14 @@ func (verifier *Verifier) Reset(ctx context.Context, token, password string) (st
 	if err := verifier.policy(ctx, password); err != nil {
 		return "", err
 	}
-	var subject string
+	var subject, address string
 	hashed := storage.Hash(token)
 	err := verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
 		pending, err := verifier.db.Find[struct {
 			Subject string `db:"subject"`
+			Address string `db:"address"`
 		}](ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Select("subject").Where("token_hash", hashed).Where("expires_at", ">", time.Now().Unix()).Limit(1)
+			statement.Select("subject", "address").Where("token_hash", hashed).Where("expires_at", ">", time.Now().Unix()).Limit(1)
 		}))
 		if errors.Is(err, database.ErrNoRows) {
 			return ErrInvalidToken
@@ -842,7 +855,7 @@ func (verifier *Verifier) Reset(ctx context.Context, token, password string) (st
 		if affected == 0 {
 			return ErrInvalidToken
 		}
-		subject = pending.Subject
+		subject, address = pending.Subject, pending.Address
 		// The user's other live tokens die with this one: the password they
 		// were meant to reset no longer exists.
 		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
@@ -868,6 +881,11 @@ func (verifier *Verifier) Reset(ctx context.Context, token, password string) (st
 	if err != nil {
 		return "", fmt.Errorf("password: reset: %w", err)
 	}
+	// The owner proved the mailbox, so failed logins counted against the
+	// identifier (by whoever was guessing) no longer lock them out. Only the
+	// cap across addresses can be cleared: the per-address counters are the
+	// guesser's. It matches when the user typed the address at login.
+	verifier.clear(ctx, verifier.identifierKey(address))
 	verifier.emit(ctx, WasReset, subject)
 
 	return subject, nil
@@ -925,14 +943,14 @@ func (verifier *Verifier) identifierKey(identifier string) cache.Key[int64] {
 
 // clientKey is the counter key of the client address of r.
 func (verifier *Verifier) clientKey(r *http.Request) cache.Key[int64] {
-	return cache.NewKey[int64]("access:" + verifier.instance + ":password:ip:" + verifier.clientIP(r))
+	return cache.NewKey[int64]("access:" + verifier.instance + ":password:ip:" + throttle.Bucket(verifier.clientIP(r)))
 }
 
 // pairKey is the counter key of one identifier from one client address, the
 // login lockout: an attacker's failures lock only the attacker's own address
 // out of the account.
 func (verifier *Verifier) pairKey(identifier string, r *http.Request) cache.Key[int64] {
-	return cache.NewKey[int64]("access:" + verifier.instance + ":password:pair:" + storage.Hash(strings.ToLower(strings.TrimSpace(identifier))) + ":" + verifier.clientIP(r))
+	return cache.NewKey[int64]("access:" + verifier.instance + ":password:pair:" + storage.Hash(strings.ToLower(strings.TrimSpace(identifier))) + ":" + throttle.Bucket(verifier.clientIP(r)))
 }
 
 // throttleAction counts one request of action (such as "forgot") on the
@@ -945,5 +963,5 @@ func (verifier *Verifier) throttleAction(r *http.Request, action, identifier str
 		return err
 	}
 
-	return verifier.attempt(r.Context(), cache.NewKey[int64](prefix+":ip:"+verifier.clientIP(r)), perClient)
+	return verifier.attempt(r.Context(), cache.NewKey[int64](prefix+":ip:"+throttle.Bucket(verifier.clientIP(r))), perClient)
 }

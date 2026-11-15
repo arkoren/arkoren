@@ -3,12 +3,14 @@ package password
 import (
 	"cmp"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
+	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/access/internal/web"
 )
@@ -164,7 +166,10 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 // is 204. It publishes [Changed] and runs [Builder.AfterChange] (the facade
 // revokes the user's device tokens there, because a device keeps no session to
 // end). It does not rotate the user, so tokens the hook leaves, such as
-// personal access tokens, survive a change.
+// personal access tokens, survive a change. It also deletes the user's live
+// reset links. If the hook fails the response is its error (500), but the
+// password is already changed and the other logins already ended; the client
+// should repeat the change so the hook runs again.
 //
 // Example:
 //
@@ -201,13 +206,25 @@ func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
 			return err
 		}
 		verifier.emit(ctx, Changed, subject)
+		// Reset links sent before the change no longer belong to this password.
+		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
+			statement.Where("subject", subject).Delete()
+		}))
+		if err != nil {
+			return err
+		}
+		// Ending the other logins always runs, even when the hook fails: the
+		// password has changed, so a failing hook must not leave other sessions
+		// alive. The hook's error is returned after, and the client may retry.
+		var hookErr error
 		if verifier.changed != nil {
-			if err := verifier.changed(ctx, subject); err != nil {
-				return err
-			}
+			hookErr = verifier.changed(ctx, subject)
 		}
 		if err := guard.RevokeOthers(r); err != nil {
-			return err
+			return errors.Join(err, hookErr)
+		}
+		if hookErr != nil {
+			return hookErr
 		}
 		// Begin on the session of the same subject keeps the login and records
 		// the password as a factor from now, so the user is fresh for the next
@@ -253,7 +270,7 @@ func (verifier *Verifier) ForgotHandler() router.Handler {
 		if err := verifier.throttleAction(r, "forgot", identifier, maxForgot, maxClientForgot); err != nil {
 			return err
 		}
-		verifier.jobs.Go(r.Context(), func(ctx context.Context) {
+		verifier.jobs.Go(func(ctx context.Context) {
 			if err := verifier.SendReset(ctx, identifier); err != nil {
 				slog.ErrorContext(ctx, "access: password reset email failed", "error", err)
 			}

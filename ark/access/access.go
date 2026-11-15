@@ -11,7 +11,6 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
-	"arkoren.dev/core/http/request"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -174,9 +173,11 @@ type NativeProvider interface {
 // directory refuses unverified users the actions an earlier holder of the
 // address could abuse (connecting a provider, enrolling two-factor, creating
 // tokens) and, when a password reset proves the mailbox, removes what such a
-// holder attached. With your own users the facade can do the same only through
-// [Users.Verified] and [Users.ProveEmail]; without them it does neither, and
-// the application must enforce the rule itself.
+// holder attached. With your own users the facade does the same through
+// [Users.Verified] and [Users.ProveEmail], which are given together or not at
+// all and are required whenever [Users.Create] is set (new users start
+// unverified); without them (users created elsewhere) it does neither, and the
+// application must enforce the rule itself.
 type Users struct {
 	// Provider serves the application's users to the guard. Its driver's
 	// UserRecord.Version must change when Rotate runs.
@@ -203,13 +204,14 @@ type Users struct {
 	// with [Builder.Password].
 	Rotate func(ctx context.Context, subject string) error
 
-	// Verified is optional. It reports whether the user's email is verified. The
-	// facade then answers 403 [account.ErrEmailUnverified] to unverified users on
-	// the routes that connect a provider, enroll two-factor or create tokens.
-	// Without it those routes are open to unverified users.
+	// Verified reports whether the user's email is verified. The handlers that
+	// connect a provider, enroll two-factor or create tokens then answer 403
+	// [account.ErrEmailUnverified] to unverified users. It must be given with
+	// ProveEmail, and is required when Create is set; without it those routes
+	// are open to unverified users.
 	Verified func(ctx context.Context, subject string) (bool, error)
 
-	// ProveEmail is optional. A completed password reset calls it, in the
+	// ProveEmail is given together with Verified. A completed password reset calls it, in the
 	// reset's transaction, because the link reached the mailbox. It marks the
 	// email verified and reports whether it was unverified before; if so the
 	// facade deletes the user's connections, two-factor enrolment, recovery
@@ -253,6 +255,7 @@ type Builder struct {
 	sessionLifetime time.Duration
 	clientIP        func(*http.Request) string
 	revokePersonal  bool
+	emailProven     func(context.Context, string) error
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -363,6 +366,23 @@ func (iam *Builder) Tokens(configure ...apitoken.BuilderFunc) *Builder {
 //	iam.RevokeTokensOnPasswordChange()
 func (iam *Builder) RevokeTokensOnPasswordChange() *Builder {
 	iam.revokePersonal = true
+
+	return iam
+}
+
+// OnEmailProven sets a function that runs when a completed password reset
+// proved the mailbox of a user whose email was not verified, in the reset's
+// transaction and after the built-in purge of connections, authenticator,
+// recovery codes and tokens. Use it to delete what the application or a module
+// registered through [Builder.SecondFactor] or [Builder.StepUp] (passkeys, say)
+// may have attached in the meantime; the facade cannot know of them. An error
+// rolls the reset back. It does not run when the email was already verified.
+//
+// Example:
+//
+//	iam.OnEmailProven(passkeys.RemoveAll)
+func (iam *Builder) OnEmailProven(hook func(ctx context.Context, subject string) error) *Builder {
+	iam.emailProven = hook
 
 	return iam
 }
@@ -527,10 +547,12 @@ type Access struct {
 	migrations []migrate.Definition
 	pingers    []func(context.Context) error
 
-	// gate is the middleware that admits only users with a verified email, put
-	// before the handlers that connect a provider, enroll two-factor or create
-	// tokens; nil when nothing can tell (own users without Users.Verified).
-	gate router.Middleware
+	// verified tells whether a user's email is verified: the directory's, or
+	// Users.Verified. It is the Verified setting of the packages whose handlers
+	// connect a provider, enroll two-factor or create tokens, and is nil only
+	// with the application's own users and no Users.Verified, validated to
+	// come together with Users.ProveEmail.
+	verified func(context.Context, string) (bool, error)
 
 	// extraSecondFactor and extraStepUp record credentials registered through
 	// the Builder, so the handlers that need a registry can tell it is not empty.
@@ -601,6 +623,12 @@ func (iam *Access) validate(settings Builder) error {
 		if settings.hasher != nil && (users.Lookup == nil || users.Rotate == nil) {
 			return errors.New("Users.Lookup and Users.Rotate are required with Password")
 		}
+		if (users.Verified == nil) != (users.ProveEmail == nil) {
+			return errors.New("Users.Verified and Users.ProveEmail are given together or not at all")
+		}
+		if users.Create != nil && users.Verified == nil {
+			return errors.New("Users.Verified and Users.ProveEmail are required with Users.Create: new users start unverified")
+		}
 	}
 	if settings.sessionLifetime < 0 {
 		return errors.New("negative session lifetime")
@@ -619,25 +647,7 @@ func (iam *Access) build(settings Builder) error {
 	)
 	if settings.users != nil {
 		iam.provider, lookup, create, rotate = settings.users.Provider, settings.users.Lookup, settings.users.Create, settings.users.Rotate
-		if verified := settings.users.Verified; verified != nil {
-			iam.gate = func(next router.Handler) router.Handler {
-				return func(w http.ResponseWriter, r *http.Request) error {
-					identity, err := request.Identity(r)
-					if err != nil {
-						return err
-					}
-					ok, err := verified(r.Context(), identity.Subject())
-					if err != nil {
-						return err
-					}
-					if !ok {
-						return account.ErrEmailUnverified
-					}
-
-					return next(w, r)
-				}
-			}
-		}
+		iam.verified = settings.users.Verified
 	} else {
 		iam.directory, err = account.NewDirectory(iam.db, func(accounts *account.Builder) {
 			accounts.Instance(settings.instance).Events(settings.events).Throttle(iam.store, settings.clientIP)
@@ -658,11 +668,11 @@ func (iam *Access) build(settings Builder) error {
 
 			return iam.directory.Create(ctx, email)
 		}
-		iam.gate = account.RequireVerified()
+		iam.verified = iam.directory.Verified
 		iam.add(iam.directory.Migrations(), iam.directory.Ping)
 	}
 	if settings.hasher != nil {
-		users := password.Users{Lookup: lookup, Rotate: rotate, ProveEmail: iam.proveEmail(settings.users)}
+		users := password.Users{Lookup: lookup, Rotate: rotate, ProveEmail: iam.proveEmail(settings.users, settings.emailProven)}
 		if create != nil {
 			users.Create = func(ctx context.Context, identifier string) (string, error) {
 				return create(ctx, identifier, false)
@@ -704,6 +714,15 @@ func (iam *Access) build(settings Builder) error {
 		iam.factors, err = twofactor.NewFactors(iam.provider, iam.db, iam.store, settings.cipher, settings.issuer,
 			append([]twofactor.BuilderFunc{func(factors *twofactor.Builder) {
 				factors.Instance(settings.instance).Events(settings.events)
+				factors.Verified(iam.verified).Methods(settings.secondFactor...)
+				// The issuer is built after the factors, so look it up when enabling.
+				factors.OnEnable(func(ctx context.Context, subject string) error {
+					if iam.issuer == nil {
+						return nil
+					}
+
+					return iam.issuer.RevokeDevices(ctx, subject)
+				})
 			}}, settings.twofactor...)...)
 		if err != nil {
 			return err
@@ -714,6 +733,7 @@ func (iam *Access) build(settings Builder) error {
 		iam.issuer, err = apitoken.NewIssuer(iam.provider, iam.db,
 			append([]apitoken.BuilderFunc{func(tokens *apitoken.Builder) {
 				tokens.Instance(settings.instance).Events(settings.events)
+				tokens.Verified(iam.verified)
 			}}, settings.apitoken...)...)
 		if err != nil {
 			return err
@@ -723,6 +743,7 @@ func (iam *Access) build(settings Builder) error {
 	if len(settings.providers) > 0 {
 		iam.links, err = federation.NewLinks(iam.provider, iam.db, func(links *federation.Builder) {
 			links.Instance(settings.instance).Events(settings.events)
+			links.Verified(iam.verified)
 			links.Create(iam.createExternal(create))
 			if iam.verifier != nil {
 				links.Fallback(iam.verifier.Has)
@@ -765,7 +786,7 @@ func (iam *Access) createExternal(create func(context.Context, string, bool) (st
 // and the handler ends the logins. It reads the packages when it runs, because
 // they are built after it. It is nil when there is nothing to prove with: own
 // users without [Users.ProveEmail].
-func (iam *Access) proveEmail(users *Users) func(context.Context, string) error {
+func (iam *Access) proveEmail(users *Users, hook func(context.Context, string) error) func(context.Context, string) error {
 	prove := func(ctx context.Context, subject string) (bool, error) {
 		return iam.directory.ProveEmail(ctx, subject)
 	}
@@ -792,7 +813,12 @@ func (iam *Access) proveEmail(users *Users) func(context.Context, string) error 
 			}
 		}
 		if iam.issuer != nil {
-			return iam.issuer.RevokeAll(ctx, subject)
+			if err := iam.issuer.RevokeAll(ctx, subject); err != nil {
+				return err
+			}
+		}
+		if hook != nil {
+			return hook(ctx, subject)
 		}
 
 		return nil

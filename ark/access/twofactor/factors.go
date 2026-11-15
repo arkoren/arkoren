@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,6 +84,9 @@ type Builder struct {
 	scheme   totp.Scheme
 	codes    int
 	window   time.Duration
+	verified func(context.Context, string) (bool, error)
+	enabled  func(context.Context, string) error
+	extra    []auth.Credential
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -163,6 +167,53 @@ func (factors *Builder) StepUpWindow(window time.Duration) *Builder {
 	return factors
 }
 
+// Verified sets the check that tells whether a user's email is verified.
+// [Factors.SetupHandler] and [Factors.EnableHandler] then answer 403 (the
+// problem of account.ErrEmailUnverified) to an unverified user, so whoever
+// registered an address first cannot enroll an authenticator before its owner
+// proves the address. Without it the handlers admit everyone, which is only
+// right when the application enforces the rule itself; the facade always sets
+// it with the built-in users.
+//
+// Example:
+//
+//	factors.Verified(directory.Verified)
+func (factors *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
+	factors.verified = check
+
+	return factors
+}
+
+// OnEnable sets a function that [Factors.EnableHandler] runs in the same
+// transaction as the activation, after ending the user's other logins, for what
+// must not outlive a new second factor (the facade revokes the user's device
+// tokens). If it fails the transaction rolls back: two-factor stays off and no
+// recovery code is shown.
+//
+// Example:
+//
+//	factors.OnEnable(issuer.RevokeDevices)
+func (factors *Builder) OnEnable(hook func(ctx context.Context, subject string) error) *Builder {
+	factors.enabled = hook
+
+	return factors
+}
+
+// Methods registers second-factor credentials from other modules (a passkey
+// package, say) whose recent proof also lets [Factors.DisableHandler] and
+// [Factors.RecoveryCodesHandler] proceed, and which the 403 step-up answer
+// offers when the user has them enrolled. Do not pass a password credential:
+// a password is the one proof these handlers exist to look beyond.
+//
+// Example:
+//
+//	factors.Methods(passkeys.Credential())
+func (factors *Builder) Methods(credentials ...auth.Credential) *Builder {
+	factors.extra = append(factors.extra, credentials...)
+
+	return factors
+}
+
 // Enrollment is what setup returns: the secret for manual entry and the
 // otpauth:// URI for a QR code. Both contain the secret; show them only to the
 // enrolling user and never log them.
@@ -215,6 +266,9 @@ type Factors struct {
 	scheme   totp.Scheme
 	count    int
 	window   time.Duration
+	verified func(context.Context, string) (bool, error)
+	enabled  func(context.Context, string) error
+	extra    []auth.Credential
 }
 
 // NewFactors returns the two-factor store. cipher encrypts the secrets (use a
@@ -270,6 +324,9 @@ func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache
 		scheme:   settings.scheme,
 		count:    settings.codes,
 		window:   settings.window,
+		verified: settings.verified,
+		enabled:  settings.enabled,
+		extra:    slices.Clone(settings.extra),
 	}
 	provider.OnForget(factors.forget)
 

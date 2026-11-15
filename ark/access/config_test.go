@@ -314,7 +314,10 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 			t.Fatalf("NewUserProvider: %v", err)
 		}
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate})
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
+				Verified:   func(context.Context, string) (bool, error) { return true, nil },
+				ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
+			})
 			iam.Password(hasher())
 		})
 		if sys.iam.Directory() != nil {

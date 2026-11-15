@@ -122,6 +122,29 @@ func (directory *Directory) SendVerification(ctx context.Context, subject string
 //		// show the expired-link page
 //	}
 func (directory *Directory) Verify(ctx context.Context, token string) (string, error) {
+	return directory.verify(ctx, "", token)
+}
+
+// VerifyFor is [Directory.Verify] for a token that must belong to subject, the
+// logged-in user: a token of anyone else returns an error wrapping
+// [auth.ErrUnauthenticated] and is not consumed. [Directory.VerifyHandler] uses
+// it, because a link opened by someone who is not logged in as the account
+// proves nothing about who holds the account's password: an attacker can
+// register a victim's address, and the victim's click on the genuine email must
+// not hand the attacker a verified account. Only a password reset, which also
+// removes whatever the registrant attached, proves ownership of such an
+// account.
+//
+// Example:
+//
+//	_, err := directory.VerifyFor(ctx, identity.Subject(), token)
+func (directory *Directory) VerifyFor(ctx context.Context, subject, token string) (string, error) {
+	return directory.verify(ctx, subject, token)
+}
+
+// verify implements [Directory.Verify] and [Directory.VerifyFor]; only is the
+// subject the token must belong to, or empty for any.
+func (directory *Directory) verify(ctx context.Context, only, token string) (string, error) {
 	var subject string
 	hashed := storage.Hash(token)
 	now := time.Now().Unix()
@@ -136,6 +159,9 @@ func (directory *Directory) Verify(ctx context.Context, token string) (string, e
 		}
 		if err != nil {
 			return err
+		}
+		if only != "" && pending.Subject != only {
+			return fmt.Errorf("account: verification token of another user: %w", auth.ErrUnauthenticated)
 		}
 		// The delete is the single-use gate: of two concurrent requests with
 		// the same token only one removes the row.
@@ -159,6 +185,9 @@ func (directory *Directory) Verify(ctx context.Context, token string) (string, e
 		if errors.Is(err, ErrInvalidToken) {
 			return "", ErrInvalidToken
 		}
+		if errors.Is(err, auth.ErrUnauthenticated) {
+			return "", err
+		}
 
 		return "", fmt.Errorf("account: verify email: %w", err)
 	}
@@ -168,21 +197,31 @@ func (directory *Directory) Verify(ctx context.Context, token string) (string, e
 }
 
 // VerifyHandler returns the handler of POST /email/verify. The body is
-// {"token": "..."}; success is 204. It needs no login, because the link is
-// usually opened on another device. A bad token is [ErrInvalidToken] (422).
+// {"token": "..."}; success is 204. It needs a browser session
+// ([auth.Identity.Session]) of the user the token belongs to, as GitHub's links
+// do: the user opens the link while logged in. Anyone else, including a user
+// who is not logged in, gets [auth.ErrUnauthenticated] (401) and the token is
+// not consumed, so the owner of an address cannot be tricked into verifying an
+// account someone else registered and holds the password of (a link opened
+// while logged out proves nothing about who controls the account). A bad token
+// is [ErrInvalidToken] (422).
 //
 // Example:
 //
 //	web.Post("/email/verify", directory.VerifyHandler())
 func (directory *Directory) VerifyHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
+		identity, err := web.Session(r)
+		if err != nil {
+			return err
+		}
 		body, err := web.Decode[struct {
 			Token string `json:"token"`
 		}](r)
 		if err != nil {
 			return err
 		}
-		if _, err := directory.Verify(r.Context(), body.Token); err != nil {
+		if _, err := directory.VerifyFor(r.Context(), identity.Subject(), body.Token); err != nil {
 			return err
 		}
 
@@ -226,11 +265,11 @@ func (directory *Directory) ResendHandler() router.Handler {
 		if err := throttle.Attempt(ctx, directory.store, subjectKey, maxResends, resendWindow, ErrThrottled); err != nil {
 			return err
 		}
-		clientKey := cache.NewKey[int64](prefix + "ip:" + directory.clientIP(r))
+		clientKey := cache.NewKey[int64](prefix + "ip:" + throttle.Bucket(directory.clientIP(r)))
 		if err := throttle.Attempt(ctx, directory.store, clientKey, maxClientResends, resendWindow, ErrThrottled); err != nil {
 			return err
 		}
-		directory.jobs.Go(ctx, func(ctx context.Context) {
+		directory.jobs.Go(func(ctx context.Context) {
 			if err := directory.SendVerification(ctx, subject); err != nil {
 				slog.ErrorContext(ctx, "access: verification email failed", "subject", subject, "error", err)
 			}

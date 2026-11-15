@@ -495,6 +495,23 @@ func (directory *Directory) Lookup(ctx context.Context, email string) (subject, 
 	return row.ID, row.Email, nil
 }
 
+// Verified reports whether the user's email is verified, read from the table
+// at call time, never from a cached claim. It is the function the facade gives
+// the other packages' Verified settings. An unknown subject returns an error
+// wrapping [auth.ErrUserNotFound].
+//
+// Example:
+//
+//	ok, err := directory.Verified(ctx, subject)
+func (directory *Directory) Verified(ctx context.Context, subject string) (bool, error) {
+	row, err := directory.row(ctx, "id", subject)
+	if err != nil {
+		return false, err
+	}
+
+	return row.VerifiedAt != 0, nil
+}
+
 // ProveEmail marks the user's email verified because the user just proved they
 // control the mailbox, as a completed password reset does, and drops any
 // pending verification token. It reports whether the user was unverified

@@ -143,7 +143,10 @@ func TestOwnUsersThroughAccessUsers(t *testing.T) {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
 	sys := newSystem(t, func(iam *access.Builder) {
-		iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate})
+		iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
+			Verified:   func(context.Context, string) (bool, error) { return true, nil },
+			ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
+		})
 	})
 	for _, definition := range sys.iam.Migrations() {
 		if strings.HasSuffix(definition.Group(), ":account") {

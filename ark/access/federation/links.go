@@ -87,6 +87,7 @@ type Builder struct {
 	events   *event.Bus
 	create   func(context.Context, auth.External) (string, error)
 	fallback func(context.Context, string) (bool, error)
+	verified func(context.Context, string) (bool, error)
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -159,6 +160,22 @@ func (links *Builder) Fallback(check func(ctx context.Context, subject string) (
 	return links
 }
 
+// Verified sets the check that tells whether a user's email is verified.
+// [Links.ConnectHandler] then answers 403 ([account.ErrEmailUnverified]'s
+// problem) to an unverified user: whoever registered an address first must not
+// attach a provider before its owner proves the address. Without it the handler
+// admits everyone, which is only right when the application enforces the rule
+// itself; the facade always sets it with the built-in users.
+//
+// Example:
+//
+//	links.Verified(directory.Verified)
+func (links *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
+	links.verified = check
+
+	return links
+}
+
 // Links owns the table that connects external identities (issuer and subject)
 // to local users. It is safe for concurrent use. Create it with [NewLinks].
 //
@@ -192,6 +209,7 @@ type Links struct {
 	events   *event.Bus
 	create   func(context.Context, auth.External) (string, error)
 	fallback func(context.Context, string) (bool, error)
+	verified func(context.Context, string) (bool, error)
 }
 
 // NewLinks returns the connection store. provider finds users and db holds the
@@ -225,6 +243,7 @@ func NewLinks(provider *auth.UserProvider, db *database.Database, configure ...B
 		events:   settings.events,
 		create:   settings.create,
 		fallback: settings.fallback,
+		verified: settings.verified,
 	}
 	provider.OnForget(links.forget)
 
@@ -428,6 +447,12 @@ func (links *Links) List(ctx context.Context, subject string) ([]Link, error) {
 // or belongs to someone else is [ErrNotFound]. Removing the user's only
 // connection is [ErrLastLink] unless [Builder.Fallback] says they can still log
 // in another way. It publishes [LinkDeleted].
+//
+// The user's connections are locked for the count, so two concurrent unlinks
+// cannot both pass the last-way-in check: the second waits and then counts
+// again. Under PostgreSQL REPEATABLE READ or SERIALIZABLE, which the
+// application chooses for its connection, the second unlink instead fails with
+// a serialization error that the caller should retry.
 //
 // Example:
 //

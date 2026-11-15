@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"arkoren.dev/foundation/problem"
+
+	"arkoren.dev/ark/access/internal/web"
 )
 
 // ErrEmailTaken is returned when an address already belongs to a user. The
@@ -57,17 +59,14 @@ var ErrInvalidToken = problem.New(func(details *problem.Builder) {
 })
 
 // ErrEmailUnverified is returned by [RequireVerified] for a user who has not
-// verified their email. It is a problem with status 403.
+// verified their email, and by the connect, token and two-factor setup handlers
+// of the other packages when their Verified setting says so. It is a problem
+// with status 403.
 //
 // Example:
 //
 //	router.With(account.RequireVerified()).Post("/posts", create)
-var ErrEmailUnverified = problem.New(func(details *problem.Builder) {
-	details.Type("tag:arkoren.dev,2026-11:ark/access:account:email-unverified")
-	details.Title("Email not verified")
-	details.Detail("Verify your email address to continue.")
-	details.Status(http.StatusForbidden)
-})
+var ErrEmailUnverified = web.ErrEmailUnverified
 
 // ErrThrottled is returned by [Directory.ResendHandler] when a user or a client
 // address asked for too many verification emails. It is a problem with status
