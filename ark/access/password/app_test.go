@@ -137,6 +137,7 @@ func newConfiguredSystem(t *testing.T, db *database.Database, instance string, c
 		driver.Cost(4)
 	}))
 	sent := &[]password.Message{}
+	var sentMu sync.Mutex
 	verifier, err := password.NewVerifier(provider, db, store, hasher, password.Users{
 		Lookup: users.Lookup,
 		Create: users.Create,
@@ -144,6 +145,9 @@ func newConfiguredSystem(t *testing.T, db *database.Database, instance string, c
 	}, func(passwords *password.Builder) {
 		passwords.Instance(instance)
 		passwords.Deliver(func(_ context.Context, message password.Message) error {
+			sentMu.Lock()
+			defer sentMu.Unlock()
+
 			*sent = append(*sent, message)
 
 			return nil
