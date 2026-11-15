@@ -49,7 +49,10 @@ type Users struct {
 	// [auth.External.EmailVerified]); its errors pass through to the client.
 	// It must fail on an existing identifier and never return the existing
 	// user: connecting an identity to someone by email is how accounts get
-	// taken over. It may be nil when users are created elsewhere.
+	// taken over. For a taken identifier return an error wrapping
+	// [ErrIdentifierTaken] (the built-in directory's [account.ErrEmailTaken] is
+	// recognised too): registration then answers like a new user and notifies the
+	// owner, instead of answering 409. It may be nil when users are created elsewhere.
 	Create func(ctx context.Context, identifier string, verified bool) (subject string, err error)
 
 	// Rotate bumps [auth.UserRecord.Version], which ends every session, pending

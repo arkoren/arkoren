@@ -54,9 +54,7 @@ func TestVictimsVerifyClickDoesNotVerifyTheAttackersAccount(t *testing.T) {
 			t.Fatal("the victim's click verified the attacker's account")
 		}
 		// Another user's session does not verify it either.
-		if reply := victim.Post("/register", `{"email":"other@example.com","password":"correct horse"}`); reply.Status != http.StatusCreated {
-			t.Fatalf("register other = %d", reply.Status)
-		}
+		register(t, victim, "other@example.com")
 		if reply := victim.Post("/email/verify", `{"token":"`+token+`"}`); reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "account:verify-wrong-account") {
 			t.Fatalf("verify as another user = %d %s, want 403 verify-wrong-account", reply.Status, reply.Body)
 		}

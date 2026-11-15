@@ -183,13 +183,17 @@ func (sys *app) settle(t *testing.T) {
 	}
 }
 
-// register signs ada up on client and fails unless the reply is 201.
+// register signs up email on client, which registration does not log in, then
+// logs in, and fails unless both succeed.
 func register(t *testing.T, client *apptest.Client, email string) apptest.Reply {
 	t.Helper()
 
 	reply := client.Post("/register", `{"email":"`+email+`","password":"correct horse"}`)
-	if reply.Status != http.StatusCreated {
+	if reply.Status != http.StatusAccepted {
 		t.Fatalf("register = %d %s", reply.Status, reply.Body)
+	}
+	if login := client.Post("/login", `{"email":"`+email+`","password":"correct horse"}`); login.Status != http.StatusNoContent {
+		t.Fatalf("login after registering = %d %s", login.Status, login.Body)
 	}
 
 	return reply

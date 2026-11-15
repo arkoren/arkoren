@@ -378,8 +378,8 @@ func TestForgotRegisterResendAreThrottledAndUniform(t *testing.T) {
 			return sys.client.Do(http.MethodPost, path, body, "X-Test-IP: "+ip)
 		}
 		// A failing mailer: still 202, for a known and for an unknown user.
-		if reply := post("/register", `{"email":"ada@example.com","password":"correct horse"}`, "10.0.0.1"); reply.Status != http.StatusCreated {
-			t.Fatalf("register with a failing mailer = %d %s, want 201", reply.Status, reply.Body)
+		if reply := post("/register", `{"email":"ada@example.com","password":"correct horse"}`, "10.0.0.1"); reply.Status != http.StatusAccepted {
+			t.Fatalf("register with a failing mailer = %d %s, want 202", reply.Status, reply.Body)
 		}
 		for _, email := range []string{"ada@example.com", "nobody@example.com"} {
 			if reply := post("/password/forgot", `{"email":"`+email+`"}`, "10.0.0.2"); reply.Status != http.StatusAccepted || reply.Body != "" {

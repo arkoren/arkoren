@@ -31,6 +31,13 @@ type Message struct {
 
 	// ExpiresAt is when the token stops working.
 	ExpiresAt time.Time
+
+	// Registration is true when the reset was not asked for by the owner but
+	// started by a registration with an identifier that already belongs to a
+	// user ([Verifier.RegisterHandler]): the email should say that someone tried
+	// to register with this address, and that the link sets a new password if it
+	// was not them. It is false for [Verifier.SendReset].
+	Registration bool
 }
 
 // Link returns base with the token as its "token" query parameter, escaped.
@@ -59,6 +66,12 @@ func (message Message) Link(base string) string {
 //		return err
 //	}
 func (verifier *Verifier) SendReset(ctx context.Context, identifier string) error {
+	return verifier.sendReset(ctx, identifier, false)
+}
+
+// sendReset is [Verifier.SendReset]; registration marks the message as the
+// notice of a registration attempt on a taken identifier.
+func (verifier *Verifier) sendReset(ctx context.Context, identifier string, registration bool) error {
 	if verifier.deliver == nil {
 		return ErrNoDelivery
 	}
@@ -75,7 +88,7 @@ func (verifier *Verifier) SendReset(ctx context.Context, identifier string) erro
 		return fmt.Errorf("password: store reset: %w", err)
 	}
 
-	return verifier.deliver(ctx, Message{Identifier: address, Token: token, ExpiresAt: expiresAt})
+	return verifier.deliver(ctx, Message{Identifier: address, Token: token, ExpiresAt: expiresAt, Registration: registration})
 }
 
 // errNoTarget is returned by [Verifier.resetTarget] for an unknown or disabled

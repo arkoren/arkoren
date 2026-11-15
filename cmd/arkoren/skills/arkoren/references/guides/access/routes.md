@@ -80,7 +80,7 @@ groups are:
 | 401 | No login, no pending login, or a credential route reached with a bearer token. |
 | 403 | Step-up needed (the problem lists the methods the user can confirm with), an unverified email, or a wrong account. |
 | 404 | An unknown token, connection or provider. |
-| 409 | A conflict: an email in use, two-factor already on, the last way to log in. |
+| 409 | A conflict: two-factor already on, the last way to log in. |
 | 422 | A wrong secret or invalid input, such as a wrong password or a weak one. |
 | 429 | Throttled, with `Retry-After` in seconds. |
 

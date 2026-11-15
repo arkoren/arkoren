@@ -190,6 +190,9 @@ func (b *browser) do(method, path, body string, headers ...string) reply {
 	if err != nil {
 		b.t.Fatalf("request: %v", err)
 	}
+	if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	for _, header := range headers {
 		name, value, _ := strings.Cut(header, ": ")
 		request.Header.Set(name, value)

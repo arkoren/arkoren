@@ -3,6 +3,7 @@ package access
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -88,12 +89,18 @@ func (iam *Access) buildPassword(settings *Builder, users Users) error {
 }
 
 // passwordUsers adapts users to the password package: registration creates
-// unverified users, and a reset proves the email.
+// unverified users, a taken address is [password.ErrIdentifierTaken] (the
+// directory's [account.ErrEmailTaken] is mapped), and a reset proves the email.
 func (iam *Access) passwordUsers(users Users) password.Users {
 	adapted := password.Users{Lookup: users.Lookup, Rotate: users.Rotate, ProveEmail: iam.proveEmail(users.ProveEmail)}
 	if users.Create != nil {
 		adapted.Create = func(ctx context.Context, identifier string) (string, error) {
-			return users.Create(ctx, identifier, false)
+			subject, err := users.Create(ctx, identifier, false)
+			if errors.Is(err, account.ErrEmailTaken) {
+				return "", password.ErrIdentifierTaken
+			}
+
+			return subject, err
 		}
 	}
 
@@ -281,9 +288,15 @@ func (iam *Access) deliverVerification(ctx context.Context, message account.Mess
 	return iam.deliver(ctx, Message{Kind: KindVerify, Identifier: message.Email, Token: message.Token, ExpiresAt: message.ExpiresAt})
 }
 
-// deliverReset hands a reset email to [Builder.Deliver].
+// deliverReset hands a reset email, or the notice of a registration attempt on
+// a taken address, to [Builder.Deliver].
 func (iam *Access) deliverReset(ctx context.Context, message password.Message) error {
-	return iam.deliver(ctx, Message{Kind: KindReset, Identifier: message.Identifier, Token: message.Token, ExpiresAt: message.ExpiresAt})
+	kind := KindReset
+	if message.Registration {
+		kind = KindRegistration
+	}
+
+	return iam.deliver(ctx, Message{Kind: kind, Identifier: message.Identifier, Token: message.Token, ExpiresAt: message.ExpiresAt})
 }
 
 // sendVerification sends the verification email of a user who just registered.

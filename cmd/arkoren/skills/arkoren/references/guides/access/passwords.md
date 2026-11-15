@@ -28,19 +28,23 @@ send `identifier` instead.
 
 ## Register and Log In
 
-`POST /register` creates the user and their password in one transaction, logs
-them in and answers `201` with the new subject:
+`POST /register` creates the user and their password in one transaction and
+answers `202` with no body. It does not log the user in: the client calls
+`POST /login` next.
 
 ```json
 { "email": "ada@example.com", "password": "correct horse battery" }
 ```
 
-```json
-{ "subject": "..." }
-```
-
-A taken email is `409` (the facade never links accounts by email), a malformed
-one is `422`, and a password outside the policy is `422`. The default policy
+The answer is the same `202` when the email already belongs to a user, so the
+route cannot be used to find out who has an account. In that case nothing is
+created or changed, and the owner receives a message of kind
+`access.KindRegistration` (see [Delivering Messages](overview.md#delivering-messages))
+that says someone tried to register with their address, with a reset link in case
+it was not them. The facade never links accounts by email. Registrations are
+throttled per email and per client address, and the notices count against the
+same limits, so the route cannot flood a mailbox. A malformed email is `422`, and
+a password outside the policy is `422`. The default policy
 requires 8 to 72 bytes, because bcrypt hashers reject more. Replace it with
 `password.Builder.Policy`:
 

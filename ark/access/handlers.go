@@ -19,8 +19,10 @@ func need(enabled bool, handler, requirement string) {
 }
 
 // RegisterHandler returns the handler of POST /register; see
-// [password.Verifier.RegisterHandler]. With the built-in directory a new user
-// gets a verification email when [Builder.Deliver] is set. It panics unless
+// [password.Verifier.RegisterHandler]. It always answers 202 and does not log
+// the user in; for a taken address it creates nothing and sends the owner a
+// [KindRegistration] message with a reset link. With the built-in directory a new
+// user gets a verification email when [Builder.Deliver] is set. It panics unless
 // [Builder.Password] is enabled and users can be created.
 //
 // Example:
@@ -29,7 +31,7 @@ func need(enabled bool, handler, requirement string) {
 func (iam *Access) RegisterHandler() router.Handler {
 	need(iam.verifier != nil, "RegisterHandler", "Builder.Password")
 
-	return iam.verifier.RegisterHandler(iam.guard)
+	return iam.verifier.RegisterHandler()
 }
 
 // LoginHandler returns the handler of POST /login; see

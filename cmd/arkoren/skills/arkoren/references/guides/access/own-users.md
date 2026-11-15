@@ -59,7 +59,10 @@ calls it with `false`. The first login with an external identity calls it with t
 provider's email, which may be empty, and whether the provider verified it. Its
 errors pass through to the client. It must fail on an existing identifier and never
 return the existing user: connecting an identity to someone by email is how accounts
-get taken over. Leave it nil when users are created elsewhere. Then registration
+get taken over. For an identifier in use, return an error wrapping
+`access.ErrIdentifierTaken`: registration then answers `202` like for a new user
+and sends the owner an `access.KindRegistration` message, instead of revealing the
+account. Leave it nil when users are created elsewhere. Then registration
 and creating users from a provider login are unavailable, and an unknown provider
 identity is refused.
 

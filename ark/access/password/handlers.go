@@ -90,22 +90,29 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 }
 
 // RegisterHandler returns the handler of POST /register. The body is
-// {"email": "...", "password": "..."} (or "identifier"). It checks the password
-// policy, then creates the user ([Users.Create]) and stores the password in one
-// transaction, runs the [Builder.Registered] hook, logs the user in and answers
-// 201 with {"subject": "..."}. A taken identifier or an invalid one returns the
-// error of [Users.Create] (409 and 422 with the directory); a weak password
-// [ErrInvalidPassword] (422). A failing [Builder.Registered] hook is logged and
-// does not fail the request. Registrations are counted before anything else,
-// per identifier as typed (5) and per client address (30) in 15 minutes
-// ([ErrThrottled], 429). A new user is unverified, and with the facade cannot
-// connect a provider, enroll two-factor or create tokens until the email is
-// verified. It panics at composition when [Users.Create] is nil.
+// {"email": "...", "password": "..."} (or "identifier"). It counts the request
+// first, per identifier as typed (5) and per client address (30) in 15 minutes
+// ([ErrThrottled], 429), checks the password policy (a weak password is
+// [ErrInvalidPassword], 422), then creates the user ([Users.Create]) and stores
+// the password in one transaction and runs the [Builder.Registered] hook.
+//
+// It always answers 202 with no body and never logs the user in, so the answer
+// does not say whether the identifier was free: the user logs in afterwards
+// ([Verifier.LoginHandler]). When [Users.Create] returns [ErrIdentifierTaken] it
+// creates nothing, still hashes the password so the time taken matches, and in
+// the background sends the owner a reset message with [Message.Registration]
+// set, at most as often as the throttle lets registrations through, so the route
+// cannot be used to flood a mailbox. Without [Builder.Deliver] the owner is not
+// told. Any other error of [Users.Create] (an invalid identifier, say) passes
+// through. A failing [Builder.Registered] hook is logged and does not fail the
+// request. A new user is unverified, and with the facade cannot connect a
+// provider, enroll two-factor or create tokens until the email is verified. It
+// panics at composition when [Users.Create] is nil.
 //
 // Example:
 //
-//	web.Post("/register", verifier.RegisterHandler(guard))
-func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
+//	web.Post("/register", verifier.RegisterHandler())
+func (verifier *Verifier) RegisterHandler() router.Handler {
 	if verifier.users.Create == nil {
 		panic("password: RegisterHandler requires Users.Create")
 	}
@@ -122,19 +129,29 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 		if err := verifier.policy(r.Context(), body.Password); err != nil {
 			return err
 		}
-		subject, err := verifier.register(r.Context(), identifier, body.Password)
-		if err != nil {
+		_, err = verifier.register(r.Context(), identifier, body.Password)
+		if errors.Is(err, ErrIdentifierTaken) {
+			verifier.notifyOwner(identifier, body.Password)
+		} else if err != nil {
 			return err
-		}
-		outcome, err := guard.Begin(r, subject, passwordFactor)
-		if err != nil {
-			return err
-		}
-		if !outcome.Complete() {
-			return outcome.Response(w)
 		}
 
-		return response.JSON(w, http.StatusCreated, map[string]string{"subject": subject})
+		return response.Status(w, http.StatusAccepted)
+	})
+}
+
+// notifyOwner is the registration of a taken identifier: it spends the hashing
+// time of a real registration, then sends the owner a reset message in the
+// background. A hash that fails is only a timing difference and is ignored.
+func (verifier *Verifier) notifyOwner(identifier, password string) {
+	_, _ = verifier.hasher.Hash(password)
+	if verifier.deliver == nil {
+		return
+	}
+	verifier.jobs.Go(func(ctx context.Context) {
+		if err := verifier.sendReset(ctx, identifier, true); err != nil {
+			slog.ErrorContext(ctx, "access: registration notice failed", "error", err)
+		}
 	})
 }
 

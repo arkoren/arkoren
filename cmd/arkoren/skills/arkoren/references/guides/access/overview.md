@@ -131,7 +131,7 @@ and its expiry:
 ```go
 iam.Deliver(func(ctx context.Context, message access.Message) error {
 	base := "https://app.example.com/verify-email"
-	if message.Kind == access.KindReset {
+	if message.Kind == access.KindReset || message.Kind == access.KindRegistration {
 		base = "https://app.example.com/reset-password"
 	}
 
@@ -139,7 +139,10 @@ iam.Deliver(func(ctx context.Context, message access.Message) error {
 })
 ```
 
-`message.Link(base)` adds the token as the `token` query parameter. The token is
+`KindRegistration` is sent to the owner of an address when someone tries to
+register with it. Its token is a reset token, so link it to the same page and
+word the email as "someone tried to register with this address; if it was not
+you, set a new password". `message.Link(base)` adds the token as the `token` query parameter. The token is
 a credential until it is used or expires, so never log it. `Identifier` is the
 address stored with the user, never the text of a request.
 

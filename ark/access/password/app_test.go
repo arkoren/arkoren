@@ -17,14 +17,10 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/hash"
 	"arkoren.dev/driver/bcrypt/bcrypthash"
-	"arkoren.dev/foundation/problem"
 
 	"arkoren.dev/ark/access/internal/apptest"
 	"arkoren.dev/ark/access/password"
 )
-
-// errTaken is what the fake user store returns for a duplicate identifier.
-var errTaken = problem.Conflict()
 
 // fakeUsers is an in-memory user store: the application's own users, as far as
 // the password package can tell.
@@ -60,7 +56,7 @@ func (users *fakeUsers) Create(_ context.Context, identifier string) (string, er
 	defer users.mu.Unlock()
 
 	if _, ok := users.subjects[identifier]; ok {
-		return "", errTaken
+		return "", password.ErrIdentifierTaken
 	}
 	subject := strconv.Itoa(len(users.subjects) + 1)
 	users.subjects[identifier] = subject
@@ -168,7 +164,7 @@ func newConfiguredSystem(t *testing.T, db *database.Database, instance string, c
 		t.Fatalf("NewGuard: %v", err)
 	}
 	client := apptest.Serve(t, store, []auth.Authenticator{guard.Authenticator()}, func(r *router.Router) {
-		r.Post("/register", verifier.RegisterHandler(guard))
+		r.Post("/register", verifier.RegisterHandler())
 		r.Post("/login", verifier.LoginHandler(guard))
 		r.Post("/login/challenge", guard.ChallengeHandler())
 		r.Post("/confirm", guard.ConfirmHandler())
@@ -198,14 +194,17 @@ func newConfiguredSystem(t *testing.T, db *database.Database, instance string, c
 	return &system{users: users, provider: provider, hasher: hasher, verifier: verifier, guard: guard, store: store, client: client, sent: sent}
 }
 
-// registerAda registers ada@example.com on the client and fails unless it is
-// logged in.
+// registerAda registers ada@example.com on the client, then logs in, and fails
+// unless both succeed.
 func (sys *system) registerAda(t *testing.T, client *apptest.Client) {
 	t.Helper()
 
 	reply := client.Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
-	if reply.Status != http.StatusCreated {
+	if reply.Status != http.StatusAccepted {
 		t.Fatalf("register = %d %s", reply.Status, reply.Body)
+	}
+	if login := loginAda(client, "correct horse"); login.Status != http.StatusNoContent {
+		t.Fatalf("login after registering = %d %s", login.Status, login.Body)
 	}
 }
 

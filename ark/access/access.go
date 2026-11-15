@@ -30,6 +30,21 @@ import (
 //	fmt.Println(errors.Is(err, access.ErrInvalidConfig)) // true
 var ErrInvalidConfig = errors.New("access: invalid configuration")
 
+// ErrIdentifierTaken is what [Users.Create] returns, or wraps, for an identifier
+// that already belongs to a user. Registration then answers 202 like for a new
+// user and sends the owner a [KindRegistration] message. It is
+// [password.ErrIdentifierTaken].
+//
+// Example:
+//
+//	create := func(ctx context.Context, identifier string, verified bool) (string, error) {
+//		if exists(identifier) {
+//			return "", access.ErrIdentifierTaken
+//		}
+//		return insert(ctx, identifier, verified)
+//	}
+var ErrIdentifierTaken = password.ErrIdentifierTaken
+
 // ErrNotMigrated is returned by [Access.Ping] when the tables of an enabled
 // feature do not exist. Add [Access.Migrations] to the application's migrator
 // and run them.

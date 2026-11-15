@@ -79,6 +79,13 @@
 //     (100) in 15 minutes, so someone failing from elsewhere cannot lock a user
 //     out; an unknown identifier costs a dummy hash. Forgot-password, register and
 //     resend are throttled per identifier and per address too.
+//   - Register answers an empty 202 and logs nobody in, whether or not the address
+//     was taken; for a taken one it creates nothing and sends the owner a
+//     [KindRegistration] message with a reset link, within the registration
+//     throttle.
+//   - Every POST, PUT and PATCH route requires the media type application/json
+//     (415 otherwise), which stops cross-site HTML forms. It is not CSRF
+//     protection: mount core's csrf.Middleware next to [Access.Middleware].
 //   - Forgot-password and resend answer an empty 202 whatever happens and send in
 //     the background, so neither the answer nor its timing says whether the user
 //     exists or the mailer works; failures are logged. Call [Access.Wait] at

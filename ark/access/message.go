@@ -32,6 +32,20 @@ const (
 	//		// link to the reset page
 	//	}
 	KindReset Kind = "reset"
+
+	// KindRegistration is the notice to the owner of an address that someone
+	// tried to register with it. The token is a password reset token, as for
+	// [KindReset]: the owner who did not register can set a new password, and an
+	// owner who forgot they have an account can use it to log in. The response to
+	// the registration is the same as for a new address, so this email is the only
+	// place the owner learns of the attempt.
+	//
+	// Example:
+	//
+	//	if message.Kind == access.KindRegistration {
+	//		// write "someone tried to register with this address"
+	//	}
+	KindRegistration Kind = "registration"
 )
 
 // Message is what the function given to [Builder.Deliver] receives: the secret

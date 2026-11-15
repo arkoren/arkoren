@@ -88,3 +88,19 @@ var ErrInvalidConfig = errors.New("password: invalid configuration")
 //		// configure Builder.Deliver
 //	}
 var ErrNoDelivery = errors.New("password: no delivery function configured")
+
+// ErrIdentifierTaken is what [Users.Create] returns, or wraps, when the
+// identifier already belongs to a user. [Verifier.RegisterHandler] answers the
+// same 202 as for a new user and notifies the owner instead of revealing it, so
+// the error never reaches the client. It is a plain error, not a problem: with
+// the built-in directory the facade maps its own [account.ErrEmailTaken] to it.
+//
+// Example:
+//
+//	create := func(ctx context.Context, identifier string) (string, error) {
+//		if exists(identifier) {
+//			return "", password.ErrIdentifierTaken
+//		}
+//		return insert(ctx, identifier)
+//	}
+var ErrIdentifierTaken = errors.New("password: identifier taken")

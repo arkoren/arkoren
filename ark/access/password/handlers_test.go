@@ -99,23 +99,96 @@ func TestLoginPendingReturns202(t *testing.T) {
 	})
 }
 
-// TestRegisterDuplicatePassesCreateError verifies the user store's error
-// reaches the client and no second hash is stored.
-func TestRegisterDuplicatePassesCreateError(t *testing.T) {
+// TestRegisterWeakPasswordCreatesNothing verifies a password the policy rejects
+// is 422 and creates no user.
+func TestRegisterWeakPasswordCreatesNothing(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newSystem(t, db, instance)
-		sys.registerAda(t, sys.client)
-		reply := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
-		if reply.Status != http.StatusConflict {
-			t.Fatalf("duplicate register = %d %s", reply.Status, reply.Body)
-		}
 		if reply := sys.client.NewDevice().Post("/register", `{"email":"bob@example.com","password":"x"}`); reply.Status != http.StatusUnprocessableEntity {
 			t.Fatalf("weak register = %d %s", reply.Status, reply.Body)
 		}
 		if _, _, err := sys.users.Lookup(testContext(t), "bob@example.com"); !errors.Is(err, auth.ErrUserNotFound) {
 			t.Fatalf("a rejected password still created a user: %v", err)
+		}
+	})
+}
+
+// TestRegisterAnswersTheSameForNewAndTaken verifies a new and a taken identifier
+// get the same 202 with the same (empty) body, neither logs the client in, and
+// the taken one changes nothing.
+func TestRegisterAnswersTheSameForNewAndTaken(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		fresh := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
+		taken := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
+		if fresh.Status != http.StatusAccepted || taken.Status != http.StatusAccepted || fresh.Body != taken.Body {
+			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
+		}
+		device := sys.client.NewDevice()
+		device.Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
+		if reply := device.Do(http.MethodGet, "/me", ""); reply.Status != http.StatusUnauthorized {
+			t.Fatalf("/me after registering = %d, want 401: registering logs nobody in", reply.Status)
+		}
+		if reply := loginAda(sys.client.NewDevice(), "another horse"); reply.Status != http.StatusUnprocessableEntity {
+			t.Fatalf("login with the taken registration's password = %d, want 422: nothing was changed", reply.Status)
+		}
+		if reply := loginAda(sys.client.NewDevice(), "correct horse"); reply.Status != http.StatusNoContent {
+			t.Fatalf("login with the original password = %d", reply.Status)
+		}
+	})
+}
+
+// TestRegisterTakenNotifiesTheOwner verifies the owner of a taken identifier
+// gets one reset message marked as a registration attempt, and a new identifier
+// gets none.
+func TestRegisterTakenNotifiesTheOwner(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
+		sys.settle(t)
+		if len(*sys.sent) != 0 {
+			t.Fatalf("a new registration sent %d messages, want none", len(*sys.sent))
+		}
+		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
+		sys.settle(t)
+		if len(*sys.sent) != 1 {
+			t.Fatalf("messages after the taken registration = %d, want 1", len(*sys.sent))
+		}
+		if message := (*sys.sent)[0]; !message.Registration || message.Identifier != "ada@example.com" || message.Token == "" {
+			t.Fatalf("message = %+v, want a registration reset for ada", message)
+		}
+	})
+}
+
+// TestRegisterNoticesAreThrottled verifies the registration throttle also caps
+// the notices: five registrations per identifier in the window (the first made
+// ada), and every one after that is 429 and sends nothing.
+func TestRegisterNoticesAreThrottled(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		sys.registerAda(t, sys.client)
+		before := len(*sys.sent)
+		for i := range 6 {
+			reply := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
+			want := http.StatusAccepted
+			if i >= 4 {
+				want = http.StatusTooManyRequests
+			}
+			if reply.Status != want {
+				t.Fatalf("registration #%d = %d %s, want %d", i+1, reply.Status, reply.Body, want)
+			}
+		}
+		sys.settle(t)
+		if got := len(*sys.sent) - before; got != 4 {
+			t.Fatalf("notices = %d, want 4: registerAda used one of the five registrations", got)
 		}
 	})
 }
@@ -342,6 +415,6 @@ func TestRegisterHandlerWithoutCreatePanics(t *testing.T) {
 				t.Fatal("RegisterHandler did not panic")
 			}
 		}()
-		verifier.RegisterHandler(sys.guard)
+		verifier.RegisterHandler()
 	})
 }
