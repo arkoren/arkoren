@@ -3,12 +3,8 @@ package apitoken
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
-	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -44,9 +40,6 @@ const (
 	idLength     = 12
 	secretLength = 26
 )
-
-// prefixPattern accepts the token prefixes: 2 to 16 lowercase letters or digits.
-var prefixPattern = regexp.MustCompile(`^[a-z0-9]{2,16}$`)
 
 // Kind says how a token was issued.
 //
@@ -130,113 +123,6 @@ type Request struct {
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
-// Builder configures [NewIssuer] before publication. Callbacks run directly
-// once, in order, on one fresh draft; methods return the same draft.
-//
-// Example:
-//
-//	issuer, err := apitoken.NewIssuer(provider, db, func(tokens *apitoken.Builder) {
-//		tokens.Scopes("posts:read", "posts:write").MaxTTL(90 * 24 * time.Hour)
-//	})
-type Builder struct {
-	instance string
-	events   *event.Bus
-	scopes   []string
-	prefix   string
-	maxTTL   time.Duration
-	verified func(context.Context, string) (bool, error)
-}
-
-// BuilderFunc is the callback form of [Builder].
-//
-// Example:
-//
-//	var configure apitoken.BuilderFunc = func(tokens *apitoken.Builder) {
-//		tokens.Scopes("posts:read")
-//	}
-//	issuer, err := apitoken.NewIssuer(provider, db, configure)
-type BuilderFunc = func(*Builder)
-
-// Instance selects a named instance: the table is prefixed "<instance>_" and the
-// migration group gains ":<instance>". The name is 1 to 20 bytes of [a-z0-9_]
-// starting with a letter; the default is the empty instance.
-//
-// Example:
-//
-//	tokens.Instance("tenant_a")
-func (tokens *Builder) Instance(name string) *Builder {
-	tokens.instance = name
-
-	return tokens
-}
-
-// Events publishes [Issued] and [Revoked] on bus. A nil bus publishes nothing.
-//
-// Example:
-//
-//	tokens.Events(events)
-func (tokens *Builder) Events(bus *event.Bus) *Builder {
-	tokens.events = bus
-
-	return tokens
-}
-
-// Scopes declares the catalog of scopes the application knows. Personal tokens
-// may carry any subset; device tokens carry all of them. Without a catalog
-// tokens carry no scopes. The names are copied.
-//
-// Example:
-//
-//	tokens.Scopes("posts:read", "posts:write")
-func (tokens *Builder) Scopes(scopes ...string) *Builder {
-	tokens.scopes = slices.Clone(scopes)
-
-	return tokens
-}
-
-// Prefix replaces the token prefix, "ark" by default: 2 to 16 lowercase letters
-// or digits. Changing it invalidates no stored token, but tokens issued under
-// the old prefix are no longer recognized.
-//
-// Example:
-//
-//	tokens.Prefix("acme")
-func (tokens *Builder) Prefix(prefix string) *Builder {
-	tokens.prefix = prefix
-
-	return tokens
-}
-
-// MaxTTL caps the lifetime of personal tokens: a longer expiry is refused and a
-// token without one expires after ttl. Zero (the default) means no cap. Device
-// tokens never expire by themselves; revoke them at logout.
-//
-// Example:
-//
-//	tokens.MaxTTL(90 * 24 * time.Hour)
-func (tokens *Builder) MaxTTL(ttl time.Duration) *Builder {
-	tokens.maxTTL = ttl
-
-	return tokens
-}
-
-// Verified sets the check that tells whether a user's email is verified.
-// [Issuer.CreateHandler] and [Issuer.ExchangeHandler] then answer 403 (the
-// problem of account.ErrEmailUnverified) to an unverified user, so whoever
-// registered an address first cannot mint a credential before its owner proves
-// the address. Without it the handlers admit everyone, which is only right when
-// the application enforces the rule itself; the facade always sets it with the
-// built-in users. [Issuer.Issue] and [Issuer.IssueDevice] are not gated.
-//
-// Example:
-//
-//	tokens.Verified(directory.Verified)
-func (tokens *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
-	tokens.verified = check
-
-	return tokens
-}
-
 // Issuer issues, authenticates and revokes API tokens. It is safe for
 // concurrent use. Create it with [NewIssuer].
 //
@@ -286,20 +172,11 @@ func NewIssuer(provider *auth.UserProvider, db *database.Database, configure ...
 	for _, apply := range configure {
 		apply(&settings)
 	}
-	if err := storage.ValidInstance(settings.instance); err != nil {
+	if err := settings.validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
-	}
-	if !prefixPattern.MatchString(settings.prefix) {
-		return nil, fmt.Errorf("%w: prefix %q must be 2 to 16 lowercase letters or digits", ErrInvalidConfig, settings.prefix)
-	}
-	if settings.maxTTL < 0 {
-		return nil, fmt.Errorf("%w: negative maximum lifetime", ErrInvalidConfig)
 	}
 	catalog := slices.Clone(settings.scopes)
 	slices.Sort(catalog)
-	if slices.Contains(catalog, "") || len(slices.Compact(slices.Clone(catalog))) != len(catalog) {
-		return nil, fmt.Errorf("%w: scopes must be unique and non-empty", ErrInvalidConfig)
-	}
 	issuer := &Issuer{
 		provider: provider,
 		db:       db,
@@ -375,20 +252,20 @@ type row struct {
 }
 
 // token converts a row to its public form.
-func (r row) token() Token {
+func (row row) token() Token {
 	var scopes []string
 	// The column is written by this package as a JSON array; anything else
 	// reads as no scopes, which is the safe direction.
-	_ = json.Unmarshal([]byte(r.Scopes), &scopes)
+	_ = json.Unmarshal([]byte(row.Scopes), &scopes)
 
 	return Token{
-		ID:         r.ID,
-		Kind:       Kind(r.Kind),
-		Name:       r.Name,
+		ID:         row.ID,
+		Kind:       Kind(row.Kind),
+		Name:       row.Name,
 		Scopes:     scopes,
-		CreatedAt:  storage.Time(r.CreatedAt),
-		LastUsedAt: storage.Time(r.LastUsedAt),
-		ExpiresAt:  storage.Time(r.ExpiresAt),
+		CreatedAt:  storage.Time(row.CreatedAt),
+		LastUsedAt: storage.Time(row.LastUsedAt),
+		ExpiresAt:  storage.Time(row.ExpiresAt),
 	}
 }
 
@@ -409,33 +286,64 @@ func (r row) token() Token {
 //	}
 //	fmt.Println(token.ID, secret) // show secret to the user once
 func (issuer *Issuer) Issue(ctx context.Context, subject string, request Request) (Token, string, error) {
-	name := strings.TrimSpace(request.Name)
-	if name == "" || len(name) > maxNameLength {
-		return Token{}, "", ErrInvalidRequest
+	name, err := tokenName(request.Name)
+	if err != nil {
+		return Token{}, "", err
 	}
-	scopes := slices.Clone(request.Scopes)
-	slices.Sort(scopes)
-	scopes = slices.Compact(scopes)
-	for _, scope := range scopes {
-		if _, known := slices.BinarySearch(issuer.catalog, scope); !known {
-			return Token{}, "", ErrInvalidRequest
-		}
+	scopes, err := issuer.scopes(request.Scopes)
+	if err != nil {
+		return Token{}, "", err
 	}
-	now := time.Now()
-	expiresAt := request.ExpiresAt
-	if issuer.maxTTL > 0 {
-		if expiresAt.IsZero() {
-			expiresAt = now.Add(issuer.maxTTL)
-		}
-		if expiresAt.After(now.Add(issuer.maxTTL)) {
-			return Token{}, "", ErrInvalidRequest
-		}
-	}
-	if !expiresAt.IsZero() && !expiresAt.After(now) {
-		return Token{}, "", ErrInvalidRequest
+	expiresAt, err := issuer.expiry(request.ExpiresAt, time.Now())
+	if err != nil {
+		return Token{}, "", err
 	}
 
 	return issuer.issue(ctx, subject, KindPersonal, name, scopes, expiresAt)
+}
+
+// tokenName trims the name of a token, which must then be 1 to maxNameLength
+// bytes.
+func tokenName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > maxNameLength {
+		return "", ErrInvalidRequest
+	}
+
+	return name, nil
+}
+
+// scopes returns requested sorted and without duplicates, or
+// [ErrInvalidRequest] when one is not in the catalog.
+func (issuer *Issuer) scopes(requested []string) ([]string, error) {
+	scopes := slices.Compact(slices.Sorted(slices.Values(requested)))
+	for _, scope := range scopes {
+		if _, known := slices.BinarySearch(issuer.catalog, scope); !known {
+			return nil, ErrInvalidRequest
+		}
+	}
+
+	return scopes, nil
+}
+
+// expiry returns the expiry of a token requested to expire at requested (zero
+// for never): with a maximum lifetime a zero request gets the maximum and a
+// later one is refused, and an expiry not after now is refused.
+func (issuer *Issuer) expiry(requested, now time.Time) (time.Time, error) {
+	if issuer.maxTTL > 0 {
+		limit := now.Add(issuer.maxTTL)
+		if requested.IsZero() {
+			requested = limit
+		}
+		if requested.After(limit) {
+			return time.Time{}, ErrInvalidRequest
+		}
+	}
+	if !requested.IsZero() && !requested.After(now) {
+		return time.Time{}, ErrInvalidRequest
+	}
+
+	return requested, nil
 }
 
 // IssueDevice creates a device token for subject: it carries every scope of the
@@ -449,9 +357,9 @@ func (issuer *Issuer) Issue(ctx context.Context, subject string, request Request
 //
 //	token, secret, err := issuer.IssueDevice(ctx, subject, "Pixel 9")
 func (issuer *Issuer) IssueDevice(ctx context.Context, subject, device string) (Token, string, error) {
-	name := strings.TrimSpace(device)
-	if name == "" || len(name) > maxNameLength {
-		return Token{}, "", ErrInvalidRequest
+	name, err := tokenName(device)
+	if err != nil {
+		return Token{}, "", err
 	}
 
 	return issuer.issue(ctx, subject, KindDevice, name, slices.Clone(issuer.catalog), time.Time{})
@@ -633,90 +541,4 @@ func (issuer *Issuer) emit(ctx context.Context, topic event.Topic[UserEvent], su
 
 		return nil
 	})
-}
-
-// parse splits a token text into its id and secret. ok is false for text that
-// does not have the shape of a token of this issuer; recognized is false when
-// the prefix is not ours, so another authenticator may try the text.
-func (issuer *Issuer) parse(text string) (id, secret string, recognized, ok bool) {
-	rest, found := strings.CutPrefix(text, issuer.prefix+"_")
-	if !found {
-		return "", "", false, false
-	}
-	id, secret, found = strings.Cut(rest, "_")
-
-	return id, secret, true, found && len(id) == idLength && len(secret) == secretLength
-}
-
-// Authenticator returns the authenticator for bearer tokens: install it with
-// [auth.Middleware], next to or instead of the guard's. A request without a
-// bearer token, or with one that does not start with the prefix, passes through
-// anonymously (so another authenticator, such as a JWT one, can try); a
-// malformed, unknown, expired, revoked or outdated token is
-// [auth.ErrUnauthenticated] with a Bearer challenge. The identity carries the
-// token's scopes and the user's record, and no factors: it is never a browser
-// session, [auth.RequireLevel] rejects it, and the credential handlers of this
-// module refuse it.
-//
-// Example:
-//
-//	api := routes.With(auth.Middleware(issuer.Authenticator()), auth.Require())
-//	api.With(gate.Require(gate.HasScopes("posts:write"))).Post("/api/posts", createPost)
-func (issuer *Issuer) Authenticator() auth.Authenticator {
-	return auth.Bearer(func(ctx context.Context, text string) (auth.Identity, error) {
-		id, secret, recognized, ok := issuer.parse(text)
-		if !recognized {
-			return auth.Identity{}, auth.ErrNoCredentials
-		}
-		if !ok {
-			return auth.Identity{}, auth.ErrUnauthenticated
-		}
-		stored, err := issuer.db.Find[row](ctx, query.Table(issuer.table, func(statement *query.Builder) {
-			statement.Where("id", id).Limit(1)
-		}))
-		if errors.Is(err, database.ErrNoRows) {
-			return auth.Identity{}, auth.ErrUnauthenticated
-		}
-		if err != nil {
-			return auth.Identity{}, fmt.Errorf("apitoken: load token: %w", err)
-		}
-		now := time.Now().Unix()
-		if subtle.ConstantTimeCompare([]byte(storage.Hash(secret)), []byte(stored.SecretHash)) != 1 ||
-			(stored.ExpiresAt != 0 && stored.ExpiresAt <= now) {
-			return auth.Identity{}, auth.ErrUnauthenticated
-		}
-		record, err := issuer.provider.Find(ctx, stored.Subject)
-		if errors.Is(err, auth.ErrUserNotFound) || errors.Is(err, auth.ErrUserDisabled) {
-			return auth.Identity{}, auth.ErrUnauthenticated
-		}
-		if err != nil {
-			return auth.Identity{}, err
-		}
-		if subtle.ConstantTimeCompare([]byte(storage.Hash(record.Version)), []byte(stored.UserVersion)) != 1 {
-			return auth.Identity{}, auth.ErrUnauthenticated
-		}
-		if stored.LastUsedAt < now-int64(touchInterval/time.Second) {
-			// The timestamp is informational: a failed write must not fail the
-			// request, and the next use retries it.
-			_, _ = issuer.db.Exec(ctx, query.Table(issuer.table, func(statement *query.Builder) {
-				statement.Where("id", id).Update(map[string]any{"last_used_at": now})
-			}))
-		}
-
-		return auth.NewIdentity(stored.Subject, func(principal *auth.IdentityBuilder) {
-			principal.Scopes(stored.token().Scopes...).Record(record)
-		}), nil
-	})
-}
-
-// presentedID returns the id of the bearer token r presented, or false when the
-// request carries none of this issuer's tokens.
-func (issuer *Issuer) presentedID(r *http.Request) (string, bool) {
-	scheme, text, found := strings.Cut(r.Header.Get("Authorization"), " ")
-	if !found || !strings.EqualFold(scheme, "Bearer") {
-		return "", false
-	}
-	id, _, recognized, ok := issuer.parse(text)
-
-	return id, recognized && ok
 }

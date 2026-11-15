@@ -1,8 +1,6 @@
 package access
 
 import (
-	"net/http"
-
 	"arkoren.dev/core/http/router"
 )
 
@@ -47,57 +45,87 @@ import (
 //	web := routes.With(iam.Middleware())
 //	iam.Mount(web)
 func (iam *Access) Mount(r *router.Router) {
-	both := []string{http.MethodGet, http.MethodPost}
-	if iam.verifier != nil {
-		r.Post("/register", iam.RegisterHandler())
-		r.Post("/login", iam.LoginHandler())
-		r.Put("/password", iam.ChangePasswordHandler())
-		r.Post("/password/reset", iam.ResetPasswordHandler())
-		r.Post("/password/forgot", iam.ForgotPasswordHandler())
+	iam.mountPassword(r)
+	iam.mountLogin(r)
+	iam.mountEmail(r)
+	iam.mountTwoFactor(r)
+	iam.mountTokens(r)
+	r.Get("/sessions", iam.ListSessionsHandler())
+	r.Delete("/sessions/{id}", iam.DeleteSessionHandler())
+	r.Delete("/sessions", iam.DeleteOtherSessionsHandler())
+	iam.mountProviders(r)
+	iam.mountConnections(r)
+	if iam.directory != nil {
+		r.Delete("/account", iam.DeleteAccountHandler())
 	}
-	if iam.hasSecondFactor() {
+}
+
+// mountPassword registers the password routes when [Builder.Password] is set.
+func (iam *Access) mountPassword(r *router.Router) {
+	if iam.verifier == nil {
+		return
+	}
+	r.Post("/register", iam.RegisterHandler())
+	r.Post("/login", iam.LoginHandler())
+	r.Put("/password", iam.ChangePasswordHandler())
+	r.Post("/password/reset", iam.ResetPasswordHandler())
+	r.Post("/password/forgot", iam.ForgotPasswordHandler())
+}
+
+// mountLogin registers the guard's routes: the challenge and pending routes
+// with a second factor, /logout always and /confirm with a step-up method.
+func (iam *Access) mountLogin(r *router.Router) {
+	if iam.secondFactor {
 		r.Post("/login/challenge", iam.ChallengeHandler())
 		r.Get("/login/pending", iam.PendingHandler())
 	}
 	r.Post("/logout", iam.LogoutHandler())
-	if iam.hasStepUp() {
+	if iam.stepUp {
 		r.Post("/confirm", iam.ConfirmHandler())
 	}
-	if iam.directory != nil && iam.deliver != nil {
-		r.Post("/email/verify", iam.VerifyEmailHandler())
-		r.Post("/email/verify/resend", iam.ResendVerificationHandler())
+}
+
+// mountEmail registers the email verification routes with the built-in users
+// and [Builder.Deliver].
+func (iam *Access) mountEmail(r *router.Router) {
+	if iam.directory == nil || iam.deliver == nil {
+		return
 	}
-	if iam.factors != nil {
-		r.Post("/two-factor/setup", iam.SetupTwoFactorHandler())
-		r.Post("/two-factor", iam.EnableTwoFactorHandler())
-		r.Delete("/two-factor", iam.DisableTwoFactorHandler())
-		r.Post("/two-factor/recovery-codes", iam.RecoveryCodesHandler())
+	r.Post("/email/verify", iam.VerifyEmailHandler())
+	r.Post("/email/verify/resend", iam.ResendVerificationHandler())
+}
+
+// mountTwoFactor registers the two-factor routes when [Builder.TwoFactor] is
+// set.
+func (iam *Access) mountTwoFactor(r *router.Router) {
+	if iam.factors == nil {
+		return
 	}
-	if iam.issuer != nil {
-		r.Get("/tokens", iam.ListTokensHandler())
-		r.Post("/tokens", iam.CreateTokenHandler())
-		r.Delete("/tokens/{id}", iam.DeleteTokenHandler())
-		r.Post("/device-tokens", iam.ExchangeHandler())
-		r.Delete("/device-tokens/current", iam.DeleteDeviceTokenHandler())
+	r.Post("/two-factor/setup", iam.SetupTwoFactorHandler())
+	r.Post("/two-factor", iam.EnableTwoFactorHandler())
+	r.Delete("/two-factor", iam.DisableTwoFactorHandler())
+	r.Post("/two-factor/recovery-codes", iam.RecoveryCodesHandler())
+}
+
+// mountTokens registers the token routes when [Builder.Tokens] is set.
+func (iam *Access) mountTokens(r *router.Router) {
+	if iam.issuer == nil {
+		return
 	}
-	r.Get("/sessions", iam.ListSessionsHandler())
-	r.Delete("/sessions/{id}", iam.DeleteSessionHandler())
-	r.Delete("/sessions", iam.DeleteOtherSessionsHandler())
-	for _, provider := range iam.providers {
-		base := "/auth/" + provider.Name()
-		r.Get(base, provider.LoginHandler())
-		r.Methods(both, base+"/callback", provider.CallbackHandler(iam.guard, iam.links.Resolve))
-		if native, ok := provider.(NativeProvider); ok {
-			r.Get(base+"/nonce", native.NonceHandler())
-			r.Post(base+"/native", native.NativeHandler(iam.guard, iam.links.Resolve))
-		}
+	r.Get("/tokens", iam.ListTokensHandler())
+	r.Post("/tokens", iam.CreateTokenHandler())
+	r.Delete("/tokens/{id}", iam.DeleteTokenHandler())
+	r.Post("/device-tokens", iam.ExchangeHandler())
+	r.Delete("/device-tokens/current", iam.DeleteDeviceTokenHandler())
+}
+
+// mountConnections registers the connection routes when [Builder.Provider]
+// added any provider.
+func (iam *Access) mountConnections(r *router.Router) {
+	if iam.links == nil {
+		return
 	}
-	if iam.links != nil {
-		r.Get("/connections", iam.ListConnectionsHandler())
-		r.Post("/connections/{provider}", iam.ConnectHandler())
-		r.Delete("/connections/{id}", iam.DeleteConnectionHandler())
-	}
-	if iam.directory != nil {
-		r.Delete("/account", iam.DeleteAccountHandler())
-	}
+	r.Get("/connections", iam.ListConnectionsHandler())
+	r.Post("/connections/{provider}", iam.ConnectHandler())
+	r.Delete("/connections/{id}", iam.DeleteConnectionHandler())
 }

@@ -2,6 +2,7 @@ package access_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -281,5 +282,18 @@ func TestResolveWithoutProvidersIsNotLinked(t *testing.T) {
 	})
 	if _, err := sys.iam.Resolve(context.Background(), auth.External{Issuer: "x", Subject: "y"}); err == nil {
 		t.Fatal("Resolve without providers succeeded")
+	}
+}
+
+// TestNewRejectsDuplicateProviderNames verifies two providers cannot share a
+// mounted path.
+func TestNewRejectsDuplicateProviderNames(t *testing.T) {
+	t.Parallel()
+
+	_, err := newFacade(t, func(iam *access.Builder) {
+		iam.Provider(fakeProvider{name: "oauth"}, fakeProvider{name: "oauth"})
+	})
+	if !errors.Is(err, access.ErrInvalidConfig) || !strings.Contains(err.Error(), "oauth") {
+		t.Fatalf("error = %v, want a duplicate-name rejection", err)
 	}
 }

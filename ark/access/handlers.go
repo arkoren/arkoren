@@ -54,7 +54,7 @@ func (iam *Access) LoginHandler() router.Handler {
 //
 //	web.Post("/login/challenge", iam.ChallengeHandler())
 func (iam *Access) ChallengeHandler() router.Handler {
-	need(iam.hasSecondFactor(), "ChallengeHandler", "Builder.TwoFactor or Builder.SecondFactor")
+	need(iam.secondFactor, "ChallengeHandler", "Builder.TwoFactor or Builder.SecondFactor")
 
 	return iam.guard.ChallengeHandler()
 }
@@ -67,7 +67,7 @@ func (iam *Access) ChallengeHandler() router.Handler {
 //
 //	web.Get("/login/pending", iam.PendingHandler())
 func (iam *Access) PendingHandler() router.Handler {
-	need(iam.hasSecondFactor(), "PendingHandler", "Builder.TwoFactor or Builder.SecondFactor")
+	need(iam.secondFactor, "PendingHandler", "Builder.TwoFactor or Builder.SecondFactor")
 
 	return iam.guard.PendingHandler()
 }
@@ -91,7 +91,7 @@ func (iam *Access) LogoutHandler() router.Handler {
 //
 //	web.Post("/confirm", iam.ConfirmHandler())
 func (iam *Access) ConfirmHandler() router.Handler {
-	need(iam.hasStepUp(), "ConfirmHandler", "Builder.Password, Builder.TwoFactor or Builder.StepUp")
+	need(iam.stepUp, "ConfirmHandler", "Builder.Password, Builder.TwoFactor or Builder.StepUp")
 
 	return iam.guard.ConfirmHandler()
 }
@@ -384,12 +384,8 @@ func (iam *Access) ListConnectionsHandler() router.Handler {
 //	web.Post("/connections/{provider}", iam.ConnectHandler())
 func (iam *Access) ConnectHandler() router.Handler {
 	need(iam.links != nil, "ConnectHandler", "Builder.Provider")
-	targets := make(map[string]string, len(iam.providers))
-	for _, provider := range iam.providers {
-		targets[provider.Name()] = "/auth/" + provider.Name()
-	}
 
-	return iam.links.ConnectHandler(iam.guard, targets)
+	return iam.links.ConnectHandler(iam.guard, iam.connectTargets())
 }
 
 // DeleteConnectionHandler returns the handler of DELETE /connections/{id}; see
@@ -447,14 +443,4 @@ func (iam *Access) RequireVerified() router.Middleware {
 	need(iam.directory != nil, "RequireVerified", "the built-in users table")
 
 	return account.RequireVerified()
-}
-
-// hasSecondFactor reports whether any second-factor method is registered.
-func (iam *Access) hasSecondFactor() bool {
-	return iam.factors != nil || iam.extraSecondFactor
-}
-
-// hasStepUp reports whether any step-up method is registered.
-func (iam *Access) hasStepUp() bool {
-	return iam.verifier != nil || iam.factors != nil || iam.extraStepUp
 }

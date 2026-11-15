@@ -29,30 +29,49 @@ type codesBody struct {
 // whoever has the password and an old session must not be able to weaken the
 // second factor. The user proves a code with POST /confirm and retries.
 func (factors *Factors) requireSecondFactor(ctx context.Context, identity auth.Identity) error {
+	if factors.hasRecentFactor(identity) {
+		return nil
+	}
+	methods, err := factors.enrolledMethods(ctx, identity.Subject())
+	if err != nil {
+		return err
+	}
+
+	return auth.ErrStepUpRequired.Derive(func(details *problem.Builder) {
+		details.Extension("methods", methods)
+	})
+}
+
+// hasRecentFactor reports whether identity proved a second factor (the
+// authenticator, a recovery code or a registered method) within the step-up
+// window.
+func (factors *Factors) hasRecentFactor(identity auth.Identity) bool {
 	accepted := []auth.Method{auth.MethodOTP, MethodRecovery}
 	for _, credential := range factors.extra {
 		accepted = append(accepted, credential.Method)
 	}
 	now := time.Now()
-	for _, factor := range identity.Factors() {
-		if slices.Contains(accepted, factor.Method) && !factor.At.IsZero() && !factor.At.After(now) && now.Sub(factor.At) <= factors.window {
-			return nil
-		}
-	}
+
+	return slices.ContainsFunc(identity.Factors(), func(factor auth.Factor) bool {
+		return slices.Contains(accepted, factor.Method) && !factor.At.IsZero() && !factor.At.After(now) && now.Sub(factor.At) <= factors.window
+	})
+}
+
+// enrolledMethods lists the methods the confirm route accepts from subject: the
+// authenticator, then the registered methods the user is enrolled in.
+func (factors *Factors) enrolledMethods(ctx context.Context, subject string) ([]auth.Method, error) {
 	methods := []auth.Method{auth.MethodOTP}
 	for _, credential := range factors.extra {
-		enrolled, err := credential.Enrolled(ctx, identity.Subject())
+		enrolled, err := credential.Enrolled(ctx, subject)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if enrolled {
 			methods = append(methods, credential.Method)
 		}
 	}
 
-	return auth.ErrStepUpRequired.Derive(func(details *problem.Builder) {
-		details.Extension("methods", methods)
-	})
+	return methods, nil
 }
 
 // SetupHandler returns the handler of POST /two-factor/setup. It starts
@@ -116,27 +135,7 @@ func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
 		if err != nil {
 			return err
 		}
-		// Enabling two-factor ends every other login and runs OnEnable in the
-		// same transaction as the activation: a session an attacker opened before
-		// the user had a second factor must not outlive it, and if ending it
-		// fails nothing was activated, so two-factor stays off and no recovery
-		// code was shown and lost. The request carries the transaction's context
-		// so the guard's reads join it instead of waiting for another connection.
-		var codes []string
-		err = factors.db.WithTransaction(r.Context(), func(ctx context.Context) error {
-			var err error
-			if codes, err = factors.Activate(ctx, identity.Subject(), body.Code); err != nil {
-				return err
-			}
-			if err := guard.RevokeOthers(r.WithContext(ctx)); err != nil {
-				return err
-			}
-			if factors.enabled == nil {
-				return nil
-			}
-
-			return factors.enabled(ctx, identity.Subject())
-		})
+		codes, err := factors.enable(guard, r, identity.Subject(), body.Code)
 		if err != nil {
 			return err
 		}
@@ -149,6 +148,32 @@ func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
 
 		return response.JSON(w, http.StatusOK, codesBody{RecoveryCodes: codes})
 	}
+}
+
+// enable activates the authenticator of subject, ends every other login and
+// runs OnEnable, in one transaction: a session an attacker opened before the
+// user had a second factor must not outlive it, and if ending it fails nothing
+// was activated, so two-factor stays off and no recovery code was shown and
+// lost. The request carries the transaction's context so the guard's reads join
+// it instead of waiting for another connection.
+func (factors *Factors) enable(guard *auth.Guard, r *http.Request, subject, code string) ([]string, error) {
+	var codes []string
+	err := factors.db.WithTransaction(r.Context(), func(ctx context.Context) error {
+		var err error
+		if codes, err = factors.Activate(ctx, subject, code); err != nil {
+			return err
+		}
+		if err := guard.RevokeOthers(r.WithContext(ctx)); err != nil {
+			return err
+		}
+		if factors.enabled == nil {
+			return nil
+		}
+
+		return factors.enabled(ctx, subject)
+	})
+
+	return codes, err
 }
 
 // DisableHandler returns the handler of DELETE /two-factor. It removes the

@@ -187,3 +187,10 @@ func register(t *testing.T, client *apptest.Client, email string) apptest.Reply 
 
 	return reply
 }
+
+// newFacade composes a facade over an in-memory database without serving it.
+func newFacade(t *testing.T, configure ...access.BuilderFunc) (*access.Access, error) {
+	t.Helper()
+
+	return access.New(memoryDatabase(t), cache.New(memorycache.New()), configure...)
+}
