@@ -471,10 +471,20 @@ r.Get("/oauth/apple/callback", client.CallbackHandler(guard, mapIdentity))
 Use an Apple-configured `client`, not the Google baseline. Its encrypted state
 cookie protects this callback and uses `SameSite=None`; HTTPS is required.
 The browser does not send your `SameSite=Lax` session cookie with Apple's cross-site
-POST, so the POST only verifies the identity, keeps it in a two-minute sealed
-cookie and answers `303` to the same path. The GET that follows carries the
-session and runs your mapper, so connecting Apple to a logged-in user links the
-identity to that user.
+POST, so the POST only verifies the identity, keeps it in a 30-second sealed
+cookie and answers `303` to the same path. The top-level GET navigation that
+follows carries the session and runs your mapper, so connecting Apple to a
+logged-in user links the identity to the session present at that GET. The session
+cookie must be `SameSite=Lax` (the default); with `Strict` connect fails because
+the cookie is not sent. A GET that carries a code is rejected, and `RedirectURL`
+must be absolute with a path. An identity too large for one cookie (about 3800
+bytes) fails the POST.
+
+### Upgrading
+
+Mounting only `r.Post` for Apple no longer works: add the `r.Get` route for the
+same path, as above. This is a breaking change for `form_post` providers.
+`ark/access` already mounts both methods.
 Apple sends the name only on first authorization in an unsigned form field;
 it is added as `Claims["name"]` on that login, so store it then, as optional
 display text and not an authorization claim. Email can be a private relay

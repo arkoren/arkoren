@@ -101,10 +101,19 @@ middleware blocks. Register only that callback outside `csrf.Middleware`, or
 use `csrf.Builder.Protection` with an `http.CrossOriginProtection` configured
 with `AddInsecureBypassPattern("POST /oauth/callback")`. Its encrypted login
 state cookie protects that callback; keep CSRF protection on logout and other
-cookie-authenticated state-changing routes. The POST callback only verifies the identity: it keeps it in a
-two-minute sealed `SameSite=Lax` cookie and answers `303` to the same path, where the GET carries the session
-cookie and finishes the login, so connecting Apple to a logged-in user links the identity instead of creating
-a second account. Route both methods to the callback (`r.Methods([]string{"GET", "POST"}, ...)`).
+cookie-authenticated state-changing routes. The POST callback only verifies the identity: it keeps it in a 30-second sealed `SameSite=Lax` cookie and
+answers `303` to the callback path, where the top-level GET navigation carries the session cookie and finishes the
+login, so connecting Apple to a logged-in user links the identity instead of creating a second account. The identity
+links to the session present at that GET, and the session cookie must be `SameSite=Lax` (the default; Strict
+breaks connect). Route both methods to the callback (`r.Methods([]string{"GET", "POST"}, ...)`), and give the
+client an absolute `RedirectURL` with a path; `New` rejects anything else for a `form_post` provider.
+
+### Upgrading
+
+Breaking for `form_post` providers (Apple): the callback must now be mounted for both GET and POST. Before, a
+POST alone was enough. A GET that carries a code is rejected for these providers; only the hand-off from the
+POST completes the login. `ark/access` `Mount` already routes both methods. `RedirectURL` must be absolute with
+a path.
 
 ## Freshness
 
@@ -231,8 +240,8 @@ as fixed redaction markers; arbitrary caller-owned dependencies are not traverse
 ## Login cookie
 
 Each login sets one cookie `__Host-<Name>.<12 chars of base64url(sha256(state))>`: encrypted with the crypto
-cipher, HttpOnly, Secure, Path=/, Max-Age=600, SameSite=Lax (None for `form_post` providers, which also set a two-minute Lax hand-off cookie). A browser keeps at
-most five; the callback accepts GET or POST, deletes the cookie, and rejects missing, tampered, expired or
+cipher, HttpOnly, Secure, Path=/, Max-Age=600, SameSite=Lax (None for `form_post` providers, which also set a 30-second Lax hand-off cookie). A browser keeps at
+most five; the callback accepts GET or POST (for `form_post` providers a GET that carries a code is rejected), deletes the cookie, and rejects missing, tampered, expired or
 state-mismatched cookies with `ErrInvalidCallback`. The client deletes the browser's
 cookie but keeps no server-side used-state registry; one-time authorization codes
 must be enforced by the provider. Deletion does not revoke a copied cookie before

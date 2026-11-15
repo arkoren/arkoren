@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -17,9 +18,19 @@ import (
 
 const (
 	// handoffTTL is how long the verified result of a form_post callback waits
-	// for the same-site request that finishes the login. It only has to cover one
-	// redirect, so it is much shorter than a login.
-	handoffTTL = 2 * time.Minute
+	// for the top-level GET navigation that finishes the login. It only has to
+	// cover one redirect. The cookie is not tracked server-side, so a copy of it
+	// works until this time passes; keep it short.
+	handoffTTL = 30 * time.Second
+
+	// handoffSuffix ends the name of every hand-off cookie. Base64url has no dot,
+	// so no login cookie name can end with it.
+	handoffSuffix = ".h"
+
+	// maxHandoffCookie is the largest hand-off cookie, name and attributes
+	// included, that handOff sets. Browsers drop a cookie of about 4096 bytes
+	// without a word; the margin keeps clear of that.
+	maxHandoffCookie = 3800
 
 	// loginTTL is how long a started login stays valid.
 	loginTTL = 10 * time.Minute
@@ -134,7 +145,7 @@ func (client *Client) take(writer http.ResponseWriter, request *http.Request, st
 // given state. It is derived from the state, so only a request that knows the
 // state can ask for it.
 func (client *Client) handoffName(state string) string {
-	return client.cookieName(state) + "h"
+	return client.cookieName(state) + handoffSuffix
 }
 
 // handOff ends the cross-site POST of a form_post callback. The browser sends
@@ -142,17 +153,26 @@ func (client *Client) handoffName(state string) string {
 // logged-in user who connects a provider, is invisible to it. handOff therefore
 // only keeps the identity the POST verified, sealed in a short-lived hand-off
 // cookie named after the state, and answers 303 See Other to the callback path
-// with the state in the query. The browser follows it with a top-level GET,
-// which carries the Lax session cookie, and [Client.CallbackHandler] finishes the
-// login there with [Client.takeHandoff]. saved is the login the POST consumed;
-// identity is what it verified. The cookie is Lax, not None: only that GET needs
-// it, and a cross-site request has no use for it.
+// with the state added to the query of the registered callback URL. The browser
+// follows it with a top-level GET navigation, which carries the Lax session
+// cookie, and [Client.CallbackHandler] finishes the login there with
+// [Client.takeHandoff]. saved is the login the POST consumed; identity is what it
+// verified. The cookie is Lax, not None: only that GET needs it, and a
+// cross-site request has no use for it.
+//
+// The sealed identity must fit one cookie. When the cookie would pass
+// [maxHandoffCookie] bytes, handOff fails before setting it, because a browser
+// would drop an oversized cookie silently and the login would then fail at the
+// GET with no hint; large claims or a very long name are the usual cause.
 func (client *Client) handOff(writer http.ResponseWriter, saved loginState, identity auth.External) error {
 	callback, err := url.Parse(client.config.RedirectURL)
 
 	if err != nil {
 		return err
 	}
+
+	query := callback.Query()
+	query.Set("state", saved.State)
 
 	name := client.handoffName(saved.State)
 
@@ -170,9 +190,14 @@ func (client *Client) handOff(writer http.ResponseWriter, saved loginState, iden
 
 	cookie := client.cookie(name, base64.RawURLEncoding.EncodeToString(sealed), int(handoffTTL.Seconds()))
 	cookie.SameSite = http.SameSiteLaxMode
+
+	if size := len(cookie.String()); size > maxHandoffCookie {
+		return fmt.Errorf("oauth: hand-off cookie is %d bytes, over the %d byte limit: the verified identity is too large", size, maxHandoffCookie)
+	}
+
 	http.SetCookie(writer, cookie)
 
-	return response.SafeRedirect(writer, http.StatusSeeOther, callback.EscapedPath()+"?"+url.Values{"state": {saved.State}}.Encode())
+	return response.SafeRedirect(writer, http.StatusSeeOther, callback.EscapedPath()+"?"+query.Encode())
 }
 
 // takeHandoff returns the login and verified identity that [Client.handOff]
@@ -225,7 +250,7 @@ func (client *Client) prune(writer http.ResponseWriter, request *http.Request) {
 	var live []loginState
 
 	for _, cookie := range request.Cookies() {
-		if !strings.HasPrefix(cookie.Name, client.prefix) {
+		if !strings.HasPrefix(cookie.Name, client.prefix) || strings.HasSuffix(cookie.Name, handoffSuffix) {
 			continue
 		}
 

@@ -52,16 +52,23 @@ import (
 // cookie (SameSite=Lax is withheld from cross-site POSTs) nor, therefore, the
 // logged-in user of a connect flow, so the POST only validates the login cookie,
 // exchanges the code and verifies the identity. It then keeps the verified
-// identity in a sealed, HttpOnly, SameSite=Lax hand-off cookie that lives two
-// minutes, and answers 303 See Other to the callback path with the state. The
-// browser follows with a top-level GET, which carries the session cookie; that
-// request deletes the hand-off cookie, runs resolve and guard.Begin, and
-// continues as described above, so a logged-in user who connects Apple is linked
-// instead of getting a second account. The hand-off cookie is named after the
-// state, bound to its name, and only that GET reads it; a form_post client
-// never completes a login from a GET that carries a code. Like the login cookie
-// it is deleted, not tracked: a copy stays valid until it expires. resolve runs
-// once, in the GET, and sees the claims after a JSON round trip.
+// identity in a sealed, HttpOnly, SameSite=Lax hand-off cookie that lives 30
+// seconds, and answers 303 See Other to the callback path with the state. The
+// browser follows with a top-level GET navigation, which carries the session
+// cookie; that request deletes the hand-off cookie, runs resolve and
+// guard.Begin, and continues as described above, so a logged-in user who
+// connects Apple is linked instead of getting a second account. The identity
+// links to the session present at that GET: the one that started the login
+// normally, but whichever session the browser holds then. Connecting needs the
+// session cookie to be SameSite=Lax (the default); with Strict it is not sent
+// on the cross-site hop and the callback sees an anonymous request. The
+// hand-off cookie is named after the state, bound to its name, and only that GET
+// reads it; a form_post client never completes a login from a GET that carries
+// a code. Like the login cookie it is deleted, not tracked: it is not
+// single-use, and a copy of it stays valid until its 30 seconds pass. A
+// verified identity too large for one cookie (about 3800 bytes) fails the POST
+// with an error. resolve runs once, in the GET, and sees the claims after a
+// JSON round trip.
 //
 // With [ClientBuilder.Events] a rejected callback publishes [LoginFailed].
 //
@@ -125,7 +132,7 @@ func (client *Client) CallbackHandler(guard *auth.Guard, resolve auth.Resolver) 
 		var external auth.External
 
 		if client.provider.formPost && httpRequest.Method == http.MethodGet {
-			// The same-site request that follows the POST: the identity was
+			// The top-level GET navigation that follows the POST: the identity was
 			// verified there, and this request carries the session cookie.
 			saved, err = client.takeHandoff(writer, httpRequest, state)
 

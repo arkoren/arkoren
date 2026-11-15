@@ -21,9 +21,11 @@ const appleIssuer = "https://appleid.apple.com"
 // Apple sends the callback as a cross-site POST form, so the login cookie
 // uses SameSite=None, and the browser withholds the SameSite=Lax session cookie
 // from that POST. The callback therefore finishes in two steps: the POST
-// verifies the identity and answers 303 to the same path, and the GET that
-// follows has the session (see [Client.CallbackHandler]). Mount the callback for
-// both methods, for example with Router.Methods. Register the callback outside csrf.Middleware, or pass
+// verifies the identity and answers 303 to the same path, and the top-level GET
+// navigation that follows has the session (see [Client.CallbackHandler]). Mount
+// the callback for both methods, for example with Router.Methods; connecting
+// Apple needs a SameSite=Lax session cookie. [New] rejects a RedirectURL that is
+// not absolute or has no path. Register the callback outside csrf.Middleware, or pass
 // csrf.Builder.Protection with an http.CrossOriginProtection that calls
 // AddInsecureBypassPattern("POST /auth/apple/callback"); the state and the
 // login cookie are the CSRF defense of this route.

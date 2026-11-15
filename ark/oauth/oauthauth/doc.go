@@ -263,7 +263,7 @@
 // with an http.CrossOriginProtection that calls
 // AddInsecureBypassPattern("POST /auth/apple/callback"). The login state and
 // cookie are the CSRF defense of that route. Mount the callback for POST and
-// GET: the POST verifies the identity and hands it to a same-site GET with a
+// GET: the POST verifies the identity and hands it to a top-level GET navigation with a
 // short-lived sealed cookie, so the session cookie is present when the identity
 // is resolved (see [Client.CallbackHandler]). The Apple preset also supports
 // native login.

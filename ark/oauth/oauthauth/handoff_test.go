@@ -2,11 +2,13 @@ package oauthauth
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
@@ -72,7 +74,8 @@ type appleConnectFixture struct {
 }
 
 // newAppleConnectFixture builds the fixture around the fake Apple provider.
-func newAppleConnectFixture(t *testing.T) *appleConnectFixture {
+// guardConfig and clientConfig adjust the guard and the client.
+func newAppleConnectFixture(t *testing.T, guardConfig []auth.GuardBuilderFunc, clientConfig ...func(*ClientBuilder)) *appleConnectFixture {
 	t.Helper()
 
 	_, pemKey := appleKey(t)
@@ -87,8 +90,8 @@ func newAppleConnectFixture(t *testing.T) *appleConnectFixture {
 	apple.clientSecret = nil
 
 	fixture := &appleConnectFixture{
-		client: newClient(t, apple),
-		guard:  newGuard(t),
+		client: newClient(t, apple, clientConfig...),
+		guard:  newGuard(t, guardConfig...),
 		linked: map[string]string{},
 	}
 
@@ -186,7 +189,7 @@ func (f *appleConnectFixture) follow(b *browser, response *http.Response) *http.
 func TestAppleConnectLinksToLoggedInUser(t *testing.T) {
 	t.Parallel()
 
-	f := newAppleConnectFixture(t)
+	f := newAppleConnectFixture(t, nil)
 	b := &browser{cookies: map[string]*http.Cookie{}}
 	form := f.startLogin(t, b, true)
 
@@ -222,7 +225,7 @@ func TestAppleConnectLinksToLoggedInUser(t *testing.T) {
 func TestAppleLoginWithoutSession(t *testing.T) {
 	t.Parallel()
 
-	f := newAppleConnectFixture(t)
+	f := newAppleConnectFixture(t, nil)
 	b := &browser{cookies: map[string]*http.Cookie{}}
 	form := f.startLogin(t, b, false)
 
@@ -235,13 +238,14 @@ func TestAppleLoginWithoutSession(t *testing.T) {
 	}
 }
 
-// TestAppleHandoffIsSingleUseAndBound verifies the hand-off finishes one login
-// only: the GET spends it, a replay fails, a different state cannot open it and
-// a cookie moved to another state's name is refused.
-func TestAppleHandoffIsSingleUseAndBound(t *testing.T) {
+// TestAppleHandoffIsDeletedAndBoundToState verifies what the hand-off cookie
+// guarantees: the GET deletes it from the browser, so the same browser cannot
+// replay it, and it opens only for its own state and under its own name. It does
+// not claim single use: see TestAppleHandoffCopyWorksUntilItExpires.
+func TestAppleHandoffIsDeletedAndBoundToState(t *testing.T) {
 	t.Parallel()
 
-	f := newAppleConnectFixture(t)
+	f := newAppleConnectFixture(t, nil)
 	b := &browser{cookies: map[string]*http.Cookie{}}
 	form := f.startLogin(t, b, true)
 	posted := f.post(b, form)
@@ -273,7 +277,7 @@ func TestAppleHandoffIsSingleUseAndBound(t *testing.T) {
 	}
 
 	if status := f.follow(b, posted).StatusCode; status != http.StatusBadRequest {
-		t.Fatalf("replayed GET status = %d, want 400", status)
+		t.Fatalf("browser replay status = %d, want 400", status)
 	}
 
 	if b.cookies[handoff] != nil {
@@ -286,7 +290,7 @@ func TestAppleHandoffIsSingleUseAndBound(t *testing.T) {
 func TestFormPostRejectsDirectGetCallback(t *testing.T) {
 	t.Parallel()
 
-	f := newAppleConnectFixture(t)
+	f := newAppleConnectFixture(t, nil)
 	b := &browser{cookies: map[string]*http.Cookie{}}
 	form := f.startLogin(t, b, false)
 
@@ -298,5 +302,201 @@ func TestFormPostRejectsDirectGetCallback(t *testing.T) {
 
 	if f.created != 0 {
 		t.Fatalf("created = %d, want 0", f.created)
+	}
+}
+
+// TestAppleHandoffCopyWorksUntilItExpires states the replay limit honestly: the
+// cookie is deleted from the browser that used it, but the server keeps no
+// record, so a copy opens it again until it expires. The lifetime is 30 seconds.
+func TestAppleHandoffCopyWorksUntilItExpires(t *testing.T) {
+	t.Parallel()
+
+	f := newAppleConnectFixture(t, nil)
+	b := &browser{cookies: map[string]*http.Cookie{}}
+	form := f.startLogin(t, b, false)
+	posted := f.post(b, form)
+	name := f.client.handoffName(form.Get("state"))
+	copied := *b.cookies[name]
+
+	if copied.MaxAge != 30 {
+		t.Fatalf("hand-off Max-Age = %d, want 30", copied.MaxAge)
+	}
+
+	if status := f.follow(b, posted).StatusCode; status != http.StatusFound {
+		t.Fatalf("GET status = %d, want 302", status)
+	}
+
+	other := &browser{cookies: map[string]*http.Cookie{name: &copied}}
+
+	if status := f.follow(other, posted).StatusCode; status != http.StatusFound {
+		t.Fatalf("copy within its lifetime: status = %d, want 302", status)
+	}
+
+	sealed, err := f.client.cipher.Encrypt(loginState{
+		Cookie:   name,
+		State:    form.Get("state"),
+		Expires:  time.Now().Add(-time.Second),
+		Identity: &auth.External{Issuer: "i", Subject: "user-1"},
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expired := &browser{cookies: map[string]*http.Cookie{name: {Name: name, Value: base64.RawURLEncoding.EncodeToString(sealed)}}}
+
+	if status := f.follow(expired, posted).StatusCode; status != http.StatusBadRequest {
+		t.Fatalf("expired copy status = %d, want 400", status)
+	}
+}
+
+// TestAppleLoginCookieIsNotAHandoff verifies the sealed login cookie cannot be
+// presented as the hand-off: it has the wrong name, and carries no identity.
+func TestAppleLoginCookieIsNotAHandoff(t *testing.T) {
+	t.Parallel()
+
+	f := newAppleConnectFixture(t, nil)
+	b := &browser{cookies: map[string]*http.Cookie{}}
+	form := f.startLogin(t, b, false)
+	state := form.Get("state")
+	login := b.cookies[f.client.cookieName(state)]
+
+	request := httptest.NewRequest(http.MethodGet, "/callback?state="+url.QueryEscape(state), nil)
+	request.AddCookie(&http.Cookie{Name: f.client.handoffName(state), Value: login.Value})
+
+	if status := f.callback.Record(request).StatusCode; status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", status)
+	}
+
+	if f.created != 0 {
+		t.Fatalf("created = %d, want 0", f.created)
+	}
+}
+
+// TestAppleHandoffRedirectKeepsCallbackQuery verifies the 303 goes to the
+// registered callback path and keeps its query next to the state.
+func TestAppleHandoffRedirectKeepsCallbackQuery(t *testing.T) {
+	t.Parallel()
+
+	f := newAppleConnectFixture(t, nil, func(client *ClientBuilder) {
+		client.RedirectURL("http://app.test/callback?tenant=a")
+	})
+	b := &browser{cookies: map[string]*http.Cookie{}}
+	form := f.startLogin(t, b, false)
+
+	location, err := url.Parse(f.post(b, form).Header.Get("Location"))
+
+	if err != nil || location.Path != "/callback" || location.Query().Get("tenant") != "a" || location.Query().Get("state") != form.Get("state") {
+		t.Fatalf("Location = %v, %v", location, err)
+	}
+}
+
+// TestFormPostRejectsRelativeRedirectURL verifies a form_post client needs an
+// absolute callback URL with a path, since the hand-off redirects to that path.
+func TestFormPostRejectsRelativeRedirectURL(t *testing.T) {
+	t.Parallel()
+
+	for _, redirect := range []string{"/callback", "http://app.test", "app.test/callback", "http://[::1"} {
+		provider := OIDC("https://issuer.test")
+		provider.formPost = true
+
+		if _, err := New(provider, testCipher(t), "cid", func(client *ClientBuilder) { client.RedirectURL(redirect) }); err == nil {
+			t.Errorf("RedirectURL %q accepted", redirect)
+		}
+	}
+
+	provider := OIDC("https://issuer.test")
+	provider.formPost = true
+
+	if _, err := New(provider, testCipher(t), "cid", func(client *ClientBuilder) { client.RedirectURL("https://app.test/cb") }); err != nil {
+		t.Fatalf("valid RedirectURL: %v", err)
+	}
+}
+
+// TestAppleHandoffRejectsOversizedIdentity verifies an identity too large for
+// one cookie fails the POST with an error instead of a cookie the browser would
+// silently drop.
+func TestAppleHandoffRejectsOversizedIdentity(t *testing.T) {
+	t.Parallel()
+
+	f := newAppleConnectFixture(t, nil)
+	b := &browser{cookies: map[string]*http.Cookie{}}
+	form := f.startLogin(t, b, false)
+	form.Set("user", `{"name":{"firstName":"`+strings.Repeat("a", 5000)+`"}}`)
+
+	response := f.post(b, form)
+
+	if response.StatusCode == http.StatusSeeOther || response.Header.Get("Location") != "" {
+		t.Fatalf("status = %d, Location = %q, want an error", response.StatusCode, response.Header.Get("Location"))
+	}
+
+	if b.cookies[f.client.handoffName(form.Get("state"))] != nil || f.created != 0 {
+		t.Fatalf("hand-off set or account created: %v, %d", b.cookies, f.created)
+	}
+}
+
+// TestPruneKeepsHandoffCookies verifies hand-off cookies neither count against
+// the five logins a browser keeps nor get dropped by a new login.
+func TestPruneKeepsHandoffCookies(t *testing.T) {
+	t.Parallel()
+
+	f := newAppleConnectFixture(t, nil)
+	b := &browser{cookies: map[string]*http.Cookie{}}
+
+	var oldest string
+
+	for i := range 4 {
+		form := f.startLogin(t, b, false)
+
+		if i == 0 {
+			oldest = f.client.cookieName(form.Get("state"))
+		}
+	}
+
+	last := f.startLogin(t, b, false)
+	f.post(b, last)
+
+	handoff := f.client.handoffName(last.Get("state"))
+
+	if b.cookies[handoff] == nil || b.cookies[oldest] == nil {
+		t.Fatalf("setup: cookies = %v", b.cookies)
+	}
+
+	f.startLogin(t, b, false)
+
+	if b.cookies[oldest] == nil {
+		t.Fatal("prune counted the hand-off cookie and dropped the oldest login")
+	}
+
+	if b.cookies[handoff] == nil {
+		t.Fatal("prune dropped the hand-off cookie")
+	}
+}
+
+// TestAppleHandoffEndsInSecondFactor verifies a GET whose login needs a second
+// factor parks it and redirects to the challenge URL without a login event.
+func TestAppleHandoffEndsInSecondFactor(t *testing.T) {
+	t.Parallel()
+
+	otp := auth.Credential{
+		Method:   auth.MethodOTP,
+		Kind:     auth.KindPossession,
+		Enrolled: func(context.Context, string) (bool, error) { return true, nil },
+	}
+
+	f := newAppleConnectFixture(t, []auth.GuardBuilderFunc{func(policy *auth.GuardBuilder) { policy.SecondFactor(otp) }},
+		func(client *ClientBuilder) { client.ChallengeURL("/2fa") })
+	b := &browser{cookies: map[string]*http.Cookie{}}
+	form := f.startLogin(t, b, false)
+	posted := f.post(b, form)
+
+	if posted.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST status = %d, want 303", posted.StatusCode)
+	}
+
+	finished := f.follow(b, posted)
+
+	if finished.StatusCode != http.StatusFound || finished.Header.Get("Location") != "/2fa" {
+		t.Fatalf("GET = %d %q, want 302 /2fa", finished.StatusCode, finished.Header.Get("Location"))
 	}
 }
