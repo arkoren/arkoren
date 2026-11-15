@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,11 +14,26 @@ import (
 	"arkoren.dev/core/http/request"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
+	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/access/internal/storage"
+	"arkoren.dev/ark/access/internal/throttle"
 	"arkoren.dev/ark/access/internal/web"
+)
+
+const (
+	// maxResends is how many resend requests one user may make within
+	// resendWindow.
+	maxResends = 5
+
+	// maxClientResends is how many resend requests one client address may make
+	// within resendWindow, across users.
+	maxClientResends = 20
+
+	// resendWindow is the lifetime of a resend counter.
+	resendWindow = 15 * time.Minute
 )
 
 // Message is what [Builder.Deliver] receives: the address to write to and the
@@ -176,21 +192,49 @@ func (directory *Directory) VerifyHandler() router.Handler {
 
 // ResendHandler returns the handler of POST /email/verify/resend. It needs a
 // browser session ([auth.Identity.Session]) and sends a new verification to the
-// logged-in user: 202, whether or not anything was sent. Without a delivery
-// function the request fails with [ErrNoDelivery] (500).
+// logged-in user's stored address: 202, whether or not anything was sent and
+// whether or not the delivery function failed. The work runs in the
+// background, so the response time says nothing about the outcome; a failed
+// delivery is logged (without the token) and never reaches the client. Wait for
+// the sends with [Directory.Wait]. Without a delivery function the request
+// fails with [ErrNoDelivery] (500).
+//
+// Requests are counted per user and per client address before anything is
+// sent: more than 5 per user or 20 per client address in 15 minutes is
+// [ErrThrottled] (429, with Retry-After). The handler panics at composition
+// unless [Builder.Throttle] was set.
 //
 // Example:
 //
 //	web.Post("/email/verify/resend", directory.ResendHandler())
 func (directory *Directory) ResendHandler() router.Handler {
+	if directory.store == nil {
+		panic("account: ResendHandler requires Builder.Throttle")
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err
 		}
-		if err := directory.SendVerification(r.Context(), identity.Subject()); err != nil {
+		if directory.deliver == nil {
+			return ErrNoDelivery
+		}
+		ctx, subject := r.Context(), identity.Subject()
+		prefix := "access:" + directory.instance + ":account:resend:"
+		subjectKey := cache.NewKey[int64](prefix + "subject:" + storage.Hash(subject))
+		if err := throttle.Attempt(ctx, directory.store, subjectKey, maxResends, resendWindow, ErrThrottled); err != nil {
 			return err
 		}
+		clientKey := cache.NewKey[int64](prefix + "ip:" + directory.clientIP(r))
+		if err := throttle.Attempt(ctx, directory.store, clientKey, maxClientResends, resendWindow, ErrThrottled); err != nil {
+			return err
+		}
+		directory.jobs.Go(ctx, func(ctx context.Context) {
+			if err := directory.SendVerification(ctx, subject); err != nil {
+				slog.ErrorContext(ctx, "access: verification email failed", "subject", subject, "error", err)
+			}
+		})
 
 		return response.Status(w, http.StatusAccepted)
 	}

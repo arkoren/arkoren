@@ -18,6 +18,21 @@ func need(enabled bool, handler, requirement string) {
 	}
 }
 
+// verified puts the email-verified gate in front of handler. Connecting a
+// provider, enrolling two-factor and creating tokens are what someone who
+// registered another person's address would use to keep access after the real
+// owner resets the password, so unverified users get 403
+// [account.ErrEmailUnverified] there. The gate is the built-in directory's
+// verified flag, or [Users.Verified]; without either (own users that gave no
+// hook) it is absent and the handler is returned as is.
+func (iam *Access) verified(handler router.Handler) router.Handler {
+	if iam.gate == nil {
+		return handler
+	}
+
+	return iam.gate(handler)
+}
+
 // RegisterHandler returns the handler of POST /register; see
 // [password.Verifier.RegisterHandler]. With the built-in directory a new user
 // gets a verification email when [Builder.Deliver] is set. It panics unless
@@ -111,7 +126,8 @@ func (iam *Access) VerifyEmailHandler() router.Handler {
 
 // ResendVerificationHandler returns the handler of POST /email/verify/resend;
 // see [account.Directory.ResendHandler]. It panics without the built-in
-// directory or without [Builder.Deliver].
+// directory or without [Builder.Deliver]. It is throttled per user and per
+// client address and sends in the background ([Access.Wait]).
 //
 // Example:
 //
@@ -124,7 +140,8 @@ func (iam *Access) ResendVerificationHandler() router.Handler {
 
 // ForgotPasswordHandler returns the handler of POST /password/forgot; see
 // [password.Verifier.ForgotHandler]. It panics unless [Builder.Password] and
-// [Builder.Deliver] are set.
+// [Builder.Deliver] are set. The email is sent in the background ([Access.Wait])
+// and the answer is an empty 202 whatever happens.
 //
 // Example:
 //
@@ -165,18 +182,25 @@ func (iam *Access) ChangePasswordHandler() router.Handler {
 // [twofactor.Factors.SetupHandler]. It panics unless [Builder.TwoFactor] is
 // enabled.
 //
+// An unverified email is 403 [account.ErrEmailUnverified]: whoever registered
+// an address first must not attach this before its owner proves it (with your
+// own users, see [Users.Verified]).
+//
 // Example:
 //
 //	web.Post("/two-factor/setup", iam.SetupTwoFactorHandler())
 func (iam *Access) SetupTwoFactorHandler() router.Handler {
 	need(iam.factors != nil, "SetupTwoFactorHandler", "Builder.TwoFactor")
 
-	return iam.factors.SetupHandler(iam.guard)
+	return iam.verified(iam.factors.SetupHandler(iam.guard))
 }
 
 // EnableTwoFactorHandler returns the handler of POST /two-factor; see
 // [twofactor.Factors.EnableHandler]. It panics unless [Builder.TwoFactor] is
 // enabled.
+//
+// An unverified email is 403 [account.ErrEmailUnverified] (see
+// [Users.Verified] with your own users). Enabling ends the user's other logins.
 //
 // Example:
 //
@@ -184,7 +208,7 @@ func (iam *Access) SetupTwoFactorHandler() router.Handler {
 func (iam *Access) EnableTwoFactorHandler() router.Handler {
 	need(iam.factors != nil, "EnableTwoFactorHandler", "Builder.TwoFactor")
 
-	return iam.factors.EnableHandler(iam.guard)
+	return iam.verified(iam.factors.EnableHandler(iam.guard))
 }
 
 // DisableTwoFactorHandler returns the handler of DELETE /two-factor; see
@@ -229,13 +253,16 @@ func (iam *Access) ListTokensHandler() router.Handler {
 // [apitoken.Issuer.CreateHandler]. It panics unless [Builder.Tokens] is
 // enabled.
 //
+// An unverified email is 403 [account.ErrEmailUnverified] (see
+// [Users.Verified] with your own users).
+//
 // Example:
 //
 //	web.Post("/tokens", iam.CreateTokenHandler())
 func (iam *Access) CreateTokenHandler() router.Handler {
 	need(iam.issuer != nil, "CreateTokenHandler", "Builder.Tokens")
 
-	return iam.issuer.CreateHandler(iam.guard)
+	return iam.verified(iam.issuer.CreateHandler(iam.guard))
 }
 
 // DeleteTokenHandler returns the handler of DELETE /tokens/{id}; see
@@ -256,13 +283,16 @@ func (iam *Access) DeleteTokenHandler() router.Handler {
 // [apitoken.Issuer.ExchangeHandler]. It panics unless [Builder.Tokens] is
 // enabled.
 //
+// An unverified email is 403 [account.ErrEmailUnverified] (see
+// [Users.Verified] with your own users).
+//
 // Example:
 //
 //	web.Post("/device-tokens", iam.ExchangeHandler())
 func (iam *Access) ExchangeHandler() router.Handler {
 	need(iam.issuer != nil, "ExchangeHandler", "Builder.Tokens")
 
-	return iam.issuer.ExchangeHandler(iam.guard)
+	return iam.verified(iam.issuer.ExchangeHandler(iam.guard))
 }
 
 // DeleteDeviceTokenHandler returns the handler of DELETE /device-tokens/current,
@@ -359,6 +389,9 @@ func (iam *Access) ListConnectionsHandler() router.Handler {
 // "/auth/<name>"; see [federation.Links.ConnectHandler]. It panics unless
 // [Builder.Provider] is used.
 //
+// An unverified email is 403 [account.ErrEmailUnverified] (see
+// [Users.Verified] with your own users).
+//
 // Example:
 //
 //	web.Post("/connections/{provider}", iam.ConnectHandler())
@@ -369,7 +402,7 @@ func (iam *Access) ConnectHandler() router.Handler {
 		targets[provider.Name()] = "/auth/" + provider.Name()
 	}
 
-	return iam.links.ConnectHandler(iam.guard, targets)
+	return iam.verified(iam.links.ConnectHandler(iam.guard, targets))
 }
 
 // DeleteConnectionHandler returns the handler of DELETE /connections/{id}; see

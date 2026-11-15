@@ -11,6 +11,7 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/http/request"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -96,8 +97,10 @@ type Message struct {
 	// Kind says which flow sent the message.
 	Kind Kind
 
-	// Identifier is who to write to: the user's email with the built-in
-	// directory, or the identifier as typed with the application's own users.
+	// Identifier is who to write to: the email stored with the user with the
+	// built-in directory, or the address that the application's [Users.Lookup]
+	// returned. It is never the text of a request, so a request cannot send a
+	// victim's link elsewhere.
 	Identifier string
 
 	// Token is the single-use secret to put in the link.
@@ -162,31 +165,57 @@ type NativeProvider interface {
 //
 //	iam.Users(access.Users{
 //		Provider: provider,
-//		Lookup:   func(ctx context.Context, email string) (string, error) { return store.SubjectByEmail(ctx, email) },
-//		Create:   func(ctx context.Context, email string) (string, error) { return store.Create(ctx, email) },
+//		Lookup:   func(ctx context.Context, email string) (string, string, error) { return store.SubjectAndEmail(ctx, email) },
+//		Create:   func(ctx context.Context, email string, verified bool) (string, error) { return store.Create(ctx, email, verified) },
 //		Rotate:   func(ctx context.Context, subject string) error { return store.BumpVersion(ctx, subject) },
 //	})
+//
+// Email verification is the application's with its own users. The built-in
+// directory refuses unverified users the actions an earlier holder of the
+// address could abuse (connecting a provider, enrolling two-factor, creating
+// tokens) and, when a password reset proves the mailbox, removes what such a
+// holder attached. With your own users the facade can do the same only through
+// [Users.Verified] and [Users.ProveEmail]; without them it does neither, and
+// the application must enforce the rule itself.
 type Users struct {
 	// Provider serves the application's users to the guard. Its driver's
 	// UserRecord.Version must change when Rotate runs.
 	Provider *auth.UserProvider
 
 	// Lookup returns the subject of the user with identifier, whatever the
-	// application uses to log in (an email, a username). An unknown user must
-	// return an error wrapping [auth.ErrUserNotFound]. It is required with
-	// [Builder.Password].
-	Lookup func(ctx context.Context, identifier string) (subject string, err error)
+	// application uses to log in (an email, a username), and the address to
+	// send mail to, as stored with the user and never the typed identifier. An
+	// unknown user must return an error wrapping [auth.ErrUserNotFound]. It is
+	// required with [Builder.Password].
+	Lookup func(ctx context.Context, identifier string) (subject, address string, err error)
 
-	// Create adds a user and returns the subject. It serves registration and the
-	// first login with an external identity (the identifier is then the
-	// provider's email, possibly empty); its errors pass through to the client.
-	// It may be nil when users are created elsewhere.
-	Create func(ctx context.Context, identifier string) (subject string, err error)
+	// Create adds a user and returns the subject. It serves registration (with
+	// verified false) and the first login with an external identity (the
+	// identifier is then the provider's email, possibly empty, and verified is
+	// [auth.External.EmailVerified]); its errors pass through to the client.
+	// It must fail on an existing identifier and never return the existing
+	// user: connecting an identity to someone by email is how accounts get
+	// taken over. It may be nil when users are created elsewhere.
+	Create func(ctx context.Context, identifier string, verified bool) (subject string, err error)
 
 	// Rotate bumps [auth.UserRecord.Version], which ends every session, pending
 	// login and API token of the user. A password reset calls it. It is required
 	// with [Builder.Password].
 	Rotate func(ctx context.Context, subject string) error
+
+	// Verified is optional. It reports whether the user's email is verified. The
+	// facade then answers 403 [account.ErrEmailUnverified] to unverified users on
+	// the routes that connect a provider, enroll two-factor or create tokens.
+	// Without it those routes are open to unverified users.
+	Verified func(ctx context.Context, subject string) (bool, error)
+
+	// ProveEmail is optional. A completed password reset calls it, in the
+	// reset's transaction, because the link reached the mailbox. It marks the
+	// email verified and reports whether it was unverified before; if so the
+	// facade deletes the user's connections, two-factor enrolment, recovery
+	// codes and tokens, which may belong to whoever registered the address first.
+	// An error rolls the reset back.
+	ProveEmail func(ctx context.Context, subject string) (wasUnverified bool, err error)
 }
 
 // Builder configures [New] before publication. Each feature is off until its
@@ -223,6 +252,7 @@ type Builder struct {
 	sessionPolicy   []session.BuilderFunc
 	sessionLifetime time.Duration
 	clientIP        func(*http.Request) string
+	revokePersonal  bool
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -317,6 +347,22 @@ func (iam *Builder) TwoFactor(cipher *crypto.Encrypter, issuer string, configure
 func (iam *Builder) Tokens(configure ...apitoken.BuilderFunc) *Builder {
 	iam.tokens = true
 	iam.apitoken = slices.Clone(configure)
+
+	return iam
+}
+
+// RevokeTokensOnPasswordChange makes a password change also revoke the user's
+// personal access tokens. By default a change ends the user's other sessions and
+// their device tokens, but keeps personal tokens, which the user created on
+// purpose for scripts and integrations. Turn this on when a changed password
+// should cut off everything. It has no effect without [Builder.Tokens] and
+// [Builder.Password]; a password reset always revokes every token.
+//
+// Example:
+//
+//	iam.RevokeTokensOnPasswordChange()
+func (iam *Builder) RevokeTokensOnPasswordChange() *Builder {
+	iam.revokePersonal = true
 
 	return iam
 }
@@ -481,6 +527,11 @@ type Access struct {
 	migrations []migrate.Definition
 	pingers    []func(context.Context) error
 
+	// gate is the middleware that admits only users with a verified email, put
+	// before the handlers that connect a provider, enroll two-factor or create
+	// tokens; nil when nothing can tell (own users without Users.Verified).
+	gate router.Middleware
+
 	// extraSecondFactor and extraStepUp record credentials registered through
 	// the Builder, so the handlers that need a registry can tell it is not empty.
 	extraSecondFactor bool
@@ -562,15 +613,34 @@ func (iam *Access) validate(settings Builder) error {
 func (iam *Access) build(settings Builder) error {
 	var (
 		err    error
-		lookup func(context.Context, string) (string, error)
-		create func(context.Context, string) (string, error)
+		lookup func(context.Context, string) (string, string, error)
+		create func(context.Context, string, bool) (string, error)
 		rotate func(context.Context, string) error
 	)
 	if settings.users != nil {
 		iam.provider, lookup, create, rotate = settings.users.Provider, settings.users.Lookup, settings.users.Create, settings.users.Rotate
+		if verified := settings.users.Verified; verified != nil {
+			iam.gate = func(next router.Handler) router.Handler {
+				return func(w http.ResponseWriter, r *http.Request) error {
+					identity, err := request.Identity(r)
+					if err != nil {
+						return err
+					}
+					ok, err := verified(r.Context(), identity.Subject())
+					if err != nil {
+						return err
+					}
+					if !ok {
+						return account.ErrEmailUnverified
+					}
+
+					return next(w, r)
+				}
+			}
+		}
 	} else {
 		iam.directory, err = account.NewDirectory(iam.db, func(accounts *account.Builder) {
-			accounts.Instance(settings.instance).Events(settings.events)
+			accounts.Instance(settings.instance).Events(settings.events).Throttle(iam.store, settings.clientIP)
 			if settings.deliver != nil {
 				accounts.Deliver(func(ctx context.Context, message account.Message) error {
 					return settings.deliver(ctx, Message{Kind: KindVerify, Identifier: message.Email, Token: message.Token, ExpiresAt: message.ExpiresAt})
@@ -580,13 +650,36 @@ func (iam *Access) build(settings Builder) error {
 		if err != nil {
 			return err
 		}
-		iam.provider, lookup, create, rotate = iam.directory.Provider(), iam.directory.Lookup, iam.directory.Create, iam.directory.Rotate
+		iam.provider, lookup, rotate = iam.directory.Provider(), iam.directory.Lookup, iam.directory.Rotate
+		create = func(ctx context.Context, email string, verified bool) (string, error) {
+			if verified {
+				return iam.directory.CreateVerified(ctx, email)
+			}
+
+			return iam.directory.Create(ctx, email)
+		}
+		iam.gate = account.RequireVerified()
 		iam.add(iam.directory.Migrations(), iam.directory.Ping)
 	}
 	if settings.hasher != nil {
-		iam.verifier, err = password.NewVerifier(iam.provider, iam.db, iam.store, settings.hasher,
-			password.Users{Lookup: lookup, Create: create, Rotate: rotate},
+		users := password.Users{Lookup: lookup, Rotate: rotate, ProveEmail: iam.proveEmail(settings.users)}
+		if create != nil {
+			users.Create = func(ctx context.Context, identifier string) (string, error) {
+				return create(ctx, identifier, false)
+			}
+		}
+		iam.verifier, err = password.NewVerifier(iam.provider, iam.db, iam.store, settings.hasher, users,
 			append([]password.BuilderFunc{func(passwords *password.Builder) {
+				passwords.AfterChange(func(ctx context.Context, subject string) error {
+					switch {
+					case iam.issuer == nil:
+						return nil
+					case settings.revokePersonal:
+						return iam.issuer.RevokeAll(ctx, subject)
+					default:
+						return iam.issuer.RevokeDevices(ctx, subject)
+					}
+				})
 				passwords.Instance(settings.instance).Events(settings.events)
 				if settings.clientIP != nil {
 					passwords.ClientIP(settings.clientIP)
@@ -651,21 +744,58 @@ func (iam *Access) add(migrations []migrate.Definition, ping func(context.Contex
 }
 
 // createExternal returns the function that makes a user for an unknown external
-// identity: with the built-in directory a verified or unverified user by email,
-// according to [auth.External.EmailVerified]; with the application's own users,
-// [Users.Create] with the provider's email. It is nil when there is no way to
-// create users, so unknown identities are refused.
-func (iam *Access) createExternal(create func(context.Context, string) (string, error)) func(context.Context, auth.External) (string, error) {
+// identity: [Users.Create] (or the built-in directory) with the provider's
+// email, verified according to [auth.External.EmailVerified]. It is nil when
+// there is no way to create users, so unknown identities are refused.
+func (iam *Access) createExternal(create func(context.Context, string, bool) (string, error)) func(context.Context, auth.External) (string, error) {
 	if create == nil {
 		return nil
 	}
 
 	return func(ctx context.Context, external auth.External) (string, error) {
-		if iam.directory != nil && external.EmailVerified {
-			return iam.directory.CreateVerified(ctx, external.Email)
+		return create(ctx, external.Email, external.EmailVerified)
+	}
+}
+
+// proveEmail returns the hook a password reset runs in its transaction to turn
+// the proof of mailbox ownership into a verified email. When the email was not
+// verified before, whoever registered the address first may have attached
+// things to the account (a connected provider, an authenticator, recovery
+// codes, tokens), so all of them are deleted; the reset itself rotates the user
+// and the handler ends the logins. It reads the packages when it runs, because
+// they are built after it. It is nil when there is nothing to prove with: own
+// users without [Users.ProveEmail].
+func (iam *Access) proveEmail(users *Users) func(context.Context, string) error {
+	prove := func(ctx context.Context, subject string) (bool, error) {
+		return iam.directory.ProveEmail(ctx, subject)
+	}
+	if users != nil {
+		if users.ProveEmail == nil {
+			return nil
+		}
+		prove = users.ProveEmail
+	}
+
+	return func(ctx context.Context, subject string) error {
+		wasUnverified, err := prove(ctx, subject)
+		if err != nil || !wasUnverified {
+			return err
+		}
+		if iam.links != nil {
+			if err := iam.links.UnlinkAll(ctx, subject); err != nil {
+				return err
+			}
+		}
+		if iam.factors != nil {
+			if err := iam.factors.Remove(ctx, subject); err != nil {
+				return err
+			}
+		}
+		if iam.issuer != nil {
+			return iam.issuer.RevokeAll(ctx, subject)
 		}
 
-		return create(ctx, external.Email)
+		return nil
 	}
 }
 
@@ -833,6 +963,30 @@ func (iam *Access) MustAccept(methods ...auth.Method) {
 	for _, method := range methods {
 		iam.guard.MustAccept(method)
 	}
+}
+
+// Wait blocks until the emails that the forgot-password and resend handlers sent
+// in the background have been handed to [Builder.Deliver], or returns the error
+// of ctx when it ends first. Those handlers answer 202 at once and deliver
+// afterwards, so call Wait during shutdown, after the server stopped accepting
+// requests; tests call it before asserting on what was delivered.
+//
+// Example:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	_ = iam.Wait(ctx)
+func (iam *Access) Wait(ctx context.Context) error {
+	if iam.verifier != nil {
+		if err := iam.verifier.Wait(ctx); err != nil {
+			return err
+		}
+	}
+	if iam.directory != nil {
+		return iam.directory.Wait(ctx)
+	}
+
+	return nil
 }
 
 // Migrations returns the migrations of the enabled features only, in the order

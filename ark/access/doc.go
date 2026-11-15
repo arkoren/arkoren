@@ -74,10 +74,29 @@
 //     ([auth.Identity.Session]) and calls [auth.Guard.Fresh]; an API token can
 //     never enroll, change or remove a credential. A user with no step-up method
 //     is fresh right after logging in, so a first enrollment needs nothing special.
-//   - Password login is throttled per identifier and per client address, and an
-//     unknown identifier costs a dummy hash. A password change keeps the caller
-//     and ends the user's other logins; a reset rotates the user, which ends every
-//     session, pending login and API token, and never logs the user in.
+//   - Password login counts only failures, per identifier and client address
+//     together (10), per identifier across addresses (50) and per client address
+//     (100) in 15 minutes, so someone failing from elsewhere cannot lock a user
+//     out; an unknown identifier costs a dummy hash. Forgot-password, register and
+//     resend are throttled per identifier and per address too.
+//   - Forgot-password and resend answer an empty 202 whatever happens and send in
+//     the background, so neither the answer nor its timing says whether the user
+//     exists or the mailer works; failures are logged. Call [Access.Wait] at
+//     shutdown. Mail goes to the address stored with the user, never to the text
+//     of the request, and a user keeps up to three live reset links.
+//   - A password change keeps the caller, ends the user's other logins and
+//     revokes their device tokens (personal tokens stay unless
+//     [Builder.RevokeTokensOnPasswordChange]); a reset rotates the user, which
+//     ends every session, pending login and API token, and never logs the user
+//     in.
+//   - A completed reset proves the mailbox. When the email was unverified it is
+//     marked verified and every connection, the authenticator, the recovery codes
+//     and all tokens are deleted, because whoever registered the address first
+//     may have attached them. Until verified, an account cannot connect a
+//     provider, enroll two-factor or create tokens (403 email-unverified).
+//   - Enabling two-factor ends the user's other logins. Disabling it and
+//     regenerating recovery codes need a recent authenticator or recovery code;
+//     a fresh password alone is 403 with methods ["otp"].
 //   - Federation never links by email. Connecting a provider is a POST that
 //     leaves a ten-minute, single-use intent in the session. A user cannot remove
 //     their last way to log in (409).
@@ -92,7 +111,11 @@
 // users table is migrated, and the routes and handlers that need the directory
 // (email verification, account deletion, [Access.RequireVerified]) are absent or
 // panic at composition. The other packages work unchanged, because they only
-// see subjects.
+// see subjects. Lookup returns the stored address mail goes to, Create gets
+// whether the provider verified the email and must fail on an existing
+// identifier, and the unverified-account rules above apply only when you give
+// [Users.Verified] and [Users.ProveEmail]; without them the application must
+// enforce the same rules itself.
 //
 // # Transactions and limits
 //

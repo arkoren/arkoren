@@ -47,7 +47,10 @@ two-factor on and answers `200` with the recovery codes:
 
 This is the only time they are shown. A wrong code is `422`, ten wrong codes in
 15 minutes are `429`, and enabling without setup is `409`. The session records
-the code, so the user stays fresh for the next change. Enabling publishes the
+the code, so the user stays fresh for the next change. Enabling also ends every
+other login of the user, so a session an attacker opened before the second
+factor existed does not outlive it, and an unverified email is `403`
+(email-unverified). Enabling publishes the
 `twofactor` enabled event and core's `auth.CredentialEnrolled`.
 
 ## Log In With a Code
@@ -75,9 +78,14 @@ who is not enrolled, so a response never says which.
 
 `POST /two-factor/recovery-codes` replaces the codes and answers with the new
 list; the old ones stop working. `DELETE /two-factor` removes the authenticator
-and the codes and answers `204`. Both need a fresh login, so a user with an
-authenticator confirms a code first, and both answer `409` when two-factor is not
-enabled. Read the state for your account page with `iam.Factors().Status(ctx,
+and the codes and answers `204`. Both answer `409` when two-factor is not
+enabled. Both need a fresh login and, on top of that, an authenticator or
+recovery code this session verified recently (15 minutes by default,
+`twofactor.Builder.StepUpWindow`; set the same value as the guard's `FreshFor`
+if you changed it). A recent password alone, which makes core's check pass, is
+`403` with `"methods": ["otp"]`: the client posts `{"method": "otp", ...}` to
+`/confirm` and retries. Someone holding a password and an old session therefore
+cannot turn two-factor off. Read the state for your account page with `iam.Factors().Status(ctx,
 subject)`.
 
 Secrets are decrypted with the current cipher and, when you rotate keys, with

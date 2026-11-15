@@ -24,6 +24,7 @@ import (
 	"arkoren.dev/foundation/query"
 	"arkoren.dev/foundation/query/schema"
 
+	"arkoren.dev/ark/access/internal/background"
 	"arkoren.dev/ark/access/internal/storage"
 	"arkoren.dev/ark/access/internal/throttle"
 )
@@ -53,15 +54,44 @@ const (
 	//	fmt.Println(password.MaxLength) // 72
 	MaxLength = 72
 
-	// maxFailures is how many login attempts per identifier are allowed within
-	// throttleWindow.
+	// maxFailures is how many failed logins one identifier may have from one
+	// client address within throttleWindow. The counter is keyed on both, so an
+	// attacker elsewhere cannot lock the real user out by failing ten times.
 	maxFailures = 10
 
-	// maxClientFailures is how many login attempts per client address are
+	// maxIdentifierFailures is how many failed logins one identifier may have
+	// from all addresses together within throttleWindow: a looser cap that
+	// still stops a distributed guess against one account, five times the
+	// per-address limit.
+	maxIdentifierFailures = 50
+
+	// maxClientFailures is how many failed logins per client address are
 	// allowed within throttleWindow: ten times the identifier limit, so one
 	// attacker cannot lock out an office behind a shared address by guessing
 	// ten times, while a credential-stuffing run is still stopped.
 	maxClientFailures = 100
+
+	// maxForgot is how many reset requests one identifier, as typed, may make
+	// within throttleWindow.
+	maxForgot = 5
+
+	// maxClientForgot is how many reset requests one client address may make
+	// within throttleWindow, across identifiers.
+	maxClientForgot = 30
+
+	// maxRegistrations is how many registrations one identifier, as typed, may
+	// attempt within throttleWindow.
+	maxRegistrations = 5
+
+	// maxClientRegistrations is how many registrations one client address may
+	// attempt within throttleWindow.
+	maxClientRegistrations = 30
+
+	// maxLiveResets is how many unexpired reset tokens a user can hold. A new
+	// request beyond it replaces the oldest, so a repeat request does not kill
+	// the link the user is about to click, and an attacker cannot make the
+	// table grow.
+	maxLiveResets = 3
 
 	// throttleWindow is the lifetime of an attempt counter.
 	throttleWindow = 15 * time.Minute
@@ -91,20 +121,33 @@ var ErrNotMigrated = storage.ErrNotMigrated
 //		Rotate: directory.Rotate,
 //	}
 type Users struct {
-	// Lookup returns the subject of the user with identifier. An unknown user
-	// must return an error wrapping [auth.ErrUserNotFound]; any other error is
-	// an infrastructure failure. It must not reveal more than that.
-	Lookup func(ctx context.Context, identifier string) (subject string, err error)
+	// Lookup returns the subject of the user with identifier and the address
+	// to write to, as stored with the user (with the directory, the stored
+	// email, which can differ from what was typed). An unknown user must
+	// return an error wrapping [auth.ErrUserNotFound]; any other error is an
+	// infrastructure failure. It must not reveal more than that. The address
+	// must not be empty: a reset email is sent only to it, never to the typed
+	// identifier, so a request cannot redirect a victim's link.
+	Lookup func(ctx context.Context, identifier string) (subject, address string, err error)
 
 	// Create adds a user with identifier and returns the subject. It is used by
 	// registration and may be nil for an application that registers users
 	// elsewhere, in which case [Verifier.RegisterHandler] panics. Its errors
-	// (a taken identifier, an invalid one) pass through to the client.
+	// (a taken identifier, an invalid one) pass through to the client. It must
+	// fail on an existing identifier and never return the existing user.
 	Create func(ctx context.Context, identifier string) (subject string, err error)
 
 	// Rotate bumps the user's [auth.UserRecord.Version], which ends every
 	// session, pending login and API token of the user. A reset calls it.
 	Rotate func(ctx context.Context, subject string) error
+
+	// ProveEmail is optional. [Verifier.Reset] calls it in its transaction,
+	// after the new password is stored, because a completed reset proves the
+	// user controls the mailbox the link went to. An implementation marks the
+	// address verified and, when it was not verified before, removes what
+	// someone who registered the address first could have attached
+	// (connections, two-factor, tokens). An error rolls the reset back.
+	ProveEmail func(ctx context.Context, subject string) error
 }
 
 // Message is what [Builder.Deliver] receives to write a reset email. The token
@@ -114,8 +157,8 @@ type Users struct {
 //
 //	link := message.Link("https://app.example.com/reset-password")
 type Message struct {
-	// Identifier is the identifier the user gave when asking for the reset, as
-	// typed (an email address, with the directory).
+	// Identifier is the address to write to, as returned by [Users.Lookup]: the
+	// one stored with the user, never the text of the request.
 	Identifier string
 
 	// Token is the single-use secret that [Verifier.Reset] accepts.
@@ -151,6 +194,7 @@ type Builder struct {
 	policy     func(context.Context, string) error
 	clientIP   func(*http.Request) string
 	registered func(context.Context, string, string) error
+	changed    func(context.Context, string) error
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -247,8 +291,9 @@ func (passwords *Builder) ClientIP(find func(*http.Request) string) *Builder {
 
 // Registered sets a function that runs after [Verifier.RegisterHandler]
 // committed a new user and before it logs them in, for work that must follow a
-// registration such as sending an email verification. An error fails the
-// request, but the user stays registered.
+// registration such as sending an email verification. An error is logged and
+// does not fail the request: the user is registered either way, and a mail
+// outage must not turn into a failed signup.
 //
 // Example:
 //
@@ -257,6 +302,20 @@ func (passwords *Builder) ClientIP(find func(*http.Request) string) *Builder {
 //	})
 func (passwords *Builder) Registered(hook func(ctx context.Context, subject, identifier string) error) *Builder {
 	passwords.registered = hook
+
+	return passwords
+}
+
+// AfterChange sets a function that runs in [Verifier.ChangeHandler] after the new
+// password is stored and before the caller's other logins end, for what must
+// not survive a password change, such as the user's device tokens. An error
+// fails the request; the password has changed by then, so the client may retry.
+//
+// Example:
+//
+//	passwords.AfterChange(issuer.RevokeDevices)
+func (passwords *Builder) AfterChange(hook func(ctx context.Context, subject string) error) *Builder {
+	passwords.changed = hook
 
 	return passwords
 }
@@ -285,6 +344,8 @@ type Verifier struct {
 	policy     func(context.Context, string) error
 	clientIP   func(*http.Request) string
 	registered func(context.Context, string, string) error
+	changed    func(context.Context, string) error
+	jobs       background.Group
 
 	dummyOnce sync.Once
 	dummy     []byte
@@ -336,6 +397,7 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		policy:     settings.policy,
 		clientIP:   settings.clientIP,
 		registered: settings.registered,
+		changed:    settings.changed,
 	}
 	if verifier.policy == nil {
 		verifier.policy = defaultPolicy
@@ -399,9 +461,11 @@ func (verifier *Verifier) Migrations() []migrate.Definition {
 		}),
 		migrate.NewMigration("resets-create-table", func(migration *migrate.MigrationBuilder) {
 			migration.Up(migrate.Schema(schema.Create(verifier.resets, func(table *schema.Table) {
-				table.String("subject", 255).Bytewise().Primary()
-				table.String("token_hash", 64).Bytewise().Unique()
+				table.String("token_hash", 64).Bytewise().Primary()
+				table.String("subject", 255).Bytewise()
 				table.BigInteger("expires_at")
+				table.BigInteger("created_at")
+				table.Index("subject")
 			})))
 			migration.Down(migrate.Schema(schema.Drop(verifier.resets)))
 		}),
@@ -572,7 +636,7 @@ func (verifier *Verifier) burn(password string) {
 //		// wrong email or password
 //	}
 func (verifier *Verifier) Authenticate(ctx context.Context, identifier, password string) (string, error) {
-	subject, err := verifier.users.Lookup(ctx, identifier)
+	subject, _, err := verifier.users.Lookup(ctx, identifier)
 	if errors.Is(err, auth.ErrUserNotFound) {
 		verifier.burn(password)
 
@@ -645,10 +709,14 @@ func (verifier *Verifier) save(ctx context.Context, subject, password string) er
 }
 
 // SendReset starts a password reset for identifier: it creates a single-use
-// token, replacing any earlier one, and hands it to [Builder.Deliver]. An
-// unknown or disabled user gets nothing and the call returns nil, so the caller
-// cannot learn which identifiers exist. It returns [ErrNoDelivery] without a
-// delivery function.
+// token and hands it to [Builder.Deliver] with the address that [Users.Lookup]
+// returned for the user, never the text of identifier. A user keeps up to three
+// live tokens: asking again does not invalidate a link already sent, and the
+// oldest is dropped only beyond three. An unknown or disabled user gets nothing
+// and the call returns nil, so the caller cannot learn which identifiers
+// exist. It returns [ErrNoDelivery] without a delivery function, and an error
+// when [Users.Lookup] returns no address. It does not throttle:
+// [Verifier.ForgotHandler] does, and runs this in the background.
 //
 // Example:
 //
@@ -660,7 +728,7 @@ func (verifier *Verifier) SendReset(ctx context.Context, identifier string) erro
 		return ErrNoDelivery
 	}
 	token := rand.Text()
-	subject, err := verifier.users.Lookup(ctx, identifier)
+	subject, address, err := verifier.users.Lookup(ctx, identifier)
 	if errors.Is(err, auth.ErrUserNotFound) {
 		// Spend the hashing time of the known path so timing stays level.
 		_ = storage.Hash(token)
@@ -669,6 +737,9 @@ func (verifier *Verifier) SendReset(ctx context.Context, identifier string) erro
 	}
 	if err != nil {
 		return err
+	}
+	if address == "" {
+		return errors.New("password: Users.Lookup returned no address")
 	}
 	if _, err := verifier.provider.Find(ctx, subject); err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) || errors.Is(err, auth.ErrUserDisabled) {
@@ -679,17 +750,40 @@ func (verifier *Verifier) SendReset(ctx context.Context, identifier string) erro
 	}
 	expiresAt := time.Now().Add(verifier.resetTTL)
 	err = verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
+		// Expired tokens are dead weight; of the live ones keep the newest
+		// maxLiveResets-1 so the new token makes at most maxLiveResets.
 		_, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Where("subject", subject).Delete()
+			statement.Where("subject", subject).Where("expires_at", "<=", time.Now().Unix()).Delete()
 		}))
 		if err != nil {
 			return err
+		}
+		live, err := verifier.db.Select[struct {
+			TokenHash string `db:"token_hash"`
+		}](ctx, query.Table(verifier.resets, func(statement *query.Builder) {
+			statement.Select("token_hash").Where("subject", subject).OrderBy("created_at")
+		}))
+		if err != nil {
+			return err
+		}
+		if excess := len(live) - (maxLiveResets - 1); excess > 0 {
+			stale := make([]string, 0, excess)
+			for _, row := range live[:excess] {
+				stale = append(stale, row.TokenHash)
+			}
+			_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
+				statement.WhereIn("token_hash", stale...).Delete()
+			}))
+			if err != nil {
+				return err
+			}
 		}
 		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
 			statement.Insert(map[string]any{
 				"subject":    subject,
 				"token_hash": storage.Hash(token),
 				"expires_at": expiresAt.Unix(),
+				"created_at": time.Now().UnixNano(),
 			})
 		}))
 
@@ -699,11 +793,14 @@ func (verifier *Verifier) SendReset(ctx context.Context, identifier string) erro
 		return fmt.Errorf("password: store reset: %w", err)
 	}
 
-	return verifier.deliver(ctx, Message{Identifier: identifier, Token: token, ExpiresAt: expiresAt})
+	return verifier.deliver(ctx, Message{Identifier: address, Token: token, ExpiresAt: expiresAt})
 }
 
-// Reset consumes a reset token, sets the password and calls [Users.Rotate], in
-// one transaction, and returns the subject. Rotation ends every session,
+// Reset consumes a reset token (and the user's other live ones), sets the
+// password, calls [Users.ProveEmail] when set and then [Users.Rotate], in one
+// transaction, and returns the subject. The link only reached someone who
+// controls the mailbox, so the reset is the proof of ownership an unverified
+// registration lacks. Rotation ends every session,
 // pending login and API token of the user; call [auth.Guard.RevokeAll] to
 // remove their login records as well, as [Verifier.ResetHandler] does. Reset
 // never logs the user in, so it cannot bypass a second factor. An unknown,
@@ -746,8 +843,21 @@ func (verifier *Verifier) Reset(ctx context.Context, token, password string) (st
 			return ErrInvalidToken
 		}
 		subject = pending.Subject
+		// The user's other live tokens die with this one: the password they
+		// were meant to reset no longer exists.
+		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
+			statement.Where("subject", subject).Delete()
+		}))
+		if err != nil {
+			return err
+		}
 		if err := verifier.save(ctx, subject, password); err != nil {
 			return err
+		}
+		if verifier.users.ProveEmail != nil {
+			if err := verifier.users.ProveEmail(ctx, subject); err != nil {
+				return err
+			}
 		}
 
 		return verifier.users.Rotate(ctx, subject)
@@ -777,15 +887,28 @@ func (verifier *Verifier) emit(ctx context.Context, topic event.Topic[UserEvent]
 // attempt reserves one attempt on key and fails with [ErrThrottled] and a
 // Retry-After header when the counter exceeds limit.
 func (verifier *Verifier) attempt(ctx context.Context, key cache.Key[int64], limit int64) error {
-	wait, err := throttle.Reserve(ctx, verifier.store, key, limit, throttleWindow)
-	if err != nil {
-		return err
-	}
-	if wait > 0 {
-		return throttle.Reject(ErrThrottled, wait)
-	}
+	return throttle.Attempt(ctx, verifier.store, key, limit, throttleWindow, ErrThrottled)
+}
 
-	return nil
+// refund gives back one attempt reserved on key, for a login that succeeded:
+// only failures count against the limits.
+func (verifier *Verifier) refund(ctx context.Context, key cache.Key[int64]) {
+	_, _ = verifier.store.Decrement(ctx, key, 1)
+}
+
+// Wait blocks until the reset emails that [Verifier.ForgotHandler] sent in the
+// background have been handed to [Builder.Deliver], or returns the error of ctx
+// when it ends first. Call it during shutdown, after the server stopped
+// accepting requests, so no message is lost; tests call it before asserting on
+// what was delivered.
+//
+// Example:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	_ = verifier.Wait(ctx)
+func (verifier *Verifier) Wait(ctx context.Context) error {
+	return verifier.jobs.Wait(ctx)
 }
 
 // clear forgets the attempts counted on key after a success. Counters expire on
@@ -803,4 +926,24 @@ func (verifier *Verifier) identifierKey(identifier string) cache.Key[int64] {
 // clientKey is the counter key of the client address of r.
 func (verifier *Verifier) clientKey(r *http.Request) cache.Key[int64] {
 	return cache.NewKey[int64]("access:" + verifier.instance + ":password:ip:" + verifier.clientIP(r))
+}
+
+// pairKey is the counter key of one identifier from one client address, the
+// login lockout: an attacker's failures lock only the attacker's own address
+// out of the account.
+func (verifier *Verifier) pairKey(identifier string, r *http.Request) cache.Key[int64] {
+	return cache.NewKey[int64]("access:" + verifier.instance + ":password:pair:" + storage.Hash(strings.ToLower(strings.TrimSpace(identifier))) + ":" + verifier.clientIP(r))
+}
+
+// throttleAction counts one request of action (such as "forgot") on the
+// identifier as typed and on the client address of r, before any lookup, so the
+// answer cannot reveal whether the identifier belongs to a user.
+func (verifier *Verifier) throttleAction(r *http.Request, action, identifier string, perIdentifier, perClient int64) error {
+	prefix := "access:" + verifier.instance + ":password:" + action
+	byIdentifier := cache.NewKey[int64](prefix + ":id:" + storage.Hash(strings.ToLower(strings.TrimSpace(identifier))))
+	if err := verifier.attempt(r.Context(), byIdentifier, perIdentifier); err != nil {
+		return err
+	}
+
+	return verifier.attempt(r.Context(), cache.NewKey[int64](prefix+":ip:"+verifier.clientIP(r)), perClient)
 }

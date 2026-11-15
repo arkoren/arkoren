@@ -436,6 +436,17 @@ func (links *Links) List(ctx context.Context, subject string) ([]Link, error) {
 //	}
 func (links *Links) Unlink(ctx context.Context, subject, id string) error {
 	err := links.db.WithTransaction(ctx, func(ctx context.Context) error {
+		// Take a write lock on every connection of the user before counting
+		// them (a no-op update works on all three databases; SQLite serializes
+		// writers anyway). Without it two concurrent unlinks of different
+		// connections each see the other still present and both succeed,
+		// leaving the user no way in. The second waits here, then counts again.
+		_, err := links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
+			statement.Where("subject", subject).Update(map[string]any{"subject": subject})
+		}))
+		if err != nil {
+			return err
+		}
 		owned, err := links.List(ctx, subject)
 		if err != nil {
 			return err
@@ -468,6 +479,29 @@ func (links *Links) Unlink(ctx context.Context, subject, id string) error {
 		return err
 	}
 	links.emit(ctx, LinkDeleted, subject)
+
+	return nil
+}
+
+// UnlinkAll removes every connection of subject without the last-way-in check
+// of [Links.Unlink]. A password reset of a user whose email was never verified
+// calls it, because whoever registered the address first may have connected
+// their own provider account. It publishes [LinkDeleted] when something was
+// removed and is idempotent.
+//
+// Example:
+//
+//	err := links.UnlinkAll(ctx, subject)
+func (links *Links) UnlinkAll(ctx context.Context, subject string) error {
+	affected, err := links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
+		statement.Where("subject", subject).Delete()
+	}))
+	if err != nil {
+		return fmt.Errorf("federation: unlink all: %w", err)
+	}
+	if affected > 0 {
+		links.emit(ctx, LinkDeleted, subject)
+	}
 
 	return nil
 }

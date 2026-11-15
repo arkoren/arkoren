@@ -155,11 +155,18 @@ by email. To use your own, give it a provider and three functions:
 ```go
 iam.Users(access.Users{
 	Provider: provider, // *auth.UserProvider over your users
-	Lookup:   lookup,   // identifier (email, username) to subject
-	Create:   create,   // optional: registration and first provider login
+	Lookup:   lookup,   // identifier to subject and the stored address to mail
+	Create:   create,   // optional: (ctx, identifier, verified) for registration and first provider login
 	Rotate:   rotate,   // bump UserRecord.Version
+	Verified: verified, // optional: gate connect, two-factor setup and tokens on a verified email
+	ProveEmail: prove,  // optional: a reset proves the mailbox; purge what an earlier holder attached
 })
 ```
+
+`Create` must fail on an existing identifier and never return the existing user.
+Without `Verified` and `ProveEmail` the facade cannot tell whether an email is
+verified, so it neither gates those routes nor purges on reset: enforce the same
+rules in your application.
 
 No users table is migrated. A password reset calls `Rotate`, so make the user's
 `Version` change: that ends every session, pending login and API token of the

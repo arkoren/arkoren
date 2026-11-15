@@ -49,9 +49,9 @@ func TestCreateFindRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		found, err := directory.Lookup(ctx, "ada@example.com")
-		if err != nil || found != subject {
-			t.Fatalf("Lookup = %q, %v; want %q", found, err, subject)
+		found, address, err := directory.Lookup(ctx, "ada@example.com")
+		if err != nil || found != subject || address != "ada@example.com" {
+			t.Fatalf("Lookup = %q, %q, %v; want %q, ada@example.com", found, address, err, subject)
 		}
 		record, err := directory.Find(ctx, subject)
 		if err != nil {
@@ -99,7 +99,7 @@ func TestCreateRejectsInvalidEmail(t *testing.T) {
 			if _, err := directory.Create(ctx, email); !errors.Is(err, account.ErrInvalidEmail) {
 				t.Errorf("Create(%q) error = %v, want ErrInvalidEmail", email, err)
 			}
-			if _, err := directory.Lookup(ctx, email); !errors.Is(err, auth.ErrUserNotFound) {
+			if _, _, err := directory.Lookup(ctx, email); !errors.Is(err, auth.ErrUserNotFound) {
 				t.Errorf("Lookup(%q) error = %v, want ErrUserNotFound", email, err)
 			}
 		}
@@ -226,6 +226,51 @@ func TestVerifyLifecycle(t *testing.T) {
 		}
 		if err := directory.SendVerification(ctx, subject); err != nil || len(delivered) != 1 {
 			t.Fatalf("SendVerification for a verified user sent %d messages, err %v", len(delivered), err)
+		}
+	})
+}
+
+// TestLookupReturnsTheStoredAddress verifies a look-alike spelling finds the
+// user but reports the stored address, which is where mail must go.
+func TestLookupReturnsTheStoredAddress(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		directory := newDirectory(t, db, instance, nil)
+		subject, _ := directory.Create(ctx, "bob@gmail.com")
+		found, address, err := directory.Lookup(ctx, "bob@gmaİl.com")
+		if err != nil || found != subject || address != "bob@gmail.com" {
+			t.Fatalf("Lookup = %q, %q, %v; want %q and the stored bob@gmail.com", found, address, err, subject)
+		}
+	})
+}
+
+// TestProveEmailReportsOnlyTheFirstProof verifies the atomic transition from
+// unverified to verified, which also drops the pending verification token.
+func TestProveEmailReportsOnlyTheFirstProof(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		var delivered []account.Message
+		directory := newDirectory(t, db, instance, &delivered)
+		subject, _ := directory.Create(ctx, "ada@example.com")
+		if err := directory.SendVerification(ctx, subject); err != nil {
+			t.Fatalf("SendVerification: %v", err)
+		}
+		changed, err := directory.ProveEmail(ctx, subject)
+		if err != nil || !changed {
+			t.Fatalf("first ProveEmail = %v, %v; want true", changed, err)
+		}
+		if changed, err := directory.ProveEmail(ctx, subject); err != nil || changed {
+			t.Fatalf("second ProveEmail = %v, %v; want false", changed, err)
+		}
+		if _, err := directory.Verify(ctx, delivered[0].Token); !errors.Is(err, account.ErrInvalidToken) {
+			t.Fatalf("the pending token survived: %v", err)
+		}
+		if _, err := directory.ProveEmail(ctx, "00000000000000000000000000000000"); !errors.Is(err, auth.ErrUserNotFound) {
+			t.Fatalf("unknown subject error = %v", err)
 		}
 	})
 }

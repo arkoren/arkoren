@@ -69,6 +69,22 @@ var ErrEmailUnverified = problem.New(func(details *problem.Builder) {
 	details.Status(http.StatusForbidden)
 })
 
+// ErrThrottled is returned by [Directory.ResendHandler] when a user or a client
+// address asked for too many verification emails. It is a problem with status
+// 429 and a Retry-After header.
+//
+// Example:
+//
+//	if errors.Is(err, account.ErrThrottled) {
+//		// ask the user to wait
+//	}
+var ErrThrottled = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:account:throttled")
+	details.Title("Too many requests")
+	details.Detail("Too many verification emails were requested. Try again later.")
+	details.Status(http.StatusTooManyRequests)
+})
+
 // ErrNoDelivery is returned by [Directory.SendVerification] when no
 // [Builder.Deliver] function is configured. It is a configuration error, not a
 // problem, so a request that hits it answers 500.

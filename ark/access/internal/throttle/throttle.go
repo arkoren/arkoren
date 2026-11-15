@@ -31,6 +31,21 @@ func Reserve(ctx context.Context, store *cache.Cache, key cache.Key[int64], limi
 	return max(remaining, time.Second), nil
 }
 
+// Attempt counts one attempt on key with [Reserve] and returns [Reject] of base
+// once the limit is exceeded, so a handler answers 429 with Retry-After before
+// it does any expensive work. A cache failure is returned as is.
+func Attempt(ctx context.Context, store *cache.Cache, key cache.Key[int64], limit int64, window time.Duration, base problem.Details) error {
+	wait, err := Reserve(ctx, store, key, limit, window)
+	if err != nil {
+		return err
+	}
+	if wait > 0 {
+		return Reject(base, wait)
+	}
+
+	return nil
+}
+
 // Reject returns base with a Retry-After header of wait, rounded up to whole
 // seconds. base is a 429 problem; the result still matches it with errors.Is.
 func Reject(base problem.Details, wait time.Duration) error {

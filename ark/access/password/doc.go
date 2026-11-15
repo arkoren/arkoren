@@ -17,19 +17,26 @@
 //   - Login answers one [ErrInvalidCredentials] (422) for an unknown user, a
 //     wrong password, a user without a password and a disabled user, and runs a
 //     dummy hash for the unknown ones so response times match.
-//   - [Verifier.LoginHandler] counts attempts per identifier (10 per 15
-//     minutes) and per client address (100) before hashing and answers
-//     [ErrThrottled] (429) with Retry-After when a counter is exhausted. [Verifier.Authenticate] itself
-//     does not throttle: it is for code that has its own limits.
-//   - A password change keeps the caller's session and ends the user's other
-//     logins. A reset calls [Users.Rotate], which ends every session, pending
-//     login and API token of the user, and never logs the user in.
+//   - [Verifier.LoginHandler] reserves an attempt before hashing and refunds it
+//     on success, so only failures count: 10 per identifier and client address
+//     together, 50 per identifier across addresses and 100 per client address in
+//     15 minutes. Past a limit it answers [ErrThrottled] (429) with Retry-After.
+//     [Verifier.Authenticate] itself does not throttle: it is for code that has
+//     its own limits. Register and forgot are counted too, per identifier as
+//     typed and per client address, before any lookup.
+//   - A password change keeps the caller's session, ends the user's other
+//     logins and runs [Builder.AfterChange]. A reset calls [Users.ProveEmail]
+//     and [Users.Rotate], which ends every session, pending login and API token
+//     of the user, and never logs the user in.
 //   - Registration and password changes are credential changes: the handlers
 //     require a browser session where they act on a logged-in user and call
 //     [auth.Guard.Fresh] themselves.
-//   - Reset tokens are 130 random bits, stored as SHA-256 hex, single use, and
-//     replaced by the next request. The forgot handler answers 202 whether or
-//     not the user exists.
+//   - Reset tokens are 130 random bits, stored as SHA-256 hex and single use. A
+//     user keeps up to three live tokens (the fourth request drops the oldest),
+//     and a completed reset deletes the rest. The email goes to the address
+//     [Users.Lookup] returned, never to the text of the request. The forgot
+//     handler answers an empty 202 whether or not the user exists or the mailer
+//     fails, and sends in the background ([Verifier.Wait]).
 //
 // # Storage
 //

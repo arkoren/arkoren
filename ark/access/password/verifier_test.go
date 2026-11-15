@@ -177,7 +177,7 @@ func TestRegisterDuplicatePassesCreateError(t *testing.T) {
 		if reply := sys.client.NewDevice().Post("/register", `{"email":"bob@example.com","password":"x"}`); reply.Status != http.StatusUnprocessableEntity {
 			t.Fatalf("weak register = %d %s", reply.Status, reply.Body)
 		}
-		if _, err := sys.users.Lookup(testContext(t), "bob@example.com"); !errors.Is(err, auth.ErrUserNotFound) {
+		if _, _, err := sys.users.Lookup(testContext(t), "bob@example.com"); !errors.Is(err, auth.ErrUserNotFound) {
 			t.Fatalf("a rejected password still created a user: %v", err)
 		}
 	})
@@ -292,6 +292,7 @@ func TestResetFlowEndsEveryLogin(t *testing.T) {
 		if reply := sys.client.Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusAccepted {
 			t.Fatalf("forgot = %d", reply.Status)
 		}
+		sys.settle(t)
 		if len(*sys.sent) != 1 {
 			t.Fatalf("sent %d messages, want 1", len(*sys.sent))
 		}
@@ -326,6 +327,7 @@ func TestResetDoesNotLogIn(t *testing.T) {
 		sys := newSystem(t, db, instance)
 		sys.registerAda(t, sys.client)
 		_ = sys.client.Post("/password/forgot", `{"email":"ada@example.com"}`)
+		sys.settle(t)
 		device := sys.client.NewDevice()
 		device.Post("/password/reset", `{"token":"`+(*sys.sent)[0].Token+`","password":"reset horse ok"}`)
 		if reply := device.Do(http.MethodGet, "/me", ""); reply.Status != http.StatusUnauthorized {
@@ -344,14 +346,48 @@ func TestForgotUnknownIdentifierIs202(t *testing.T) {
 		if reply := sys.client.Post("/password/forgot", `{"email":"nobody@example.com"}`); reply.Status != http.StatusAccepted {
 			t.Fatalf("forgot = %d", reply.Status)
 		}
+		sys.settle(t)
 		if len(*sys.sent) != 0 {
 			t.Fatalf("sent %d messages", len(*sys.sent))
 		}
 	})
 }
 
-// TestResetTokenExpiredAndReplaced verifies expiry and replacement.
-func TestResetTokenExpiredAndReplaced(t *testing.T) {
+// TestResetTokensKeepThreeAndDieTogether verifies a repeat request does not
+// invalidate a link already sent, only the fourth drops the oldest, and one
+// completed reset ends the rest.
+func TestResetTokensKeepThreeAndDieTogether(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newSystem(t, db, instance)
+		sys.registerAda(t, sys.client)
+		for range 4 {
+			if err := sys.verifier.SendReset(ctx, "ada@example.com"); err != nil {
+				t.Fatalf("SendReset: %v", err)
+			}
+		}
+		tokens := make([]string, 0, 4)
+		for _, message := range *sys.sent {
+			tokens = append(tokens, message.Token)
+		}
+		if _, err := sys.verifier.Reset(ctx, tokens[0], "reset horse ok"); !errors.Is(err, password.ErrInvalidToken) {
+			t.Fatalf("the oldest of four tokens error = %v, want ErrInvalidToken", err)
+		}
+		if _, err := sys.verifier.Reset(ctx, tokens[1], "reset horse ok"); err != nil {
+			t.Fatalf("an earlier live token was invalidated: %v", err)
+		}
+		for _, token := range tokens[2:] {
+			if _, err := sys.verifier.Reset(ctx, token, "other horse ok"); !errors.Is(err, password.ErrInvalidToken) {
+				t.Fatalf("a token outlived a completed reset: %v", err)
+			}
+		}
+	})
+}
+
+// TestResetTokenExpired verifies expiry.
+func TestResetTokenExpired(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
@@ -359,11 +395,7 @@ func TestResetTokenExpiredAndReplaced(t *testing.T) {
 		sys := newSystem(t, db, instance)
 		sys.registerAda(t, sys.client)
 		_ = sys.verifier.SendReset(ctx, "ada@example.com")
-		_ = sys.verifier.SendReset(ctx, "ada@example.com")
-		first, second := (*sys.sent)[0].Token, (*sys.sent)[1].Token
-		if _, err := sys.verifier.Reset(ctx, first, "reset horse ok"); !errors.Is(err, password.ErrInvalidToken) {
-			t.Fatalf("replaced token error = %v", err)
-		}
+		second := (*sys.sent)[0].Token
 		past := time.Now().Add(-time.Hour).Unix()
 		_, err := db.Exec(ctx, query.Table(instance+"_password_resets", func(statement *query.Builder) {
 			statement.Unfiltered().Update(map[string]any{"expires_at": past})

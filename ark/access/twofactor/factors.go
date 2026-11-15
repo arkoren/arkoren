@@ -45,6 +45,15 @@ const (
 	//	factors.RecoveryCodes(twofactor.DefaultRecoveryCodes)
 	DefaultRecoveryCodes = 10
 
+	// DefaultStepUpWindow is how recent the second factor must be for the
+	// handlers that weaken two-factor when [Builder.StepUpWindow] is not set:
+	// 15 minutes, core's default freshness window.
+	//
+	// Example:
+	//
+	//	factors.StepUpWindow(twofactor.DefaultStepUpWindow / 3)
+	DefaultStepUpWindow = 15 * time.Minute
+
 	// maxRecoveryCodes bounds [Builder.RecoveryCodes].
 	maxRecoveryCodes = 100
 
@@ -73,6 +82,7 @@ type Builder struct {
 	events   *event.Bus
 	scheme   totp.Scheme
 	codes    int
+	window   time.Duration
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -137,6 +147,22 @@ func (factors *Builder) RecoveryCodes(count int) *Builder {
 	return factors
 }
 
+// StepUpWindow sets how recent the authenticator code (or recovery code) must
+// be for [Factors.DisableHandler] and [Factors.RecoveryCodesHandler]; zero
+// selects [DefaultStepUpWindow]. Core's freshness check also accepts a recent
+// password, which is not enough to weaken two-factor, so these handlers look
+// at the factors of the session themselves. The guard's own window is not
+// readable, so when you change it with FreshFor, set the same value here.
+//
+// Example:
+//
+//	factors.StepUpWindow(5 * time.Minute)
+func (factors *Builder) StepUpWindow(window time.Duration) *Builder {
+	factors.window = window
+
+	return factors
+}
+
 // Enrollment is what setup returns: the secret for manual entry and the
 // otpauth:// URI for a QR code. Both contain the secret; show them only to the
 // enrolling user and never log them.
@@ -188,6 +214,7 @@ type Factors struct {
 	events   *event.Bus
 	scheme   totp.Scheme
 	count    int
+	window   time.Duration
 }
 
 // NewFactors returns the two-factor store. cipher encrypts the secrets (use a
@@ -225,6 +252,12 @@ func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache
 	if settings.codes == 0 {
 		settings.codes = DefaultRecoveryCodes
 	}
+	if settings.window < 0 {
+		return nil, fmt.Errorf("%w: negative step-up window", ErrInvalidConfig)
+	}
+	if settings.window == 0 {
+		settings.window = DefaultStepUpWindow
+	}
 	factors := &Factors{
 		db:       db,
 		store:    store,
@@ -236,6 +269,7 @@ func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache
 		events:   settings.events,
 		scheme:   settings.scheme,
 		count:    settings.codes,
+		window:   settings.window,
 	}
 	provider.OnForget(factors.forget)
 

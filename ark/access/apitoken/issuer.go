@@ -581,6 +581,29 @@ func (issuer *Issuer) RevokeAll(ctx context.Context, subject string) error {
 	return nil
 }
 
+// RevokeDevices deletes the device tokens of subject and keeps their personal
+// access tokens. A device holds no session that a password change could end,
+// so the password handlers call it to make the change reach the devices; the
+// personal tokens are the user's own deliberate credentials and survive. It
+// publishes [Revoked] when at least one token was deleted.
+//
+// Example:
+//
+//	err := issuer.RevokeDevices(ctx, subject)
+func (issuer *Issuer) RevokeDevices(ctx context.Context, subject string) error {
+	affected, err := issuer.db.Exec(ctx, query.Table(issuer.table, func(statement *query.Builder) {
+		statement.Where("subject", subject).Where("kind", string(KindDevice)).Delete()
+	}))
+	if err != nil {
+		return fmt.Errorf("apitoken: revoke devices: %w", err)
+	}
+	if affected > 0 {
+		issuer.emit(ctx, Revoked, subject)
+	}
+
+	return nil
+}
+
 // emit publishes topic with the subject once the surrounding transaction, if
 // any, has committed.
 func (issuer *Issuer) emit(ctx context.Context, topic event.Topic[UserEvent], subject string) {
