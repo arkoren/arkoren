@@ -77,6 +77,10 @@ jar only for the login:
 4. To log out, `DELETE /device-tokens/current` revokes the presented token.
 
 A device token carries every scope of the catalog and does not expire by itself.
+Creating tokens and exchanging a login for a device token both need a verified
+email (`403` email-unverified). A password change revokes the user's device
+tokens but keeps their personal tokens unless you call
+`iam.RevokeTokensOnPasswordChange()`; a reset revokes all of them.
 Apps that sign in with Google or Apple use the native routes of
 [Access Connections](access-connections.md) in step 1.
 

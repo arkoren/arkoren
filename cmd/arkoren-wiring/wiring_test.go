@@ -15,12 +15,19 @@ import (
 	"arkoren.dev/core/auth/memoryauth"
 )
 
-// register signs ada up on b and fails unless it is logged in.
-func register(t *testing.T, b *browser) {
+// register signs ada up on b, verifies the email with the delivered link and
+// fails unless she is logged in.
+func register(t *testing.T, sys *system, b *browser) {
 	t.Helper()
 
 	if r := b.post("/register", `{"email":"ada@example.com","password":"correct horse"}`); r.status != http.StatusCreated {
 		t.Fatalf("register = %d %s", r.status, r.body)
+	}
+	sys.mu.Lock()
+	token := sys.sent[len(sys.sent)-1].Token
+	sys.mu.Unlock()
+	if r := b.post("/email/verify", `{"token":"`+token+`"}`); r.status != http.StatusNoContent {
+		t.Fatalf("verify = %d %s", r.status, r.body)
 	}
 }
 
@@ -51,7 +58,7 @@ func TestPasswordAndTOTPEndToEnd(t *testing.T) {
 	t.Parallel()
 
 	sys := newSystem(t)
-	register(t, sys.browser)
+	register(t, sys, sys.browser)
 	secret, recovery := enableTOTP(t, sys.browser)
 	if me := sys.browser.get("/me"); !strings.HasSuffix(me.body, "|multi|session") {
 		t.Fatalf("/me after enabling = %q", me.body)
@@ -88,7 +95,7 @@ type ownUsers struct {
 }
 
 // create adds a user.
-func (users *ownUsers) create(_ context.Context, identifier string) (string, error) {
+func (users *ownUsers) create(_ context.Context, identifier string, _ bool) (string, error) {
 	users.mu.Lock()
 	defer users.mu.Unlock()
 
@@ -99,16 +106,16 @@ func (users *ownUsers) create(_ context.Context, identifier string) (string, err
 }
 
 // lookup finds a user by identifier.
-func (users *ownUsers) lookup(_ context.Context, identifier string) (string, error) {
+func (users *ownUsers) lookup(_ context.Context, identifier string) (string, string, error) {
 	users.mu.Lock()
 	defer users.mu.Unlock()
 
 	subject, ok := users.subjects[identifier]
 	if !ok {
-		return "", fmt.Errorf("own users: %w", auth.ErrUserNotFound)
+		return "", "", fmt.Errorf("own users: %w", auth.ErrUserNotFound)
 	}
 
-	return subject, nil
+	return subject, identifier, nil
 }
 
 // rotate bumps a user's version.
@@ -128,7 +135,7 @@ func TestOwnUsersThroughAccessUsers(t *testing.T) {
 	t.Parallel()
 
 	users := &ownUsers{driver: memoryauth.New(), subjects: map[string]string{}, versions: map[string]int{}}
-	if _, err := users.create(t.Context(), "ada@example.com"); err != nil {
+	if _, err := users.create(t.Context(), "ada@example.com", true); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	provider, err := auth.NewUserProvider(users.driver)
@@ -136,7 +143,10 @@ func TestOwnUsersThroughAccessUsers(t *testing.T) {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
 	sys := newSystem(t, func(iam *access.Builder) {
-		iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate})
+		iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
+			Verified:   func(context.Context, string) (bool, error) { return true, nil },
+			ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
+		})
 	})
 	for _, definition := range sys.iam.Migrations() {
 		if strings.HasSuffix(definition.Group(), ":account") {
@@ -189,7 +199,7 @@ func TestSocialLoginThenConnect(t *testing.T) {
 	}
 
 	ada := sys.browser.device()
-	register(t, ada)
+	register(t, sys, ada)
 	if connect := ada.post("/connections/google", ""); connect.status != http.StatusSeeOther || connect.header.Get("Location") != "/auth/google" {
 		t.Fatalf("connect = %d %q", connect.status, connect.header.Get("Location"))
 	}
@@ -251,7 +261,7 @@ func TestSilentReloginNotFreshForTOTPUser(t *testing.T) {
 			policy.FreshFor(time.Second)
 		})
 	})
-	register(t, sys.browser)
+	register(t, sys, sys.browser)
 	secret, _ := enableTOTP(t, sys.browser)
 	sys.provider.as("g3", "ada@example.com")
 	sys.browser.post("/connections/google", "")

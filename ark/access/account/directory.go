@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/mail"
 	"strconv"
 	"strings"
@@ -11,11 +13,13 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/foundation/query"
 	"arkoren.dev/foundation/query/schema"
 
+	"arkoren.dev/ark/access/internal/background"
 	"arkoren.dev/ark/access/internal/storage"
 )
 
@@ -63,6 +67,8 @@ type Builder struct {
 	events    *event.Bus
 	deliver   func(context.Context, Message) error
 	verifyTTL time.Duration
+	store     *cache.Cache
+	clientIP  func(*http.Request) string
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -115,6 +121,22 @@ func (accounts *Builder) Events(bus *event.Bus) *Builder {
 //	})
 func (accounts *Builder) Deliver(deliver func(ctx context.Context, message Message) error) *Builder {
 	accounts.deliver = deliver
+
+	return accounts
+}
+
+// Throttle sets the cache that counts verification resends and how the client
+// address is found. [Directory.ResendHandler] needs it and panics without it,
+// because an unlimited resend route lets one user flood a mailbox. A nil
+// clientIP uses the host of r.RemoteAddr, which behind a reverse proxy is the
+// proxy: pass the function given to the guard, such as ratelimit.TrustedProxyKey.
+//
+// Example:
+//
+//	accounts.Throttle(store, ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
+func (accounts *Builder) Throttle(store *cache.Cache, clientIP func(*http.Request) string) *Builder {
+	accounts.store = store
+	accounts.clientIP = clientIP
 
 	return accounts
 }
@@ -201,6 +223,9 @@ type Directory struct {
 	deliver   func(context.Context, Message) error
 	verifyTTL time.Duration
 	provider  *auth.UserProvider
+	store     *cache.Cache
+	clientIP  func(*http.Request) string
+	jobs      background.Group
 }
 
 // NewDirectory returns the directory over db. It does no I/O: the tables come
@@ -241,6 +266,11 @@ func NewDirectory(db *database.Database, configure ...BuilderFunc) (*Directory, 
 		events:    settings.events,
 		deliver:   settings.deliver,
 		verifyTTL: settings.verifyTTL,
+		store:     settings.store,
+		clientIP:  settings.clientIP,
+	}
+	if directory.clientIP == nil {
+		directory.clientIP = remoteHost
 	}
 	if directory.verifyTTL == 0 {
 		directory.verifyTTL = DefaultVerifyTTL
@@ -435,28 +465,90 @@ func (directory *Directory) create(ctx context.Context, email string, verified b
 	return id, nil
 }
 
-// Lookup returns the subject of the user with email, or an error wrapping
-// [auth.ErrUserNotFound]. An unusable address is also not found, so a login
-// attempt cannot tell the two apart. It is the Lookup function the password
-// package needs when the directory is the user store.
+// Lookup returns the subject and the stored address of the user with email, or
+// an error wrapping [auth.ErrUserNotFound]. An unusable address is also not
+// found, so a login attempt cannot tell the two apart. It is the Lookup
+// function the password package needs when the directory is the user store.
+//
+// The returned address is the one stored with the user, which can differ from
+// what the caller typed (letter case, or a character that lowercases to
+// another such as "İ"). Mail about the account must go to it and never to the
+// typed text, or an attacker could have a victim's reset link sent to a
+// look-alike address.
 //
 // Example:
 //
-//	subject, err := directory.Lookup(ctx, "ada@example.com")
+//	subject, address, err := directory.Lookup(ctx, "ada@example.com")
 //	if errors.Is(err, auth.ErrUserNotFound) {
 //		// unknown user
 //	}
-func (directory *Directory) Lookup(ctx context.Context, email string) (string, error) {
-	email, err := normalizeEmail(email)
+func (directory *Directory) Lookup(ctx context.Context, email string) (subject, address string, err error) {
+	email, err = normalizeEmail(email)
 	if err != nil {
-		return "", fmt.Errorf("account: %w", auth.ErrUserNotFound)
+		return "", "", fmt.Errorf("account: %w", auth.ErrUserNotFound)
 	}
 	row, err := directory.row(ctx, "email", email)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return row.ID, nil
+	return row.ID, row.Email, nil
+}
+
+// Verified reports whether the user's email is verified, read from the table
+// at call time, never from a cached claim. It is the function the facade gives
+// the other packages' Verified settings. An unknown subject returns an error
+// wrapping [auth.ErrUserNotFound].
+//
+// Example:
+//
+//	ok, err := directory.Verified(ctx, subject)
+func (directory *Directory) Verified(ctx context.Context, subject string) (bool, error) {
+	row, err := directory.row(ctx, "id", subject)
+	if err != nil {
+		return false, err
+	}
+
+	return row.VerifiedAt != 0, nil
+}
+
+// ProveEmail marks the user's email verified because the user just proved they
+// control the mailbox, as a completed password reset does, and drops any
+// pending verification token. It reports whether the user was unverified
+// before: that is the signal that someone else may have registered the address
+// first, so the caller must then remove everything an earlier holder could have
+// attached (connections, two-factor, tokens). The update is atomic, so of two
+// concurrent calls exactly one reports true. It publishes [EmailVerified] when
+// it changed something and returns an error wrapping [auth.ErrUserNotFound] for
+// an unknown subject.
+//
+// Example:
+//
+//	changed, err := directory.ProveEmail(ctx, subject)
+//	if err != nil {
+//		return err
+//	}
+//	if changed {
+//		// purge what a squatter attached
+//	}
+func (directory *Directory) ProveEmail(ctx context.Context, subject string) (bool, error) {
+	affected, err := directory.db.Exec(ctx, query.Table(directory.users, func(statement *query.Builder) {
+		statement.Where("id", subject).Where("verified_at", 0).Update(map[string]any{"verified_at": time.Now().Unix()})
+	}))
+	if err != nil {
+		return false, fmt.Errorf("account: prove email: %w", err)
+	}
+	if affected == 0 {
+		_, err := directory.row(ctx, "id", subject)
+
+		return false, err
+	}
+	if err := directory.forget(ctx, subject); err != nil {
+		return false, err
+	}
+	directory.emit(ctx, EmailVerified, subject)
+
+	return true, nil
 }
 
 // Rotate bumps the user's version, which ends every session, pending login and
@@ -565,6 +657,31 @@ func (directory *Directory) forget(ctx context.Context, subject string) error {
 	}
 
 	return nil
+}
+
+// remoteHost is the default client address: the host part of r.RemoteAddr.
+func remoteHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
+}
+
+// Wait blocks until the verification emails that [Directory.ResendHandler] sent
+// in the background have been handed to [Builder.Deliver], or returns the error
+// of ctx when it ends first. Call it during shutdown, after the server stopped
+// accepting requests, so no message is lost; tests call it before asserting on
+// what was delivered.
+//
+// Example:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	_ = directory.Wait(ctx)
+func (directory *Directory) Wait(ctx context.Context) error {
+	return directory.jobs.Wait(ctx)
 }
 
 // emit publishes topic with the subject once the surrounding transaction, if

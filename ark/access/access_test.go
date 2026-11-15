@@ -60,7 +60,7 @@ func TestRegisterVerifyAndRequireVerified(t *testing.T) {
 func mustSubject(t *testing.T, sys *app) string {
 	t.Helper()
 
-	subject, err := sys.iam.Directory().Lookup(testContext(t), "ada@example.com")
+	subject, _, err := sys.iam.Directory().Lookup(testContext(t), "ada@example.com")
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestTwoFactorEnableChallengeAndRecovery(t *testing.T) {
 			iam.Password(hasher())
 			iam.TwoFactor(cipher(t), "Example")
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		setup := sys.client.Post("/two-factor/setup", "")
 		if setup.Status != http.StatusOK {
 			t.Fatalf("setup = %d %s", setup.Status, setup.Body)
@@ -134,7 +134,7 @@ func TestPasswordChangeEndsOtherDevices(t *testing.T) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
 		other.Post("/login", `{"email":"ada@example.com","password":"correct horse"}`)
 		change := sys.client.Do(http.MethodPut, "/password", `{"current_password":"correct horse","password":"another horse"}`)
@@ -159,10 +159,11 @@ func TestForgotAndResetFlow(t *testing.T) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		if reply := sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusAccepted {
 			t.Fatalf("forgot = %d", reply.Status)
 		}
+		sys.settle(t)
 		token := sys.box.last(t, access.KindReset).Token
 		reset := sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		if reset.Status != http.StatusNoContent {
@@ -191,7 +192,7 @@ func TestTokensExchangeAndBearer(t *testing.T) {
 			})
 		})
 		device := sys.client.NewDevice()
-		register(t, device, "ada@example.com")
+		registerVerified(t, sys, device, "ada@example.com")
 		exchange := device.Post("/device-tokens", `{"device":"Pixel 9"}`)
 		if exchange.Status != http.StatusCreated {
 			t.Fatalf("exchange = %d %s", exchange.Status, exchange.Body)
@@ -223,7 +224,7 @@ func TestResetEndsTokens(t *testing.T) {
 			iam.Password(hasher())
 			iam.Tokens()
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		_, secret, err := sys.iam.Issuer().Issue(testContext(t), mustSubject(t, sys), apitoken.Request{Name: "ci"})
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
@@ -233,6 +234,7 @@ func TestResetEndsTokens(t *testing.T) {
 			t.Fatalf("token before reset = %d", reply.Status)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
+		sys.settle(t)
 		token := sys.box.last(t, access.KindReset).Token
 		sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		if reply := sys.client.NewDevice().Do(http.MethodGet, "/me", "", header); reply.Status != http.StatusUnauthorized {
@@ -249,7 +251,7 @@ func TestSessionsListAndRevoke(t *testing.T) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
 		other.Post("/login", `{"email":"ada@example.com","password":"correct horse"}`)
 		list := sys.client.Do(http.MethodGet, "/sessions", "")
@@ -284,7 +286,7 @@ func TestDeleteAccountRemovesEveryPackagesRows(t *testing.T) {
 			iam.TwoFactor(cipher(t), "Example")
 			iam.Tokens()
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		subject := mustSubject(t, sys)
 		setup := sys.client.Post("/two-factor/setup", "")
 		sys.client.Post("/two-factor", `{"code":"`+code(t, secretOf(setup.Body), 0)+`"}`)
@@ -323,7 +325,7 @@ func TestConfirmWithPassword(t *testing.T) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		stale := sys.client.NewDevice()
 		stale.Post("/login", `{"email":"ada@example.com","password":"correct horse"}`)
 		// A fresh password login is fresh; confirming works the same way.

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,11 +14,26 @@ import (
 	"arkoren.dev/core/http/request"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
+	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/access/internal/storage"
+	"arkoren.dev/ark/access/internal/throttle"
 	"arkoren.dev/ark/access/internal/web"
+)
+
+const (
+	// maxResends is how many resend requests one user may make within
+	// resendWindow.
+	maxResends = 5
+
+	// maxClientResends is how many resend requests one client address may make
+	// within resendWindow, across users.
+	maxClientResends = 20
+
+	// resendWindow is the lifetime of a resend counter.
+	resendWindow = 15 * time.Minute
 )
 
 // Message is what [Builder.Deliver] receives: the address to write to and the
@@ -106,6 +122,29 @@ func (directory *Directory) SendVerification(ctx context.Context, subject string
 //		// show the expired-link page
 //	}
 func (directory *Directory) Verify(ctx context.Context, token string) (string, error) {
+	return directory.verify(ctx, "", token)
+}
+
+// VerifyFor is [Directory.Verify] for a token that must belong to subject, the
+// logged-in user: a token of anyone else returns [ErrWrongAccount] and is not
+// consumed. [Directory.VerifyHandler] uses
+// it, because a link opened by someone who is not logged in as the account
+// proves nothing about who holds the account's password: an attacker can
+// register a victim's address, and the victim's click on the genuine email must
+// not hand the attacker a verified account. Only a password reset, which also
+// removes whatever the registrant attached, proves ownership of such an
+// account.
+//
+// Example:
+//
+//	_, err := directory.VerifyFor(ctx, identity.Subject(), token)
+func (directory *Directory) VerifyFor(ctx context.Context, subject, token string) (string, error) {
+	return directory.verify(ctx, subject, token)
+}
+
+// verify implements [Directory.Verify] and [Directory.VerifyFor]; only is the
+// subject the token must belong to, or empty for any.
+func (directory *Directory) verify(ctx context.Context, only, token string) (string, error) {
 	var subject string
 	hashed := storage.Hash(token)
 	now := time.Now().Unix()
@@ -120,6 +159,9 @@ func (directory *Directory) Verify(ctx context.Context, token string) (string, e
 		}
 		if err != nil {
 			return err
+		}
+		if only != "" && pending.Subject != only {
+			return fmt.Errorf("account: verification token of another user: %w", ErrWrongAccount)
 		}
 		// The delete is the single-use gate: of two concurrent requests with
 		// the same token only one removes the row.
@@ -143,6 +185,9 @@ func (directory *Directory) Verify(ctx context.Context, token string) (string, e
 		if errors.Is(err, ErrInvalidToken) {
 			return "", ErrInvalidToken
 		}
+		if errors.Is(err, ErrWrongAccount) {
+			return "", err
+		}
 
 		return "", fmt.Errorf("account: verify email: %w", err)
 	}
@@ -152,21 +197,32 @@ func (directory *Directory) Verify(ctx context.Context, token string) (string, e
 }
 
 // VerifyHandler returns the handler of POST /email/verify. The body is
-// {"token": "..."}; success is 204. It needs no login, because the link is
-// usually opened on another device. A bad token is [ErrInvalidToken] (422).
+// {"token": "..."}; success is 204. It needs a browser session
+// ([auth.Identity.Session]) of the user the token belongs to, as GitHub's links
+// do: the user opens the link while logged in. Without a session the answer is
+// [auth.ErrUnauthenticated] (401); a session of another user is
+// [ErrWrongAccount] (403). Either way the token is not consumed, so the owner
+// of an address cannot be tricked into verifying an account someone else
+// registered and holds the password of (a link opened while logged out proves
+// nothing about who controls the account). A bad token is [ErrInvalidToken]
+// (422).
 //
 // Example:
 //
 //	web.Post("/email/verify", directory.VerifyHandler())
 func (directory *Directory) VerifyHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
+		identity, err := web.Session(r)
+		if err != nil {
+			return err
+		}
 		body, err := web.Decode[struct {
 			Token string `json:"token"`
 		}](r)
 		if err != nil {
 			return err
 		}
-		if _, err := directory.Verify(r.Context(), body.Token); err != nil {
+		if _, err := directory.VerifyFor(r.Context(), identity.Subject(), body.Token); err != nil {
 			return err
 		}
 
@@ -176,21 +232,49 @@ func (directory *Directory) VerifyHandler() router.Handler {
 
 // ResendHandler returns the handler of POST /email/verify/resend. It needs a
 // browser session ([auth.Identity.Session]) and sends a new verification to the
-// logged-in user: 202, whether or not anything was sent. Without a delivery
-// function the request fails with [ErrNoDelivery] (500).
+// logged-in user's stored address: 202, whether or not anything was sent and
+// whether or not the delivery function failed. The work runs in the
+// background, so the response time says nothing about the outcome; a failed
+// delivery is logged (without the token) and never reaches the client. Wait for
+// the sends with [Directory.Wait]. Without a delivery function the request
+// fails with [ErrNoDelivery] (500).
+//
+// Requests are counted per user and per client address before anything is
+// sent: more than 5 per user or 20 per client address in 15 minutes is
+// [ErrThrottled] (429, with Retry-After). The handler panics at composition
+// unless [Builder.Throttle] was set.
 //
 // Example:
 //
 //	web.Post("/email/verify/resend", directory.ResendHandler())
 func (directory *Directory) ResendHandler() router.Handler {
+	if directory.store == nil {
+		panic("account: ResendHandler requires Builder.Throttle")
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err
 		}
-		if err := directory.SendVerification(r.Context(), identity.Subject()); err != nil {
+		if directory.deliver == nil {
+			return ErrNoDelivery
+		}
+		ctx, subject := r.Context(), identity.Subject()
+		prefix := "access:" + directory.instance + ":account:resend:"
+		subjectKey := cache.NewKey[int64](prefix + "subject:" + storage.Hash(subject))
+		if err := throttle.Attempt(ctx, directory.store, subjectKey, maxResends, resendWindow, ErrThrottled); err != nil {
 			return err
 		}
+		clientKey := cache.NewKey[int64](prefix + "ip:" + throttle.Bucket(directory.clientIP(r)))
+		if err := throttle.Attempt(ctx, directory.store, clientKey, maxClientResends, resendWindow, ErrThrottled); err != nil {
+			return err
+		}
+		directory.jobs.Go(func(ctx context.Context) {
+			if err := directory.SendVerification(ctx, subject); err != nil {
+				slog.ErrorContext(ctx, "access: verification email failed", "subject", subject, "error", err)
+			}
+		})
 
 		return response.Status(w, http.StatusAccepted)
 	}
@@ -202,6 +286,11 @@ func (directory *Directory) ResendHandler() router.Handler {
 // [ErrEmailUnverified] (403). Install it after auth middleware. It reads the
 // claim the directory sets, so it fits only applications that use the
 // directory; with their own users, applications check their own state.
+//
+// The claim is the one the session recorded at login, so a user who verified
+// the email since their last login passes only after logging in again. The
+// handlers of the other packages that gate on verification (connect, tokens,
+// two-factor setup) read the table at request time and are not affected.
 //
 // Example:
 //

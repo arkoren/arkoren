@@ -3,11 +3,14 @@ package password
 import (
 	"cmp"
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
+	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/access/internal/web"
 )
@@ -34,13 +37,19 @@ var passwordFactor = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKno
 
 // LoginHandler returns the handler of POST /login. The body is
 // {"email": "...", "password": "..."} (or "identifier" instead of "email").
-// It counts the attempt per identifier and per client address before hashing
-// ([ErrThrottled], 429, with Retry-After), authenticates, and hands the user to
-// [auth.Guard.Begin]: 204 when logged in, or 202 with the second-factor methods
-// when the user has to answer a challenge (POST /login/challenge). A failure is
-// [ErrInvalidCredentials] (422), the same for every cause. The limits are 10
-// attempts per identifier and 100 per client address in 15 minutes; a
-// successful login clears the identifier's counter and refunds the address's.
+// It counts the attempt before hashing ([ErrThrottled], 429, with Retry-After),
+// authenticates, and hands the user to [auth.Guard.Begin]: 204 when logged in,
+// or 202 with the second-factor methods when the user has to answer a
+// challenge (POST /login/challenge). A failure is [ErrInvalidCredentials]
+// (422), the same for every cause.
+//
+// Only failed logins count. The limits in 15 minutes are 10 per identifier
+// and client address together, so someone failing from elsewhere cannot lock
+// the real user out; 50 per identifier across all addresses, a looser cap
+// against a distributed guess; and 100 per client address. A successful login
+// refunds its attempt on all three and clears the identifier-and-address
+// counter. A user locked out of an account by a distributed guess waits for
+// the window, or resets the password.
 //
 // Example:
 //
@@ -56,8 +65,14 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 			return ErrInvalidCredentials
 		}
 		ctx := r.Context()
-		identifierKey, clientKey := verifier.identifierKey(identifier), verifier.clientKey(r)
-		if err := verifier.attempt(ctx, identifierKey, maxFailures); err != nil {
+		pairKey, identifierKey, clientKey := verifier.pairKey(identifier, r), verifier.identifierKey(identifier), verifier.clientKey(r)
+		// Each attempt is reserved before the password is checked, so a burst of
+		// parallel guesses cannot slip past the limit, and refunded below when
+		// it succeeds: only failures count.
+		if err := verifier.attempt(ctx, pairKey, maxFailures); err != nil {
+			return err
+		}
+		if err := verifier.attempt(ctx, identifierKey, maxIdentifierFailures); err != nil {
 			return err
 		}
 		if err := verifier.attempt(ctx, clientKey, maxClientFailures); err != nil {
@@ -67,9 +82,9 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 		if err != nil {
 			return err
 		}
-		verifier.clear(ctx, identifierKey)
-		// A success is not an attempt against the address: refund it.
-		_, _ = verifier.store.Decrement(ctx, clientKey, 1)
+		verifier.clear(ctx, pairKey)
+		verifier.refund(ctx, identifierKey)
+		verifier.refund(ctx, clientKey)
 		outcome, err := guard.Begin(r, subject, passwordFactor)
 		if err != nil {
 			return err
@@ -85,8 +100,12 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 // transaction, runs the [Builder.Registered] hook, logs the user in and answers
 // 201 with {"subject": "..."}. A taken identifier or an invalid one returns the
 // error of [Users.Create] (409 and 422 with the directory); a weak password
-// [ErrInvalidPassword] (422). It panics at composition when [Users.Create] is
-// nil.
+// [ErrInvalidPassword] (422). A failing [Builder.Registered] hook is logged and
+// does not fail the request. Registrations are counted before anything else,
+// per identifier as typed (5) and per client address (30) in 15 minutes
+// ([ErrThrottled], 429). A new user is unverified, and with the facade cannot
+// connect a provider, enroll two-factor or create tokens until the email is
+// verified. It panics at composition when [Users.Create] is nil.
 //
 // Example:
 //
@@ -102,6 +121,9 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 			return err
 		}
 		identifier := body.value()
+		if err := verifier.throttleAction(r, "register", identifier, maxRegistrations, maxClientRegistrations); err != nil {
+			return err
+		}
 		if err := verifier.policy(r.Context(), body.Password); err != nil {
 			return err
 		}
@@ -119,7 +141,7 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 		}
 		if verifier.registered != nil {
 			if err := verifier.registered(r.Context(), subject, identifier); err != nil {
-				return err
+				slog.ErrorContext(r.Context(), "access: post-registration hook failed", "subject", subject, "error", err)
 			}
 		}
 		outcome, err := guard.Begin(r, subject, passwordFactor)
@@ -141,8 +163,13 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 // ([auth.Guard.Fresh]), checks the current password with the same throttle as
 // login, stores the new one, ends the user's other logins and keeps the
 // caller's session, which also records the password as a recent proof. Success
-// is 204. It publishes [Changed]. It does not rotate the user, so API tokens
-// survive a change.
+// is 204. It publishes [Changed] and runs [Builder.AfterChange] (the facade
+// revokes the user's device tokens there, because a device keeps no session to
+// end). It does not rotate the user, so tokens the hook leaves, such as
+// personal access tokens, survive a change. It also deletes the user's live
+// reset links. If the hook fails the response is its error (500), but the
+// password is already changed and the other logins already ended; the client
+// should repeat the change so the hook runs again.
 //
 // Example:
 //
@@ -179,8 +206,25 @@ func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
 			return err
 		}
 		verifier.emit(ctx, Changed, subject)
-		if err := guard.RevokeOthers(r); err != nil {
+		// Reset links sent before the change no longer belong to this password.
+		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
+			statement.Where("subject", subject).Delete()
+		}))
+		if err != nil {
 			return err
+		}
+		// Ending the other logins always runs, even when the hook fails: the
+		// password has changed, so a failing hook must not leave other sessions
+		// alive. The hook's error is returned after, and the client may retry.
+		var hookErr error
+		if verifier.changed != nil {
+			hookErr = verifier.changed(ctx, subject)
+		}
+		if err := guard.RevokeOthers(r); err != nil {
+			return errors.Join(err, hookErr)
+		}
+		if hookErr != nil {
+			return hookErr
 		}
 		// Begin on the session of the same subject keeps the login and records
 		// the password as a factor from now, so the user is fresh for the next
@@ -196,8 +240,19 @@ func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
 
 // ForgotHandler returns the handler of POST /password/forgot. The body is
 // {"email": "..."} (or "identifier"). It starts a reset ([Verifier.SendReset])
-// and answers 202 whether or not the user exists. Put a rate limit in front of
-// it: every request can send an email.
+// and answers 202 whether or not the user exists and whether or not the
+// delivery works.
+//
+// The reset runs in the background, after the response, so the time taken says
+// nothing about whether the user exists or how fast the mail server is. A
+// failure is logged (never with the token) and not shown to the client. Wait for
+// the sends with [Verifier.Wait] at shutdown. The email goes to the address
+// stored with the user, never to the text of the request.
+//
+// Requests are counted before the lookup: more than 5 per identifier as typed
+// or 30 per client address in 15 minutes is [ErrThrottled] (429), which holds
+// whatever the identifier is. Without a delivery function the request fails
+// with [ErrNoDelivery] (500).
 //
 // Example:
 //
@@ -208,9 +263,18 @@ func (verifier *Verifier) ForgotHandler() router.Handler {
 		if err != nil {
 			return err
 		}
-		if err := verifier.SendReset(r.Context(), body.value()); err != nil {
+		if verifier.deliver == nil {
+			return ErrNoDelivery
+		}
+		identifier := body.value()
+		if err := verifier.throttleAction(r, "forgot", identifier, maxForgot, maxClientForgot); err != nil {
 			return err
 		}
+		verifier.jobs.Go(func(ctx context.Context) {
+			if err := verifier.SendReset(ctx, identifier); err != nil {
+				slog.ErrorContext(ctx, "access: password reset email failed", "error", err)
+			}
+		})
 
 		return response.Status(w, http.StatusAccepted)
 	}

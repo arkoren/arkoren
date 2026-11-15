@@ -68,6 +68,9 @@ func (issuer *Issuer) CreateHandler(guard *auth.Guard) router.Handler {
 		if err != nil {
 			return err
 		}
+		if err := web.Verified(r.Context(), issuer.verified, identity.Subject()); err != nil {
+			return err
+		}
 		body, err := web.Decode[Request](r)
 		if err != nil {
 			return err
@@ -125,6 +128,9 @@ func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
+			return err
+		}
+		if err := web.Verified(r.Context(), issuer.verified, identity.Subject()); err != nil {
 			return err
 		}
 		if err := guard.RecentLogin(r, ExchangeWindow); err != nil {

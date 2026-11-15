@@ -165,7 +165,7 @@ func TestDefaultRegistriesAreOrdered(t *testing.T) {
 			iam.Password(hasher())
 			iam.TwoFactor(cipher(t), "Example")
 		})
-		register(t, sys.client, "ada@example.com")
+		registerVerified(t, sys, sys.client, "ada@example.com")
 		setup := sys.client.Post("/two-factor/setup", "")
 		sys.client.Post("/two-factor", `{"code":"`+code(t, secretOf(setup.Body), 0)+`"}`)
 		stale := sys.client.NewDevice()
@@ -260,7 +260,7 @@ func newOwnUsers(t *testing.T) *ownUsers {
 	t.Helper()
 
 	users := &ownUsers{driver: memoryauth.New(), subjects: map[string]string{}, versions: map[string]int{}}
-	if _, err := users.create(context.Background(), "ada@example.com"); err != nil {
+	if _, err := users.create(context.Background(), "ada@example.com", true); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -268,7 +268,7 @@ func newOwnUsers(t *testing.T) *ownUsers {
 }
 
 // create adds a user.
-func (users *ownUsers) create(_ context.Context, identifier string) (string, error) {
+func (users *ownUsers) create(_ context.Context, identifier string, _ bool) (string, error) {
 	users.mu.Lock()
 	defer users.mu.Unlock()
 
@@ -279,16 +279,16 @@ func (users *ownUsers) create(_ context.Context, identifier string) (string, err
 }
 
 // lookup finds a user by identifier.
-func (users *ownUsers) lookup(_ context.Context, identifier string) (string, error) {
+func (users *ownUsers) lookup(_ context.Context, identifier string) (string, string, error) {
 	users.mu.Lock()
 	defer users.mu.Unlock()
 
 	subject, ok := users.subjects[identifier]
 	if !ok {
-		return "", fmt.Errorf("own users: %w", auth.ErrUserNotFound)
+		return "", "", fmt.Errorf("own users: %w", auth.ErrUserNotFound)
 	}
 
-	return subject, nil
+	return subject, identifier, nil
 }
 
 // rotate bumps a user's version.
@@ -314,7 +314,10 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 			t.Fatalf("NewUserProvider: %v", err)
 		}
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate})
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
+				Verified:   func(context.Context, string) (bool, error) { return true, nil },
+				ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
+			})
 			iam.Password(hasher())
 		})
 		if sys.iam.Directory() != nil {
@@ -336,6 +339,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 			t.Fatalf("/me = %q", reply.Body)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
+		sys.settle(t)
 		token := sys.box.last(t, access.KindReset).Token
 		sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		if users.versions["u1"] != 1 {
