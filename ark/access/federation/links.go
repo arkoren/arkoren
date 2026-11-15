@@ -87,6 +87,7 @@ type Builder struct {
 	events   *event.Bus
 	create   func(context.Context, auth.External) (string, error)
 	fallback func(context.Context, string) (bool, error)
+	verified func(context.Context, string) (bool, error)
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -159,6 +160,22 @@ func (links *Builder) Fallback(check func(ctx context.Context, subject string) (
 	return links
 }
 
+// Verified sets the check that tells whether a user's email is verified.
+// [Links.ConnectHandler] then answers 403 ([account.ErrEmailUnverified]'s
+// problem) to an unverified user: whoever registered an address first must not
+// attach a provider before its owner proves the address. Without it the handler
+// admits everyone, which is only right when the application enforces the rule
+// itself; the facade always sets it with the built-in users.
+//
+// Example:
+//
+//	links.Verified(directory.Verified)
+func (links *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
+	links.verified = check
+
+	return links
+}
+
 // Links owns the table that connects external identities (issuer and subject)
 // to local users. It is safe for concurrent use. Create it with [NewLinks].
 //
@@ -192,6 +209,7 @@ type Links struct {
 	events   *event.Bus
 	create   func(context.Context, auth.External) (string, error)
 	fallback func(context.Context, string) (bool, error)
+	verified func(context.Context, string) (bool, error)
 }
 
 // NewLinks returns the connection store. provider finds users and db holds the
@@ -225,6 +243,7 @@ func NewLinks(provider *auth.UserProvider, db *database.Database, configure ...B
 		events:   settings.events,
 		create:   settings.create,
 		fallback: settings.fallback,
+		verified: settings.verified,
 	}
 	provider.OnForget(links.forget)
 
@@ -429,6 +448,12 @@ func (links *Links) List(ctx context.Context, subject string) ([]Link, error) {
 // connection is [ErrLastLink] unless [Builder.Fallback] says they can still log
 // in another way. It publishes [LinkDeleted].
 //
+// The user's connections are locked for the count, so two concurrent unlinks
+// cannot both pass the last-way-in check: the second waits and then counts
+// again. Under PostgreSQL REPEATABLE READ or SERIALIZABLE, which the
+// application chooses for its connection, the second unlink instead fails with
+// a serialization error that the caller should retry.
+//
 // Example:
 //
 //	if err := links.Unlink(ctx, subject, id); err != nil {
@@ -436,6 +461,17 @@ func (links *Links) List(ctx context.Context, subject string) ([]Link, error) {
 //	}
 func (links *Links) Unlink(ctx context.Context, subject, id string) error {
 	err := links.db.WithTransaction(ctx, func(ctx context.Context) error {
+		// Take a write lock on every connection of the user before counting
+		// them (a no-op update works on all three databases; SQLite serializes
+		// writers anyway). Without it two concurrent unlinks of different
+		// connections each see the other still present and both succeed,
+		// leaving the user no way in. The second waits here, then counts again.
+		_, err := links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
+			statement.Where("subject", subject).Update(map[string]any{"subject": subject})
+		}))
+		if err != nil {
+			return err
+		}
 		owned, err := links.List(ctx, subject)
 		if err != nil {
 			return err
@@ -468,6 +504,29 @@ func (links *Links) Unlink(ctx context.Context, subject, id string) error {
 		return err
 	}
 	links.emit(ctx, LinkDeleted, subject)
+
+	return nil
+}
+
+// UnlinkAll removes every connection of subject without the last-way-in check
+// of [Links.Unlink]. A password reset of a user whose email was never verified
+// calls it, because whoever registered the address first may have connected
+// their own provider account. It publishes [LinkDeleted] when something was
+// removed and is idempotent.
+//
+// Example:
+//
+//	err := links.UnlinkAll(ctx, subject)
+func (links *Links) UnlinkAll(ctx context.Context, subject string) error {
+	affected, err := links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
+		statement.Where("subject", subject).Delete()
+	}))
+	if err != nil {
+		return fmt.Errorf("federation: unlink all: %w", err)
+	}
+	if affected > 0 {
+		links.emit(ctx, LinkDeleted, subject)
+	}
 
 	return nil
 }

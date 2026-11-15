@@ -7,6 +7,7 @@ package throttle
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -29,6 +30,38 @@ func Reserve(ctx context.Context, store *cache.Cache, key cache.Key[int64], limi
 	}
 
 	return max(remaining, time.Second), nil
+}
+
+// Attempt counts one attempt on key with [Reserve] and returns [Reject] of base
+// once the limit is exceeded, so a handler answers 429 with Retry-After before
+// it does any expensive work. A cache failure is returned as is.
+func Attempt(ctx context.Context, store *cache.Cache, key cache.Key[int64], limit int64, window time.Duration, base problem.Details) error {
+	wait, err := Reserve(ctx, store, key, limit, window)
+	if err != nil {
+		return err
+	}
+	if wait > 0 {
+		return Reject(base, wait)
+	}
+
+	return nil
+}
+
+// Bucket returns the key part for a client address: an IPv6 address becomes its
+// /64 prefix, because one subscriber commonly controls a whole /64 and could
+// otherwise take a fresh address for every attempt; an IPv4 address, or text
+// that is not an address, is returned as is.
+func Bucket(client string) string {
+	address, err := netip.ParseAddr(client)
+	if err != nil || address.Is4() || address.Is4In6() {
+		return client
+	}
+	prefix, err := address.Prefix(64)
+	if err != nil {
+		return client
+	}
+
+	return prefix.String()
 }
 
 // Reject returns base with a Retry-After header of wait, rounded up to whole

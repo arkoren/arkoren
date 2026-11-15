@@ -64,6 +64,8 @@ func (links *Links) DeleteHandler(guard *auth.Guard) router.Handler {
 // [ErrUnknownProvider] (404). The intent lasts [ConnectIntentTTL] and serves one
 // callback.
 //
+// With [Builder.Verified] set, a user whose email is not verified gets 403.
+//
 // It needs a browser session and a fresh login, and it must be a POST: a
 // cross-site GET to the login route alone can then never link an identity to a
 // victim. Connecting a provider the user already has links nothing new.
@@ -85,6 +87,9 @@ func (links *Links) ConnectHandler(guard *auth.Guard, targets map[string]string)
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
+			return err
+		}
+		if err := web.Verified(r.Context(), links.verified, identity.Subject()); err != nil {
 			return err
 		}
 		target, ok := fixed[r.PathValue("provider")]

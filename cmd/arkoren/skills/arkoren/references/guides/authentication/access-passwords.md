@@ -44,12 +44,19 @@ a wrong password, a user without a password and a disabled user look the same,
 and an unknown email still costs one dummy hash, so response time does not reveal
 which accounts exist.
 
-Login is throttled before any hashing: 10 attempts per identifier and 100 per
-client address in 15 minutes. The next attempt is `429` with `Retry-After`; a
-successful login clears the identifier's count. Behind a reverse proxy set
-`iam.ClientIP(ratelimit.TrustedProxyKey(...))`: otherwise every user shares the
-proxy's address, and 100 failed attempts from anyone lock login for everyone. Also put a [rate limit](../abuse-prevention/rate-limiting.md) in front
-of `/register`, `/password/forgot` and the other routes that can send email.
+Login is throttled before any hashing, and only failures count: 10 per
+identifier and client address together, 50 per identifier across all addresses
+and 100 per client address in 15 minutes. The next attempt is `429` with
+`Retry-After`; a successful login refunds its attempt. Keying the first limit
+on the address too means someone failing from elsewhere cannot lock the real
+user out; the looser 50 still stops a distributed guess at one account, and
+that user waits for the window or resets the password. Behind a reverse proxy
+set `iam.ClientIP(ratelimit.TrustedProxyKey(...))`: otherwise every user shares
+the proxy's address, and 100 failed attempts from anyone lock login for
+everyone. IPv6 clients are counted per /64, because one subscriber controls a
+whole /64. `/register`, `/password/forgot` and `/email/verify/resend` are
+throttled too (see below); still put a
+[rate limit](../abuse-prevention/rate-limiting.md) in front of them.
 
 ## Confirm and Change
 
@@ -70,13 +77,22 @@ It needs a browser session and a fresh login. The current password is required
 unless the user has none yet, such as someone created by a provider login, who
 sets their first one without it. A change stores the new password, ends the
 user's other logins and keeps the caller's session, which also records the
-password as a fresh proof. It does not rotate the user, so API tokens survive a
-change.
+password as a fresh proof. It also revokes the user's device tokens, because a
+device has no session to end. It does not rotate the user, so personal access
+tokens, which the user made on purpose for scripts, survive a change; call
+`iam.RevokeTokensOnPasswordChange()` to revoke them too.
 
 ## Reset
 
-`POST /password/forgot` takes `{"email": "..."}` and answers `202` whether or not
-the user exists; for a known user it hands a single-use token to `iam.Deliver`:
+`POST /password/forgot` takes `{"email": "..."}` and answers an empty `202`
+whether or not the user exists, whether or not the mailer works. The email is
+sent in the background, so neither the answer nor its timing reveals anything;
+a delivery failure is logged, never shown. Call `iam.Wait(ctx)` at shutdown so
+queued messages are not lost. At most 5 requests per identifier as typed and 30
+per client address in 15 minutes (`429` after). For a known user it hands a
+single-use token to `iam.Deliver`, addressed to the email stored with the user,
+never to the text of the request (`bob@gmaİl.com` finds `bob@gmail.com` and
+the link goes to `bob@gmail.com`):
 
 ```go
 iam.Deliver(func(ctx context.Context, message access.Message) error {
@@ -89,18 +105,48 @@ iam.Deliver(func(ctx context.Context, message access.Message) error {
 })
 ```
 
-The token has 130 random bits, is stored only as a hash, expires after an hour
-and is replaced by the next request. Your page posts `{"token": "...",
-"password": "..."}` to `POST /password/reset`. A reset sets the password and
-rotates the user, which ends every session, pending login and API token, and it
-never logs the user in, so it cannot bypass a second factor. A bad, used or
-expired token is `422`.
+The token has 130 random bits, is stored only as a hash and expires after an
+hour. A user keeps up to three live tokens: asking again does not kill the link
+already in their inbox, and the fourth request drops the oldest. Your page
+posts `{"token": "...", "password": "..."}` to `POST /password/reset`. A reset
+sets the password, deletes the user's other reset tokens and rotates the user,
+which ends every session, pending login and API token, and it never logs the
+user in, so it cannot bypass a second factor. A bad, used or expired token is
+`422`.
+
+A completed reset proves the user controls the mailbox. If the email was not
+verified yet, the reset marks it verified and also deletes every connected
+provider, the authenticator, the recovery codes and all tokens: someone who
+registered the victim's address before the victim did could have attached them
+(the pre-registration hijack). Until an email is verified, the account cannot
+connect a provider, enroll two-factor or create tokens (`403` email-unverified).
+With your own users (`iam.Users`) the facade does this only if you give
+`Users.Verified` (the gate) and `Users.ProveEmail` (the purge), together, and
+both are required when you set `Users.Create`. The checks live in the connect,
+token and two-factor handlers themselves, so they hold on custom paths too. A
+completed reset also clears the failed-login count kept against the address
+across clients. If `AfterChange` fails during a password change the answer is
+`500` after the other logins already ended; repeat the change. `Users.Lookup`
+returns the stored address to mail, and `Users.Create` receives whether the
+provider verified the email and must fail on an existing identifier.
 
 ## Verify Emails
 
-`POST /email/verify` takes `{"token": "..."}` from the link and answers `204`;
-it needs no login, because the link is usually opened on another device.
-`POST /email/verify/resend` sends a new link to the logged-in user.
+`POST /email/verify` takes `{"token": "..."}` from the link and answers `204`.
+The flow is: the user logs in, then your verify page posts the token. It needs a
+browser session of the user the link belongs to, as with GitHub, so a page that
+receives the link while logged out should send the user to log in first and
+then post the token. Without a session the answer is `401`; a session of another
+user is `403` (`account:verify-wrong-account`). Neither consumes the token:
+otherwise an attacker could
+register your address with their own password and let your click verify it.
+Only a password reset, which also deletes whatever the registrant attached,
+proves ownership of such an account.
+`POST /email/verify/resend` sends a new link to the logged-in user's stored
+address: an empty `202` as above, at most 5 per user and 20 per client address
+in 15 minutes. Registration is limited to 5 per identifier as typed and 30 per
+client address, and a failing verification mail is logged without failing the
+signup.
 
 Verification never blocks login. Require it where it matters:
 
@@ -108,7 +154,9 @@ Verification never blocks login. Require it where it matters:
 posts := web.With(auth.Require(), iam.RequireVerified())
 ```
 
-`RequireVerified` answers `403` to a user whose email is not verified. A user
+`RequireVerified` answers `403` to a user whose email is not verified. It reads
+the claim recorded at login, so a user who verified since their last login
+passes only after logging in again. A user
 created by a provider whose email the provider verified starts verified.
 
 For every function and option, see

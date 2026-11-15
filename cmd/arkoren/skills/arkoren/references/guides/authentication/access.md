@@ -87,7 +87,7 @@ would break it. For a provider at another path, build the connect handler with
 | --- | --- |
 | Login | `POST /register`, `POST /login`, `POST /login/challenge`, `GET /login/pending`, `POST /logout` |
 | Step-up | `POST /confirm` |
-| Email | `POST /email/verify`, `POST /email/verify/resend` |
+| Email | `POST /email/verify` (log in, then post the token), `POST /email/verify/resend` |
 | Password | `POST /password/forgot`, `POST /password/reset`, `PUT /password` |
 | Two-factor | `POST /two-factor/setup`, `POST /two-factor`, `DELETE /two-factor`, `POST /two-factor/recovery-codes` |
 | Tokens | `GET /tokens`, `POST /tokens`, `DELETE /tokens/{id}`, `POST /device-tokens`, `DELETE /device-tokens/current` |
@@ -155,11 +155,21 @@ by email. To use your own, give it a provider and three functions:
 ```go
 iam.Users(access.Users{
 	Provider: provider, // *auth.UserProvider over your users
-	Lookup:   lookup,   // identifier (email, username) to subject
-	Create:   create,   // optional: registration and first provider login
+	Lookup:   lookup,   // identifier to subject and the stored address to mail
+	Create:   create,   // optional: (ctx, identifier, verified) for registration and first provider login
 	Rotate:   rotate,   // bump UserRecord.Version
+	Verified: verified, // gate connect, two-factor setup and tokens on a verified email
+	ProveEmail: prove,  // a reset proves the mailbox; return whether it was unverified, to purge
 })
 ```
+
+`Create` must fail on an existing identifier and never return the existing user.
+`Verified` and `ProveEmail` come together, and both are required when you set
+`Create`, because users it makes start unverified. Without them (users created
+elsewhere) the facade can neither gate those routes nor purge on reset: enforce
+the same rules in your application. `iam.OnEmailProven(hook)` runs inside the
+reset, after the built-in purge, so you can delete credentials of modules the
+facade does not know (a passkey package, say).
 
 No users table is migrated. A password reset calls `Rotate`, so make the user's
 `Version` change: that ends every session, pending login and API token of the

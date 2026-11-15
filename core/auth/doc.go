@@ -102,8 +102,13 @@
 // rest of the body and logs the user in, once. The attempt count is per user,
 // shared by all methods, sessions and requests; a wrong code costs the attempt, an
 // infrastructure error refunds it ([ErrInvalidCredential]). A user over the limit
-// is locked out of the second factor until the challenge window
-// ([GuardBuilder.ChallengeTTL]) ends. A logged-in user proves themselves again
+// is locked out of the second factor for the challenge window
+// ([GuardBuilder.ChallengeTTL]). Later lockouts double, up to 24 hours, as
+// wrong codes add up in a 24 hour budget per user even when each window stays
+// under the limit; a successful challenge or [Guard.Unlock] resets it. A lockout
+// also blocks step-up and can be chained by anyone who knows the password.
+// [SecondFactorLocked] reports each lockout; the application must subscribe and
+// count it as a failure in its login throttle (ark/access does not yet). A logged-in user proves themselves again
 // with [Guard.ConfirmHandler], the same route shape over the methods registered
 // with [GuardBuilder.StepUp]; it requires a browser session ([Identity.Session]).
 // Modules that need their method accepted call [Guard.MustAccept] at composition.

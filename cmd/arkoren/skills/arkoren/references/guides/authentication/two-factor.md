@@ -144,12 +144,32 @@ pending cookie do not reset it, and racing requests cannot check more codes than
 the limit. One count covers every method. At most five attempts are allowed
 within the challenge window (`policy.MaxAttempts(n)`, window
 `policy.ChallengeTTL(d)`); after that the pending login is discarded and that
-user cannot pass the second factor, in any session, until the window ends. A wrong
+user cannot pass the second factor, in any session, for one window. Lockouts
+escalate: every wrong second-factor code also counts against a 24 hour budget per user
+(a wrong step-up code counts only when it uses up a window's attempts, so
+occasional typos at `ConfirmHandler` never add up), and
+each time the budget grows by `MaxAttempts` (or a window's attempts run out) a
+lockout starts that is twice as long as the last (window x 2^n, capped at 24
+hours, or at the window when that is longer). Staying just under the limit in
+every window therefore does not avoid it. The budget expires 24 hours after its
+first failure, not after the last; a successful challenge or `guard.Unlock` clears it. A wrong
 code (`Verify` returns an error wrapping `auth.ErrInvalidCredential`) keeps its
 attempt; any other `Verify` error is an infrastructure failure, so the attempt
 is refunded and the error passes through. A successful challenge clears the
 count. The lockout lets anyone who knows a subject delay that user, so also
 [rate limit](../abuse-prevention/rate-limiting.md) the routes by address.
+
+Each lockout publishes `auth.SecondFactorLocked` with the subject and the end of
+the lockout, once, when the guard has a bus (`policy.Events(bus)`). Subscribe to
+it yourself: `ark/access` does not yet. Count it as a failed login in the
+throttle of your login route, otherwise an attacker who knows the first factor
+can keep starting pending logins after every lockout at no cost.
+
+Lockouts chain, up to 24 hours each, and they also block step-up
+(`ConfirmHandler`). Anyone who holds the password can start pending logins and
+spend the attempts, so a lockout means the password is compromised: reset it and
+call `guard.Unlock(ctx, subject)`, which clears the lockout, the budget and the
+current window's attempts. Call it from a password reset or an admin action.
 
 The challenge is single use: it consumes the pending login and rotates the ID, so
 a second call returns `ErrUnauthenticated`. A user deleted or disabled meanwhile

@@ -41,6 +41,14 @@ func (box *outbox) send(_ context.Context, message access.Message) error {
 	return nil
 }
 
+// all returns a copy of every message delivered so far.
+func (box *outbox) all() []access.Message {
+	box.mu.Lock()
+	defer box.mu.Unlock()
+
+	return append([]access.Message(nil), box.messages...)
+}
+
 // last returns the newest message of kind, failing the test when there is none.
 func (box *outbox) last(t *testing.T, kind access.Kind) access.Message {
 	t.Helper()
@@ -145,6 +153,27 @@ func code(t *testing.T, encoded string, offset time.Duration) string {
 	}
 
 	return value
+}
+
+// registerVerified signs email up on client and verifies it with the link the
+// outbox received, as a user who clicked it would.
+func registerVerified(t *testing.T, sys *app, client *apptest.Client, email string) {
+	t.Helper()
+
+	register(t, client, email)
+	token := sys.box.last(t, access.KindVerify).Token
+	if reply := client.Post("/email/verify", `{"token":"`+token+`"}`); reply.Status != http.StatusNoContent {
+		t.Fatalf("verify = %d %s", reply.Status, reply.Body)
+	}
+}
+
+// settle waits for the emails the handlers send in the background.
+func (sys *app) settle(t *testing.T) {
+	t.Helper()
+
+	if err := sys.iam.Wait(testContext(t)); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
 }
 
 // register signs ada up on client and fails unless the reply is 201.

@@ -45,7 +45,9 @@ two-factor on; without it the callback ends the pending login and fails.
 ## Connect a Provider
 
 A logged-in user connects a provider from their settings with
-`POST /connections/{provider}`, which needs a fresh login. It stores a
+`POST /connections/{provider}`, which needs a fresh login and a verified email
+(`403` email-unverified otherwise, so whoever registered an address first cannot
+attach a provider before its owner proves it). It stores a
 single-use intent in their session for ten minutes and answers `303` to
 `/auth/{provider}`. When that callback completes in the same session, the identity
 is linked to the logged-in user instead of creating one. Because connecting is a
