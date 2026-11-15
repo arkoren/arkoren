@@ -31,6 +31,7 @@ import (
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send)
+//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 type Builder struct {
 	instance        string
@@ -52,6 +53,7 @@ type Builder struct {
 	sessionPolicy   []session.BuilderFunc
 	sessionLifetime time.Duration
 	clientIP        func(*http.Request) string
+	trustRemoteAddr bool
 	keepPersonal    bool
 	emailProven     func(context.Context, string) error
 }
@@ -314,9 +316,13 @@ func (iam *Builder) SessionLifetime(lifetime time.Duration) *Builder {
 }
 
 // ClientIP sets how the client address is found, for the guard's login records
-// and the password login throttle. The default is the host of r.RemoteAddr,
-// which behind a reverse proxy is the proxy; pass ratelimit.TrustedProxyKey
-// with your proxies' prefixes.
+// and the throttles of every package. New requires an explicit choice, because
+// the right source depends on the deployment and a wrong default silently
+// breaks the throttles: behind a reverse proxy r.RemoteAddr is the proxy, so
+// every user shares one counter, and a header read without trusting the proxy
+// that set it lets an attacker pick their own counter. Pass
+// ratelimit.TrustedProxyKey with your proxies' prefixes, or use
+// [Builder.TrustRemoteAddr] when no proxy sits in front of the application.
 //
 // Example:
 //
@@ -327,8 +333,25 @@ func (iam *Builder) ClientIP(find func(*http.Request) string) *Builder {
 	return iam
 }
 
+// TrustRemoteAddr chooses the host of r.RemoteAddr as the client address, for
+// an application that faces the internet directly with no proxy or load
+// balancer in front of it. Behind one, every user would share the proxy's
+// address and the throttles would lock everybody out together: use
+// [Builder.ClientIP] instead. It has no effect when [Builder.ClientIP] is also
+// set, which takes precedence.
+//
+// Example:
+//
+//	iam.TrustRemoteAddr()
+func (iam *Builder) TrustRemoteAddr() *Builder {
+	iam.trustRemoteAddr = true
+
+	return iam
+}
+
 // validate checks the combinations of settings that no package can see, in
-// order: the providers, the application's users, the session lifetime.
+// order: the providers, the application's users, the session lifetime, the
+// client address source.
 func (iam *Builder) validate() error {
 	if err := validateProviders(iam.providers); err != nil {
 		return err
@@ -340,6 +363,9 @@ func (iam *Builder) validate() error {
 	}
 	if iam.sessionLifetime < 0 {
 		return errors.New("negative session lifetime")
+	}
+	if iam.clientIP == nil && !iam.trustRemoteAddr {
+		return errors.New("the client address source is not set: call ClientIP (for example with ratelimit.TrustedProxyKey) or, with no proxy in front, TrustRemoteAddr")
 	}
 
 	return nil

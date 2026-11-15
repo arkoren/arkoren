@@ -123,6 +123,7 @@ func TestOwnUsersNeedTheVerifiedHooks(t *testing.T) {
 		} {
 			_, err := access.New(db, cache.New(memorycache.New()), func(iam *access.Builder) {
 				iam.Instance(instance)
+				iam.TrustRemoteAddr()
 				iam.Users(own)
 				iam.Password(hasher())
 			})

@@ -116,6 +116,7 @@ func newAppOn(t *testing.T, db *database.Database, instance string, store *cache
 	box := &outbox{}
 	iam, err := access.New(db, store, append([]access.BuilderFunc{func(iam *access.Builder) {
 		iam.Instance(instance)
+		iam.TrustRemoteAddr()
 		iam.Deliver(box.send)
 		iam.Session(func(cookies *session.Builder) {
 			cookies.AllowInsecure(true)
@@ -203,5 +204,5 @@ func register(t *testing.T, client *apptest.Client, email string) apptest.Reply 
 func newFacade(t *testing.T, configure ...access.BuilderFunc) (*access.Access, error) {
 	t.Helper()
 
-	return access.New(memoryDatabase(t), cache.New(memorycache.New()), configure...)
+	return access.New(memoryDatabase(t), cache.New(memorycache.New()), append([]access.BuilderFunc{func(iam *access.Builder) { iam.TrustRemoteAddr() }}, configure...)...)
 }

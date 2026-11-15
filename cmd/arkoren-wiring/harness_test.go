@@ -293,6 +293,7 @@ func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
 		t.Fatalf("Start: %v", err)
 	}
 	sys.iam, err = access.New(db, cache.New(memorycache.New()), append([]access.BuilderFunc{func(iam *access.Builder) {
+		iam.TrustRemoteAddr()
 		iam.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })))
 		iam.TwoFactor(newCipher(t), "Example")
 		iam.Tokens()

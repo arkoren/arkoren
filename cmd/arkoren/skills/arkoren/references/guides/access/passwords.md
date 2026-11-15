@@ -19,6 +19,7 @@ links:
 iam, err := access.New(db, store, func(iam *access.Builder) {
 	iam.Password(hasher)
 	iam.Deliver(send)
+	iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 })
 ```
 
@@ -90,14 +91,16 @@ cannot lock the real user out. The looser 50 still stops a distributed guess at
 one account, and that user waits for the window or resets the password. IPv6
 clients are counted per /64, because one subscriber controls a whole /64.
 
-Behind a reverse proxy, tell the facade how to find the client address:
+`New` requires you to say how to find the client address, because the throttles
+count by it. Behind a reverse proxy, name the proxies you trust:
 
 ```go
 iam.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
 ```
 
-Without it every user shares the proxy's address, and 100 failed attempts from
-anyone lock login for everyone. Registration, forgot-password and email resend are
+An application that faces the internet directly with no proxy calls
+`iam.TrustRemoteAddr()` instead. Using it behind a proxy makes every user share
+the proxy's address, and 100 failed attempts from anyone lock login for everyone. Registration, forgot-password and email resend are
 throttled too (see below), per identifier as typed and per client address; still
 put a [rate limit](../abuse-prevention/rate-limiting.md) in front of them.
 

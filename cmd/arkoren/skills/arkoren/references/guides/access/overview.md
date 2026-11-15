@@ -48,6 +48,7 @@ iam, err := access.New(db, store, func(iam *access.Builder) {
 	iam.Tokens()
 	iam.Provider(google, github)
 	iam.Deliver(send)
+	iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 })
 if err != nil {
 	return err
@@ -55,8 +56,9 @@ if err != nil {
 ```
 
 `New` does no I/O. It returns an error wrapping `access.ErrInvalidConfig` when a
-dependency is missing, a provider name is used twice or a package rejects its
-settings.
+dependency is missing, no client address source is set (see
+[Shared Settings](#shared-settings)), a provider name is used twice or a package
+rejects its settings.
 
 | Feature | Builder method | Guide |
 | --- | --- | --- |
@@ -215,12 +217,14 @@ Four builder methods configure what the facade shares between features:
 - `iam.SessionLifetime(d)` sets the absolute lifetime of a login for the session
   middleware and the guard together.
 - `iam.ClientIP(find)` sets how the client address is found for login records and
-  throttles. The default is the host of `r.RemoteAddr`, which behind a reverse
-  proxy is the proxy itself, so pass `ratelimit.TrustedProxyKey(...)` there.
+  throttles, and `New` requires it. Behind a reverse proxy pass
+  `ratelimit.TrustedProxyKey(...)` with your proxies' prefixes. Only an
+  application that faces the internet directly may call `iam.TrustRemoteAddr()`
+  instead, which uses the host of `r.RemoteAddr`.
 - `iam.Guard(configure)` customizes the guard, such as the step-up window with
   `FreshFor`. The facade applies its own settings after your callback, so the
-  session lifetime, the session handle, the event bus and the client address you
-  set with `iam.ClientIP` always win. Register credentials with `iam.SecondFactor`
+  session lifetime, the session handle and the client address you set with
+  `iam.ClientIP` always win. Register credentials with `iam.SecondFactor`
   and `iam.StepUp`, not there: the registries only append.
 - `iam.Session(configure)` customizes the session cookie, such as its name. The
   facade applies the maximum lifetime and the default handle after your callback,

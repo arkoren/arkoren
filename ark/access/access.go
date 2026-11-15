@@ -126,6 +126,7 @@ type Access struct {
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send)
+//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 //	if err != nil {
 //		return err

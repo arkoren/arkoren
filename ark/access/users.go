@@ -51,7 +51,7 @@ type Users struct {
 	// user: connecting an identity to someone by email is how accounts get
 	// taken over. For a taken identifier return an error wrapping
 	// [ErrIdentifierTaken] (the built-in directory's [account.ErrEmailTaken] is
-	// recognised too): registration then answers like a new user and notifies the
+	// recognized too): registration then answers like a new user and notifies the
 	// owner, instead of answering 409. It may be nil when users are created elsewhere.
 	Create func(ctx context.Context, identifier string, verified bool) (subject string, err error)
 

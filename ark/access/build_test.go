@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -8,6 +9,8 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/session"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/access"
@@ -63,4 +66,40 @@ func TestApplicationCallbacksCannotOverrideTheSessionHandle(t *testing.T) {
 			t.Fatalf("/me after registering = %q, want the user", reply.Body)
 		}
 	})
+}
+
+// TestClientAddressSourceIsRequired verifies New refuses to guess how to find
+// the client address.
+func TestClientAddressSourceIsRequired(t *testing.T) {
+	t.Parallel()
+
+	_, err := access.New(memoryDatabase(t), cache.New(memorycache.New()))
+	if !errors.Is(err, access.ErrInvalidConfig) || !strings.Contains(err.Error(), "ClientIP") {
+		t.Fatalf("New without a client address source = %v, want ErrInvalidConfig naming ClientIP", err)
+	}
+}
+
+// TestClientIPSatisfiesTheAddressSource verifies ClientIP alone is accepted.
+func TestClientIPSatisfiesTheAddressSource(t *testing.T) {
+	t.Parallel()
+
+	_, err := access.New(memoryDatabase(t), cache.New(memorycache.New()), func(iam *access.Builder) {
+		iam.ClientIP(func(*http.Request) string { return "203.0.113.9" })
+	})
+	if err != nil {
+		t.Fatalf("New with ClientIP: %v", err)
+	}
+}
+
+// TestTrustRemoteAddrSatisfiesTheAddressSource verifies the explicit opt-in is
+// accepted on its own.
+func TestTrustRemoteAddrSatisfiesTheAddressSource(t *testing.T) {
+	t.Parallel()
+
+	_, err := access.New(memoryDatabase(t), cache.New(memorycache.New()), func(iam *access.Builder) {
+		iam.TrustRemoteAddr()
+	})
+	if err != nil {
+		t.Fatalf("New with TrustRemoteAddr: %v", err)
+	}
 }

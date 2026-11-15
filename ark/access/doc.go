@@ -26,6 +26,7 @@
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send) // reset and verification links
+//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 //	if err != nil {
 //		return err
