@@ -1,8 +1,10 @@
 package access_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -360,4 +362,104 @@ func TestTwoInstancesShareOneDatabase(t *testing.T) {
 			t.Fatalf("login on the second instance = %d", reply.Status)
 		}
 	})
+}
+
+// TestNewRejectsBadConfig verifies the configuration errors.
+func TestNewRejectsBadConfig(t *testing.T) {
+	t.Parallel()
+
+	if _, err := access.New(nil, nil); !errors.Is(err, access.ErrInvalidConfig) {
+		t.Errorf("missing dependencies error = %v", err)
+	}
+	if _, err := newFacade(t, func(iam *access.Builder) { iam.Instance("Bad-Name") }); !errors.Is(err, access.ErrInvalidConfig) {
+		t.Errorf("invalid instance error = %v", err)
+	}
+	if _, err := newFacade(t, func(iam *access.Builder) { iam.SessionLifetime(-1) }); !errors.Is(err, access.ErrInvalidConfig) {
+		t.Errorf("negative lifetime error = %v", err)
+	}
+	if _, err := newFacade(t, func(iam *access.Builder) { iam.TwoFactor(cipher(t), "bad:issuer") }); !errors.Is(err, access.ErrInvalidConfig) {
+		t.Errorf("invalid issuer error = %v", err)
+	}
+}
+
+// TestMustAcceptPanicsForUnregisteredMethod verifies the startup check.
+func TestMustAcceptPanicsForUnregisteredMethod(t *testing.T) {
+	t.Parallel()
+
+	iam, err := newFacade(t, func(iam *access.Builder) {
+		iam.Password(hasher())
+		iam.TwoFactor(cipher(t), "Example")
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	iam.MustAccept(auth.MethodPassword, auth.MethodOTP, "recovery")
+	if !panics(func() { iam.MustAccept("passkey") }) {
+		t.Fatal("MustAccept accepted an unregistered method")
+	}
+}
+
+// TestMigrationsOnlyForEnabledFeatures verifies Migrations lists the groups of
+// the enabled features and Ping names the migrations when they have not run.
+func TestMigrationsOnlyForEnabledFeatures(t *testing.T) {
+	t.Parallel()
+
+	groups := func(iam *access.Access) string {
+		seen := []string{}
+		for _, definition := range iam.Migrations() {
+			group := strings.TrimPrefix(definition.Group(), "arkoren.dev:ark/access:")
+			if len(seen) == 0 || seen[len(seen)-1] != group {
+				seen = append(seen, group)
+			}
+		}
+
+		return strings.Join(seen, ",")
+	}
+	all, err := newFacade(t, func(iam *access.Builder) {
+		iam.Password(hasher())
+		iam.TwoFactor(cipher(t), "Example")
+		iam.Tokens()
+		iam.Provider(fakeProvider{name: "fake"})
+		iam.Instance("tenant_a")
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got, want := groups(all), "account:tenant_a,password:tenant_a,twofactor:tenant_a,apitoken:tenant_a,federation:tenant_a"; got != want {
+		t.Errorf("groups = %s, want %s", got, want)
+	}
+	passwordOnly, _ := newFacade(t, func(iam *access.Builder) { iam.Password(hasher()) })
+	if got, want := groups(passwordOnly), "account,password"; got != want {
+		t.Errorf("groups = %s, want %s", got, want)
+	}
+	if err := passwordOnly.Ping(context.Background()); !errors.Is(err, access.ErrNotMigrated) {
+		t.Errorf("Ping before migrating error = %v, want ErrNotMigrated", err)
+	}
+}
+
+// TestPackagesDoNotImportEachOther verifies the public packages of the module
+// import only core, foundation, internal helpers and the standard library, and
+// never one another or the root.
+func TestPackagesDoNotImportEachOther(t *testing.T) {
+	t.Parallel()
+
+	output, err := exec.Command("go", "list", "-f", "{{.ImportPath}}: {{join .Imports \" \"}}", "./...").Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	const module = "arkoren.dev/ark/access"
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
+		path, imports, _ := strings.Cut(line, ": ")
+		if strings.Contains(path, "/internal/") {
+			continue
+		}
+		for imported := range strings.FieldsSeq(imports) {
+			switch {
+			case strings.HasPrefix(imported, "arkoren.dev/ark/") && !strings.HasPrefix(imported, module):
+				t.Errorf("%s imports another ark: %s", path, imported)
+			case strings.HasPrefix(imported, module) && path != module && !strings.Contains(imported, "/internal/"):
+				t.Errorf("%s imports a sibling package: %s", path, imported)
+			}
+		}
+	}
 }

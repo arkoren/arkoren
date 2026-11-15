@@ -7,6 +7,8 @@ package throttle
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"net/netip"
 	"strconv"
 	"time"
@@ -72,4 +74,15 @@ func Reject(base problem.Details, wait time.Duration) error {
 	return base.Derive(func(details *problem.Builder) {
 		details.Header("Retry-After", strconv.Itoa(seconds))
 	})
+}
+
+// RemoteHost is the default client address of the packages: the host part of
+// r.RemoteAddr, or all of it when it has no port.
+func RemoteHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
 }

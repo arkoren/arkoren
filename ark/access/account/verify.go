@@ -146,54 +146,63 @@ func (directory *Directory) VerifyFor(ctx context.Context, subject, token string
 // subject the token must belong to, or empty for any.
 func (directory *Directory) verify(ctx context.Context, only, token string) (string, error) {
 	var subject string
-	hashed := storage.Hash(token)
 	now := time.Now().Unix()
 	err := directory.db.WithTransaction(ctx, func(ctx context.Context) error {
-		pending, err := directory.db.Find[struct {
-			Subject string `db:"subject"`
-		}](ctx, query.Table(directory.verifs, func(statement *query.Builder) {
-			statement.Select("subject").Where("token_hash", hashed).Where("expires_at", ">", now).Limit(1)
-		}))
-		if errors.Is(err, database.ErrNoRows) {
-			return ErrInvalidToken
-		}
-		if err != nil {
+		var err error
+		if subject, err = directory.consumeVerification(ctx, only, storage.Hash(token), now); err != nil {
 			return err
 		}
-		if only != "" && pending.Subject != only {
-			return fmt.Errorf("account: verification token of another user: %w", ErrWrongAccount)
-		}
-		// The delete is the single-use gate: of two concurrent requests with
-		// the same token only one removes the row.
-		affected, err := directory.db.Exec(ctx, query.Table(directory.verifs, func(statement *query.Builder) {
-			statement.Where("token_hash", hashed).Delete()
-		}))
-		if err != nil {
-			return err
-		}
-		if affected == 0 {
-			return ErrInvalidToken
-		}
-		subject = pending.Subject
 		_, err = directory.db.Exec(ctx, query.Table(directory.users, func(statement *query.Builder) {
 			statement.Where("id", subject).Where("verified_at", 0).Update(map[string]any{"verified_at": now})
 		}))
 
 		return err
 	})
-	if err != nil {
-		if errors.Is(err, ErrInvalidToken) {
-			return "", ErrInvalidToken
-		}
-		if errors.Is(err, ErrWrongAccount) {
-			return "", err
-		}
-
+	switch {
+	case errors.Is(err, ErrInvalidToken):
+		return "", ErrInvalidToken
+	case errors.Is(err, ErrWrongAccount):
+		return "", err
+	case err != nil:
 		return "", fmt.Errorf("account: verify email: %w", err)
 	}
 	directory.emit(ctx, EmailVerified, subject)
 
 	return subject, nil
+}
+
+// consumeVerification deletes the live verification token whose hash is hashed
+// and returns its subject. An unknown, expired or used token is
+// [ErrInvalidToken], and one of another user than only (when set)
+// [ErrWrongAccount]. It runs in the caller's transaction.
+func (directory *Directory) consumeVerification(ctx context.Context, only, hashed string, now int64) (string, error) {
+	pending, err := directory.db.Find[struct {
+		Subject string `db:"subject"`
+	}](ctx, query.Table(directory.verifs, func(statement *query.Builder) {
+		statement.Select("subject").Where("token_hash", hashed).Where("expires_at", ">", now).Limit(1)
+	}))
+	if errors.Is(err, database.ErrNoRows) {
+		return "", ErrInvalidToken
+	}
+	if err != nil {
+		return "", err
+	}
+	if only != "" && pending.Subject != only {
+		return "", fmt.Errorf("account: verification token of another user: %w", ErrWrongAccount)
+	}
+	// The delete is the single-use gate: of two concurrent requests with
+	// the same token only one removes the row.
+	affected, err := directory.db.Exec(ctx, query.Table(directory.verifs, func(statement *query.Builder) {
+		statement.Where("token_hash", hashed).Delete()
+	}))
+	if err != nil {
+		return "", err
+	}
+	if affected == 0 {
+		return "", ErrInvalidToken
+	}
+
+	return pending.Subject, nil
 }
 
 // VerifyHandler returns the handler of POST /email/verify. The body is

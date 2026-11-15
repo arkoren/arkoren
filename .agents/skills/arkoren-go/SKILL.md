@@ -44,6 +44,40 @@ do not add empty source files to justify test filenames. Keep public declaration
 in the owning package and cohesive private implementations in package-local
 `internal/` packages. Prefer shared `core/internal/` only for actual shared use.
 
+## Function and file size
+
+No linter enforces these limits, so check them before reporting a change.
+
+- **Complexity:** keep cyclomatic complexity at 10 or less per function, and
+  ideally under 8. Count one for the function, plus each `if`, `for`, `case`,
+  `&&` and `||`.
+- **Wiring several features:** a constructor or `build` that wires several
+  optional features gets one method per feature. Each method starts with a
+  guard clause for the disabled case, so the top-level function reads as plain
+  sequential calls.
+- **File size:** keep each production file under about 600 lines. A longer
+  file splits by role into single-word files:
+  - `builder.go` holds the Builder, its setters and `validate()`;
+  - the main type keeps its own file;
+  - each flow gets one file, such as `reset.go`, `bearer.go` or `resolve.go`.
+
+  Move each test into the `_test.go` file paired with the code it exercises.
+- **Validation and defaults:** construction validation lives in
+  `Builder.validate()`, which the constructor calls after the callbacks. Zero
+  numbers and durations then default through `cmp.Or`.
+- **Option closures and hooks:** an inline option closure that holds logic
+  becomes a named method. A hook that needs a component built later is a method
+  on the owner that reads the field when it runs; never capture that component
+  while building.
+- **When to extract:** extract a step the caller reads as one action, such as a
+  transaction body, a validation, or a lookup with its error mapping. Do not add:
+  - single-use wrappers that only move a branch;
+  - slices whose position carries meaning;
+  - closure slices in place of plain calls.
+- **Security-sensitive steps:** keep them in order with their comments,
+  including no-op lock updates, dummy hashes, throttle-before-lookup and
+  delete-as-single-use gates.
+
 ## Generated application documentation
 
 In `cmd/arkoren/templates/`, document functions and methods at their

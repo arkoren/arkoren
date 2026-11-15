@@ -10,7 +10,6 @@ import (
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
-	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/access/internal/web"
 )
@@ -65,26 +64,18 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 			return ErrInvalidCredentials
 		}
 		ctx := r.Context()
-		pairKey, identifierKey, clientKey := verifier.pairKey(identifier, r), verifier.identifierKey(identifier), verifier.clientKey(r)
+		counters := verifier.countersFor(identifier, r)
 		// Each attempt is reserved before the password is checked, so a burst of
 		// parallel guesses cannot slip past the limit, and refunded below when
 		// it succeeds: only failures count.
-		if err := verifier.attempt(ctx, pairKey, maxFailures); err != nil {
-			return err
-		}
-		if err := verifier.attempt(ctx, identifierKey, maxIdentifierFailures); err != nil {
-			return err
-		}
-		if err := verifier.attempt(ctx, clientKey, maxClientFailures); err != nil {
+		if err := verifier.reserveLogin(ctx, counters); err != nil {
 			return err
 		}
 		subject, err := verifier.Authenticate(ctx, identifier, body.Password)
 		if err != nil {
 			return err
 		}
-		verifier.clear(ctx, pairKey)
-		verifier.refund(ctx, identifierKey)
-		verifier.refund(ctx, clientKey)
+		verifier.settleLogin(ctx, counters)
 		outcome, err := guard.Begin(r, subject, passwordFactor)
 		if err != nil {
 			return err
@@ -127,22 +118,9 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 		if err := verifier.policy(r.Context(), body.Password); err != nil {
 			return err
 		}
-		var subject string
-		err = verifier.db.WithTransaction(r.Context(), func(ctx context.Context) error {
-			var err error
-			if subject, err = verifier.users.Create(ctx, identifier); err != nil {
-				return err
-			}
-
-			return verifier.save(ctx, subject, body.Password)
-		})
+		subject, err := verifier.register(r.Context(), identifier, body.Password)
 		if err != nil {
 			return err
-		}
-		if verifier.registered != nil {
-			if err := verifier.registered(r.Context(), subject, identifier); err != nil {
-				slog.ErrorContext(r.Context(), "access: post-registration hook failed", "subject", subject, "error", err)
-			}
 		}
 		outcome, err := guard.Begin(r, subject, passwordFactor)
 		if err != nil {
@@ -184,47 +162,12 @@ func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
 		if err != nil {
 			return err
 		}
-		ctx, subject := r.Context(), identity.Subject()
-		if err := verifier.policy(ctx, body.Password); err != nil {
+		subject := identity.Subject()
+		if err := verifier.change(r.Context(), subject, body.Current, body.Password); err != nil {
 			return err
 		}
-		has, err := verifier.Has(ctx, subject)
-		if err != nil {
+		if err := verifier.endOtherLogins(guard, r, subject); err != nil {
 			return err
-		}
-		if has {
-			subjectKey := verifier.identifierKey("subject:" + subject)
-			if err := verifier.attempt(ctx, subjectKey, maxFailures); err != nil {
-				return err
-			}
-			if err := verifier.Check(ctx, subject, body.Current); err != nil {
-				return err
-			}
-			verifier.clear(ctx, subjectKey)
-		}
-		if err := verifier.save(ctx, subject, body.Password); err != nil {
-			return err
-		}
-		verifier.emit(ctx, Changed, subject)
-		// Reset links sent before the change no longer belong to this password.
-		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Where("subject", subject).Delete()
-		}))
-		if err != nil {
-			return err
-		}
-		// Ending the other logins always runs, even when the hook fails: the
-		// password has changed, so a failing hook must not leave other sessions
-		// alive. The hook's error is returned after, and the client may retry.
-		var hookErr error
-		if verifier.changed != nil {
-			hookErr = verifier.changed(ctx, subject)
-		}
-		if err := guard.RevokeOthers(r); err != nil {
-			return errors.Join(err, hookErr)
-		}
-		if hookErr != nil {
-			return hookErr
 		}
 		// Begin on the session of the same subject keeps the login and records
 		// the password as a factor from now, so the user is fresh for the next
@@ -236,6 +179,85 @@ func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
 
 		return outcome.Response(w)
 	}
+}
+
+// register creates the user and stores the password in one transaction, then
+// runs the [Builder.Registered] hook, whose failure is logged and does not undo
+// the registration.
+func (verifier *Verifier) register(ctx context.Context, identifier, password string) (string, error) {
+	var subject string
+	err := verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
+		var err error
+		if subject, err = verifier.users.Create(ctx, identifier); err != nil {
+			return err
+		}
+
+		return verifier.save(ctx, subject, password)
+	})
+	if err != nil {
+		return "", err
+	}
+	if verifier.registered != nil {
+		if err := verifier.registered(ctx, subject, identifier); err != nil {
+			slog.ErrorContext(ctx, "access: post-registration hook failed", "subject", subject, "error", err)
+		}
+	}
+
+	return subject, nil
+}
+
+// change checks the policy and the current password, stores the new one and
+// drops the reset links sent before.
+func (verifier *Verifier) change(ctx context.Context, subject, current, password string) error {
+	if err := verifier.policy(ctx, password); err != nil {
+		return err
+	}
+	if err := verifier.checkCurrent(ctx, subject, current); err != nil {
+		return err
+	}
+	if err := verifier.save(ctx, subject, password); err != nil {
+		return err
+	}
+	verifier.emit(ctx, Changed, subject)
+
+	// Reset links sent before the change no longer belong to this password.
+	return verifier.deleteResets(ctx, subject)
+}
+
+// checkCurrent verifies the current password of a user who has one, counting
+// the attempt on the user, not on the login counters. A user without a password
+// (who logged in with a provider) sets the first one without it.
+func (verifier *Verifier) checkCurrent(ctx context.Context, subject, current string) error {
+	has, err := verifier.Has(ctx, subject)
+	if err != nil || !has {
+		return err
+	}
+	subjectKey := verifier.identifierKey("subject:" + subject)
+	if err := verifier.attempt(ctx, subjectKey, maxFailures); err != nil {
+		return err
+	}
+	if err := verifier.Check(ctx, subject, current); err != nil {
+		return err
+	}
+	verifier.clear(ctx, subjectKey)
+
+	return nil
+}
+
+// endOtherLogins runs the [Builder.AfterChange] hook and ends the user's other
+// logins. Ending them always runs, even when the hook fails: the password has
+// changed, so a failing hook must not leave other sessions alive. The hook's
+// error is returned after, and the client may retry.
+func (verifier *Verifier) endOtherLogins(guard *auth.Guard, r *http.Request, subject string) error {
+	var hookErr error
+	if verifier.changed != nil {
+		hookErr = verifier.changed(r.Context(), subject)
+	}
+	if err := guard.RevokeOthers(r); err != nil {
+		return errors.Join(err, hookErr)
+	}
+
+	return hookErr
 }
 
 // ForgotHandler returns the handler of POST /password/forgot. The body is

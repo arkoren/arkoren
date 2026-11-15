@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
-	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/foundation/query"
@@ -16,39 +16,6 @@ import (
 
 	"arkoren.dev/ark/access/internal/storage"
 )
-
-// ConnectIntentTTL is how long a connect intent stays valid: the time the user
-// has to finish signing in at the provider after starting a connection (ten
-// minutes).
-//
-// Example:
-//
-//	deadline := time.Now().Add(federation.ConnectIntentTTL)
-const ConnectIntentTTL = 10 * time.Minute
-
-// connectField is the session field that holds the connect intent.
-var connectField = session.NewField[connectIntent]("arkoren:federation:connect")
-
-// connectIntent records that a logged-in user asked to connect a provider: the
-// next callback of that session may link its identity to this subject.
-type connectIntent struct {
-	// Subject is the user who started the connection.
-	Subject string `json:"subject"`
-
-	// ExpiresAt is when the intent stops being honored, in Unix seconds.
-	ExpiresAt int64 `json:"expires_at"`
-}
-
-// validFor reports whether the intent belongs to subject and has not expired at
-// now. An intent with another subject belongs to a user who has since logged
-// out and been replaced in the session; it never links anything.
-func (intent connectIntent) validFor(subject string, now time.Time) bool {
-	return intent.Subject == subject && now.Unix() < intent.ExpiresAt
-}
-
-// errLostRace aborts a creating transaction whose link insert lost to a
-// concurrent first login of the same external identity.
-var errLostRace = errors.New("federation: lost link race")
 
 // Link describes one connection of a user to an external identity, as shown in
 // their settings. It holds no email or profile data: those belong to the
@@ -72,108 +39,6 @@ type Link struct {
 
 	// LastUsedAt is when the connection last logged the user in; zero if never.
 	LastUsedAt time.Time `json:"last_used_at,omitzero"`
-}
-
-// Builder configures [NewLinks] before publication. Callbacks run directly
-// once, in order, on one fresh draft; methods return the same draft.
-//
-// Example:
-//
-//	links, err := federation.NewLinks(provider, db, func(links *federation.Builder) {
-//		links.Create(createUser).Fallback(hasPassword)
-//	})
-type Builder struct {
-	instance string
-	events   *event.Bus
-	create   func(context.Context, auth.External) (string, error)
-	fallback func(context.Context, string) (bool, error)
-	verified func(context.Context, string) (bool, error)
-}
-
-// BuilderFunc is the callback form of [Builder].
-//
-// Example:
-//
-//	var configure federation.BuilderFunc = func(links *federation.Builder) {
-//		links.Instance("tenant_a")
-//	}
-//	links, err := federation.NewLinks(provider, db, configure)
-type BuilderFunc = func(*Builder)
-
-// Instance selects a named instance: the table is prefixed "<instance>_" and the
-// migration group gains ":<instance>". The name is 1 to 20 bytes of [a-z0-9_]
-// starting with a letter; the default is the empty instance.
-//
-// Example:
-//
-//	links.Instance("tenant_a")
-func (links *Builder) Instance(name string) *Builder {
-	links.instance = name
-
-	return links
-}
-
-// Events publishes [LinkCreated] and [LinkDeleted] on bus. A nil bus publishes
-// nothing.
-//
-// Example:
-//
-//	links.Events(events)
-func (links *Builder) Events(bus *event.Bus) *Builder {
-	links.events = bus
-
-	return links
-}
-
-// Create sets the function that makes a local user for an external identity
-// that is not connected to anyone, during a logged-out login. It returns the new
-// user's subject; its errors pass through to the client (a taken email is
-// a 409 with the directory). Use [auth.External.EmailVerified] to decide
-// whether the new user's email counts as verified. Without it, an unknown
-// identity gets [ErrNotLinked]. The package never links by email: Create must
-// not return an existing user.
-//
-// Example:
-//
-//	links.Create(func(ctx context.Context, external auth.External) (string, error) {
-//		if external.EmailVerified {
-//			return directory.CreateVerified(ctx, external.Email)
-//		}
-//		return directory.Create(ctx, external.Email)
-//	})
-func (links *Builder) Create(create func(ctx context.Context, external auth.External) (string, error)) *Builder {
-	links.create = create
-
-	return links
-}
-
-// Fallback sets the check that tells whether a user can still log in without
-// their connections, for example whether they have a password. Without it the
-// last connection of a user can never be removed.
-//
-// Example:
-//
-//	links.Fallback(passwords.Has)
-func (links *Builder) Fallback(check func(ctx context.Context, subject string) (bool, error)) *Builder {
-	links.fallback = check
-
-	return links
-}
-
-// Verified sets the check that tells whether a user's email is verified.
-// [Links.ConnectHandler] then answers 403 ([account.ErrEmailUnverified]'s
-// problem) to an unverified user: whoever registered an address first must not
-// attach a provider before its owner proves the address. Without it the handler
-// admits everyone, which is only right when the application enforces the rule
-// itself; the facade always sets it with the built-in users.
-//
-// Example:
-//
-//	links.Verified(directory.Verified)
-func (links *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
-	links.verified = check
-
-	return links
 }
 
 // Links owns the table that connects external identities (issuer and subject)
@@ -232,7 +97,7 @@ func NewLinks(provider *auth.UserProvider, db *database.Database, configure ...B
 	for _, apply := range configure {
 		apply(&settings)
 	}
-	if err := storage.ValidInstance(settings.instance); err != nil {
+	if err := settings.validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	links := &Links{
@@ -461,40 +326,10 @@ func (links *Links) List(ctx context.Context, subject string) ([]Link, error) {
 //	}
 func (links *Links) Unlink(ctx context.Context, subject, id string) error {
 	err := links.db.WithTransaction(ctx, func(ctx context.Context) error {
-		// Take a write lock on every connection of the user before counting
-		// them (a no-op update works on all three databases; SQLite serializes
-		// writers anyway). Without it two concurrent unlinks of different
-		// connections each see the other still present and both succeed,
-		// leaving the user no way in. The second waits here, then counts again.
+		if err := links.checkUnlink(ctx, subject, id); err != nil {
+			return err
+		}
 		_, err := links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
-			statement.Where("subject", subject).Update(map[string]any{"subject": subject})
-		}))
-		if err != nil {
-			return err
-		}
-		owned, err := links.List(ctx, subject)
-		if err != nil {
-			return err
-		}
-		found := false
-		for _, link := range owned {
-			found = found || link.ID == id
-		}
-		if !found {
-			return ErrNotFound
-		}
-		if len(owned) == 1 {
-			other := false
-			if links.fallback != nil {
-				if other, err = links.fallback(ctx, subject); err != nil {
-					return err
-				}
-			}
-			if !other {
-				return ErrLastLink
-			}
-		}
-		_, err = links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
 			statement.Where("subject", subject).Where("id", id).Delete()
 		}))
 
@@ -506,6 +341,51 @@ func (links *Links) Unlink(ctx context.Context, subject, id string) error {
 	links.emit(ctx, LinkDeleted, subject)
 
 	return nil
+}
+
+// checkUnlink locks the connections of subject and checks that id is one of
+// them and not the user's last way in. It runs in the caller's transaction.
+func (links *Links) checkUnlink(ctx context.Context, subject, id string) error {
+	// Take a write lock on every connection of the user before counting
+	// them (a no-op update works on all three databases; SQLite serializes
+	// writers anyway). Without it two concurrent unlinks of different
+	// connections each see the other still present and both succeed,
+	// leaving the user no way in. The second waits here, then counts again.
+	_, err := links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
+		statement.Where("subject", subject).Update(map[string]any{"subject": subject})
+	}))
+	if err != nil {
+		return err
+	}
+	owned, err := links.List(ctx, subject)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(owned, func(link Link) bool { return link.ID == id }) {
+		return ErrNotFound
+	}
+	if len(owned) > 1 {
+		return nil
+	}
+	other, err := links.hasFallback(ctx, subject)
+	if err != nil {
+		return err
+	}
+	if !other {
+		return ErrLastLink
+	}
+
+	return nil
+}
+
+// hasFallback reports whether subject has another way in than connections,
+// through [Builder.Fallback]; without it there is none.
+func (links *Links) hasFallback(ctx context.Context, subject string) (bool, error) {
+	if links.fallback == nil {
+		return false, nil
+	}
+
+	return links.fallback(ctx, subject)
 }
 
 // UnlinkAll removes every connection of subject without the last-way-in check
@@ -529,125 +409,4 @@ func (links *Links) UnlinkAll(ctx context.Context, subject string) error {
 	}
 
 	return nil
-}
-
-// Resolve is the [auth.Resolver] of the package: it maps a verified external
-// identity to the local subject to log in, as the protocol module's callback
-// expects. See [Links] for the rules. It reads the logged-in identity and the
-// session from ctx, which protocol modules take from the request, so the
-// callback route needs the session and auth middleware. Errors that are
-// problems ([ErrNotLinked], [ErrLinkedElsewhere], the error of [Builder.Create])
-// reach the client as problem responses.
-//
-// Example:
-//
-//	web.Get("/auth/google/callback", google.CallbackHandler(guard, links.Resolve))
-func (links *Links) Resolve(ctx context.Context, external auth.External) (string, error) {
-	if external.Issuer == "" || external.Subject == "" {
-		return "", fmt.Errorf("federation: empty issuer or subject: %w", auth.ErrNoCredentials)
-	}
-	current := links.takeIntent(ctx)
-	existing, linked, err := links.find(ctx, external.Issuer, external.Subject)
-	if err != nil {
-		return "", err
-	}
-	switch {
-	case linked && current != "" && existing.Subject != current:
-		return "", ErrLinkedElsewhere
-	case linked:
-		return links.login(ctx, existing)
-	case current != "":
-		if err := links.Link(ctx, current, external); err != nil {
-			return "", err
-		}
-
-		return current, nil
-	}
-
-	return links.createUser(ctx, external)
-}
-
-// takeIntent returns the subject of the connect intent in the session of ctx,
-// provided it is unexpired and belongs to the logged-in user, and removes it:
-// an intent serves one callback whatever its outcome. It returns "" when there
-// is none.
-func (links *Links) takeIntent(ctx context.Context) string {
-	current, ok := session.FromContext(ctx)
-	if !ok {
-		return ""
-	}
-	intent, err := current.Get(connectField)
-	if err != nil {
-		return ""
-	}
-	// Deleting can only fail for an invalid field; the intent is unusable then
-	// anyway, and a stale one still expires by its own time.
-	_ = current.Delete(connectField)
-	identity, ok := auth.FromContext(ctx)
-	if !ok || !identity.Session() || !intent.validFor(identity.Subject(), time.Now()) {
-		return ""
-	}
-
-	return intent.Subject
-}
-
-// login returns the subject of a known connection after checking the user is
-// still allowed in, and records the use.
-func (links *Links) login(ctx context.Context, found row) (string, error) {
-	if _, err := links.provider.Find(ctx, found.Subject); err != nil {
-		if errors.Is(err, auth.ErrUserNotFound) || errors.Is(err, auth.ErrUserDisabled) {
-			return "", auth.ErrUnauthenticated
-		}
-
-		return "", err
-	}
-	// The time is informational: a failed write must not fail the login.
-	_, _ = links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
-		statement.Where("id", found.ID).Update(map[string]any{"last_used_at": time.Now().Unix()})
-	}))
-
-	return found.Subject, nil
-}
-
-// createUser makes a user for an unknown identity and connects it, in one
-// transaction. When a concurrent first login of the same identity wins the
-// insert, this one rolls its user back and returns the winner's subject.
-func (links *Links) createUser(ctx context.Context, external auth.External) (string, error) {
-	if links.create == nil {
-		return "", ErrNotLinked
-	}
-	var subject string
-	err := links.db.WithTransaction(ctx, func(ctx context.Context) error {
-		created, err := links.create(ctx, external)
-		if err != nil {
-			return err
-		}
-		written, err := links.insert(ctx, created, external)
-		if err != nil {
-			return err
-		}
-		if !written {
-			return errLostRace
-		}
-		subject = created
-
-		return nil
-	})
-	if errors.Is(err, errLostRace) {
-		winner, ok, err := links.find(ctx, external.Issuer, external.Subject)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return "", ErrNotLinked
-		}
-
-		return links.login(ctx, winner)
-	}
-	if err != nil {
-		return "", err
-	}
-	links.emit(ctx, LinkCreated, subject)
-
-	return subject, nil
 }

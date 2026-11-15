@@ -1,6 +1,7 @@
 package password
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -8,10 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -150,176 +148,6 @@ type Users struct {
 	ProveEmail func(ctx context.Context, subject string) error
 }
 
-// Message is what [Builder.Deliver] receives to write a reset email. The token
-// is a credential until it is used or expires; never log it.
-//
-// Example:
-//
-//	link := message.Link("https://app.example.com/reset-password")
-type Message struct {
-	// Identifier is the address to write to, as returned by [Users.Lookup]: the
-	// one stored with the user, never the text of the request.
-	Identifier string
-
-	// Token is the single-use secret that [Verifier.Reset] accepts.
-	Token string
-
-	// ExpiresAt is when the token stops working.
-	ExpiresAt time.Time
-}
-
-// Link returns base with the token as its "token" query parameter, escaped.
-//
-// Example:
-//
-//	message := password.Message{Token: "abc"}
-//	fmt.Println(message.Link("https://app.example.com/reset")) // https://app.example.com/reset?token=abc
-func (message Message) Link(base string) string {
-	return base + "?" + url.Values{"token": {message.Token}}.Encode()
-}
-
-// Builder configures [NewVerifier] before publication. Callbacks run directly
-// once, in order, on one fresh draft; methods return the same draft.
-//
-// Example:
-//
-//	verifier, err := password.NewVerifier(provider, db, store, hasher, users, func(passwords *password.Builder) {
-//		passwords.Deliver(send).ResetTTL(30 * time.Minute)
-//	})
-type Builder struct {
-	instance   string
-	events     *event.Bus
-	deliver    func(context.Context, Message) error
-	resetTTL   time.Duration
-	policy     func(context.Context, string) error
-	clientIP   func(*http.Request) string
-	registered func(context.Context, string, string) error
-	changed    func(context.Context, string) error
-}
-
-// BuilderFunc is the callback form of [Builder].
-//
-// Example:
-//
-//	var configure password.BuilderFunc = func(passwords *password.Builder) {
-//		passwords.Instance("tenant_a")
-//	}
-//	verifier, err := password.NewVerifier(provider, db, store, hasher, users, configure)
-type BuilderFunc = func(*Builder)
-
-// Instance selects a named instance: tables are prefixed "<instance>_" and the
-// migration group gains ":<instance>". The name is 1 to 20 bytes of [a-z0-9_]
-// starting with a letter; the default is the empty instance.
-//
-// Example:
-//
-//	passwords.Instance("tenant_a")
-func (passwords *Builder) Instance(name string) *Builder {
-	passwords.instance = name
-
-	return passwords
-}
-
-// Events publishes [Changed] and [WasReset] on bus. A nil bus publishes nothing.
-//
-// Example:
-//
-//	passwords.Events(events)
-func (passwords *Builder) Events(bus *event.Bus) *Builder {
-	passwords.events = bus
-
-	return passwords
-}
-
-// Deliver sets the function that sends reset links. Without it
-// [Verifier.SendReset] returns [ErrNoDelivery].
-//
-// Example:
-//
-//	passwords.Deliver(func(ctx context.Context, message password.Message) error {
-//		return mailer.Send(ctx, message.Identifier, message.Link("https://app.example.com/reset"))
-//	})
-func (passwords *Builder) Deliver(deliver func(ctx context.Context, message Message) error) *Builder {
-	passwords.deliver = deliver
-
-	return passwords
-}
-
-// ResetTTL sets how long a reset token is valid; zero selects
-// [DefaultResetTTL].
-//
-// Example:
-//
-//	passwords.ResetTTL(30 * time.Minute)
-func (passwords *Builder) ResetTTL(ttl time.Duration) *Builder {
-	passwords.resetTTL = ttl
-
-	return passwords
-}
-
-// Policy replaces the password policy, which by default requires [MinLength] to
-// [MaxLength] bytes. check returns an error wrapping [ErrInvalidPassword] to
-// reject a password; any other error is an infrastructure failure.
-//
-// Example:
-//
-//	passwords.Policy(func(ctx context.Context, password string) error {
-//		if len(password) < 12 {
-//			return fmt.Errorf("too short: %w", passwordpkg.ErrInvalidPassword)
-//		}
-//		return nil
-//	})
-func (passwords *Builder) Policy(check func(ctx context.Context, password string) error) *Builder {
-	passwords.policy = check
-
-	return passwords
-}
-
-// ClientIP sets how the client address of the login throttle is found. The
-// default is the host of r.RemoteAddr, which behind a reverse proxy is the
-// proxy: pass the same function given to the guard's ClientIP, such as
-// ratelimit.TrustedProxyKey.
-//
-// Example:
-//
-//	passwords.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
-func (passwords *Builder) ClientIP(find func(*http.Request) string) *Builder {
-	passwords.clientIP = find
-
-	return passwords
-}
-
-// Registered sets a function that runs after [Verifier.RegisterHandler]
-// committed a new user and before it logs them in, for work that must follow a
-// registration such as sending an email verification. An error is logged and
-// does not fail the request: the user is registered either way, and a mail
-// outage must not turn into a failed signup.
-//
-// Example:
-//
-//	passwords.Registered(func(ctx context.Context, subject, identifier string) error {
-//		return directory.SendVerification(ctx, subject)
-//	})
-func (passwords *Builder) Registered(hook func(ctx context.Context, subject, identifier string) error) *Builder {
-	passwords.registered = hook
-
-	return passwords
-}
-
-// AfterChange sets a function that runs in [Verifier.ChangeHandler] after the new
-// password is stored and before the caller's other logins end, for what must
-// not survive a password change, such as the user's device tokens. An error
-// fails the request; the password has changed by then, so the client may retry.
-//
-// Example:
-//
-//	passwords.AfterChange(issuer.RevokeDevices)
-func (passwords *Builder) AfterChange(hook func(ctx context.Context, subject string) error) *Builder {
-	passwords.changed = hook
-
-	return passwords
-}
-
 // Verifier owns the password hashes and reset tokens. It is safe for
 // concurrent use. Create it with [NewVerifier].
 //
@@ -376,11 +204,8 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 	for _, apply := range configure {
 		apply(&settings)
 	}
-	if err := storage.ValidInstance(settings.instance); err != nil {
+	if err := settings.validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
-	}
-	if settings.resetTTL < 0 {
-		return nil, fmt.Errorf("%w: negative reset lifetime", ErrInvalidConfig)
 	}
 	verifier := &Verifier{
 		provider:   provider,
@@ -393,7 +218,7 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		resets:     storage.Table(settings.instance, "password_resets"),
 		events:     settings.events,
 		deliver:    settings.deliver,
-		resetTTL:   cmpOr(settings.resetTTL, DefaultResetTTL),
+		resetTTL:   cmp.Or(settings.resetTTL, DefaultResetTTL),
 		policy:     settings.policy,
 		clientIP:   settings.clientIP,
 		registered: settings.registered,
@@ -403,20 +228,11 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		verifier.policy = defaultPolicy
 	}
 	if verifier.clientIP == nil {
-		verifier.clientIP = remoteHost
+		verifier.clientIP = throttle.RemoteHost
 	}
 	provider.OnForget(verifier.forget)
 
 	return verifier, nil
-}
-
-// cmpOr returns value, or fallback when value is zero.
-func cmpOr(value, fallback time.Duration) time.Duration {
-	if value == 0 {
-		return fallback
-	}
-
-	return value
 }
 
 // defaultPolicy requires [MinLength] to [MaxLength] bytes.
@@ -426,16 +242,6 @@ func defaultPolicy(_ context.Context, password string) error {
 	}
 
 	return nil
-}
-
-// remoteHost is the default client address: the host part of r.RemoteAddr.
-func remoteHost(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-
-	return host
 }
 
 // Migrations returns the migrations that create the "password_hashes" and
@@ -709,188 +515,6 @@ func (verifier *Verifier) save(ctx context.Context, subject, password string) er
 	return nil
 }
 
-// SendReset starts a password reset for identifier: it creates a single-use
-// token and hands it to [Builder.Deliver] with the address that [Users.Lookup]
-// returned for the user, never the text of identifier. A user keeps up to three
-// live tokens: asking again does not invalidate a link already sent, and the
-// oldest is dropped only beyond three. An unknown or disabled user gets nothing
-// and the call returns nil, so the caller cannot learn which identifiers
-// exist. It returns [ErrNoDelivery] without a delivery function, and an error
-// when [Users.Lookup] returns no address. It does not throttle:
-// [Verifier.ForgotHandler] does, and runs this in the background.
-//
-// Example:
-//
-//	if err := verifier.SendReset(ctx, "ada@example.com"); err != nil {
-//		return err
-//	}
-func (verifier *Verifier) SendReset(ctx context.Context, identifier string) error {
-	if verifier.deliver == nil {
-		return ErrNoDelivery
-	}
-	token := rand.Text()
-	subject, address, err := verifier.users.Lookup(ctx, identifier)
-	if errors.Is(err, auth.ErrUserNotFound) {
-		// Spend the hashing time of the known path so timing stays level.
-		_ = storage.Hash(token)
-
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if address == "" {
-		return errors.New("password: Users.Lookup returned no address")
-	}
-	if _, err := verifier.provider.Find(ctx, subject); err != nil {
-		if errors.Is(err, auth.ErrUserNotFound) || errors.Is(err, auth.ErrUserDisabled) {
-			return nil
-		}
-
-		return err
-	}
-	expiresAt := time.Now().Add(verifier.resetTTL)
-	err = verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
-		// Lock the user's existing tokens first (a no-op update) so concurrent
-		// requests count and trim one after the other and the limit holds. With
-		// no token yet there is nothing to lock; then the throttle, not this
-		// lock, bounds a burst, and the next request trims the surplus.
-		_, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Where("subject", subject).Update(map[string]any{"subject": subject})
-		}))
-		if err != nil {
-			return err
-		}
-		// Expired tokens are dead weight; of the live ones keep the newest
-		// maxLiveResets-1 so the new token makes at most maxLiveResets.
-		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Where("subject", subject).Where("expires_at", "<=", time.Now().Unix()).Delete()
-		}))
-		if err != nil {
-			return err
-		}
-		live, err := verifier.db.Select[struct {
-			TokenHash string `db:"token_hash"`
-		}](ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Select("token_hash").Where("subject", subject).OrderBy("created_at")
-		}))
-		if err != nil {
-			return err
-		}
-		if excess := len(live) - (maxLiveResets - 1); excess > 0 {
-			stale := make([]string, 0, excess)
-			for _, row := range live[:excess] {
-				stale = append(stale, row.TokenHash)
-			}
-			_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-				statement.WhereIn("token_hash", stale...).Delete()
-			}))
-			if err != nil {
-				return err
-			}
-		}
-		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Insert(map[string]any{
-				"subject":    subject,
-				"token_hash": storage.Hash(token),
-				"expires_at": expiresAt.Unix(),
-				"created_at": time.Now().UnixNano(),
-				"address":    address,
-			})
-		}))
-
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("password: store reset: %w", err)
-	}
-
-	return verifier.deliver(ctx, Message{Identifier: address, Token: token, ExpiresAt: expiresAt})
-}
-
-// Reset consumes a reset token (and the user's other live ones), sets the
-// password, calls [Users.ProveEmail] when set and then [Users.Rotate], in one
-// transaction, and returns the subject. The link only reached someone who
-// controls the mailbox, so the reset is the proof of ownership an unverified
-// registration lacks. Rotation ends every session,
-// pending login and API token of the user; call [auth.Guard.RevokeAll] to
-// remove their login records as well, as [Verifier.ResetHandler] does. Reset
-// never logs the user in, so it cannot bypass a second factor. An unknown,
-// expired, used or replaced token is [ErrInvalidToken]; a password that fails
-// the policy is [ErrInvalidPassword] and leaves the token usable.
-//
-// Example:
-//
-//	subject, err := verifier.Reset(ctx, token, "a new long password")
-//	if errors.Is(err, password.ErrInvalidToken) {
-//		// ask for a new link
-//	}
-func (verifier *Verifier) Reset(ctx context.Context, token, password string) (string, error) {
-	if err := verifier.policy(ctx, password); err != nil {
-		return "", err
-	}
-	var subject, address string
-	hashed := storage.Hash(token)
-	err := verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
-		pending, err := verifier.db.Find[struct {
-			Subject string `db:"subject"`
-			Address string `db:"address"`
-		}](ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Select("subject", "address").Where("token_hash", hashed).Where("expires_at", ">", time.Now().Unix()).Limit(1)
-		}))
-		if errors.Is(err, database.ErrNoRows) {
-			return ErrInvalidToken
-		}
-		if err != nil {
-			return err
-		}
-		// The delete is the single-use gate: of two concurrent requests with the
-		// same token only one removes the row.
-		affected, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Where("token_hash", hashed).Delete()
-		}))
-		if err != nil {
-			return err
-		}
-		if affected == 0 {
-			return ErrInvalidToken
-		}
-		subject, address = pending.Subject, pending.Address
-		// The user's other live tokens die with this one: the password they
-		// were meant to reset no longer exists.
-		_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Where("subject", subject).Delete()
-		}))
-		if err != nil {
-			return err
-		}
-		if err := verifier.save(ctx, subject, password); err != nil {
-			return err
-		}
-		if verifier.users.ProveEmail != nil {
-			if err := verifier.users.ProveEmail(ctx, subject); err != nil {
-				return err
-			}
-		}
-
-		return verifier.users.Rotate(ctx, subject)
-	})
-	if errors.Is(err, ErrInvalidToken) {
-		return "", ErrInvalidToken
-	}
-	if err != nil {
-		return "", fmt.Errorf("password: reset: %w", err)
-	}
-	// The owner proved the mailbox, so failed logins counted against the
-	// identifier (by whoever was guessing) no longer lock them out. Only the
-	// cap across addresses can be cleared: the per-address counters are the
-	// guesser's. It matches when the user typed the address at login.
-	verifier.clear(ctx, verifier.identifierKey(address))
-	verifier.emit(ctx, WasReset, subject)
-
-	return subject, nil
-}
-
 // emit publishes topic with the subject once the surrounding transaction, if
 // any, has committed.
 func (verifier *Verifier) emit(ctx context.Context, topic event.Topic[UserEvent], subject string) {
@@ -900,18 +524,6 @@ func (verifier *Verifier) emit(ctx context.Context, topic event.Topic[UserEvent]
 
 		return nil
 	})
-}
-
-// attempt reserves one attempt on key and fails with [ErrThrottled] and a
-// Retry-After header when the counter exceeds limit.
-func (verifier *Verifier) attempt(ctx context.Context, key cache.Key[int64], limit int64) error {
-	return throttle.Attempt(ctx, verifier.store, key, limit, throttleWindow, ErrThrottled)
-}
-
-// refund gives back one attempt reserved on key, for a login that succeeded:
-// only failures count against the limits.
-func (verifier *Verifier) refund(ctx context.Context, key cache.Key[int64]) {
-	_, _ = verifier.store.Decrement(ctx, key, 1)
 }
 
 // Wait blocks until the reset emails that [Verifier.ForgotHandler] sent in the
@@ -927,41 +539,4 @@ func (verifier *Verifier) refund(ctx context.Context, key cache.Key[int64]) {
 //	_ = verifier.Wait(ctx)
 func (verifier *Verifier) Wait(ctx context.Context) error {
 	return verifier.jobs.Wait(ctx)
-}
-
-// clear forgets the attempts counted on key after a success. Counters expire on
-// their own, so a failed cleanup only keeps a stale count.
-func (verifier *Verifier) clear(ctx context.Context, key cache.Key[int64]) {
-	_ = verifier.store.Delete(ctx, key)
-}
-
-// identifierKey is the counter key of one identifier, lowercased and hashed so
-// the key has a fixed shape whatever the user typed.
-func (verifier *Verifier) identifierKey(identifier string) cache.Key[int64] {
-	return cache.NewKey[int64]("access:" + verifier.instance + ":password:id:" + storage.Hash(strings.ToLower(strings.TrimSpace(identifier))))
-}
-
-// clientKey is the counter key of the client address of r.
-func (verifier *Verifier) clientKey(r *http.Request) cache.Key[int64] {
-	return cache.NewKey[int64]("access:" + verifier.instance + ":password:ip:" + throttle.Bucket(verifier.clientIP(r)))
-}
-
-// pairKey is the counter key of one identifier from one client address, the
-// login lockout: an attacker's failures lock only the attacker's own address
-// out of the account.
-func (verifier *Verifier) pairKey(identifier string, r *http.Request) cache.Key[int64] {
-	return cache.NewKey[int64]("access:" + verifier.instance + ":password:pair:" + storage.Hash(strings.ToLower(strings.TrimSpace(identifier))) + ":" + throttle.Bucket(verifier.clientIP(r)))
-}
-
-// throttleAction counts one request of action (such as "forgot") on the
-// identifier as typed and on the client address of r, before any lookup, so the
-// answer cannot reveal whether the identifier belongs to a user.
-func (verifier *Verifier) throttleAction(r *http.Request, action, identifier string, perIdentifier, perClient int64) error {
-	prefix := "access:" + verifier.instance + ":password:" + action
-	byIdentifier := cache.NewKey[int64](prefix + ":id:" + storage.Hash(strings.ToLower(strings.TrimSpace(identifier))))
-	if err := verifier.attempt(r.Context(), byIdentifier, perIdentifier); err != nil {
-		return err
-	}
-
-	return verifier.attempt(r.Context(), cache.NewKey[int64](prefix+":ip:"+throttle.Bucket(verifier.clientIP(r))), perClient)
 }

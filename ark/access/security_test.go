@@ -244,53 +244,99 @@ func TestTwoFactorWithRecentCodeDisablesAndEnableEndsOtherLogins(t *testing.T) {
 	})
 }
 
-// TestPasswordChangeRevokesDeviceTokens verifies a change ends device tokens and
-// keeps personal ones, and that the opt-in revokes both.
+// TestEnablingTwoFactorRevokesDeviceTokens verifies enabling two-factor ends
+// device tokens, which were issued without the new factor, and keeps personal
+// ones.
+func TestEnablingTwoFactorRevokesDeviceTokens(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher())
+			iam.TwoFactor(cipher(t), "Example")
+			iam.Tokens()
+		})
+		registerVerified(t, sys, sys.client, "ada@example.com")
+		subject := mustSubject(t, sys)
+		_, personal, err := sys.iam.Issuer().Issue(ctx, subject, apitoken.Request{Name: "ci"})
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		_, device, err := sys.iam.Issuer().IssueDevice(ctx, subject, "phone")
+		if err != nil {
+			t.Fatalf("IssueDevice: %v", err)
+		}
+		setup := sys.client.Post("/two-factor/setup", "")
+		if reply := sys.client.Post("/two-factor", `{"code":"`+code(t, secretOf(setup.Body), 0)+`"}`); reply.Status != http.StatusOK {
+			t.Fatalf("enable = %d %s", reply.Status, reply.Body)
+		}
+		status := func(secret string) int {
+			return sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+secret).Status
+		}
+		if got := status(device); got != http.StatusUnauthorized {
+			t.Fatalf("device token after enabling two-factor = %d, want 401", got)
+		}
+		if got := status(personal); got != http.StatusOK {
+			t.Fatalf("personal token after enabling two-factor = %d, want 200", got)
+		}
+	})
+}
+
+// TestPasswordChangeRevokesDeviceTokens verifies a change ends device tokens
+// and keeps personal ones.
 func TestPasswordChangeRevokesDeviceTokens(t *testing.T) {
 	t.Parallel()
 
-	for _, revokePersonal := range []bool{false, true} {
-		t.Run("revokePersonal="+strconv.FormatBool(revokePersonal), func(t *testing.T) {
-			t.Parallel()
+	checkPasswordChangeTokens(t, false, http.StatusOK)
+}
 
-			eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-				ctx := testContext(t)
-				sys := newApp(t, db, instance, func(iam *access.Builder) {
-					iam.Password(hasher())
-					iam.Tokens()
-					if revokePersonal {
-						iam.RevokeTokensOnPasswordChange()
-					}
-				})
-				registerVerified(t, sys, sys.client, "ada@example.com")
-				subject := mustSubject(t, sys)
-				_, personal, err := sys.iam.Issuer().Issue(ctx, subject, apitoken.Request{Name: "ci"})
-				if err != nil {
-					t.Fatalf("Issue: %v", err)
-				}
-				_, device, err := sys.iam.Issuer().IssueDevice(ctx, subject, "phone")
-				if err != nil {
-					t.Fatalf("IssueDevice: %v", err)
-				}
-				if reply := sys.client.Do(http.MethodPut, "/password", `{"current_password":"correct horse","password":"changed horse ok"}`); reply.Status != http.StatusNoContent {
-					t.Fatalf("change = %d %s", reply.Status, reply.Body)
-				}
-				status := func(secret string) int {
-					return sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+secret).Status
-				}
-				if got := status(device); got != http.StatusUnauthorized {
-					t.Fatalf("device token after a password change = %d, want 401", got)
-				}
-				want := http.StatusOK
-				if revokePersonal {
-					want = http.StatusUnauthorized
-				}
-				if got := status(personal); got != want {
-					t.Fatalf("personal token after a password change = %d, want %d", got, want)
-				}
-			})
+// TestPasswordChangeRevokesPersonalTokensWhenOptedIn verifies
+// RevokeTokensOnPasswordChange makes a change end personal tokens too.
+func TestPasswordChangeRevokesPersonalTokensWhenOptedIn(t *testing.T) {
+	t.Parallel()
+
+	checkPasswordChangeTokens(t, true, http.StatusUnauthorized)
+}
+
+// checkPasswordChangeTokens changes the password of a user holding a personal
+// and a device token, with or without RevokeTokensOnPasswordChange, and checks
+// the device token is rejected and the personal one answers personalStatus.
+func checkPasswordChangeTokens(t *testing.T, revokePersonal bool, personalStatus int) {
+	t.Helper()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher())
+			iam.Tokens()
+			if revokePersonal {
+				iam.RevokeTokensOnPasswordChange()
+			}
 		})
-	}
+		registerVerified(t, sys, sys.client, "ada@example.com")
+		subject := mustSubject(t, sys)
+		_, personal, err := sys.iam.Issuer().Issue(ctx, subject, apitoken.Request{Name: "ci"})
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		_, device, err := sys.iam.Issuer().IssueDevice(ctx, subject, "phone")
+		if err != nil {
+			t.Fatalf("IssueDevice: %v", err)
+		}
+		if reply := sys.client.Do(http.MethodPut, "/password", `{"current_password":"correct horse","password":"changed horse ok"}`); reply.Status != http.StatusNoContent {
+			t.Fatalf("change = %d %s", reply.Status, reply.Body)
+		}
+		status := func(secret string) int {
+			return sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+secret).Status
+		}
+		if got := status(device); got != http.StatusUnauthorized {
+			t.Fatalf("device token after a password change = %d, want 401", got)
+		}
+		if got := status(personal); got != personalStatus {
+			t.Fatalf("personal token after a password change = %d, want %d", got, personalStatus)
+		}
+	})
 }
 
 // TestForgotRegisterResendAreThrottledAndUniform verifies the per-identifier and

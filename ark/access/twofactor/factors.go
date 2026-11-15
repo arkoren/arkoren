@@ -1,15 +1,11 @@
 package twofactor
 
 import (
+	"cmp"
 	"context"
-	"crypto/rand"
-	"encoding/base32"
 	"encoding/base64"
-	"encoding/json/jsontext"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -65,154 +61,6 @@ const (
 	// activateWindow is the lifetime of the activation attempt counter.
 	activateWindow = 15 * time.Minute
 )
-
-// recoveryEncoding writes recovery codes: base32 without padding, so 10 random
-// bytes make 16 characters.
-var recoveryEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
-
-// Builder configures [NewFactors] before publication. Callbacks run directly
-// once, in order, on one fresh draft; methods return the same draft.
-//
-// Example:
-//
-//	factors, err := twofactor.NewFactors(provider, db, store, cipher, "Example", func(factors *twofactor.Builder) {
-//		factors.RecoveryCodes(8)
-//	})
-type Builder struct {
-	instance string
-	events   *event.Bus
-	scheme   totp.Scheme
-	codes    int
-	window   time.Duration
-	verified func(context.Context, string) (bool, error)
-	enabled  func(context.Context, string) error
-	extra    []auth.Credential
-}
-
-// BuilderFunc is the callback form of [Builder].
-//
-// Example:
-//
-//	var configure twofactor.BuilderFunc = func(factors *twofactor.Builder) {
-//		factors.Instance("tenant_a")
-//	}
-//	factors, err := twofactor.NewFactors(provider, db, store, cipher, "Example", configure)
-type BuilderFunc = func(*Builder)
-
-// Instance selects a named instance: tables are prefixed "<instance>_" and the
-// migration group gains ":<instance>". The name is 1 to 20 bytes of [a-z0-9_]
-// starting with a letter; the default is the empty instance.
-//
-// Example:
-//
-//	factors.Instance("tenant_a")
-func (factors *Builder) Instance(name string) *Builder {
-	factors.instance = name
-
-	return factors
-}
-
-// Events publishes [Enabled], [Disabled], [Regenerated] and [RecoveryUsed], and
-// the core [auth.CredentialEnrolled] event, on bus. A nil bus publishes nothing.
-//
-// Example:
-//
-//	factors.Events(events)
-func (factors *Builder) Events(bus *event.Bus) *Builder {
-	factors.events = bus
-
-	return factors
-}
-
-// Scheme replaces the TOTP parameters (hash, digits, period, window). The
-// default is [totp.New]: SHA-1, 6 digits, 30 seconds, one step of drift, which
-// every authenticator app supports.
-//
-// Example:
-//
-//	factors.Scheme(totp.New(func(scheme *totp.Builder) {
-//		scheme.Digits(8)
-//	}))
-func (factors *Builder) Scheme(scheme totp.Scheme) *Builder {
-	factors.scheme = scheme
-
-	return factors
-}
-
-// RecoveryCodes sets how many recovery codes enabling two-factor creates, 1 to
-// 100; zero selects [DefaultRecoveryCodes].
-//
-// Example:
-//
-//	factors.RecoveryCodes(8)
-func (factors *Builder) RecoveryCodes(count int) *Builder {
-	factors.codes = count
-
-	return factors
-}
-
-// StepUpWindow sets how recent the authenticator code (or recovery code) must
-// be for [Factors.DisableHandler] and [Factors.RecoveryCodesHandler]; zero
-// selects [DefaultStepUpWindow]. Core's freshness check also accepts a recent
-// password, which is not enough to weaken two-factor, so these handlers look
-// at the factors of the session themselves. The guard's own window is not
-// readable, so when you change it with FreshFor, set the same value here.
-//
-// Example:
-//
-//	factors.StepUpWindow(5 * time.Minute)
-func (factors *Builder) StepUpWindow(window time.Duration) *Builder {
-	factors.window = window
-
-	return factors
-}
-
-// Verified sets the check that tells whether a user's email is verified.
-// [Factors.SetupHandler] and [Factors.EnableHandler] then answer 403 (the
-// problem of account.ErrEmailUnverified) to an unverified user, so whoever
-// registered an address first cannot enroll an authenticator before its owner
-// proves the address. Without it the handlers admit everyone, which is only
-// right when the application enforces the rule itself; the facade always sets
-// it with the built-in users.
-//
-// Example:
-//
-//	factors.Verified(directory.Verified)
-func (factors *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
-	factors.verified = check
-
-	return factors
-}
-
-// OnEnable sets a function that [Factors.EnableHandler] runs in the same
-// transaction as the activation, after ending the user's other logins, for what
-// must not outlive a new second factor (the facade revokes the user's device
-// tokens). If it fails the transaction rolls back: two-factor stays off and no
-// recovery code is shown.
-//
-// Example:
-//
-//	factors.OnEnable(issuer.RevokeDevices)
-func (factors *Builder) OnEnable(hook func(ctx context.Context, subject string) error) *Builder {
-	factors.enabled = hook
-
-	return factors
-}
-
-// Methods registers second-factor credentials from other modules (a passkey
-// package, say) whose recent proof also lets [Factors.DisableHandler] and
-// [Factors.RecoveryCodesHandler] proceed, and which the 403 step-up answer
-// offers when the user has them enrolled. Do not pass a password credential:
-// a password is the one proof these handlers exist to look beyond.
-//
-// Example:
-//
-//	factors.Methods(passkeys.Credential())
-func (factors *Builder) Methods(credentials ...auth.Credential) *Builder {
-	factors.extra = append(factors.extra, credentials...)
-
-	return factors
-}
 
 // Enrollment is what setup returns: the secret for manual entry and the
 // otpauth:// URI for a QR code. Both contain the secret; show them only to the
@@ -294,23 +142,8 @@ func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache
 	for _, apply := range configure {
 		apply(&settings)
 	}
-	if err := storage.ValidInstance(settings.instance); err != nil {
+	if err := settings.validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
-	}
-	if err := settings.scheme.Err(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
-	}
-	if settings.codes < 0 || settings.codes > maxRecoveryCodes {
-		return nil, fmt.Errorf("%w: recovery codes must be 1 to %d", ErrInvalidConfig, maxRecoveryCodes)
-	}
-	if settings.codes == 0 {
-		settings.codes = DefaultRecoveryCodes
-	}
-	if settings.window < 0 {
-		return nil, fmt.Errorf("%w: negative step-up window", ErrInvalidConfig)
-	}
-	if settings.window == 0 {
-		settings.window = DefaultStepUpWindow
 	}
 	factors := &Factors{
 		db:       db,
@@ -322,8 +155,8 @@ func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache
 		codes:    storage.Table(settings.instance, "recovery_codes"),
 		events:   settings.events,
 		scheme:   settings.scheme,
-		count:    settings.codes,
-		window:   settings.window,
+		count:    cmp.Or(settings.codes, DefaultRecoveryCodes),
+		window:   cmp.Or(settings.window, DefaultStepUpWindow),
 		verified: settings.verified,
 		enabled:  settings.enabled,
 		extra:    slices.Clone(settings.extra),
@@ -416,18 +249,6 @@ func (factors *Factors) row(ctx context.Context, subject string) (secretRow, boo
 	return row, true, nil
 }
 
-// unused counts the recovery codes of subject that are not spent.
-func (factors *Factors) unused(ctx context.Context, subject string) (int, error) {
-	counts, err := factors.db.Select[int](ctx, query.Table(factors.codes, func(statement *query.Builder) {
-		statement.SelectRaw("COUNT(*)").Where("subject", subject).Where("used_at", 0)
-	}))
-	if err != nil {
-		return 0, fmt.Errorf("twofactor: count recovery codes: %w", err)
-	}
-
-	return counts[0], nil
-}
-
 // Enrolled reports whether subject has a confirmed authenticator. It is the
 // Enrolled function of [Factors.Credential].
 //
@@ -488,6 +309,18 @@ func (factors *Factors) Enroll(ctx context.Context, subject, label string) (Enro
 	if err != nil {
 		return Enrollment{}, err
 	}
+	if err := factors.storePending(ctx, subject, sealed); err != nil {
+		return Enrollment{}, err
+	}
+
+	return Enrollment{Secret: totp.EncodeSecret(secret), URI: uri}, nil
+}
+
+// storePending stores sealed as the pending secret of subject, replacing an
+// earlier pending one. A user with a confirmed authenticator gets
+// [ErrAlreadyEnabled]. The update goes first because a pending row usually
+// exists after a first setup.
+func (factors *Factors) storePending(ctx context.Context, subject, sealed string) error {
 	replace := func() (int64, error) {
 		return factors.db.Exec(ctx, query.Table(factors.secrets, func(statement *query.Builder) {
 			statement.Where("subject", subject).Where("confirmed_at", 0).Update(map[string]any{"secret": sealed, "last_step": 0})
@@ -507,13 +340,13 @@ func (factors *Factors) Enroll(ctx context.Context, subject, label string) (Enro
 		}
 	}
 	if err != nil {
-		return Enrollment{}, fmt.Errorf("twofactor: store secret: %w", err)
+		return fmt.Errorf("twofactor: store secret: %w", err)
 	}
 	if affected == 0 {
-		return Enrollment{}, ErrAlreadyEnabled
+		return ErrAlreadyEnabled
 	}
 
-	return Enrollment{Secret: totp.EncodeSecret(secret), URI: uri}, nil
+	return nil
 }
 
 // seal encrypts a secret for storage.
@@ -623,38 +456,13 @@ func (factors *Factors) Verify(ctx context.Context, subject, code string) (auth.
 //	fmt.Println(codes)
 func (factors *Factors) Activate(ctx context.Context, subject, code string) ([]string, error) {
 	key := cache.NewKey[int64]("access:" + factors.instance + ":twofactor:activate:" + storage.Hash(subject))
-	wait, err := throttle.Reserve(ctx, factors.store, key, activateFailures, activateWindow)
-	if err != nil {
+	if err := throttle.Attempt(ctx, factors.store, key, activateFailures, activateWindow, ErrThrottled); err != nil {
 		return nil, err
 	}
-	if wait > 0 {
-		return nil, throttle.Reject(ErrThrottled, wait)
-	}
 	var codes []string
-	err = factors.db.WithTransaction(ctx, func(ctx context.Context) error {
-		row, ok, err := factors.row(ctx, subject)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return ErrNotEnrolling
-		}
-		if row.ConfirmedAt != 0 {
-			return ErrAlreadyEnabled
-		}
-		if err := factors.check(ctx, subject, row, code); err != nil {
-			return err
-		}
-		affected, err := factors.db.Exec(ctx, query.Table(factors.secrets, func(statement *query.Builder) {
-			statement.Where("subject", subject).Where("confirmed_at", 0).Update(map[string]any{"confirmed_at": time.Now().Unix()})
-		}))
-		if err != nil {
-			return fmt.Errorf("twofactor: confirm: %w", err)
-		}
-		if affected == 0 {
-			return ErrAlreadyEnabled
-		}
-		codes, err = factors.replaceCodes(ctx, subject)
+	err := factors.db.WithTransaction(ctx, func(ctx context.Context) error {
+		var err error
+		codes, err = factors.confirm(ctx, subject, code)
 
 		return err
 	})
@@ -663,106 +471,41 @@ func (factors *Factors) Activate(ctx context.Context, subject, code string) ([]s
 	}
 	// Counters expire on their own; a failed cleanup only keeps a stale count.
 	_ = factors.store.Delete(ctx, key)
-	_ = factors.db.AfterCommit(ctx, func(ctx context.Context) error {
+	factors.afterCommit(ctx, func(ctx context.Context) {
 		factors.events.Emit(ctx, Enabled, UserEvent{Subject: subject})
 		factors.events.Emit(ctx, auth.CredentialEnrolled, auth.CredentialEnrolledEvent{Subject: subject, Method: auth.MethodOTP})
-
-		return nil
 	})
 
 	return codes, nil
 }
 
-// replaceCodes deletes the recovery codes of subject and inserts a new set, in
-// the caller's transaction, and returns the codes formatted for display.
-func (factors *Factors) replaceCodes(ctx context.Context, subject string) ([]string, error) {
-	_, err := factors.db.Exec(ctx, query.Table(factors.codes, func(statement *query.Builder) {
-		statement.Where("subject", subject).Delete()
-	}))
-	if err != nil {
-		return nil, fmt.Errorf("twofactor: clear recovery codes: %w", err)
-	}
-	display := make([]string, factors.count)
-	rows := make([]map[string]any, factors.count)
-	for slot := range factors.count {
-		var raw [10]byte
-		if _, err := rand.Read(raw[:]); err != nil {
-			return nil, fmt.Errorf("twofactor: generate recovery code: %w", err)
-		}
-		plain := recoveryEncoding.EncodeToString(raw[:])
-		display[slot] = plain[0:4] + "-" + plain[4:8] + "-" + plain[8:12] + "-" + plain[12:16]
-		rows[slot] = map[string]any{"subject": subject, "slot": slot, "code_hash": storage.Hash(plain), "used_at": 0}
-	}
-	if _, err := factors.db.Exec(ctx, query.Table(factors.codes, func(statement *query.Builder) {
-		statement.InsertRows(rows...)
-	})); err != nil {
-		return nil, fmt.Errorf("twofactor: store recovery codes: %w", err)
-	}
-
-	return display, nil
-}
-
-// Recover spends a recovery code and returns the factor to record (method
-// [MethodRecovery], kind possession). The case, dashes and spaces of the code
-// do not matter. Every failure is [ErrInvalidCode]. Spending is one conditional
-// update, so a code works once even under concurrency. It publishes
-// [RecoveryUsed].
-//
-// Example:
-//
-//	factor, err := factors.Recover(ctx, subject, "ABCD-EFGH-IJKL-MNOP")
-//	if errors.Is(err, twofactor.ErrInvalidCode) {
-//		// wrong or spent code
-//	}
-//	_ = factor
-func (factors *Factors) Recover(ctx context.Context, subject, code string) (auth.Factor, error) {
-	normalized := strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(code))
-	affected, err := factors.db.Exec(ctx, query.Table(factors.codes, func(statement *query.Builder) {
-		statement.Where("subject", subject).Where("code_hash", storage.Hash(normalized)).Where("used_at", 0).
-			Update(map[string]any{"used_at": time.Now().Unix()})
-	}))
-	if err != nil {
-		return auth.Factor{}, fmt.Errorf("twofactor: spend recovery code: %w", err)
-	}
-	if affected == 0 {
-		return auth.Factor{}, ErrInvalidCode
-	}
-	factors.events.Emit(ctx, RecoveryUsed, UserEvent{Subject: subject})
-
-	return auth.Factor{Method: MethodRecovery, Kind: auth.KindPossession}, nil
-}
-
-// Regenerate replaces the user's recovery codes and returns the new ones,
-// formatted; the old ones stop working at once. A user without an enabled
-// authenticator gets [ErrNotEnabled]. It publishes [Regenerated].
-//
-// Example:
-//
-//	codes, err := factors.Regenerate(ctx, subject)
-func (factors *Factors) Regenerate(ctx context.Context, subject string) ([]string, error) {
-	var codes []string
-	err := factors.db.WithTransaction(ctx, func(ctx context.Context) error {
-		enabled, err := factors.Enrolled(ctx, subject)
-		if err != nil {
-			return err
-		}
-		if !enabled {
-			return ErrNotEnabled
-		}
-		codes, err = factors.replaceCodes(ctx, subject)
-
-		return err
-	})
+// confirm checks the first code of the pending enrollment of subject, marks it
+// confirmed and creates the recovery codes, in the caller's transaction.
+func (factors *Factors) confirm(ctx context.Context, subject, code string) ([]string, error) {
+	row, ok, err := factors.row(ctx, subject)
 	if err != nil {
 		return nil, err
 	}
-	_ = factors.db.AfterCommit(ctx, func(ctx context.Context) error {
-		factors.events.Emit(ctx, Regenerated, UserEvent{Subject: subject})
+	if !ok {
+		return nil, ErrNotEnrolling
+	}
+	if row.ConfirmedAt != 0 {
+		return nil, ErrAlreadyEnabled
+	}
+	if err := factors.check(ctx, subject, row, code); err != nil {
+		return nil, err
+	}
+	affected, err := factors.db.Exec(ctx, query.Table(factors.secrets, func(statement *query.Builder) {
+		statement.Where("subject", subject).Where("confirmed_at", 0).Update(map[string]any{"confirmed_at": time.Now().Unix()})
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("twofactor: confirm: %w", err)
+	}
+	if affected == 0 {
+		return nil, ErrAlreadyEnabled
+	}
 
-		return nil
-	})
-
-	return codes, nil
+	return factors.replaceCodes(ctx, subject)
 }
 
 // Remove deletes the user's authenticator, pending enrollment and recovery
@@ -786,75 +529,21 @@ func (factors *Factors) Remove(ctx context.Context, subject string) error {
 		return err
 	}
 	if enabled {
-		_ = factors.db.AfterCommit(ctx, func(ctx context.Context) error {
+		factors.afterCommit(ctx, func(ctx context.Context) {
 			factors.events.Emit(ctx, Disabled, UserEvent{Subject: subject})
-
-			return nil
 		})
 	}
 
 	return nil
 }
 
-// codeBody is the input of the code credentials.
-type codeBody struct {
-	Code string `json:"code"`
-}
+// afterCommit runs publish once the surrounding transaction, if any, has
+// committed.
+func (factors *Factors) afterCommit(ctx context.Context, publish func(context.Context)) {
+	// A failing hook only loses a notification, never the committed change.
+	_ = factors.db.AfterCommit(ctx, func(ctx context.Context) error {
+		publish(ctx)
 
-// credential builds the credential of one method around verify.
-func credential(method auth.Method, enrolled func(context.Context, string) (bool, error), verify func(context.Context, string, string) (auth.Factor, error)) auth.Credential {
-	return auth.Credential{
-		Method:   method,
-		Kind:     auth.KindPossession,
-		Enrolled: enrolled,
-		Verify: func(r *http.Request, subject string, input jsontext.Value) (auth.Factor, error) {
-			var body codeBody
-			if err := json.Unmarshal(input, &body); err != nil {
-				return auth.Factor{}, fmt.Errorf("twofactor: %w", auth.ErrInvalidCredential)
-			}
-			factor, err := verify(r.Context(), subject, body.Code)
-			if errors.Is(err, ErrInvalidCode) {
-				return auth.Factor{}, fmt.Errorf("twofactor: %w", auth.ErrInvalidCredential)
-			}
-
-			return factor, err
-		},
-	}
-}
-
-// Credential returns the [auth.Credential] of the authenticator: method "otp",
-// kind possession, request body {"method": "otp", "code": "123456"}. Register it
-// with the guard's SecondFactor registry to finish a parked login
-// (POST /login/challenge) and with its StepUp registry to re-prove a logged-in
-// user (POST /confirm). A wrong code wraps [auth.ErrInvalidCredential], which
-// core counts as an attempt.
-//
-// Example:
-//
-//	policy.SecondFactor(factors.Credential(), factors.RecoveryCredential())
-//	policy.StepUp(passwords.Credential(), factors.Credential())
-func (factors *Factors) Credential() auth.Credential {
-	return credential(auth.MethodOTP, factors.Enrolled, factors.Verify)
-}
-
-// RecoveryCredential returns the [auth.Credential] of the recovery codes:
-// method [MethodRecovery], kind possession, request body
-// {"method": "recovery", "code": "abcd-efgh-ijkl-mnop"}. It is enrolled while the
-// user has an authenticator and an unspent code. Register it with the SecondFactor
-// registry after [Factors.Credential]; it is not a step-up method, so a spent
-// recovery code never counts as the user's fresh proof.
-//
-// Example:
-//
-//	policy.SecondFactor(factors.Credential(), factors.RecoveryCredential())
-func (factors *Factors) RecoveryCredential() auth.Credential {
-	return credential(MethodRecovery, func(ctx context.Context, subject string) (bool, error) {
-		enabled, err := factors.Enrolled(ctx, subject)
-		if err != nil || !enabled {
-			return false, err
-		}
-		remaining, err := factors.unused(ctx, subject)
-
-		return remaining > 0, err
-	}, factors.Recover)
+		return nil
+	})
 }
