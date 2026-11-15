@@ -139,24 +139,20 @@ type SecondFactorLockedEvent struct {
 // hours after its first failure; a successful challenge or [Guard.Unlock] clears
 // it. When several requests race to lock, one publishes.
 //
-// The application must subscribe to this event itself: ark/access does not do it
-// yet. Treat every event as a failed login for the throttle that guards your
-// login route. Anyone who knows a subject can lock it, and a locked user cannot
-// finish a pending login, but without the throttle the same attacker can start a
-// fresh password login, which only needs the first factor, after every lockout.
-// The login throttle belongs to the application, so the guard cannot do this for
-// you. A lockout also means someone holds the password: reset it, then call
-// [Guard.Unlock]. Emit logs listener errors instead of returning them, so a
-// listener cannot change the outcome of the request.
+// Anyone who knows a subject can lock it, and a locked user cannot finish a
+// pending login, but a fresh password login only needs the first factor, so an
+// attacker can start one after every lockout. The login route's throttle must
+// therefore count a lockout as a failed login. Do not feed it from this event:
+// Emit logs listener errors instead of returning them, so a failing listener
+// would fail open. Ask [Guard.LockedOut] in the login route instead; it reports
+// the lockout the guard keeps, and its error can fail the login closed. Use the
+// event to notify. A lockout also means someone holds the password: reset it,
+// then call [Guard.Unlock].
 //
 // Example:
 //
-//	// failLogin is the application's own: it adds one failure for subject to the
-//	// throttle of the login route, for as long as the lockout lasts.
-//	failLogin := func(ctx context.Context, subject string, wait time.Duration) error { return nil }
-//
 //	unsubscribe, err := bus.Listen(auth.SecondFactorLocked, func(ctx context.Context, locked auth.SecondFactorLockedEvent) error {
-//		return failLogin(ctx, locked.Subject, time.Until(locked.Until))
+//		return notify(ctx, locked.Subject, locked.Until)
 //	})
 //	if err != nil {
 //		return err

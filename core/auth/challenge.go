@@ -356,7 +356,7 @@ func (guard *Guard) Pending(r *http.Request) (PendingLogin, error) {
 		return PendingLogin{}, err
 	}
 
-	locked, err := guard.locked(r.Context(), waiting.Subject)
+	locked, err := guard.LockedOut(r.Context(), waiting.Subject)
 
 	if err != nil {
 		return PendingLogin{}, err
@@ -461,7 +461,7 @@ func (guard *Guard) check(r *http.Request, subject string, credentials []Credent
 
 	ctx := r.Context()
 
-	locked, err := guard.locked(ctx, subject)
+	locked, err := guard.LockedOut(ctx, subject)
 
 	if err != nil {
 		return Factor{}, 0, err
@@ -667,10 +667,32 @@ func (guard *Guard) ConfirmHandler() router.Handler {
 	}
 }
 
-// locked reports whether subject is inside an escalating lockout started by
-// [Guard.reject]. The lockout entry expires on its own, so an absent entry means
-// the user may try again.
-func (guard *Guard) locked(ctx context.Context, subject string) (bool, error) {
+// LockedOut reports whether subject is inside a second-factor lockout, the
+// escalating block that [Guard.ChallengeHandler] and [Guard.ConfirmHandler]
+// start when a user uses up their [GuardBuilder.MaxAttempts] (see
+// [SecondFactorLocked]). While it lasts every challenge or confirmation of the
+// subject fails without verifying anything, in any session. It only reads the
+// lockout entry, which expires on its own: it reserves no attempt, counts no
+// failure and never starts or extends a lockout, so it is safe to call on every
+// request. A cache failure is returned with false; decide for yourself whether to
+// fail closed.
+//
+// Use it for control flow, such as a login route that must not refund a login
+// throttle while the user is locked, because a correct password then only parks
+// a pending login that cannot finish. Do not use [SecondFactorLocked] for that:
+// [event.Bus.Emit] logs listener errors instead of returning them, so a failing
+// listener would fail open.
+//
+// Example:
+//
+//	locked, err := guard.LockedOut(ctx, subject)
+//	if err != nil {
+//		return err
+//	}
+//	if locked {
+//		return errors.New("second factor locked")
+//	}
+func (guard *Guard) LockedOut(ctx context.Context, subject string) (bool, error) {
 	_, err := guard.store.Get(ctx, guard.locks.Key(subject))
 
 	if errors.Is(err, cache.ErrNotFound) {
