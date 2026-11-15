@@ -1,6 +1,10 @@
 package auth
 
-import "arkoren.dev/core/event"
+import (
+	"time"
+
+	"arkoren.dev/core/event"
+)
 
 // UserForgottenEvent reports that every forget hook of a user completed. It
 // carries only the subject, never personal data.
@@ -105,3 +109,57 @@ type CredentialEnrolledEvent struct {
 //		Method:  auth.MethodOTP,
 //	})
 var CredentialEnrolled = event.NewTopic[CredentialEnrolledEvent]("auth.credential.enrolled")
+
+// SecondFactorLockedEvent reports that a user used up their second-factor
+// attempts and is locked out. It carries the subject and the end of the
+// lockout, never a code, credential or request detail.
+//
+// Example:
+//
+//	unsubscribe, err := events.Listen(auth.SecondFactorLocked, func(ctx context.Context, locked auth.SecondFactorLockedEvent) error {
+//		return notify(ctx, locked.Subject, locked.Until)
+//	})
+type SecondFactorLockedEvent struct {
+	// Subject is the user whose second factor and step-up are locked.
+	Subject string
+
+	// Until is when the lockout ends, in UTC. Until then every challenge or
+	// confirmation of the subject fails without verifying anything, in any
+	// session.
+	Until time.Time
+}
+
+// SecondFactorLocked is published by [Guard.ChallengeHandler] and
+// [Guard.ConfirmHandler] with [event.Bus.Emit], once per lockout, when a wrong
+// credential uses up the user's [GuardBuilder.MaxAttempts] attempts in a window
+// or takes their 24 hour failure budget to a multiple of it, and only when the
+// bus was set with [GuardBuilder.Events]. Each lockout lasts the challenge window
+// doubled once per MaxAttempts failures the budget already holds before this one,
+// capped at 24 hours (at the window when that is longer). The budget expires 24
+// hours after its first failure; a successful challenge or [Guard.Unlock] clears
+// it. When several requests race to lock, one publishes.
+//
+// The application must subscribe to this event itself: ark/access does not do it
+// yet. Treat every event as a failed login for the throttle that guards your
+// login route. Anyone who knows a subject can lock it, and a locked user cannot
+// finish a pending login, but without the throttle the same attacker can start a
+// fresh password login, which only needs the first factor, after every lockout.
+// The login throttle belongs to the application, so the guard cannot do this for
+// you. A lockout also means someone holds the password: reset it, then call
+// [Guard.Unlock]. Emit logs listener errors instead of returning them, so a
+// listener cannot change the outcome of the request.
+//
+// Example:
+//
+//	// failLogin is the application's own: it adds one failure for subject to the
+//	// throttle of the login route, for as long as the lockout lasts.
+//	failLogin := func(ctx context.Context, subject string, wait time.Duration) error { return nil }
+//
+//	unsubscribe, err := bus.Listen(auth.SecondFactorLocked, func(ctx context.Context, locked auth.SecondFactorLockedEvent) error {
+//		return failLogin(ctx, locked.Subject, time.Until(locked.Until))
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	defer unsubscribe()
+var SecondFactorLocked = event.NewTopic[SecondFactorLockedEvent]("auth.second-factor.locked")

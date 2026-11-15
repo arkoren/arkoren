@@ -155,6 +155,9 @@ type guardSettings struct {
 	// MaxLogins is the number of login records kept per user.
 	MaxLogins int
 
+	// Events receives [SecondFactorLocked]; nil publishes nothing.
+	Events *event.Bus
+
 	// SessionLifetime is the lifetime of the login-record list.
 	SessionLifetime time.Duration
 }
@@ -219,9 +222,21 @@ func (policy *GuardBuilder) ChallengeTTL(ttl time.Duration) *GuardBuilder {
 // [Guard.ChallengeHandler] or [Guard.ConfirmHandler] before the credential is
 // verified, one user gets within a [GuardBuilder.ChallengeTTL] window, across
 // all methods and sessions, before a pending login is discarded and the user is
-// locked out of the second factor and of step-up until the window ends. A check
-// that fails with an infrastructure error is refunded. The default is five. [NewGuard] rejects a value of zero or less. The setting
-// replaces the previous value on this draft.
+// locked out of the second factor and of step-up. The first lockout lasts the
+// window. Every wrong second-factor code also counts against a 24 hour budget per user
+// that lasts across windows (a wrong step-up code counts only when it uses up the
+// window's attempts, so occasional typos never add up): each time it grows by MaxAttempts, or a window's attempts
+// are used up, a lockout starts that is twice as long as the previous one (window
+// x 2^n, capped at 24 hours, or at the window when that is longer). So staying
+// just under the limit in every window does not avoid the lockout. The budget
+// expires 24 hours after its first failure (not after the last), and a
+// successful challenge or [Guard.Unlock] clears it. Lockouts chain: anyone who
+// knows the password can keep a user locked out of the second factor and of
+// step-up for up to 24 hours at a time, so treat a lockout as a sign that the
+// password is compromised and reset it. [SecondFactorLocked] reports each
+// lockout (see [GuardBuilder.Events]). A check that fails with an infrastructure
+// error is refunded. The default is five. [NewGuard] rejects a value of zero or less.
+// The setting replaces the previous value on this draft.
 //
 // Example:
 //
@@ -340,6 +355,21 @@ func (policy *GuardBuilder) ClientIP(find func(*http.Request) string) *GuardBuil
 //	})
 func (policy *GuardBuilder) MaxLogins(limit int) *GuardBuilder {
 	policy.settings.MaxLogins = limit
+
+	return policy
+}
+
+// Events sets the bus that receives [SecondFactorLocked] when a user is locked
+// out of the second factor. Nil, the default, publishes nothing. The setting
+// replaces the previous value on this draft.
+//
+// Example:
+//
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
+//		policy.Events(app.Events())
+//	})
+func (policy *GuardBuilder) Events(bus *event.Bus) *GuardBuilder {
+	policy.settings.Events = bus
 
 	return policy
 }
