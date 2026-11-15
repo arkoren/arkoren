@@ -101,7 +101,10 @@ middleware blocks. Register only that callback outside `csrf.Middleware`, or
 use `csrf.Builder.Protection` with an `http.CrossOriginProtection` configured
 with `AddInsecureBypassPattern("POST /oauth/callback")`. Its encrypted login
 state cookie protects that callback; keep CSRF protection on logout and other
-cookie-authenticated state-changing routes.
+cookie-authenticated state-changing routes. The POST callback only verifies the identity: it keeps it in a
+two-minute sealed `SameSite=Lax` cookie and answers `303` to the same path, where the GET carries the session
+cookie and finishes the login, so connecting Apple to a logged-in user links the identity instead of creating
+a second account. Route both methods to the callback (`r.Methods([]string{"GET", "POST"}, ...)`).
 
 ## Freshness
 
@@ -228,7 +231,7 @@ as fixed redaction markers; arbitrary caller-owned dependencies are not traverse
 ## Login cookie
 
 Each login sets one cookie `__Host-<Name>.<12 chars of base64url(sha256(state))>`: encrypted with the crypto
-cipher, HttpOnly, Secure, Path=/, Max-Age=600, SameSite=Lax (None for `form_post` providers). A browser keeps at
+cipher, HttpOnly, Secure, Path=/, Max-Age=600, SameSite=Lax (None for `form_post` providers, which also set a two-minute Lax hand-off cookie). A browser keeps at
 most five; the callback accepts GET or POST, deletes the cookie, and rejects missing, tampered, expired or
 state-mismatched cookies with `ErrInvalidCallback`. The client deletes the browser's
 cookie but keeps no server-side used-state registry; one-time authorization codes

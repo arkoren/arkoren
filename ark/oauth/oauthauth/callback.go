@@ -47,6 +47,22 @@ import (
 // URL it ends the pending login with guard.Logout and fails with
 // [ErrNoChallengeURL]. It never falls back to a login without the second factor.
 //
+// A form_post provider such as Apple takes two requests (route both methods to
+// the same handler). The provider's cross-site POST carries neither the session
+// cookie (SameSite=Lax is withheld from cross-site POSTs) nor, therefore, the
+// logged-in user of a connect flow, so the POST only validates the login cookie,
+// exchanges the code and verifies the identity. It then keeps the verified
+// identity in a sealed, HttpOnly, SameSite=Lax hand-off cookie that lives two
+// minutes, and answers 303 See Other to the callback path with the state. The
+// browser follows with a top-level GET, which carries the session cookie; that
+// request deletes the hand-off cookie, runs resolve and guard.Begin, and
+// continues as described above, so a logged-in user who connects Apple is linked
+// instead of getting a second account. The hand-off cookie is named after the
+// state, bound to its name, and only that GET reads it; a form_post client
+// never completes a login from a GET that carries a code. Like the login cookie
+// it is deleted, not tracked: a copy stays valid until it expires. resolve runs
+// once, in the GET, and sees the claims after a JSON round trip.
+//
 // With [ClientBuilder.Events] a rejected callback publishes [LoginFailed].
 //
 // A missing, tampered or expired login cookie, a failed ID-token check, or a
@@ -102,22 +118,48 @@ func (client *Client) CallbackHandler(guard *auth.Guard, resolve auth.Resolver) 
 			return auth.ErrUnauthenticated
 		}
 
-		saved, err := client.take(writer, httpRequest, param(httpRequest, "state"))
+		state := param(httpRequest, "state")
 
-		if err != nil {
-			return client.loginFailed(httpRequest, invalidCallback(err))
-		}
+		var saved loginState
 
-		code := param(httpRequest, "code")
+		var external auth.External
 
-		if code == "" || param(httpRequest, "error") != "" {
-			return client.loginFailed(httpRequest, invalidCallback(nil))
-		}
+		if client.provider.formPost && httpRequest.Method == http.MethodGet {
+			// The same-site request that follows the POST: the identity was
+			// verified there, and this request carries the session cookie.
+			saved, err = client.takeHandoff(writer, httpRequest, state)
 
-		external, err := client.callbackIdentity(httpRequest, ready, code, saved)
+			if err != nil {
+				return client.loginFailed(httpRequest, invalidCallback(err))
+			}
 
-		if err != nil {
-			return client.loginFailed(httpRequest, err)
+			external = *saved.Identity
+		} else {
+			saved, err = client.take(writer, httpRequest, state)
+
+			if err != nil {
+				return client.loginFailed(httpRequest, invalidCallback(err))
+			}
+
+			code := param(httpRequest, "code")
+
+			if code == "" || param(httpRequest, "error") != "" {
+				return client.loginFailed(httpRequest, invalidCallback(nil))
+			}
+
+			external, err = client.callbackIdentity(httpRequest, ready, code, saved)
+
+			if err != nil {
+				return client.loginFailed(httpRequest, err)
+			}
+
+			if client.provider.formPost {
+				if err := client.handOff(writer, saved, external); err != nil {
+					return client.loginFailed(httpRequest, err)
+				}
+
+				return nil
+			}
 		}
 
 		subject, err := resolve(httpRequest.Context(), external)

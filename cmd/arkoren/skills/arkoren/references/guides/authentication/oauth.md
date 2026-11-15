@@ -461,14 +461,20 @@ PKCE off.
 Apple sends a cross-site POST callback. Mount only that callback outside CSRF
 protection, while retaining session middleware; keep CSRF on logout and all
 other state-changing browser routes. With `r` your session-enabled router,
-the callback is:
+the callback is (mount the same handler for GET too, which finishes the login):
 
 ```go
 r.Post("/oauth/apple/callback", client.CallbackHandler(guard, mapIdentity))
+r.Get("/oauth/apple/callback", client.CallbackHandler(guard, mapIdentity))
 ```
 
 Use an Apple-configured `client`, not the Google baseline. Its encrypted state
 cookie protects this callback and uses `SameSite=None`; HTTPS is required.
+The browser does not send your `SameSite=Lax` session cookie with Apple's cross-site
+POST, so the POST only verifies the identity, keeps it in a two-minute sealed
+cookie and answers `303` to the same path. The GET that follows carries the
+session and runs your mapper, so connecting Apple to a logged-in user links the
+identity to that user.
 Apple sends the name only on first authorization in an unsigned form field;
 it is added as `Claims["name"]` on that login, so store it then, as optional
 display text and not an authorization claim. Email can be a private relay
