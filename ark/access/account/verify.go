@@ -54,13 +54,29 @@ type Message struct {
 	ExpiresAt time.Time
 }
 
-// Link returns base with the token as its "token" query parameter, escaped.
+// Link returns base with the token in the URL fragment, as "#token=...",
+// escaped, so the token is not sent to the server, its logs or proxies. The
+// verify page reads it from location.hash and posts it; [Message.QueryLink] is
+// the form for a server-rendered page. base must not already carry a fragment.
 //
 // Example:
 //
 //	message := account.Message{Token: "abc"}
-//	fmt.Println(message.Link("https://app.example.com/verify")) // https://app.example.com/verify?token=abc
+//	fmt.Println(message.Link("https://app.example.com/verify")) // https://app.example.com/verify#token=abc
 func (message Message) Link(base string) string {
+	return base + "#" + url.Values{"token": {message.Token}}.Encode()
+}
+
+// QueryLink returns base with the token as its "token" query parameter,
+// escaped, for a page that a server renders. The token then reaches the server,
+// its logs and proxies: prefer [Message.Link]. base must not already carry a
+// query.
+//
+// Example:
+//
+//	message := account.Message{Token: "abc"}
+//	fmt.Println(message.QueryLink("https://app.example.com/verify")) // https://app.example.com/verify?token=abc
+func (message Message) QueryLink(base string) string {
 	return base + "?" + url.Values{"token": {message.Token}}.Encode()
 }
 

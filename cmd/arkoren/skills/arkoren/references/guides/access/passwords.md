@@ -152,7 +152,9 @@ A user keeps up to three live tokens, so asking again does not kill the link
 already in their inbox, and the fourth request drops the oldest. To change the
 lifetime, pass `passwords.ResetTTL(d)` in the `iam.Password` callback.
 
-Your reset page posts the token and the new password to `POST /password/reset`:
+The link carries the token in the fragment (`#token=...`), so your reset page
+reads it from `location.hash` and posts it with the new password to
+`POST /password/reset`:
 
 ```json
 { "token": "...", "password": "a new longer password" }
@@ -171,7 +173,9 @@ to the account; see [Credential Changes](accounts.md#unverified-accounts).
 
 ## Verify Emails
 
-`POST /email/verify` takes `{"token": "..."}` from the link and answers `204`. The
+`POST /email/verify` takes `{"token": "..."}` from the link, which carries it in
+the fragment (`#token=...`) for your page to read from `location.hash`, and
+answers `204`. The
 token lasts 24 hours, and a new link replaces an earlier one. The flow is: the
 user logs in, then your verify page posts the token. It needs a browser session
 of the user the link belongs to, so a page that receives the link while logged out

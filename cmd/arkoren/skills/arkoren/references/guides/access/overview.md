@@ -142,8 +142,26 @@ iam.Deliver(func(ctx context.Context, message access.Message) error {
 `KindRegistration` is sent to the owner of an address when someone tries to
 register with it. Its token is a reset token, so link it to the same page and
 word the email as "someone tried to register with this address; if it was not
-you, set a new password". `message.Link(base)` adds the token as the `token` query parameter. The token is
-a credential until it is used or expires, so never log it. `Identifier` is the
+you, set a new password". `message.Link(base)` puts the token in the URL fragment, as
+`https://app.example.com/reset-password#token=...`. A browser never sends the
+fragment to a server, so the token stays out of access logs, proxies and the
+`Referer` header of the page the link opens. Your page reads it from
+`location.hash`, removes it from the address bar and posts it:
+
+```js
+const token = new URLSearchParams(location.hash.slice(1)).get("token");
+history.replaceState(null, "", location.pathname + location.search);
+await fetch("/password/reset", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ token, password }),
+});
+```
+
+If a server renders the page and so needs the token in the request, use
+`message.QueryLink(base)` instead, which adds it as the `token` query parameter.
+The token then reaches your server, its logs and every proxy in front of it, so
+set `Referrer-Policy: no-referrer` on that page. The token is a credential until it is used or expires, so never log it. `Identifier` is the
 address stored with the user, never the text of a request.
 
 Forgot-password and resend requests answer before they send. The facade delivers
