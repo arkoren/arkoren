@@ -145,7 +145,9 @@ the limit. One count covers every method. At most five attempts are allowed
 within the challenge window (`policy.MaxAttempts(n)`, window
 `policy.ChallengeTTL(d)`); after that the pending login is discarded and that
 user cannot pass the second factor, in any session, for one window. Lockouts
-escalate: every wrong code also counts against a 24 hour budget per user, and
+escalate: every wrong second-factor code also counts against a 24 hour budget per user
+(a wrong step-up code counts only when it uses up a window's attempts, so
+occasional typos at `ConfirmHandler` never add up), and
 each time the budget grows by `MaxAttempts` (or a window's attempts run out) a
 lockout starts that is twice as long as the last (window x 2^n, capped at 24
 hours, or at the window when that is longer). Staying just under the limit in

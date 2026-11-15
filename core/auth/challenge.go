@@ -415,12 +415,13 @@ func (guard *Guard) PendingHandler() router.Handler {
 // and at most [GuardBuilder.MaxAttempts] of them pass: a read followed by a later
 // increment would let every request that read the counter before the limit
 // through. A count over the limit, or a lockout in force (see [Guard.reject]),
-// returns errLockedOut and keeps the reservation.
+// returns errLockedOut and keeps the reservation. stepUp says the check belongs to
+// [Guard.ConfirmHandler]; it only changes how [Guard.reject] counts a wrong code.
 // A method the user is not enrolled in is [ErrInvalidCredential], counted like a
 // wrong code so the two cannot be told apart. An error wrapping
 // [ErrInvalidCredential] from Verify stays counted; any other error from Enrolled
 // or Verify refunds the attempt and is returned unchanged.
-func (guard *Guard) check(r *http.Request, subject string, credentials []Credential) (Factor, int64, error) {
+func (guard *Guard) check(r *http.Request, subject string, credentials []Credential, stepUp bool) (Factor, int64, error) {
 	// core/http/request imports this package, so the body is decoded here
 	// instead of with request.JSON, with its own size limit. Every decoding
 	// failure, including an oversized body, is a 400 here; the body is never
@@ -495,13 +496,13 @@ func (guard *Guard) check(r *http.Request, subject string, credentials []Credent
 	}
 
 	if !ok {
-		return Factor{}, failures, guard.reject(ctx, subject, failures, ErrInvalidCredential)
+		return Factor{}, failures, guard.reject(ctx, subject, failures, stepUp, ErrInvalidCredential)
 	}
 
 	factor, err := credential.Verify(r, subject, input)
 
 	if errors.Is(err, ErrInvalidCredential) {
-		return Factor{}, failures, guard.reject(ctx, subject, failures, err)
+		return Factor{}, failures, guard.reject(ctx, subject, failures, stepUp, err)
 	}
 
 	if err != nil {
@@ -561,7 +562,7 @@ func (guard *Guard) ChallengeHandler() router.Handler {
 			return err
 		}
 
-		factor, failures, err := guard.check(r, waiting.Subject, guard.settings.SecondFactors)
+		factor, failures, err := guard.check(r, waiting.Subject, guard.settings.SecondFactors, false)
 
 		if errors.Is(err, errLockedOut) {
 			if err := current.Delete(pendingField); err != nil {
@@ -643,7 +644,7 @@ func (guard *Guard) ConfirmHandler() router.Handler {
 			return err
 		}
 
-		factor, _, err := guard.check(r, identity.Subject(), guard.settings.StepUps)
+		factor, _, err := guard.check(r, identity.Subject(), guard.settings.StepUps, true)
 
 		if errors.Is(err, errLockedOut) {
 			return ErrInvalidCredential
@@ -692,12 +693,26 @@ func (guard *Guard) locked(ctx context.Context, subject string) (bool, error) {
 //
 // The lock is written with [cache.Cache.Add] so that, when several requests see
 // the condition at once, one creates it and publishes [SecondFactorLocked]; the
-// others find it in place and publish nothing. A cache failure while counting or
+// others find it in place and publish nothing. A wrong step-up code (stepUp) only
+// counts once it uses up the window's attempts; see the first lines of the body.
+// The writes ignore cancellation of ctx. A cache failure while counting or
 // locking is logged and swallowed: it must not turn a wrong code into a server
 // error, and the window counter has already refused further checks past the
 // limit.
-func (guard *Guard) reject(ctx context.Context, subject string, failures int64, cause error) error {
+func (guard *Guard) reject(ctx context.Context, subject string, failures int64, stepUp bool, cause error) error {
 	limit := int64(guard.settings.MaxAttempts)
+
+	// A wrong step-up code of a logged-in user is a typo far more often than a
+	// guess, so it escalates only once it has used up the window's attempts,
+	// where it is a lockout anyway. Wrong second-factor codes always count.
+	if stepUp && failures < limit {
+		return cause
+	}
+
+	// The counters and the lock are written even when the request is canceled
+	// (a client that hangs up after a wrong code must not skip the lockout), like
+	// the refund of an attempt.
+	ctx = context.WithoutCancel(ctx)
 
 	budget, _, err := guard.store.IncrementWithTTL(ctx, guard.budgets.Key(subject), 1, budgetTTL)
 
@@ -753,8 +768,9 @@ func (guard *Guard) reject(ctx context.Context, subject string, failures int64, 
 // start pending logins and spend the attempts, chaining lockouts of up to 24
 // hours each, which locks the real user out of the second factor and of step-up.
 // Treat a [SecondFactorLocked] event as a sign that the password is known to
-// someone else, and reset it when you unlock. It returns the first cache error;
-// a partial failure leaves the lockout in place, so call it again.
+// someone else, and reset it when you unlock. It returns the first cache error.
+// The lockout entry is deleted last, so a partial failure leaves the user locked
+// (never unlocked with the old escalation still counted); call it again.
 //
 // Example:
 //
@@ -762,15 +778,15 @@ func (guard *Guard) reject(ctx context.Context, subject string, failures int64, 
 //		return err
 //	}
 func (guard *Guard) Unlock(ctx context.Context, subject string) error {
-	if err := guard.store.Delete(ctx, guard.locks.Key(subject)); err != nil {
-		return err
-	}
-
 	if err := guard.store.Delete(ctx, guard.budgets.Key(subject)); err != nil {
 		return err
 	}
 
-	return guard.store.Delete(ctx, guard.attempts.Key(subject))
+	if err := guard.store.Delete(ctx, guard.attempts.Key(subject)); err != nil {
+		return err
+	}
+
+	return guard.store.Delete(ctx, guard.locks.Key(subject))
 }
 
 // refund gives one reserved attempt of subject back. It adds -1 with a TTL

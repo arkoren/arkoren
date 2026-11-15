@@ -223,8 +223,9 @@ func (policy *GuardBuilder) ChallengeTTL(ttl time.Duration) *GuardBuilder {
 // verified, one user gets within a [GuardBuilder.ChallengeTTL] window, across
 // all methods and sessions, before a pending login is discarded and the user is
 // locked out of the second factor and of step-up. The first lockout lasts the
-// window. Every wrong code also counts against a 24 hour budget per user that
-// lasts across windows: each time it grows by MaxAttempts, or a window's attempts
+// window. Every wrong second-factor code also counts against a 24 hour budget per user
+// that lasts across windows (a wrong step-up code counts only when it uses up the
+// window's attempts, so occasional typos never add up): each time it grows by MaxAttempts, or a window's attempts
 // are used up, a lockout starts that is twice as long as the previous one (window
 // x 2^n, capped at 24 hours, or at the window when that is longer). So staying
 // just under the limit in every window does not avoid the lockout. The budget

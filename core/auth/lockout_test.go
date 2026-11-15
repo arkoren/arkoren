@@ -316,3 +316,45 @@ func TestLockoutLevelExpires(t *testing.T) {
 		}
 	})
 }
+
+// TestStepUpTyposDoNotEscalate verifies five step-ups in a day, each with one
+// typo before the right code, cause no lockout: a wrong step-up code does not
+// count toward the budget unless it uses up the window.
+func TestStepUpTyposDoNotEscalate(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		bus := event.New()
+		published := 0
+
+		if _, err := bus.Listen(auth.SecondFactorLocked, func(context.Context, auth.SecondFactorLockedEvent) error {
+			published++
+
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		guard, _ := newGuard(t, withStepUp(secondFactor(true, nil)), func(policy *auth.GuardBuilder) {
+			policy.ChallengeTTL(lockoutWindow).MaxAttempts(2).Events(bus)
+		})
+		r := sessionRequest(newSession())
+		begin(t, guard, r, "7")
+
+		for range 5 {
+			if err := confirm(guard, r, badOTP); !errors.Is(err, auth.ErrInvalidCredential) {
+				t.Fatalf("typo = %v", err)
+			}
+
+			if err := confirm(guard, r, goodOTP); err != nil {
+				t.Fatalf("right code after a typo = %v", err)
+			}
+
+			time.Sleep(2 * lockoutWindow)
+		}
+
+		if published != 0 {
+			t.Fatalf("lockouts = %d, want none", published)
+		}
+	})
+}
