@@ -6,9 +6,20 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"time"
 
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
+)
+
+const (
+	// maxLockout caps one escalating second-factor lockout (see
+	// [GuardBuilder.MaxAttempts]), unless the challenge window is longer.
+	maxLockout = 24 * time.Hour
+
+	// levelTTL is how long the lockout level of a subject is remembered after the
+	// last lockout ends, so the escalation resets after a quiet day.
+	levelTTL = 24 * time.Hour
 )
 
 // Guard turns "this person proved X" into a logged-in browser session. Every
@@ -66,6 +77,14 @@ type Guard struct {
 	// counter lives in the shared store, not the session, so neither a new
 	// session nor a forked one resets it.
 	attempts cache.Namespace[int64]
+
+	// locks names the entry that holds when a subject's escalating lockout ends.
+	// Its lifetime is the lockout, so the entry vanishes when the lockout does.
+	locks cache.Namespace[time.Time]
+
+	// levels names how many lockouts a subject recently earned, kept for
+	// the lockout plus [levelTTL]. It sets how long the next lockout lasts.
+	levels cache.Namespace[int64]
 
 	// settings are the completed construction settings.
 	settings guardSettings
@@ -136,7 +155,9 @@ func NewGuard(provider *UserProvider, store *cache.Cache, configure ...GuardBuil
 
 	guard := &Guard{provider: provider, store: store, settings: settings, records: cache.NewNamespace[[]LoginRecord]("arkoren:auth:logins", func(space *cache.NamespaceBuilder) {
 		space.TTL(settings.SessionLifetime)
-	}), attempts: cache.NewNamespace[int64]("arkoren:auth:attempts")}
+	}), attempts: cache.NewNamespace[int64]("arkoren:auth:attempts"),
+		locks:  cache.NewNamespace[time.Time]("arkoren:auth:lockouts"),
+		levels: cache.NewNamespace[int64]("arkoren:auth:lockout-levels", func(space *cache.NamespaceBuilder) { space.TTL(levelTTL) })}
 
 	provider.OnForget(guard.RevokeAll)
 

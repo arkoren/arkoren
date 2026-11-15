@@ -1,6 +1,10 @@
 package auth
 
-import "arkoren.dev/core/event"
+import (
+	"time"
+
+	"arkoren.dev/core/event"
+)
 
 // UserForgottenEvent reports that every forget hook of a user completed. It
 // carries only the subject, never personal data.
@@ -105,3 +109,49 @@ type CredentialEnrolledEvent struct {
 //		Method:  auth.MethodOTP,
 //	})
 var CredentialEnrolled = event.NewTopic[CredentialEnrolledEvent]("auth.credential.enrolled")
+
+// SecondFactorLockedEvent reports that a user used up their second-factor
+// attempts and is locked out. It carries the subject and the end of the
+// lockout, never a code, credential or request detail.
+//
+// Example:
+//
+//	unsubscribe, err := events.Listen(auth.SecondFactorLocked, func(ctx context.Context, locked auth.SecondFactorLockedEvent) error {
+//		return notify(ctx, locked.Subject, locked.Until)
+//	})
+type SecondFactorLockedEvent struct {
+	// Subject is the user whose second factor and step-up are locked.
+	Subject string
+
+	// Until is when the lockout ends, in UTC. Until then every challenge or
+	// confirmation of the subject fails without verifying anything, in any
+	// session.
+	Until time.Time
+}
+
+// SecondFactorLocked is published by [Guard.ChallengeHandler] and
+// [Guard.ConfirmHandler] with [event.Bus.Emit] when a wrong credential uses the
+// last of the user's [GuardBuilder.MaxAttempts] attempts, once per lockout, when
+// the bus was set with [GuardBuilder.Events]. Each lockout lasts the challenge
+// window doubled once per lockout the user earned in the last 24 hours, capped at
+// 24 hours; a successful challenge resets that count.
+//
+// Treat every event as a failed login for the throttle that guards your login
+// route. Anyone who knows a subject can lock it, and a locked user cannot finish
+// a pending login, but without the throttle the same attacker can start a fresh
+// password login, which only needs the first factor, after every lockout. The
+// guard cannot do that for you because the login throttle belongs to the
+// application (or to ark/access); a listener that adds a failure for the subject
+// to that throttle closes the gap. Emit logs listener errors instead of returning
+// them, so a listener cannot change the outcome of the request.
+//
+// Example:
+//
+//	unsubscribe, err := events.Listen(auth.SecondFactorLocked, func(ctx context.Context, locked auth.SecondFactorLockedEvent) error {
+//		return throttle.Fail(ctx, locked.Subject, time.Until(locked.Until))
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	defer unsubscribe()
+var SecondFactorLocked = event.NewTopic[SecondFactorLockedEvent]("auth.second-factor.locked")

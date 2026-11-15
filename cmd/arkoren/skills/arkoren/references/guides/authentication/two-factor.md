@@ -144,12 +144,20 @@ pending cookie do not reset it, and racing requests cannot check more codes than
 the limit. One count covers every method. At most five attempts are allowed
 within the challenge window (`policy.MaxAttempts(n)`, window
 `policy.ChallengeTTL(d)`); after that the pending login is discarded and that
-user cannot pass the second factor, in any session, until the window ends. A wrong
+user cannot pass the second factor, in any session, for one window. Lockouts
+escalate: each further lockout within 24 hours doubles the previous one (window
+x 2^n, capped at 24 hours), and a successful challenge resets the escalation. A wrong
 code (`Verify` returns an error wrapping `auth.ErrInvalidCredential`) keeps its
 attempt; any other `Verify` error is an infrastructure failure, so the attempt
 is refunded and the error passes through. A successful challenge clears the
 count. The lockout lets anyone who knows a subject delay that user, so also
 [rate limit](../abuse-prevention/rate-limiting.md) the routes by address.
+
+Each lockout publishes `auth.SecondFactorLocked` with the subject and the end of
+the lockout, when the guard has a bus (`policy.Events(bus)`). Count it as a
+failed login in the throttle of your login route (`ark/access` or your own):
+otherwise an attacker who knows the first factor can keep starting pending
+logins after every lockout at no cost.
 
 The challenge is single use: it consumes the pending login and rotates the ID, so
 a second call returns `ErrUnauthenticated`. A user deleted or disabled meanwhile

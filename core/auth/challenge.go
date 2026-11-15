@@ -355,7 +355,13 @@ func (guard *Guard) Pending(r *http.Request) (PendingLogin, error) {
 		return PendingLogin{}, err
 	}
 
-	if failures >= int64(guard.settings.MaxAttempts) {
+	locked, err := guard.locked(r.Context(), waiting.Subject)
+
+	if err != nil {
+		return PendingLogin{}, err
+	}
+
+	if locked || failures >= int64(guard.settings.MaxAttempts) {
 		if err := current.Delete(pendingField); err != nil {
 			return PendingLogin{}, err
 		}
@@ -407,7 +413,8 @@ func (guard *Guard) PendingHandler() router.Handler {
 // before anything is verified, so concurrent requests each get a distinct count
 // and at most [GuardBuilder.MaxAttempts] of them pass: a read followed by a later
 // increment would let every request that read the counter before the limit
-// through. A count over the limit returns errLockedOut and keeps the reservation.
+// through. A count over the limit, or a lockout in force (see [Guard.reject]),
+// returns errLockedOut and keeps the reservation.
 // A method the user is not enrolled in is [ErrInvalidCredential], counted like a
 // wrong code so the two cannot be told apart. An error wrapping
 // [ErrInvalidCredential] from Verify stays counted; any other error from Enrolled
@@ -451,9 +458,18 @@ func (guard *Guard) check(r *http.Request, subject string, credentials []Credent
 	}
 
 	ctx := r.Context()
-	key := guard.attempts.Key(subject)
 
-	failures, _, err := guard.store.IncrementWithTTL(ctx, key, 1, guard.settings.ChallengeTTL)
+	locked, err := guard.locked(ctx, subject)
+
+	if err != nil {
+		return Factor{}, 0, err
+	}
+
+	if locked {
+		return Factor{}, 0, errLockedOut
+	}
+
+	failures, _, err := guard.store.IncrementWithTTL(ctx, guard.attempts.Key(subject), 1, guard.settings.ChallengeTTL)
 
 	if err != nil {
 		return Factor{}, 0, err
@@ -478,13 +494,13 @@ func (guard *Guard) check(r *http.Request, subject string, credentials []Credent
 	}
 
 	if !ok {
-		return Factor{}, failures, ErrInvalidCredential
+		return Factor{}, failures, guard.reject(ctx, subject, failures, ErrInvalidCredential)
 	}
 
 	factor, err := credential.Verify(r, subject, input)
 
 	if errors.Is(err, ErrInvalidCredential) {
-		return Factor{}, failures, err
+		return Factor{}, failures, guard.reject(ctx, subject, failures, err)
 	}
 
 	if err != nil {
@@ -578,6 +594,10 @@ func (guard *Guard) ChallengeHandler() router.Handler {
 			return err
 		}
 
+		if err := guard.store.Delete(r.Context(), guard.levels.Key(waiting.Subject)); err != nil {
+			return err
+		}
+
 		return response.Status(w, http.StatusNoContent)
 	}
 }
@@ -641,6 +661,72 @@ func (guard *Guard) ConfirmHandler() router.Handler {
 
 		return response.Status(w, http.StatusNoContent)
 	}
+}
+
+// locked reports whether subject is inside an escalating lockout started by
+// [Guard.reject]. The lockout entry expires on its own, so an absent entry means
+// the user may try again.
+func (guard *Guard) locked(ctx context.Context, subject string) (bool, error) {
+	_, err := guard.store.Get(ctx, guard.locks.Key(subject))
+
+	if errors.Is(err, cache.ErrNotFound) {
+		return false, nil
+	}
+
+	return err == nil, err
+}
+
+// reject is called with every wrong credential check of subject. It returns
+// cause, except when failures equals [GuardBuilder.MaxAttempts]: that check used
+// the last attempt of the window, so reject starts the next escalating lockout
+// first. The atomic counter hands the value out once per window, so exactly one
+// request locks.
+//
+// The lockout lasts the challenge window doubled once per earlier lockout still
+// remembered in guard.levels, capped at [maxLockout] (or at the window when that
+// is longer). It is stored with that lifetime, which may exceed the counter's, and
+// the new level is stored for the lockout plus [levelTTL], so a full quiet day
+// after a lockout ends forgets the history.
+// Then reject publishes [SecondFactorLocked]. A cache failure while locking is
+// returned instead of cause; the counter is already over the limit, so the user
+// stays locked out for the window either way.
+func (guard *Guard) reject(ctx context.Context, subject string, failures int64, cause error) error {
+	if failures != int64(guard.settings.MaxAttempts) {
+		return cause
+	}
+
+	level, err := guard.store.Get(ctx, guard.levels.Key(subject))
+
+	if err != nil && !errors.Is(err, cache.ErrNotFound) {
+		return err
+	}
+
+	window := guard.settings.ChallengeTTL
+	limit := max(window, maxLockout)
+	duration := window
+
+	for range level {
+		if duration >= limit {
+			break
+		}
+
+		duration *= 2
+	}
+
+	duration = min(duration, limit)
+	until := time.Now().Add(duration).UTC()
+
+	if err := guard.store.Put(ctx, guard.locks.Key(subject, func(entry *cache.KeyBuilder) { entry.TTL(duration) }), until); err != nil {
+		return err
+	}
+
+	if err := guard.store.Put(ctx, guard.levels.Key(subject, func(entry *cache.KeyBuilder) { entry.TTL(duration + levelTTL) }), level+1); err != nil {
+		return err
+	}
+
+	guard.settings.Events.Emit(ctx, SecondFactorLocked, SecondFactorLockedEvent{Subject: subject, Until: until})
+
+	return cause
 }
 
 // refund gives one reserved attempt of subject back. It adds -1 with a TTL

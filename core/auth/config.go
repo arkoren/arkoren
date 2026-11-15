@@ -155,6 +155,9 @@ type guardSettings struct {
 	// MaxLogins is the number of login records kept per user.
 	MaxLogins int
 
+	// Events receives [SecondFactorLocked]; nil publishes nothing.
+	Events *event.Bus
+
 	// SessionLifetime is the lifetime of the login-record list.
 	SessionLifetime time.Duration
 }
@@ -219,9 +222,13 @@ func (policy *GuardBuilder) ChallengeTTL(ttl time.Duration) *GuardBuilder {
 // [Guard.ChallengeHandler] or [Guard.ConfirmHandler] before the credential is
 // verified, one user gets within a [GuardBuilder.ChallengeTTL] window, across
 // all methods and sessions, before a pending login is discarded and the user is
-// locked out of the second factor and of step-up until the window ends. A check
-// that fails with an infrastructure error is refunded. The default is five. [NewGuard] rejects a value of zero or less. The setting
-// replaces the previous value on this draft.
+// locked out of the second factor and of step-up. The first lockout lasts the
+// window; each further one within 24 hours of the last doubles (window x 2^n,
+// capped at 24 hours, or at the window when that is longer), and a successful
+// challenge resets the escalation. [SecondFactorLocked] reports each lockout
+// (see [GuardBuilder.Events]). A check that fails with an infrastructure error
+// is refunded. The default is five. [NewGuard] rejects a value of zero or less.
+// The setting replaces the previous value on this draft.
 //
 // Example:
 //
@@ -340,6 +347,21 @@ func (policy *GuardBuilder) ClientIP(find func(*http.Request) string) *GuardBuil
 //	})
 func (policy *GuardBuilder) MaxLogins(limit int) *GuardBuilder {
 	policy.settings.MaxLogins = limit
+
+	return policy
+}
+
+// Events sets the bus that receives [SecondFactorLocked] when a user is locked
+// out of the second factor. Nil, the default, publishes nothing. The setting
+// replaces the previous value on this draft.
+//
+// Example:
+//
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
+//		policy.Events(app.Events())
+//	})
+func (policy *GuardBuilder) Events(bus *event.Bus) *GuardBuilder {
+	policy.settings.Events = bus
 
 	return policy
 }
