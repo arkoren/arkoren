@@ -322,8 +322,17 @@ func TestFormPostCallback(t *testing.T) {
 
 	response := client.CallbackHandler(guard, idLogin).Record(callbackRequest(http.MethodPost, jar, newSession(), query.Get("state"), query.Get("nonce")))
 
-	if response.StatusCode != http.StatusFound {
-		t.Errorf("POST status = %d, want 302", response.StatusCode)
+	if response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST status = %d, want 303", response.StatusCode)
+	}
+
+	jar.apply(response)
+
+	follow := jar.attach(httptest.NewRequest(http.MethodGet, response.Header.Get("Location"), nil))
+	follow = follow.WithContext(session.NewContext(follow.Context(), newSession()))
+
+	if got := client.CallbackHandler(guard, idLogin).Record(follow).StatusCode; got != http.StatusFound {
+		t.Errorf("hand-off GET status = %d, want 302", got)
 	}
 }
 

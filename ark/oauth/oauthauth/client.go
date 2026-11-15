@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
+	"strings"
 	"sync/atomic"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -144,6 +146,14 @@ func New(
 	if config.ChallengeURL != "" {
 		if err := response.ValidateRedirectTarget(config.ChallengeURL); err != nil {
 			return nil, fmt.Errorf("OAuth challenge URL: %w", err)
+		}
+	}
+
+	if provider.formPost && config.RedirectURL != "" {
+		callback, err := url.Parse(config.RedirectURL)
+
+		if err != nil || callback.Scheme == "" || callback.Host == "" || !strings.HasPrefix(callback.Path, "/") {
+			return nil, errors.New("OAuth redirect URL of a form_post provider must be absolute with a path")
 		}
 	}
 
