@@ -31,6 +31,7 @@ import (
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send)
+//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 type Builder struct {
 	instance        string
@@ -52,7 +53,8 @@ type Builder struct {
 	sessionPolicy   []session.BuilderFunc
 	sessionLifetime time.Duration
 	clientIP        func(*http.Request) string
-	revokePersonal  bool
+	trustRemoteAddr bool
+	keepPersonal    bool
 	emailProven     func(context.Context, string) error
 }
 
@@ -83,7 +85,9 @@ func (iam *Builder) Instance(name string) *Builder {
 // Events publishes the events of every package on bus: account, password,
 // two-factor, token and connection changes, and the core
 // [auth.CredentialEnrolled]. Events carry subjects only, never tokens, codes or
-// email addresses. A nil bus publishes nothing.
+// email addresses. A nil bus publishes nothing. The guard publishes
+// [auth.SecondFactorLocked] on it too, for your own listeners; the facade never
+// depends on events, because a failing listener must not change a decision.
 //
 // Example:
 //
@@ -110,7 +114,11 @@ func (iam *Builder) Users(users Users) *Builder {
 // Password enables registration, login, password confirmation, change, forgot
 // and reset, hashing with hasher. configure customizes the password package (the
 // policy, the reset lifetime); the facade has already set the instance, the
-// events and the client address.
+// events and the client address. While a user is in a second-factor lockout
+// ([auth.Guard.LockedOut]), a correct password of that user is not refunded by
+// the login throttle, so starting pending logins that cannot finish keeps
+// costing throttle budget. The login asks the guard, so it needs no bus and
+// fails closed if the lockout cannot be read.
 //
 // Example:
 //
@@ -152,18 +160,21 @@ func (iam *Builder) Tokens(configure ...apitoken.BuilderFunc) *Builder {
 	return iam
 }
 
-// RevokeTokensOnPasswordChange makes a password change also revoke the user's
-// personal access tokens. By default a change ends the user's other sessions and
-// their device tokens, but keeps personal tokens, which the user created on
-// purpose for scripts and integrations. Turn this on when a changed password
-// should cut off everything. It has no effect without [Builder.Tokens] and
-// [Builder.Password]; a password reset always revokes every token.
+// KeepPersonalTokens limits what a password change and enabling two-factor
+// revoke to the user's device tokens. By default both revoke every token,
+// personal ones included: someone who stole the password can log in and create a
+// personal token, and a user who then changes the password, or protects the
+// account with two-factor, would otherwise leave that token working. Keep
+// personal tokens only when your users rely on long-lived tokens for scripts and
+// integrations and you accept that trade-off; they can still revoke them one by
+// one. It has no effect without [Builder.Tokens]. A password reset always
+// revokes every token, whatever this says.
 //
 // Example:
 //
-//	iam.RevokeTokensOnPasswordChange()
-func (iam *Builder) RevokeTokensOnPasswordChange() *Builder {
-	iam.revokePersonal = true
+//	iam.KeepPersonalTokens()
+func (iam *Builder) KeepPersonalTokens() *Builder {
+	iam.keepPersonal = true
 
 	return iam
 }
@@ -252,10 +263,16 @@ func (iam *Builder) Authenticator(authenticators ...auth.Authenticator) *Builder
 }
 
 // Guard customizes the [auth.Guard] the facade builds (the step-up window, the
-// attempt limit, the login limit). Do not set the credential registries
-// (use [Builder.SecondFactor] and [Builder.StepUp]), the session lifetime (use
-// [Builder.SessionLifetime]) or a session handle: the provider handlers of
-// ark/oauth use the default handle.
+// attempt limit, the login limit). The callbacks run first and the facade's own
+// settings after them, so the facade wins: the session lifetime
+// ([Builder.SessionLifetime]), the session handle (always the default one,
+// which the provider handlers of ark/oauth use), the event bus and, when set,
+// the client address ([Builder.ClientIP]) replace whatever the callbacks chose.
+// The credential registries only append: register second-factor and step-up
+// credentials with [Builder.SecondFactor] and [Builder.StepUp], not here. A
+// credential registered here would be listed to users before the built-in ones,
+// and a method the facade also registers makes [New] fail with
+// [ErrInvalidConfig] as a duplicate.
 //
 // Example:
 //
@@ -269,9 +286,10 @@ func (iam *Builder) Guard(configure ...auth.GuardBuilderFunc) *Builder {
 }
 
 // Session customizes the session middleware that [Access.Middleware] installs
-// (cookie name, domain, renewal). Do not set MaxLifetime (use
-// [Builder.SessionLifetime]) or a handle: the provider handlers of ark/oauth
-// use the default handle.
+// (cookie name, domain, renewal). The callbacks run first and the facade's
+// settings after them, so the maximum lifetime ([Builder.SessionLifetime]) and
+// the default handle, which the guard and the provider handlers of ark/oauth
+// use, replace whatever the callbacks chose.
 //
 // Example:
 //
@@ -298,9 +316,13 @@ func (iam *Builder) SessionLifetime(lifetime time.Duration) *Builder {
 }
 
 // ClientIP sets how the client address is found, for the guard's login records
-// and the password login throttle. The default is the host of r.RemoteAddr,
-// which behind a reverse proxy is the proxy; pass ratelimit.TrustedProxyKey
-// with your proxies' prefixes.
+// and the throttles of every package. New requires an explicit choice, because
+// the right source depends on the deployment and a wrong default silently
+// breaks the throttles: behind a reverse proxy r.RemoteAddr is the proxy, so
+// every user shares one counter, and a header read without trusting the proxy
+// that set it lets an attacker pick their own counter. Pass
+// ratelimit.TrustedProxyKey with your proxies' prefixes, or use
+// [Builder.TrustRemoteAddr] when no proxy sits in front of the application.
 //
 // Example:
 //
@@ -311,8 +333,25 @@ func (iam *Builder) ClientIP(find func(*http.Request) string) *Builder {
 	return iam
 }
 
+// TrustRemoteAddr chooses the host of r.RemoteAddr as the client address, for
+// an application that faces the internet directly with no proxy or load
+// balancer in front of it. Behind one, every user would share the proxy's
+// address and the throttles would lock everybody out together: use
+// [Builder.ClientIP] instead. It has no effect when [Builder.ClientIP] is also
+// set, which takes precedence.
+//
+// Example:
+//
+//	iam.TrustRemoteAddr()
+func (iam *Builder) TrustRemoteAddr() *Builder {
+	iam.trustRemoteAddr = true
+
+	return iam
+}
+
 // validate checks the combinations of settings that no package can see, in
-// order: the providers, the application's users, the session lifetime.
+// order: the providers, the application's users, the session lifetime, the
+// client address source.
 func (iam *Builder) validate() error {
 	if err := validateProviders(iam.providers); err != nil {
 		return err
@@ -324,6 +363,9 @@ func (iam *Builder) validate() error {
 	}
 	if iam.sessionLifetime < 0 {
 		return errors.New("negative session lifetime")
+	}
+	if iam.clientIP == nil && !iam.trustRemoteAddr {
+		return errors.New("the client address source is not set: call ClientIP (for example with ratelimit.TrustedProxyKey) or, with no proxy in front, TrustRemoteAddr")
 	}
 
 	return nil

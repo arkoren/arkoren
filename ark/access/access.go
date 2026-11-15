@@ -30,6 +30,21 @@ import (
 //	fmt.Println(errors.Is(err, access.ErrInvalidConfig)) // true
 var ErrInvalidConfig = errors.New("access: invalid configuration")
 
+// ErrIdentifierTaken is what [Users.Create] returns, or wraps, for an identifier
+// that already belongs to a user. Registration then answers 202 like for a new
+// user and sends the owner a [KindRegistration] message. It is
+// [password.ErrIdentifierTaken].
+//
+// Example:
+//
+//	create := func(ctx context.Context, identifier string, verified bool) (string, error) {
+//		if exists(identifier) {
+//			return "", access.ErrIdentifierTaken
+//		}
+//		return insert(ctx, identifier, verified)
+//	}
+var ErrIdentifierTaken = password.ErrIdentifierTaken
+
 // ErrNotMigrated is returned by [Access.Ping] when the tables of an enabled
 // feature do not exist. Add [Access.Migrations] to the application's migrator
 // and run them.
@@ -82,10 +97,10 @@ type Access struct {
 	// come together with Users.ProveEmail.
 	verified func(context.Context, string) (bool, error)
 
-	// emailProven and revokePersonal are [Builder.OnEmailProven] and
-	// [Builder.RevokeTokensOnPasswordChange], read by the hooks when they run.
-	emailProven    func(context.Context, string) error
-	revokePersonal bool
+	// emailProven and keepPersonal are [Builder.OnEmailProven] and
+	// [Builder.KeepPersonalTokens], read by the hooks when they run.
+	emailProven  func(context.Context, string) error
+	keepPersonal bool
 
 	// secondFactor and stepUp report whether the guard's registries are not
 	// empty, which the handlers that need one check.
@@ -111,6 +126,7 @@ type Access struct {
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send)
+//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 //	if err != nil {
 //		return err
@@ -130,12 +146,12 @@ func New(db *database.Database, store *cache.Cache, configure ...BuilderFunc) (*
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	iam := &Access{
-		db:             db,
-		store:          store,
-		deliver:        settings.deliver,
-		providers:      slices.Clone(settings.providers),
-		emailProven:    settings.emailProven,
-		revokePersonal: settings.revokePersonal,
+		db:           db,
+		store:        store,
+		deliver:      settings.deliver,
+		providers:    slices.Clone(settings.providers),
+		emailProven:  settings.emailProven,
+		keepPersonal: settings.keepPersonal,
 	}
 	if err := iam.build(&settings); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)

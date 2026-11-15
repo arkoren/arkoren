@@ -27,6 +27,7 @@ iam, err := access.New(db, store, func(iam *access.Builder) {
 	iam.Tokens()
 	iam.Provider(google, github)
 	iam.Deliver(send)
+	iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 })
 if err != nil {
 	return err

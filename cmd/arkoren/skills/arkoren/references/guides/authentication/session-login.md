@@ -99,7 +99,9 @@ web.Use(csrf.Middleware())
 web.Use(auth.Middleware(guard.Authenticator()))
 ```
 
-Session middleware must run first. Keep [CSRF protection](../browser-security/csrf-protection.md)
+Session middleware must run first. With the `ark/access` facade, mount
+`csrf.Middleware()` beside `iam.Middleware()` yourself: the facade does not add
+it. Keep [CSRF protection](../browser-security/csrf-protection.md)
 on login, logout, and other state-changing browser routes: browsers send session
 cookies automatically, including on requests another site can initiate. Add
 `auth.Require()` only to routes requiring a signed-in account, not to the login

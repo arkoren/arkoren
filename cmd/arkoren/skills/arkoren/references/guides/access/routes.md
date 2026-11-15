@@ -43,6 +43,13 @@ routes accept and answer: [Passwords](passwords.md), [Two-Factor](two-factor.md)
 ## Responses
 
 Request and response bodies are JSON, and handlers read at most 64 KiB of body.
+Every `POST`, `PUT` and `PATCH` route requires the media type `application/json`,
+with or without a `charset`, even routes that read no body such as `/logout`;
+a form or a missing `Content-Type` answers `415`. The provider routes under
+`/auth/{name}` are exempt, because identity providers redirect with a query or
+post a form (`form_post`). The check is not a replacement for
+[CSRF protection](../browser-security/csrf-protection.md), which you add next to
+`iam.Middleware()`.
 A login that is complete answers `204`. When the user must also answer a second
 factor it answers `202`:
 
@@ -73,7 +80,7 @@ groups are:
 | 401 | No login, no pending login, or a credential route reached with a bearer token. |
 | 403 | Step-up needed (the problem lists the methods the user can confirm with), an unverified email, or a wrong account. |
 | 404 | An unknown token, connection or provider. |
-| 409 | A conflict: an email in use, two-factor already on, the last way to log in. |
+| 409 | A conflict: two-factor already on, the last way to log in. |
 | 422 | A wrong secret or invalid input, such as a wrong password or a weak one. |
 | 429 | Throttled, with `Retry-After` in seconds. |
 

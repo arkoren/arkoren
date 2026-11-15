@@ -52,8 +52,8 @@ func TestRegisterVerifyAndRequireVerified(t *testing.T) {
 		if record.Claims["email_verified"] != true {
 			t.Fatalf("claims after verifying = %v", record.Claims)
 		}
-		if reply := sys.client.Post("/register", `{"email":"ada@example.com","password":"correct horse"}`); reply.Status != http.StatusConflict {
-			t.Fatalf("duplicate register = %d, want 409", reply.Status)
+		if reply := sys.client.Post("/register", `{"email":"ada@example.com","password":"correct horse"}`); reply.Status != http.StatusAccepted {
+			t.Fatalf("duplicate register = %d, want 202", reply.Status)
 		}
 	})
 }
@@ -462,4 +462,28 @@ func TestPackagesDoNotImportEachOther(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestRegisterTakenAddressNotifiesTheOwner verifies registering a taken address
+// answers like a new one and sends its owner a registration notice whose token
+// resets the password, and that the notice is the only trace.
+func TestRegisterTakenAddressNotifiesTheOwner(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher()) })
+		fresh := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
+		taken := sys.client.NewDevice().Post("/register", `{"email":"Ada@example.com","password":"another horse"}`)
+		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
+			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
+		}
+		sys.settle(t)
+		notice := sys.box.last(t, access.KindRegistration)
+		if notice.Identifier != "ada@example.com" || notice.Token == "" {
+			t.Fatalf("notice = %+v, want a token for the stored address", notice)
+		}
+		if reply := sys.client.NewDevice().Post("/password/reset", `{"token":"`+notice.Token+`","password":"reset horse ok"}`); reply.Status != http.StatusNoContent {
+			t.Fatalf("reset with the notice's token = %d %s", reply.Status, reply.Body)
+		}
+	})
 }

@@ -84,7 +84,7 @@ func (links *Links) ConnectHandler(guard *auth.Guard, targets map[string]string)
 		fixed[name] = target
 	}
 
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -109,5 +109,5 @@ func (links *Links) ConnectHandler(guard *auth.Guard, targets map[string]string)
 		}
 
 		return response.Redirect(w, http.StatusSeeOther, target)
-	}
+	})
 }

@@ -1,6 +1,7 @@
 package apitoken
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"errors"
@@ -54,7 +55,7 @@ func (issuer *Issuer) authenticate(ctx context.Context, text string) (auth.Ident
 		return auth.Identity{}, err
 	}
 	now := time.Now().Unix()
-	if !stored.valid(secret, now) {
+	if !stored.valid(secret, now, issuer.deviceIdle) {
 		return auth.Identity{}, auth.ErrUnauthenticated
 	}
 	record, err := issuer.user(ctx, stored)
@@ -93,11 +94,24 @@ func (issuer *Issuer) find(ctx context.Context, text string) (row, string, error
 	return stored, secret, nil
 }
 
-// valid reports whether secret is the token's, compared in constant time, and
-// the token has not expired at now (Unix seconds).
-func (row row) valid(secret string, now int64) bool {
-	return subtle.ConstantTimeCompare([]byte(storage.Hash(secret)), []byte(row.SecretHash)) == 1 &&
-		(row.ExpiresAt == 0 || row.ExpiresAt > now)
+// valid reports whether secret is the token's, compared in constant time, the
+// token has not expired at now (Unix seconds) and, for a device token, has not
+// been idle longer than idle (zero means no limit). A device token that was
+// never used counts its idle time from its creation.
+func (row row) valid(secret string, now int64, idle time.Duration) bool {
+	if subtle.ConstantTimeCompare([]byte(storage.Hash(secret)), []byte(row.SecretHash)) != 1 {
+		return false
+	}
+	if row.ExpiresAt != 0 && row.ExpiresAt <= now {
+		return false
+	}
+	if row.Kind == string(KindDevice) && idle > 0 {
+		lastUse := cmp.Or(row.LastUsedAt, row.CreatedAt)
+
+		return now-lastUse <= int64(idle/time.Second)
+	}
+
+	return true
 }
 
 // user returns the record of the token's user. A deleted or disabled user, or

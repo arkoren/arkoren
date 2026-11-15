@@ -106,9 +106,17 @@ type app struct {
 func newApp(t *testing.T, db *database.Database, instance string, configure ...access.BuilderFunc) *app {
 	t.Helper()
 
+	return newAppOn(t, db, instance, cache.New(memorycache.New()), configure...)
+}
+
+// newAppOn is [newApp] over the given cache, for tests that break part of it.
+func newAppOn(t *testing.T, db *database.Database, instance string, store *cache.Cache, configure ...access.BuilderFunc) *app {
+	t.Helper()
+
 	box := &outbox{}
-	iam, err := access.New(db, cache.New(memorycache.New()), append([]access.BuilderFunc{func(iam *access.Builder) {
+	iam, err := access.New(db, store, append([]access.BuilderFunc{func(iam *access.Builder) {
 		iam.Instance(instance)
+		iam.TrustRemoteAddr()
 		iam.Deliver(box.send)
 		iam.Session(func(cookies *session.Builder) {
 			cookies.AllowInsecure(true)
@@ -176,13 +184,17 @@ func (sys *app) settle(t *testing.T) {
 	}
 }
 
-// register signs ada up on client and fails unless the reply is 201.
+// register signs up email on client, which registration does not log in, then
+// logs in, and fails unless both succeed.
 func register(t *testing.T, client *apptest.Client, email string) apptest.Reply {
 	t.Helper()
 
 	reply := client.Post("/register", `{"email":"`+email+`","password":"correct horse"}`)
-	if reply.Status != http.StatusCreated {
+	if reply.Status != http.StatusAccepted {
 		t.Fatalf("register = %d %s", reply.Status, reply.Body)
+	}
+	if login := client.Post("/login", `{"email":"`+email+`","password":"correct horse"}`); login.Status != http.StatusNoContent {
+		t.Fatalf("login after registering = %d %s", login.Status, login.Body)
 	}
 
 	return reply
@@ -192,5 +204,5 @@ func register(t *testing.T, client *apptest.Client, email string) apptest.Reply 
 func newFacade(t *testing.T, configure ...access.BuilderFunc) (*access.Access, error) {
 	t.Helper()
 
-	return access.New(memoryDatabase(t), cache.New(memorycache.New()), configure...)
+	return access.New(memoryDatabase(t), cache.New(memorycache.New()), append([]access.BuilderFunc{func(iam *access.Builder) { iam.TrustRemoteAddr() }}, configure...)...)
 }

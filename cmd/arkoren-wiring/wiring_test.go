@@ -20,8 +20,11 @@ import (
 func register(t *testing.T, sys *system, b *browser) {
 	t.Helper()
 
-	if r := b.post("/register", `{"email":"ada@example.com","password":"correct horse"}`); r.status != http.StatusCreated {
+	if r := b.post("/register", `{"email":"ada@example.com","password":"correct horse"}`); r.status != http.StatusAccepted {
 		t.Fatalf("register = %d %s", r.status, r.body)
+	}
+	if r := b.post("/login", `{"email":"ada@example.com","password":"correct horse"}`); r.status != http.StatusNoContent {
+		t.Fatalf("login = %d %s", r.status, r.body)
 	}
 	sys.mu.Lock()
 	token := sys.sent[len(sys.sent)-1].Token

@@ -190,6 +190,9 @@ func (b *browser) do(method, path, body string, headers ...string) reply {
 	if err != nil {
 		b.t.Fatalf("request: %v", err)
 	}
+	if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	for _, header := range headers {
 		name, value, _ := strings.Cut(header, ": ")
 		request.Header.Set(name, value)
@@ -290,6 +293,7 @@ func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
 		t.Fatalf("Start: %v", err)
 	}
 	sys.iam, err = access.New(db, cache.New(memorycache.New()), append([]access.BuilderFunc{func(iam *access.Builder) {
+		iam.TrustRemoteAddr()
 		iam.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })))
 		iam.TwoFactor(newCipher(t), "Example")
 		iam.Tokens()

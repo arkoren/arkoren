@@ -26,6 +26,7 @@
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send) // reset and verification links
+//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 //	if err != nil {
 //		return err
@@ -79,16 +80,23 @@
 //     (100) in 15 minutes, so someone failing from elsewhere cannot lock a user
 //     out; an unknown identifier costs a dummy hash. Forgot-password, register and
 //     resend are throttled per identifier and per address too.
+//   - Register answers an empty 202 and logs nobody in, whether or not the address
+//     was taken; for a taken one it creates nothing and sends the owner a
+//     [KindRegistration] message with a reset link, within the registration
+//     throttle.
+//   - Every POST, PUT and PATCH route requires the media type application/json
+//     (415 otherwise), which stops cross-site HTML forms. It is not CSRF
+//     protection: mount core's csrf.Middleware next to [Access.Middleware].
 //   - Forgot-password and resend answer an empty 202 whatever happens and send in
 //     the background, so neither the answer nor its timing says whether the user
 //     exists or the mailer works; failures are logged. Call [Access.Wait] at
 //     shutdown. Mail goes to the address stored with the user, never to the text
 //     of the request, and a user keeps up to three live reset links.
 //   - A password change keeps the caller, ends the user's other logins and
-//     revokes their device tokens (personal tokens stay unless
-//     [Builder.RevokeTokensOnPasswordChange]); a reset rotates the user, which
-//     ends every session, pending login and API token, and never logs the user
-//     in.
+//     revokes all their tokens, personal ones too (only device tokens with
+//     [Builder.KeepPersonalTokens]); enabling two-factor does the same; a reset
+//     rotates the user, which ends every session, pending login and API token,
+//     and never logs the user in.
 //   - A completed reset proves the mailbox. When the email was unverified it is
 //     marked verified and every connection, the authenticator, the recovery codes
 //     and all tokens are deleted, because whoever registered the address first

@@ -30,7 +30,10 @@ type Builder struct {
 	scopes   []string
 	prefix   string
 	maxTTL   time.Duration
-	verified func(context.Context, string) (bool, error)
+
+	// deviceIdleTTL is [Builder.DeviceIdleTTL] before its default is applied.
+	deviceIdleTTL time.Duration
+	verified      func(context.Context, string) (bool, error)
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -93,9 +96,10 @@ func (tokens *Builder) Prefix(prefix string) *Builder {
 	return tokens
 }
 
-// MaxTTL caps the lifetime of personal tokens: a longer expiry is refused and a
-// token without one expires after ttl. Zero (the default) means no cap. Device
-// tokens never expire by themselves; revoke them at logout.
+// MaxTTL caps the lifetime of tokens: a longer expiry of a personal token is
+// refused, and a personal or device token without one expires after ttl. Zero
+// (the default) means no cap and applies to neither: a device token is then
+// limited only by [Builder.DeviceIdleTTL] and by revocation at logout.
 //
 // Example:
 //
@@ -104,6 +108,37 @@ func (tokens *Builder) MaxTTL(ttl time.Duration) *Builder {
 	tokens.maxTTL = ttl
 
 	return tokens
+}
+
+// DeviceIdleTTL sets how long a device token may go unused before it stops
+// working: its last use (or its creation, when it was never used) plus ttl is
+// the deadline, and every use moves it. Last use is written at most once an hour,
+// so the deadline can be early by up to an hour. The default is
+// [DefaultDeviceIdleTTL], 90 days; zero selects it, and a negative value turns
+// the limit off. A device token that is only revoked at logout otherwise lives
+// forever on a phone nobody uses. It does not apply to personal tokens, which
+// have [Builder.MaxTTL] and their own expiry.
+//
+// Example:
+//
+//	tokens.DeviceIdleTTL(30 * 24 * time.Hour)
+func (tokens *Builder) DeviceIdleTTL(ttl time.Duration) *Builder {
+	tokens.deviceIdleTTL = ttl
+
+	return tokens
+}
+
+// deviceIdle returns the idle limit with its default applied: zero for no
+// limit.
+func (tokens *Builder) deviceIdle() time.Duration {
+	switch {
+	case tokens.deviceIdleTTL < 0:
+		return 0
+	case tokens.deviceIdleTTL == 0:
+		return DefaultDeviceIdleTTL
+	}
+
+	return tokens.deviceIdleTTL
 }
 
 // Verified sets the check that tells whether a user's email is verified.

@@ -19,6 +19,7 @@ links:
 iam, err := access.New(db, store, func(iam *access.Builder) {
 	iam.Password(hasher)
 	iam.Deliver(send)
+	iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 })
 ```
 
@@ -28,19 +29,23 @@ send `identifier` instead.
 
 ## Register and Log In
 
-`POST /register` creates the user and their password in one transaction, logs
-them in and answers `201` with the new subject:
+`POST /register` creates the user and their password in one transaction and
+answers `202` with no body. It does not log the user in: the client calls
+`POST /login` next.
 
 ```json
 { "email": "ada@example.com", "password": "correct horse battery" }
 ```
 
-```json
-{ "subject": "..." }
-```
-
-A taken email is `409` (the facade never links accounts by email), a malformed
-one is `422`, and a password outside the policy is `422`. The default policy
+The answer is the same `202` when the email already belongs to a user, so the
+route cannot be used to find out who has an account. In that case nothing is
+created or changed, and the owner receives a message of kind
+`access.KindRegistration` (see [Delivering Messages](overview.md#delivering-messages))
+that says someone tried to register with their address, with a reset link in case
+it was not them. The facade never links accounts by email. Registrations are
+throttled per email and per client address, and the notices count against the
+same limits, so the route cannot flood a mailbox. A malformed email is `422`, and
+a password outside the policy is `422`. The default policy
 requires 8 to 72 bytes, because bcrypt hashers reject more. Replace it with
 `password.Builder.Policy`:
 
@@ -73,19 +78,29 @@ limits are 10 failures per identifier and client address together, 50 per
 identifier across all addresses and 100 per client address. The next attempt is
 `429` with `Retry-After`, and a successful login refunds its attempt.
 
+The refund stops while the user is in a second-factor lockout. A correct password
+then only parks a pending login that cannot finish, so the facade keeps the attempt
+counted: someone who knows the password cannot start pending logins after every
+lockout at no cost. The login asks the guard (`guard.LockedOut`) after a correct
+password, so it needs no event bus and no setup. If the guard cannot read the
+lockout, for example because the cache is down, the login fails with `500` and
+the attempt stays counted.
+
 Keying the first limit on the address too means someone failing from elsewhere
 cannot lock the real user out. The looser 50 still stops a distributed guess at
 one account, and that user waits for the window or resets the password. IPv6
 clients are counted per /64, because one subscriber controls a whole /64.
 
-Behind a reverse proxy, tell the facade how to find the client address:
+`New` requires you to say how to find the client address, because the throttles
+count by it. Behind a reverse proxy, name the proxies you trust:
 
 ```go
 iam.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
 ```
 
-Without it every user shares the proxy's address, and 100 failed attempts from
-anyone lock login for everyone. Registration, forgot-password and email resend are
+An application that faces the internet directly with no proxy calls
+`iam.TrustRemoteAddr()` instead. Using it behind a proxy makes every user share
+the proxy's address, and 100 failed attempts from anyone lock login for everyone. Registration, forgot-password and email resend are
 throttled too (see below), per identifier as typed and per client address; still
 put a [rate limit](../abuse-prevention/rate-limiting.md) in front of them.
 
@@ -140,7 +155,9 @@ A user keeps up to three live tokens, so asking again does not kill the link
 already in their inbox, and the fourth request drops the oldest. To change the
 lifetime, pass `passwords.ResetTTL(d)` in the `iam.Password` callback.
 
-Your reset page posts the token and the new password to `POST /password/reset`:
+The link carries the token in the fragment (`#token=...`), so your reset page
+reads it from `location.hash` and posts it with the new password to
+`POST /password/reset`:
 
 ```json
 { "token": "...", "password": "a new longer password" }
@@ -159,7 +176,9 @@ to the account; see [Credential Changes](accounts.md#unverified-accounts).
 
 ## Verify Emails
 
-`POST /email/verify` takes `{"token": "..."}` from the link and answers `204`. The
+`POST /email/verify` takes `{"token": "..."}` from the link, which carries it in
+the fragment (`#token=...`) for your page to read from `location.hash`, and
+answers `204`. The
 token lasts 24 hours, and a new link replaces an earlier one. The flow is: the
 user logs in, then your verify page posts the token. It needs a browser session
 of the user the link belongs to, so a page that receives the link while logged out

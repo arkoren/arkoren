@@ -87,7 +87,7 @@ func (factors *Factors) enrolledMethods(ctx context.Context, subject string) ([]
 //
 //	web.Post("/two-factor/setup", factors.SetupHandler(guard))
 func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -105,7 +105,7 @@ func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
 		}
 
 		return response.JSON(w, http.StatusOK, enrollment)
-	}
+	})
 }
 
 // EnableHandler returns the handler of POST /two-factor. The body is
@@ -123,7 +123,7 @@ func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
 //
 //	web.Post("/two-factor", factors.EnableHandler(guard))
 func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -147,7 +147,7 @@ func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
 		_, _ = guard.Begin(r, identity.Subject(), auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession})
 
 		return response.JSON(w, http.StatusOK, codesBody{RecoveryCodes: codes})
-	}
+	})
 }
 
 // enable activates the authenticator of subject, ends every other login and
@@ -222,7 +222,7 @@ func (factors *Factors) DisableHandler(guard *auth.Guard) router.Handler {
 //
 //	web.Post("/two-factor/recovery-codes", factors.RecoveryCodesHandler(guard))
 func (factors *Factors) RecoveryCodesHandler(guard *auth.Guard) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -243,5 +243,5 @@ func (factors *Factors) RecoveryCodesHandler(guard *auth.Guard) router.Handler {
 		}
 
 		return response.JSON(w, http.StatusOK, codesBody{RecoveryCodes: codes})
-	}
+	})
 }

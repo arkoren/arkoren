@@ -1,7 +1,8 @@
 // Package apitoken issues opaque, hashed, revocable bearer tokens to users:
 // personal access tokens (named, scoped, optionally expiring, shown once) and
 // device tokens for first-party mobile and desktop apps (issued when a login is
-// exchanged, revoked by the device's own logout). It works with any user store:
+// exchanged, revoked by the device's own logout, and ended after
+// [DefaultDeviceIdleTTL] of disuse). It works with any user store:
 // it only needs an [auth.UserProvider].
 //
 // # Model

@@ -48,6 +48,7 @@ iam, err := access.New(db, store, func(iam *access.Builder) {
 	iam.Tokens()
 	iam.Provider(google, github)
 	iam.Deliver(send)
+	iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 })
 if err != nil {
 	return err
@@ -55,8 +56,9 @@ if err != nil {
 ```
 
 `New` does no I/O. It returns an error wrapping `access.ErrInvalidConfig` when a
-dependency is missing, a provider name is used twice or a package rejects its
-settings.
+dependency is missing, no client address source is set (see
+[Shared Settings](#shared-settings)), a provider name is used twice or a package
+rejects its settings.
 
 | Feature | Builder method | Guide |
 | --- | --- | --- |
@@ -89,11 +91,22 @@ session middleware and the guard and keeps them on one lifetime: set it with
 session handle, which the OAuth provider handlers require. [Routes](routes.md)
 lists what `Mount` registers.
 
+Add core's CSRF middleware next to it, before `iam.Mount`:
+
+```go
+web := routes.With(csrf.Middleware(), iam.Middleware())
+iam.Mount(web)
+```
+
 > [!WARNING]
-> The routes change state with a session cookie. Install
-> [CSRF protection](../browser-security/csrf-protection.md) on the router before
-> `iam.Mount`. Native clients that send no `Origin` header pass it, and bearer
-> tokens need no cookie.
+> `iam.Middleware()` does not add [CSRF protection](../browser-security/csrf-protection.md),
+> and the routes change state with a session cookie. Install `csrf.Middleware()`
+> yourself, from `arkoren.dev/core/http/middleware/csrf`. Every `POST`, `PUT` and
+> `PATCH` route of the facade also requires `Content-Type: application/json` and
+> answers `415` otherwise, which stops a cross-site HTML form but is not CSRF
+> protection: it does not cover `DELETE`, other request types or a site that
+> sends JSON itself. Native clients that send no `Origin` header pass the CSRF
+> middleware, and bearer tokens need no cookie.
 
 ## Migrations and Readiness
 
@@ -120,7 +133,7 @@ and its expiry:
 ```go
 iam.Deliver(func(ctx context.Context, message access.Message) error {
 	base := "https://app.example.com/verify-email"
-	if message.Kind == access.KindReset {
+	if message.Kind == access.KindReset || message.Kind == access.KindRegistration {
 		base = "https://app.example.com/reset-password"
 	}
 
@@ -128,8 +141,29 @@ iam.Deliver(func(ctx context.Context, message access.Message) error {
 })
 ```
 
-`message.Link(base)` adds the token as the `token` query parameter. The token is
-a credential until it is used or expires, so never log it. `Identifier` is the
+`KindRegistration` is sent to the owner of an address when someone tries to
+register with it. Its token is a reset token, so link it to the same page and
+word the email as "someone tried to register with this address; if it was not
+you, set a new password". `message.Link(base)` puts the token in the URL fragment, as
+`https://app.example.com/reset-password#token=...`. A browser never sends the
+fragment to a server, so the token stays out of access logs, proxies and the
+`Referer` header of the page the link opens. Your page reads it from
+`location.hash`, removes it from the address bar and posts it:
+
+```js
+const token = new URLSearchParams(location.hash.slice(1)).get("token");
+history.replaceState(null, "", location.pathname + location.search);
+await fetch("/password/reset", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ token, password }),
+});
+```
+
+If a server renders the page and so needs the token in the request, use
+`message.QueryLink(base)` instead, which adds it as the `token` query parameter.
+The token then reaches your server, its logs and every proxy in front of it, so
+set `Referrer-Policy: no-referrer` on that page. The token is a credential until it is used or expires, so never log it. `Identifier` is the
 address stored with the user, never the text of a request.
 
 Forgot-password and resend requests answer before they send. The facade delivers
@@ -183,13 +217,18 @@ Four builder methods configure what the facade shares between features:
 - `iam.SessionLifetime(d)` sets the absolute lifetime of a login for the session
   middleware and the guard together.
 - `iam.ClientIP(find)` sets how the client address is found for login records and
-  throttles. The default is the host of `r.RemoteAddr`, which behind a reverse
-  proxy is the proxy itself, so pass `ratelimit.TrustedProxyKey(...)` there.
+  throttles, and `New` requires it. Behind a reverse proxy pass
+  `ratelimit.TrustedProxyKey(...)` with your proxies' prefixes. Only an
+  application that faces the internet directly may call `iam.TrustRemoteAddr()`
+  instead, which uses the host of `r.RemoteAddr`.
 - `iam.Guard(configure)` customizes the guard, such as the step-up window with
-  `FreshFor`. Do not set credential registries, the session lifetime or a session
-  handle there.
-- `iam.Session(configure)` customizes the session cookie, such as its name. Do
-  not set the maximum lifetime or a handle there.
+  `FreshFor`. The facade applies its own settings after your callback, so the
+  session lifetime, the session handle and the client address you set with
+  `iam.ClientIP` always win. Register credentials with `iam.SecondFactor`
+  and `iam.StepUp`, not there: the registries only append.
+- `iam.Session(configure)` customizes the session cookie, such as its name. The
+  facade applies the maximum lifetime and the default handle after your callback,
+  so they cannot be overridden.
 
 `iam.SecondFactor`, `iam.StepUp` and `iam.Authenticator` add credentials and
 authenticators from other modules, such as a passkey package, after the built-in

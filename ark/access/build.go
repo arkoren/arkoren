@@ -3,6 +3,8 @@ package access
 import (
 	"cmp"
 	"context"
+	"errors"
+	"slices"
 	"time"
 
 	"arkoren.dev/core/auth"
@@ -87,12 +89,18 @@ func (iam *Access) buildPassword(settings *Builder, users Users) error {
 }
 
 // passwordUsers adapts users to the password package: registration creates
-// unverified users, and a reset proves the email.
+// unverified users, a taken address is [password.ErrIdentifierTaken] (the
+// directory's [account.ErrEmailTaken] is mapped), and a reset proves the email.
 func (iam *Access) passwordUsers(users Users) password.Users {
 	adapted := password.Users{Lookup: users.Lookup, Rotate: users.Rotate, ProveEmail: iam.proveEmail(users.ProveEmail)}
 	if users.Create != nil {
 		adapted.Create = func(ctx context.Context, identifier string) (string, error) {
-			return users.Create(ctx, identifier, false)
+			subject, err := users.Create(ctx, identifier, false)
+			if errors.Is(err, account.ErrEmailTaken) {
+				return "", password.ErrIdentifierTaken
+			}
+
+			return subject, err
 		}
 	}
 
@@ -103,7 +111,7 @@ func (iam *Access) passwordUsers(users Users) password.Users {
 // application's.
 func (iam *Access) passwordPolicy(settings *Builder) password.BuilderFunc {
 	return func(passwords *password.Builder) {
-		passwords.Instance(settings.instance).Events(settings.events).AfterChange(iam.afterPasswordChange)
+		passwords.Instance(settings.instance).Events(settings.events).AfterChange(iam.revokeTokens)
 		if settings.clientIP != nil {
 			passwords.ClientIP(settings.clientIP)
 		}
@@ -124,7 +132,7 @@ func (iam *Access) buildTwoFactor(settings *Builder) error {
 	}
 	configure := append([]twofactor.BuilderFunc{func(factors *twofactor.Builder) {
 		factors.Instance(settings.instance).Events(settings.events)
-		factors.Verified(iam.verified).Methods(settings.secondFactor...).OnEnable(iam.revokeDevices)
+		factors.Verified(iam.verified).Methods(settings.secondFactor...).OnEnable(iam.revokeTokens)
 	}}, settings.twofactor...)
 	factors, err := twofactor.NewFactors(iam.provider, iam.db, iam.store, settings.cipher, settings.issuer, configure...)
 	if err != nil {
@@ -177,17 +185,28 @@ func (iam *Access) buildLinks(settings *Builder, users Users) error {
 }
 
 // buildGuard builds the guard with the credential registries, and the
-// middleware chain around it.
+// middleware chain around it. The application's [Builder.Guard] callbacks run
+// first and the facade's own settings last, so what the facade owns (the
+// session lifetime, the default session handle, the credential registries and
+// the client address) cannot be overridden. Registries only append, so
+// credentials a callback registers directly stay in front of the facade's; see
+// [Builder.Guard]. The event bus of [Builder.Events] is set before the
+// callbacks and is not re-asserted: the facade does not depend on it, so a
+// callback may replace it.
 func (iam *Access) buildGuard(settings *Builder) error {
 	secondFactor, stepUp := iam.credentials(settings)
 	iam.secondFactor, iam.stepUp = len(secondFactor) > 0, len(stepUp) > 0
 	lifetime := cmp.Or(settings.sessionLifetime, session.DefaultMaxLifetime)
-	configure := append([]auth.GuardBuilderFunc{func(policy *auth.GuardBuilder) {
-		policy.SessionLifetime(lifetime).SecondFactor(secondFactor...).StepUp(stepUp...)
+	configure := append(slices.Clone(settings.guard), func(policy *auth.GuardBuilder) {
+		policy.Handle(session.Handle{}).SessionLifetime(lifetime)
+		policy.SecondFactor(secondFactor...).StepUp(stepUp...)
 		if settings.clientIP != nil {
 			policy.ClientIP(settings.clientIP)
 		}
-	}}, settings.guard...)
+	})
+	// The bus goes first: nothing in the facade depends on it, so an application's
+	// Guard callback may replace it.
+	configure = append([]auth.GuardBuilderFunc{func(policy *auth.GuardBuilder) { policy.Events(settings.events) }}, configure...)
 	guard, err := auth.NewGuard(iam.provider, iam.store, configure...)
 	if err != nil {
 		return err
@@ -215,15 +234,17 @@ func (iam *Access) credentials(settings *Builder) (secondFactor, stepUp []auth.C
 }
 
 // chain returns the session middleware followed by the authenticators: the
-// guard's, the token issuer's when enabled, then [Builder.Authenticator]'s.
+// guard's, the token issuer's when enabled, then [Builder.Authenticator]'s. The
+// application's [Builder.Session] callbacks run first and the facade's
+// lifetime and default handle last, so they cannot be overridden.
 func (iam *Access) chain(settings *Builder, lifetime time.Duration) router.Middleware {
 	authenticators := []auth.Authenticator{iam.guard.Authenticator()}
 	if iam.issuer != nil {
 		authenticators = append(authenticators, iam.issuer.Authenticator())
 	}
-	sessions := session.Middleware(iam.store, append([]session.BuilderFunc{func(cookies *session.Builder) {
-		cookies.MaxLifetime(lifetime)
-	}}, settings.sessionPolicy...)...)
+	sessions := session.Middleware(iam.store, append(slices.Clone(settings.sessionPolicy), func(cookies *session.Builder) {
+		cookies.MaxLifetime(lifetime).Handle(session.Handle{})
+	})...)
 	authenticate := auth.Middleware(append(authenticators, settings.authenticators...)...)
 
 	return func(next router.Handler) router.Handler {
@@ -245,25 +266,21 @@ func createExternal(create func(context.Context, string, bool) (string, error)) 
 	}
 }
 
-// afterPasswordChange revokes the user's device tokens, or every token with
-// [Builder.RevokeTokensOnPasswordChange]. The issuer is built after the
-// verifier, so it is read when the hook runs.
-func (iam *Access) afterPasswordChange(ctx context.Context, subject string) error {
-	if iam.revokePersonal && iam.issuer != nil {
-		return iam.issuer.RevokeAll(ctx, subject)
-	}
-
-	return iam.revokeDevices(ctx, subject)
-}
-
-// revokeDevices revokes the user's device tokens when tokens are enabled. It is
-// also the hook that enabling two-factor runs, which is built before the issuer.
-func (iam *Access) revokeDevices(ctx context.Context, subject string) error {
+// revokeTokens ends the user's token access after a credential change, a
+// password change or enabling two-factor: every personal and device token, or
+// only the device tokens with [Builder.KeepPersonalTokens]. Whoever just proved
+// the old credential, or the stolen password, may have minted a personal token
+// that would otherwise outlive the change. The issuer is built after the
+// password and two-factor packages, so it is read when the hook runs.
+func (iam *Access) revokeTokens(ctx context.Context, subject string) error {
 	if iam.issuer == nil {
 		return nil
 	}
+	if iam.keepPersonal {
+		return iam.issuer.RevokeDevices(ctx, subject)
+	}
 
-	return iam.issuer.RevokeDevices(ctx, subject)
+	return iam.issuer.RevokeAll(ctx, subject)
 }
 
 // deliverVerification hands a verification email to [Builder.Deliver].
@@ -271,9 +288,15 @@ func (iam *Access) deliverVerification(ctx context.Context, message account.Mess
 	return iam.deliver(ctx, Message{Kind: KindVerify, Identifier: message.Email, Token: message.Token, ExpiresAt: message.ExpiresAt})
 }
 
-// deliverReset hands a reset email to [Builder.Deliver].
+// deliverReset hands a reset email, or the notice of a registration attempt on
+// a taken address, to [Builder.Deliver].
 func (iam *Access) deliverReset(ctx context.Context, message password.Message) error {
-	return iam.deliver(ctx, Message{Kind: KindReset, Identifier: message.Identifier, Token: message.Token, ExpiresAt: message.ExpiresAt})
+	kind := KindReset
+	if message.Registration {
+		kind = KindRegistration
+	}
+
+	return iam.deliver(ctx, Message{Kind: kind, Identifier: message.Identifier, Token: message.Token, ExpiresAt: message.ExpiresAt})
 }
 
 // sendVerification sends the verification email of a user who just registered.

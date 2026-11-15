@@ -54,13 +54,29 @@ type Message struct {
 	ExpiresAt time.Time
 }
 
-// Link returns base with the token as its "token" query parameter, escaped.
+// Link returns base with the token in the URL fragment, as "#token=...",
+// escaped, so the token is not sent to the server, its logs or proxies. The
+// verify page reads it from location.hash and posts it; [Message.QueryLink] is
+// the form for a server-rendered page. base must not already carry a fragment.
 //
 // Example:
 //
 //	message := account.Message{Token: "abc"}
-//	fmt.Println(message.Link("https://app.example.com/verify")) // https://app.example.com/verify?token=abc
+//	fmt.Println(message.Link("https://app.example.com/verify")) // https://app.example.com/verify#token=abc
 func (message Message) Link(base string) string {
+	return base + "#" + url.Values{"token": {message.Token}}.Encode()
+}
+
+// QueryLink returns base with the token as its "token" query parameter,
+// escaped, for a page that a server renders. The token then reaches the server,
+// its logs and proxies: prefer [Message.Link]. base must not already carry a
+// query.
+//
+// Example:
+//
+//	message := account.Message{Token: "abc"}
+//	fmt.Println(message.QueryLink("https://app.example.com/verify")) // https://app.example.com/verify?token=abc
+func (message Message) QueryLink(base string) string {
 	return base + "?" + url.Values{"token": {message.Token}}.Encode()
 }
 
@@ -220,7 +236,7 @@ func (directory *Directory) consumeVerification(ctx context.Context, only, hashe
 //
 //	web.Post("/email/verify", directory.VerifyHandler())
 func (directory *Directory) VerifyHandler() router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err
@@ -236,7 +252,7 @@ func (directory *Directory) VerifyHandler() router.Handler {
 		}
 
 		return response.Status(w, http.StatusNoContent)
-	}
+	})
 }
 
 // ResendHandler returns the handler of POST /email/verify/resend. It needs a
@@ -261,7 +277,7 @@ func (directory *Directory) ResendHandler() router.Handler {
 		panic("account: ResendHandler requires Builder.Throttle")
 	}
 
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err
@@ -286,7 +302,7 @@ func (directory *Directory) ResendHandler() router.Handler {
 		})
 
 		return response.Status(w, http.StatusAccepted)
-	}
+	})
 }
 
 // RequireVerified returns middleware that admits only users whose email is

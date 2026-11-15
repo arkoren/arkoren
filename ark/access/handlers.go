@@ -19,8 +19,10 @@ func need(enabled bool, handler, requirement string) {
 }
 
 // RegisterHandler returns the handler of POST /register; see
-// [password.Verifier.RegisterHandler]. With the built-in directory a new user
-// gets a verification email when [Builder.Deliver] is set. It panics unless
+// [password.Verifier.RegisterHandler]. It always answers 202 and does not log
+// the user in; for a taken address it creates nothing and sends the owner a
+// [KindRegistration] message with a reset link. With the built-in directory a new
+// user gets a verification email when [Builder.Deliver] is set. It panics unless
 // [Builder.Password] is enabled and users can be created.
 //
 // Example:
@@ -29,7 +31,7 @@ func need(enabled bool, handler, requirement string) {
 func (iam *Access) RegisterHandler() router.Handler {
 	need(iam.verifier != nil, "RegisterHandler", "Builder.Password")
 
-	return iam.verifier.RegisterHandler(iam.guard)
+	return iam.verifier.RegisterHandler()
 }
 
 // LoginHandler returns the handler of POST /login; see
@@ -56,7 +58,7 @@ func (iam *Access) LoginHandler() router.Handler {
 func (iam *Access) ChallengeHandler() router.Handler {
 	need(iam.secondFactor, "ChallengeHandler", "Builder.TwoFactor or Builder.SecondFactor")
 
-	return iam.guard.ChallengeHandler()
+	return web.JSON(iam.guard.ChallengeHandler())
 }
 
 // PendingHandler returns the handler of GET /login/pending, which tells a client
@@ -79,7 +81,7 @@ func (iam *Access) PendingHandler() router.Handler {
 //
 //	web.Post("/logout", iam.LogoutHandler())
 func (iam *Access) LogoutHandler() router.Handler {
-	return iam.guard.LogoutHandler()
+	return web.JSON(iam.guard.LogoutHandler())
 }
 
 // ConfirmHandler returns the handler of POST /confirm, which re-proves a
@@ -93,7 +95,7 @@ func (iam *Access) LogoutHandler() router.Handler {
 func (iam *Access) ConfirmHandler() router.Handler {
 	need(iam.stepUp, "ConfirmHandler", "Builder.Password, Builder.TwoFactor or Builder.StepUp")
 
-	return iam.guard.ConfirmHandler()
+	return web.JSON(iam.guard.ConfirmHandler())
 }
 
 // VerifyEmailHandler returns the handler of POST /email/verify; see

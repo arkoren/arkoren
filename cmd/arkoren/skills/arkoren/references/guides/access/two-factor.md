@@ -53,9 +53,9 @@ This is the only time they are shown. A wrong code is `422`, ten wrong codes in 
 minutes are `429`, and enabling without setup is `409`. The session records the
 code, so the user stays fresh for the next change.
 
-Enabling also ends every other login of the user and revokes their device tokens,
-so a session an attacker opened before the second factor existed does not
-outlive it. All of that happens in the same transaction as the activation: if it
+Enabling also ends every other login of the user and revokes all their tokens
+(only device tokens with `iam.KeepPersonalTokens()`), so a session an attacker
+opened before the second factor existed does not outlive it. All of that happens in the same transaction as the activation: if it
 fails, the answer is `500`, two-factor stays off and no recovery code was shown.
 Enabling publishes `twofactor.Enabled` and core's `auth.CredentialEnrolled`.
 

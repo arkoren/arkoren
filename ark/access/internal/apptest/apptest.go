@@ -102,7 +102,9 @@ func (client *Client) NewDevice() *Client {
 }
 
 // Do sends method path with body (empty for none) and optional "Name: value"
-// headers, and returns the reply. Redirects are not followed.
+// headers, and returns the reply. POST, PUT and PATCH carry Content-Type
+// application/json unless a header sets another value; a header with an empty
+// value ("Content-Type: ") removes it. Redirects are not followed.
 func (client *Client) Do(method, path, body string, headers ...string) Reply {
 	client.t.Helper()
 
@@ -114,8 +116,16 @@ func (client *Client) Do(method, path, body string, headers ...string) Reply {
 	if err != nil {
 		client.t.Fatalf("request: %v", err)
 	}
+	if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	for _, header := range headers {
 		name, value, _ := strings.Cut(header, ": ")
+		if value == "" {
+			request.Header.Del(name)
+
+			continue
+		}
 		request.Header.Set(name, value)
 	}
 	response, err := client.http.Do(request)

@@ -2,9 +2,11 @@ package password
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/cache"
 
 	"arkoren.dev/ark/access/internal/storage"
@@ -74,11 +76,25 @@ func (verifier *Verifier) reserveLogin(ctx context.Context, counters loginCounte
 }
 
 // settleLogin undoes the counting of a successful login: it clears the
-// identifier-and-address counter and refunds the other two.
-func (verifier *Verifier) settleLogin(ctx context.Context, counters loginCounters) {
+// identifier-and-address counter and refunds the other two. A subject in a
+// second-factor lockout ([auth.Guard.LockedOut]) is not settled: its correct
+// password only opens a pending login that cannot finish, so the attempt stays
+// counted as the failure it is, and someone who knows the password cannot start
+// pending logins after every lockout at no cost. The guard keeps the lockout, not
+// an event, so a failing lookup is returned and the login fails closed.
+func (verifier *Verifier) settleLogin(ctx context.Context, guard *auth.Guard, counters loginCounters, subject string) error {
+	locked, err := guard.LockedOut(ctx, subject)
+	if err != nil {
+		return fmt.Errorf("access: read second-factor lockout: %w", err)
+	}
+	if locked {
+		return nil
+	}
 	verifier.clear(ctx, counters.pair.key)
 	verifier.refund(ctx, counters.identifier.key)
 	verifier.refund(ctx, counters.client.key)
+
+	return nil
 }
 
 // identifierKey is the counter key of one identifier, lowercased and hashed so
