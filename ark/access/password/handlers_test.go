@@ -185,8 +185,10 @@ func TestRegisterNoticesAreThrottled(t *testing.T) {
 			if reply.Status != want {
 				t.Fatalf("registration #%d = %d %s, want %d", i+1, reply.Status, reply.Body, want)
 			}
+			// One send at a time: concurrent resets of one user may deadlock on
+			// MySQL, which is not what this test is about.
+			sys.settle(t)
 		}
-		sys.settle(t)
 		if got := len(*sys.sent) - before; got != 4 {
 			t.Fatalf("notices = %d, want 4: registerAda used one of the five registrations", got)
 		}
