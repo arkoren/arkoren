@@ -48,7 +48,9 @@ var passwordFactor = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKno
 // against a distributed guess; and 100 per client address. A successful login
 // refunds its attempt on all three and clears the identifier-and-address
 // counter. A user locked out of an account by a distributed guess waits for
-// the window, or resets the password.
+// the window, or resets the password. A user in a second-factor lockout
+// ([Verifier.CountLockout]) is not refunded: a correct password only parks a
+// pending login that cannot finish, so it counts as a failure.
 //
 // Example:
 //
@@ -75,7 +77,9 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 		if err != nil {
 			return err
 		}
-		verifier.settleLogin(ctx, counters)
+		if err := verifier.settleLogin(ctx, counters, subject); err != nil {
+			return err
+		}
 		outcome, err := guard.Begin(r, subject, passwordFactor)
 		if err != nil {
 			return err

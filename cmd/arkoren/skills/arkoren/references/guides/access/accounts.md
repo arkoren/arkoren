@@ -99,11 +99,15 @@ provide `Users.Verified`.
 
 What a change ends:
 
-- A password change ends the user's other logins and revokes their device tokens.
-  Personal tokens survive, because the user made them on purpose for scripts. To
-  revoke them too, call `iam.RevokeTokensOnPasswordChange()`. It has no effect
-  without passwords and tokens.
-- Enabling two-factor ends the user's other logins and revokes their device tokens.
+- A password change ends the user's other logins and revokes all their tokens,
+  personal and device ones. Someone who stole the password can log in and create a
+  personal token, and that token must not outlive the change. If your users rely
+  on long-lived personal tokens for scripts and you accept the risk, call
+  `iam.KeepPersonalTokens()` to revoke only device tokens. It has no effect
+  without tokens.
+- Enabling two-factor ends the user's other logins and revokes their tokens the
+  same way, for the same reason, and `iam.KeepPersonalTokens()` limits it to
+  device tokens too.
 - A password reset rotates the user, which ends every session, pending login and
   token.
 

@@ -1,5 +1,7 @@
 arkoren.dev/core v0.8.0 h1:eBb8YTm2A3iE8vx50Y0bHGO3ku434r65wSqHajxJgEM=
 arkoren.dev/core v0.8.0/go.mod h1:09a4ff3ddb8VhE9wQgAGcIbIJWEBHk4Ltxyg1+muE20=
+arkoren.dev/core v0.8.1-0.20261115061220-ee142ed01841 h1:xBxhGmVDx6bqrzbP8bOE83ds75tWojfz+Ei/1G+J0ZU=
+arkoren.dev/core v0.8.1-0.20261115061220-ee142ed01841/go.mod h1:09a4ff3ddb8VhE9wQgAGcIbIJWEBHk4Ltxyg1+muE20=
 arkoren.dev/driver/aes v0.1.0 h1:BgKo4KOAF9K0uN57tQudoWc5WbcJwC8UA7iV+lj1UM8=
 arkoren.dev/driver/aes v0.1.0/go.mod h1:iCi4Y5QWmicOE9SmJ4QMfiraItfzKljyzM5Z4DltlPI=
 arkoren.dev/driver/bcrypt v0.1.0 h1:kSI01TV8ZdV7655oTZ5ogSZDB4JSXVX6Abs2wBWl34o=

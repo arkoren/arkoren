@@ -85,10 +85,10 @@
 //     shutdown. Mail goes to the address stored with the user, never to the text
 //     of the request, and a user keeps up to three live reset links.
 //   - A password change keeps the caller, ends the user's other logins and
-//     revokes their device tokens (personal tokens stay unless
-//     [Builder.RevokeTokensOnPasswordChange]); a reset rotates the user, which
-//     ends every session, pending login and API token, and never logs the user
-//     in.
+//     revokes all their tokens, personal ones too (only device tokens with
+//     [Builder.KeepPersonalTokens]); enabling two-factor does the same; a reset
+//     rotates the user, which ends every session, pending login and API token,
+//     and never logs the user in.
 //   - A completed reset proves the mailbox. When the email was unverified it is
 //     marked verified and every connection, the authenticator, the recovery codes
 //     and all tokens are deleted, because whoever registered the address first

@@ -99,9 +99,10 @@ carries every scope of the catalog and does not expire by itself, so the app mus
 revoke it at logout. Exchanging a login for a device token needs a verified email,
 like creating a personal token.
 
-A password change revokes the user's device tokens but keeps their personal tokens
-unless you opt in to [revoking them too](accounts.md#credential-changes). A
-password reset revokes all of them, and so does a deleted account. Tokens publish
+A password change, enabling two-factor and a password reset revoke all the user's
+tokens, and so does a deleted account. `iam.KeepPersonalTokens()` makes a password
+change and enabling two-factor [revoke only device tokens](accounts.md#credential-changes),
+for applications whose users depend on long-lived personal tokens. Tokens publish
 `apitoken.Issued` and `apitoken.Revoked` events.
 
 For every function and option, see

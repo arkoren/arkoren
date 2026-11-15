@@ -186,10 +186,13 @@ Four builder methods configure what the facade shares between features:
   throttles. The default is the host of `r.RemoteAddr`, which behind a reverse
   proxy is the proxy itself, so pass `ratelimit.TrustedProxyKey(...)` there.
 - `iam.Guard(configure)` customizes the guard, such as the step-up window with
-  `FreshFor`. Do not set credential registries, the session lifetime or a session
-  handle there.
-- `iam.Session(configure)` customizes the session cookie, such as its name. Do
-  not set the maximum lifetime or a handle there.
+  `FreshFor`. The facade applies its own settings after your callback, so the
+  session lifetime, the session handle, the event bus and the client address you
+  set with `iam.ClientIP` always win. Register credentials with `iam.SecondFactor`
+  and `iam.StepUp`, not there: the registries only append.
+- `iam.Session(configure)` customizes the session cookie, such as its name. The
+  facade applies the maximum lifetime and the default handle after your callback,
+  so they cannot be overridden.
 
 `iam.SecondFactor`, `iam.StepUp` and `iam.Authenticator` add credentials and
 authenticators from other modules, such as a passkey package, after the built-in

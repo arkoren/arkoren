@@ -73,6 +73,12 @@ limits are 10 failures per identifier and client address together, 50 per
 identifier across all addresses and 100 per client address. The next attempt is
 `429` with `Retry-After`, and a successful login refunds its attempt.
 
+The refund stops while the user is in a second-factor lockout. A correct password
+then only parks a pending login that cannot finish, so the facade keeps the attempt
+counted: someone who knows the password cannot start pending logins after every
+lockout at no cost. The facade listens for `auth.SecondFactorLocked` itself, on
+the bus you set with `iam.Events` or on a private one, so it needs no setup.
+
 Keying the first limit on the address too means someone failing from elsewhere
 cannot lock the real user out. The looser 50 still stops a distributed guess at
 one account, and that user waits for the window or resets the password. IPv6

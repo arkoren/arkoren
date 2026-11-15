@@ -52,7 +52,7 @@ type Builder struct {
 	sessionPolicy   []session.BuilderFunc
 	sessionLifetime time.Duration
 	clientIP        func(*http.Request) string
-	revokePersonal  bool
+	keepPersonal    bool
 	emailProven     func(context.Context, string) error
 }
 
@@ -83,7 +83,9 @@ func (iam *Builder) Instance(name string) *Builder {
 // Events publishes the events of every package on bus: account, password,
 // two-factor, token and connection changes, and the core
 // [auth.CredentialEnrolled]. Events carry subjects only, never tokens, codes or
-// email addresses. A nil bus publishes nothing.
+// email addresses. A nil bus publishes nothing, except that the facade listens
+// on a private bus for [auth.SecondFactorLocked] (see [Builder.Password]); the
+// guard publishes that event on this bus too, for your own listeners.
 //
 // Example:
 //
@@ -110,7 +112,12 @@ func (iam *Builder) Users(users Users) *Builder {
 // Password enables registration, login, password confirmation, change, forgot
 // and reset, hashing with hasher. configure customizes the password package (the
 // policy, the reset lifetime); the facade has already set the instance, the
-// events and the client address.
+// events and the client address. Every second-factor lockout of a user (see
+// [auth.SecondFactorLocked]) counts against the login throttle: while it lasts,
+// a correct password of that user is not refunded, so starting pending logins
+// that cannot finish keeps costing throttle budget. The facade subscribes to
+// the guard's event bus itself, the application's [Builder.Events] bus or a
+// private one when there is none; it needs no setup.
 //
 // Example:
 //
@@ -152,18 +159,21 @@ func (iam *Builder) Tokens(configure ...apitoken.BuilderFunc) *Builder {
 	return iam
 }
 
-// RevokeTokensOnPasswordChange makes a password change also revoke the user's
-// personal access tokens. By default a change ends the user's other sessions and
-// their device tokens, but keeps personal tokens, which the user created on
-// purpose for scripts and integrations. Turn this on when a changed password
-// should cut off everything. It has no effect without [Builder.Tokens] and
-// [Builder.Password]; a password reset always revokes every token.
+// KeepPersonalTokens limits what a password change and enabling two-factor
+// revoke to the user's device tokens. By default both revoke every token,
+// personal ones included: someone who stole the password can log in and create a
+// personal token, and a user who then changes the password, or protects the
+// account with two-factor, would otherwise leave that token working. Keep
+// personal tokens only when your users rely on long-lived tokens for scripts and
+// integrations and you accept that trade-off; they can still revoke them one by
+// one. It has no effect without [Builder.Tokens]. A password reset always
+// revokes every token, whatever this says.
 //
 // Example:
 //
-//	iam.RevokeTokensOnPasswordChange()
-func (iam *Builder) RevokeTokensOnPasswordChange() *Builder {
-	iam.revokePersonal = true
+//	iam.KeepPersonalTokens()
+func (iam *Builder) KeepPersonalTokens() *Builder {
+	iam.keepPersonal = true
 
 	return iam
 }
@@ -252,10 +262,16 @@ func (iam *Builder) Authenticator(authenticators ...auth.Authenticator) *Builder
 }
 
 // Guard customizes the [auth.Guard] the facade builds (the step-up window, the
-// attempt limit, the login limit). Do not set the credential registries
-// (use [Builder.SecondFactor] and [Builder.StepUp]), the session lifetime (use
-// [Builder.SessionLifetime]) or a session handle: the provider handlers of
-// ark/oauth use the default handle.
+// attempt limit, the login limit). The callbacks run first and the facade's own
+// settings after them, so the facade wins: the session lifetime
+// ([Builder.SessionLifetime]), the session handle (always the default one,
+// which the provider handlers of ark/oauth use), the event bus and, when set,
+// the client address ([Builder.ClientIP]) replace whatever the callbacks chose.
+// The credential registries only append: register second-factor and step-up
+// credentials with [Builder.SecondFactor] and [Builder.StepUp], not here. A
+// credential registered here would be listed to users before the built-in ones,
+// and a method the facade also registers makes [New] fail with
+// [ErrInvalidConfig] as a duplicate.
 //
 // Example:
 //
@@ -269,9 +285,10 @@ func (iam *Builder) Guard(configure ...auth.GuardBuilderFunc) *Builder {
 }
 
 // Session customizes the session middleware that [Access.Middleware] installs
-// (cookie name, domain, renewal). Do not set MaxLifetime (use
-// [Builder.SessionLifetime]) or a handle: the provider handlers of ark/oauth
-// use the default handle.
+// (cookie name, domain, renewal). The callbacks run first and the facade's
+// settings after them, so the maximum lifetime ([Builder.SessionLifetime]) and
+// the default handle, which the guard and the provider handlers of ark/oauth
+// use, replace whatever the callbacks chose.
 //
 // Example:
 //

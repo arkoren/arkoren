@@ -3,7 +3,7 @@ module arkoren.dev/ark/access
 go 1.27
 
 require (
-	arkoren.dev/core v0.8.0
+	arkoren.dev/core v0.8.1-0.20261115061220-ee142ed01841
 	arkoren.dev/driver/aes v0.1.0
 	arkoren.dev/driver/bcrypt v0.1.0
 	arkoren.dev/driver/mysql v0.1.0

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/event"
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/access"
@@ -244,11 +245,27 @@ func TestTwoFactorWithRecentCodeDisablesAndEnableEndsOtherLogins(t *testing.T) {
 	})
 }
 
-// TestEnablingTwoFactorRevokesDeviceTokens verifies enabling two-factor ends
-// device tokens, which were issued without the new factor, and keeps personal
-// ones.
-func TestEnablingTwoFactorRevokesDeviceTokens(t *testing.T) {
+// TestEnablingTwoFactorRevokesAllTokens verifies enabling two-factor ends
+// device and personal tokens, which were issued without the new factor.
+func TestEnablingTwoFactorRevokesAllTokens(t *testing.T) {
 	t.Parallel()
+
+	checkEnablingTwoFactorTokens(t, false, http.StatusUnauthorized)
+}
+
+// TestEnablingTwoFactorKeepsPersonalTokensWhenOptedIn verifies
+// KeepPersonalTokens limits enabling two-factor to device tokens.
+func TestEnablingTwoFactorKeepsPersonalTokensWhenOptedIn(t *testing.T) {
+	t.Parallel()
+
+	checkEnablingTwoFactorTokens(t, true, http.StatusOK)
+}
+
+// checkEnablingTwoFactorTokens enables two-factor for a user holding a personal
+// and a device token, with or without KeepPersonalTokens, and checks the device
+// token is rejected and the personal one answers personalStatus.
+func checkEnablingTwoFactorTokens(t *testing.T, keepPersonal bool, personalStatus int) {
+	t.Helper()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
@@ -256,6 +273,9 @@ func TestEnablingTwoFactorRevokesDeviceTokens(t *testing.T) {
 			iam.Password(hasher())
 			iam.TwoFactor(cipher(t), "Example")
 			iam.Tokens()
+			if keepPersonal {
+				iam.KeepPersonalTokens()
+			}
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		subject := mustSubject(t, sys)
@@ -277,32 +297,32 @@ func TestEnablingTwoFactorRevokesDeviceTokens(t *testing.T) {
 		if got := status(device); got != http.StatusUnauthorized {
 			t.Fatalf("device token after enabling two-factor = %d, want 401", got)
 		}
-		if got := status(personal); got != http.StatusOK {
-			t.Fatalf("personal token after enabling two-factor = %d, want 200", got)
+		if got := status(personal); got != personalStatus {
+			t.Fatalf("personal token after enabling two-factor = %d, want %d", got, personalStatus)
 		}
 	})
 }
 
-// TestPasswordChangeRevokesDeviceTokens verifies a change ends device tokens
-// and keeps personal ones.
-func TestPasswordChangeRevokesDeviceTokens(t *testing.T) {
+// TestPasswordChangeRevokesAllTokens verifies a change ends device and personal
+// tokens by default.
+func TestPasswordChangeRevokesAllTokens(t *testing.T) {
 	t.Parallel()
 
-	checkPasswordChangeTokens(t, false, http.StatusOK)
+	checkPasswordChangeTokens(t, false, http.StatusUnauthorized)
 }
 
-// TestPasswordChangeRevokesPersonalTokensWhenOptedIn verifies
-// RevokeTokensOnPasswordChange makes a change end personal tokens too.
-func TestPasswordChangeRevokesPersonalTokensWhenOptedIn(t *testing.T) {
+// TestPasswordChangeKeepsPersonalTokensWhenOptedIn verifies KeepPersonalTokens
+// limits a change to device tokens.
+func TestPasswordChangeKeepsPersonalTokensWhenOptedIn(t *testing.T) {
 	t.Parallel()
 
-	checkPasswordChangeTokens(t, true, http.StatusUnauthorized)
+	checkPasswordChangeTokens(t, true, http.StatusOK)
 }
 
 // checkPasswordChangeTokens changes the password of a user holding a personal
-// and a device token, with or without RevokeTokensOnPasswordChange, and checks
+// and a device token, with or without KeepPersonalTokens, and checks
 // the device token is rejected and the personal one answers personalStatus.
-func checkPasswordChangeTokens(t *testing.T, revokePersonal bool, personalStatus int) {
+func checkPasswordChangeTokens(t *testing.T, keepPersonal bool, personalStatus int) {
 	t.Helper()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
@@ -310,8 +330,8 @@ func checkPasswordChangeTokens(t *testing.T, revokePersonal bool, personalStatus
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
 			iam.Tokens()
-			if revokePersonal {
-				iam.RevokeTokensOnPasswordChange()
+			if keepPersonal {
+				iam.KeepPersonalTokens()
 			}
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
@@ -516,6 +536,85 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 		}
 		if tokens, _ := sys.iam.Issuer().Tokens(ctx, "u1"); len(tokens) != 0 {
 			t.Fatalf("tokens after a reset of an unverified user = %v", tokens)
+		}
+	})
+}
+
+// lockSecondFactor enables two-factor for ada and uses up the second-factor
+// attempts of a pending login with wrong codes, so the guard publishes
+// [auth.SecondFactorLocked].
+func lockSecondFactor(t *testing.T, sys *app) {
+	t.Helper()
+
+	registerVerified(t, sys, sys.client, "ada@example.com")
+	setup := sys.client.Post("/two-factor/setup", "")
+	if reply := sys.client.Post("/two-factor", `{"code":"`+code(t, secretOf(setup.Body), 0)+`"}`); reply.Status != http.StatusOK {
+		t.Fatalf("enable = %d %s", reply.Status, reply.Body)
+	}
+	attacker := sys.client.NewDevice()
+	if reply := attacker.Post("/login", `{"email":"ada@example.com","password":"correct horse"}`); reply.Status != http.StatusAccepted {
+		t.Fatalf("login = %d %s", reply.Status, reply.Body)
+	}
+	for range 5 {
+		attacker.Post("/login/challenge", `{"method":"otp","code":"000000"}`)
+	}
+}
+
+// TestSecondFactorLockoutCountsAgainstTheLoginThrottle verifies that after a
+// lockout a correct password is no longer refunded, so starting pending logins
+// ends in 429 instead of costing nothing, even when the application's Guard
+// callback tried to drop the event bus and the application set no bus.
+func TestSecondFactorLockoutCountsAgainstTheLoginThrottle(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher())
+			iam.TwoFactor(cipher(t), "Example")
+			iam.Guard(func(policy *auth.GuardBuilder) { policy.Events(nil) })
+		})
+		lockSecondFactor(t, sys)
+		for i := range 12 {
+			reply := sys.client.NewDevice().Post("/login", `{"email":"ada@example.com","password":"correct horse"}`)
+			if reply.Status == http.StatusTooManyRequests {
+				return
+			}
+			if reply.Status != http.StatusAccepted {
+				t.Fatalf("login #%d during the lockout = %d %s, want 202", i+1, reply.Status, reply.Body)
+			}
+		}
+		t.Fatal("twelve pending logins during a lockout were never throttled")
+	})
+}
+
+// TestSecondFactorLockoutReachesTheApplicationBus verifies the bus set with
+// Events still receives auth.SecondFactorLocked from the facade's guard.
+func TestSecondFactorLockoutReachesTheApplicationBus(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		bus := event.New()
+		locked := make(chan string, 1)
+		if _, err := bus.Listen(auth.SecondFactorLocked, func(_ context.Context, lockout auth.SecondFactorLockedEvent) error {
+			locked <- lockout.Subject
+
+			return nil
+		}); err != nil {
+			t.Fatalf("Listen: %v", err)
+		}
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher())
+			iam.TwoFactor(cipher(t), "Example")
+			iam.Events(bus)
+		})
+		lockSecondFactor(t, sys)
+		select {
+		case subject := <-locked:
+			if subject != mustSubject(t, sys) {
+				t.Fatalf("locked subject = %q", subject)
+			}
+		default:
+			t.Fatal("the application's bus did not receive SecondFactorLocked")
 		}
 	})
 }
