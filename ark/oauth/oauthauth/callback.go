@@ -65,7 +65,8 @@ import (
 // hand-off cookie is named after the state, bound to its name, and only that GET
 // reads it; a form_post client never completes a login from a GET that carries
 // a code. Like the login cookie it is deleted, not tracked: it is not
-// single-use, and a copy of it stays valid until its 30 seconds pass. A
+// single-use, and a copy of it stays valid until its 30 seconds pass (the check tolerates 5
+// more seconds of clock difference between servers). A
 // verified identity too large for one cookie (about 3800 bytes) fails the POST
 // with an error. resolve runs once, in the GET, and sees the claims after a
 // JSON round trip.

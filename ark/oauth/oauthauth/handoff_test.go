@@ -332,20 +332,29 @@ func TestAppleHandoffCopyWorksUntilItExpires(t *testing.T) {
 		t.Fatalf("copy within its lifetime: status = %d, want 302", status)
 	}
 
-	sealed, err := f.client.cipher.Encrypt(loginState{
-		Cookie:   name,
-		State:    form.Get("state"),
-		Expires:  time.Now().Add(-time.Second),
-		Identity: &auth.External{Issuer: "i", Subject: "user-1"},
-	})
+	// forge returns a browser holding a hand-off sealed with an expiry the given
+	// time ago.
+	forge := func(ago time.Duration) *browser {
+		sealed, err := f.client.cipher.Encrypt(loginState{
+			Cookie:   name,
+			State:    form.Get("state"),
+			ReturnTo: "/dash",
+			Expires:  time.Now().Add(-ago),
+			Identity: &auth.External{Issuer: "i", Subject: "user-1"},
+		})
 
-	if err != nil {
-		t.Fatal(err)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return &browser{cookies: map[string]*http.Cookie{name: {Name: name, Value: base64.RawURLEncoding.EncodeToString(sealed)}}}
 	}
 
-	expired := &browser{cookies: map[string]*http.Cookie{name: {Name: name, Value: base64.RawURLEncoding.EncodeToString(sealed)}}}
+	if status := f.follow(forge(3*time.Second), posted).StatusCode; status != http.StatusFound {
+		t.Fatalf("copy expired within the clock slack: status = %d, want 302", status)
+	}
 
-	if status := f.follow(expired, posted).StatusCode; status != http.StatusBadRequest {
+	if status := f.follow(forge(10*time.Second), posted).StatusCode; status != http.StatusBadRequest {
 		t.Fatalf("expired copy status = %d, want 400", status)
 	}
 }

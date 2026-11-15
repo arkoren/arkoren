@@ -106,7 +106,8 @@ answers `303` to the callback path, where the top-level GET navigation carries t
 login, so connecting Apple to a logged-in user links the identity instead of creating a second account. The identity
 links to the session present at that GET, and the session cookie must be `SameSite=Lax` (the default; Strict
 breaks connect). Route both methods to the callback (`r.Methods([]string{"GET", "POST"}, ...)`), and give the
-client an absolute `RedirectURL` with a path; `New` rejects anything else for a `form_post` provider.
+client an absolute `RedirectURL` with a path: for a `form_post` provider, `New` rejects a non-empty `RedirectURL`
+that is not absolute with a path. The hand-off expiry check tolerates 5 seconds of clock skew between servers.
 
 ### Upgrading
 

@@ -23,6 +23,13 @@ const (
 	// works until this time passes; keep it short.
 	handoffTTL = 30 * time.Second
 
+	// handoffSlack is the clock difference between servers that the hand-off
+	// expiry tolerates. The POST and the GET can reach different instances, and
+	// the expiry is the POST server's clock; without slack a skew of a few
+	// seconds would reject a 30 second hand-off. The cookie's Max-Age is not
+	// extended, so a browser normally drops it at 30 seconds anyway.
+	handoffSlack = 5 * time.Second
+
 	// handoffSuffix ends the name of every hand-off cookie. Base64url has no dot,
 	// so no login cookie name can end with it.
 	handoffSuffix = ".h"
@@ -138,7 +145,7 @@ func (client *Client) drop(writer http.ResponseWriter, name string) {
 // Deletion does not invalidate a copied cookie: there is no used-state registry.
 // The provider's one-time authorization code is the server-side replay boundary.
 func (client *Client) take(writer http.ResponseWriter, request *http.Request, state string) (loginState, error) {
-	return client.takeCookie(writer, request, client.cookieName(state), state)
+	return client.takeCookie(writer, request, client.cookieName(state), state, 0)
 }
 
 // handoffName returns the name of the hand-off cookie of the login with the
@@ -204,9 +211,10 @@ func (client *Client) handOff(writer http.ResponseWriter, saved loginState, iden
 // stored for state and sends a cookie deletion to the browser. It fails when the
 // cookie is missing, tampered, expired, moved, for another state, or holds no
 // identity. Like [Client.take] it cannot invalidate a copied cookie; the
-// cookie is encrypted, HttpOnly and lives for [handoffTTL].
+// cookie is encrypted, HttpOnly and lives for [handoffTTL], plus [handoffSlack]
+// of tolerated clock skew in the expiry check.
 func (client *Client) takeHandoff(writer http.ResponseWriter, request *http.Request, state string) (loginState, error) {
-	saved, err := client.takeCookie(writer, request, client.handoffName(state), state)
+	saved, err := client.takeCookie(writer, request, client.handoffName(state), state, handoffSlack)
 
 	if err != nil {
 		return loginState{}, err
@@ -221,8 +229,9 @@ func (client *Client) takeHandoff(writer http.ResponseWriter, request *http.Requ
 
 // takeCookie is the shared body of [Client.take] and [Client.takeHandoff]: it
 // opens the sealed cookie called name, deletes it from the browser and checks it
-// belongs to state.
-func (client *Client) takeCookie(writer http.ResponseWriter, request *http.Request, name, state string) (loginState, error) {
+// belongs to state. slack is extra time past the sealed expiry that is still
+// accepted, to absorb clock skew between servers; zero for a login cookie.
+func (client *Client) takeCookie(writer http.ResponseWriter, request *http.Request, name, state string, slack time.Duration) (loginState, error) {
 	cookie, err := request.Cookie(name)
 
 	if err != nil {
@@ -237,7 +246,7 @@ func (client *Client) takeCookie(writer http.ResponseWriter, request *http.Reque
 		return loginState{}, err
 	}
 
-	if !saved.Expires.After(time.Now()) || subtle.ConstantTimeCompare([]byte(saved.State), []byte(state)) != 1 {
+	if !saved.Expires.Add(slack).After(time.Now()) || subtle.ConstantTimeCompare([]byte(saved.State), []byte(state)) != 1 {
 		return loginState{}, errors.New("login expired or state mismatch")
 	}
 
