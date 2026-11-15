@@ -220,7 +220,7 @@ func (directory *Directory) consumeVerification(ctx context.Context, only, hashe
 //
 //	web.Post("/email/verify", directory.VerifyHandler())
 func (directory *Directory) VerifyHandler() router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err
@@ -236,7 +236,7 @@ func (directory *Directory) VerifyHandler() router.Handler {
 		}
 
 		return response.Status(w, http.StatusNoContent)
-	}
+	})
 }
 
 // ResendHandler returns the handler of POST /email/verify/resend. It needs a
@@ -261,7 +261,7 @@ func (directory *Directory) ResendHandler() router.Handler {
 		panic("account: ResendHandler requires Builder.Throttle")
 	}
 
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err
@@ -286,7 +286,7 @@ func (directory *Directory) ResendHandler() router.Handler {
 		})
 
 		return response.Status(w, http.StatusAccepted)
-	}
+	})
 }
 
 // RequireVerified returns middleware that admits only users whose email is

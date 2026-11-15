@@ -56,7 +56,7 @@ func (iam *Access) LoginHandler() router.Handler {
 func (iam *Access) ChallengeHandler() router.Handler {
 	need(iam.secondFactor, "ChallengeHandler", "Builder.TwoFactor or Builder.SecondFactor")
 
-	return iam.guard.ChallengeHandler()
+	return web.JSON(iam.guard.ChallengeHandler())
 }
 
 // PendingHandler returns the handler of GET /login/pending, which tells a client
@@ -79,7 +79,7 @@ func (iam *Access) PendingHandler() router.Handler {
 //
 //	web.Post("/logout", iam.LogoutHandler())
 func (iam *Access) LogoutHandler() router.Handler {
-	return iam.guard.LogoutHandler()
+	return web.JSON(iam.guard.LogoutHandler())
 }
 
 // ConfirmHandler returns the handler of POST /confirm, which re-proves a
@@ -93,7 +93,7 @@ func (iam *Access) LogoutHandler() router.Handler {
 func (iam *Access) ConfirmHandler() router.Handler {
 	need(iam.stepUp, "ConfirmHandler", "Builder.Password, Builder.TwoFactor or Builder.StepUp")
 
-	return iam.guard.ConfirmHandler()
+	return web.JSON(iam.guard.ConfirmHandler())
 }
 
 // VerifyEmailHandler returns the handler of POST /email/verify; see

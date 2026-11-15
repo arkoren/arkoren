@@ -63,7 +63,7 @@ func (issuer *Issuer) ListHandler() router.Handler {
 //
 //	web.Post("/tokens", issuer.CreateHandler(guard))
 func (issuer *Issuer) CreateHandler(guard *auth.Guard) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -81,7 +81,7 @@ func (issuer *Issuer) CreateHandler(guard *auth.Guard) router.Handler {
 		}
 
 		return response.JSON(w, http.StatusCreated, secretBody{Token: token, Secret: secret})
-	}
+	})
 }
 
 // DeleteHandler returns the handler of DELETE /tokens/{id}: 204 when the token
@@ -125,7 +125,7 @@ func (issuer *Issuer) DeleteHandler() router.Handler {
 //
 //	web.Post("/device-tokens", issuer.ExchangeHandler(guard))
 func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err
@@ -151,7 +151,7 @@ func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
 		}
 
 		return response.JSON(w, http.StatusCreated, secretBody{Token: token, Secret: secret})
-	}
+	})
 }
 
 // DeleteCurrentHandler returns the handler of DELETE /device-tokens/current: it

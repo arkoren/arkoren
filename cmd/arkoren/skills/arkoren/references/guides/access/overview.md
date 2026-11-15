@@ -89,11 +89,22 @@ session middleware and the guard and keeps them on one lifetime: set it with
 session handle, which the OAuth provider handlers require. [Routes](routes.md)
 lists what `Mount` registers.
 
+Add core's CSRF middleware next to it, before `iam.Mount`:
+
+```go
+web := routes.With(csrf.Middleware(), iam.Middleware())
+iam.Mount(web)
+```
+
 > [!WARNING]
-> The routes change state with a session cookie. Install
-> [CSRF protection](../browser-security/csrf-protection.md) on the router before
-> `iam.Mount`. Native clients that send no `Origin` header pass it, and bearer
-> tokens need no cookie.
+> `iam.Middleware()` does not add [CSRF protection](../browser-security/csrf-protection.md),
+> and the routes change state with a session cookie. Install `csrf.Middleware()`
+> yourself, from `arkoren.dev/core/http/middleware/csrf`. Every `POST`, `PUT` and
+> `PATCH` route of the facade also requires `Content-Type: application/json` and
+> answers `415` otherwise, which stops a cross-site HTML form but is not CSRF
+> protection: it does not cover `DELETE`, other request types or a site that
+> sends JSON itself. Native clients that send no `Origin` header pass the CSRF
+> middleware, and bearer tokens need no cookie.
 
 ## Migrations and Readiness
 

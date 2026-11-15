@@ -56,7 +56,7 @@ var passwordFactor = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKno
 //
 //	web.Post("/login", verifier.LoginHandler(guard))
 func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err
@@ -86,7 +86,7 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 		}
 
 		return outcome.Response(w)
-	}
+	})
 }
 
 // RegisterHandler returns the handler of POST /register. The body is
@@ -110,7 +110,7 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 		panic("password: RegisterHandler requires Users.Create")
 	}
 
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err
@@ -135,7 +135,7 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 		}
 
 		return response.JSON(w, http.StatusCreated, map[string]string{"subject": subject})
-	}
+	})
 }
 
 // ChangeHandler returns the handler of PUT /password. The body is
@@ -157,7 +157,7 @@ func (verifier *Verifier) RegisterHandler(guard *auth.Guard) router.Handler {
 //
 //	web.Put("/password", verifier.ChangeHandler(guard))
 func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -182,7 +182,7 @@ func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
 		}
 
 		return outcome.Response(w)
-	}
+	})
 }
 
 // register creates the user and stores the password in one transaction, then
@@ -284,7 +284,7 @@ func (verifier *Verifier) endOtherLogins(guard *auth.Guard, r *http.Request, sub
 //
 //	web.Post("/password/forgot", verifier.ForgotHandler())
 func (verifier *Verifier) ForgotHandler() router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err
@@ -303,7 +303,7 @@ func (verifier *Verifier) ForgotHandler() router.Handler {
 		})
 
 		return response.Status(w, http.StatusAccepted)
-	}
+	})
 }
 
 // ResetHandler returns the handler of POST /password/reset. The body is
@@ -317,7 +317,7 @@ func (verifier *Verifier) ForgotHandler() router.Handler {
 //
 //	web.Post("/password/reset", verifier.ResetHandler(guard))
 func (verifier *Verifier) ResetHandler(guard *auth.Guard) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
+	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err
@@ -331,5 +331,5 @@ func (verifier *Verifier) ResetHandler(guard *auth.Guard) router.Handler {
 		}
 
 		return response.Status(w, http.StatusNoContent)
-	}
+	})
 }

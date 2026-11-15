@@ -5,10 +5,12 @@ package web
 
 import (
 	"context"
+	"mime"
 	"net/http"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/request"
+	"arkoren.dev/core/http/router"
 	"arkoren.dev/foundation/problem"
 )
 
@@ -39,6 +41,30 @@ func Verified(ctx context.Context, verified func(context.Context, string) (bool,
 	}
 
 	return nil
+}
+
+// JSON returns next for requests that declare the media type application/json
+// and [request.ErrUnsupportedMediaType] (415) for POST, PUT and PATCH requests
+// that declare anything else or nothing. It checks the header, not the body, so
+// it also covers routes that read no body (logout, a password reset's
+// confirmation): a cross-site HTML form can only send a form media type, and so
+// cannot reach any state-changing route of this module. Parameters such as
+// charset are allowed; the match is exact on the media type, never a prefix.
+// DELETE and safe methods pass: a form cannot send DELETE.
+//
+// It is only a guard against cross-site forms. It does not authenticate a
+// request and is no replacement for CSRF protection.
+func JSON(next router.Handler) router.Handler {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
+			mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || mediaType != "application/json" {
+				return request.ErrUnsupportedMediaType
+			}
+		}
+
+		return next(w, r)
+	}
 }
 
 // MaxBody is the largest JSON body a handler of this module reads, in bytes.

@@ -43,6 +43,13 @@ routes accept and answer: [Passwords](passwords.md), [Two-Factor](two-factor.md)
 ## Responses
 
 Request and response bodies are JSON, and handlers read at most 64 KiB of body.
+Every `POST`, `PUT` and `PATCH` route requires the media type `application/json`,
+with or without a `charset`, even routes that read no body such as `/logout`;
+a form or a missing `Content-Type` answers `415`. The provider routes under
+`/auth/{name}` are exempt, because identity providers redirect with a query or
+post a form (`form_post`). The check is not a replacement for
+[CSRF protection](../browser-security/csrf-protection.md), which you add next to
+`iam.Middleware()`.
 A login that is complete answers `204`. When the user must also answer a second
 factor it answers `202`:
 
