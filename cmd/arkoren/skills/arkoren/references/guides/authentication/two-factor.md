@@ -161,9 +161,28 @@ count. The lockout lets anyone who knows a subject delay that user, so also
 
 Each lockout publishes `auth.SecondFactorLocked` with the subject and the end of
 the lockout, once, when the guard has a bus (`policy.Events(bus)`). Subscribe to
-it yourself and count it as a failed login in the
-throttle of your login route, otherwise an attacker who knows the first factor
-can keep starting pending logins after every lockout at no cost.
+it to notify the user or your operators. The login route's throttle must also
+count a lockout as a failed login, otherwise an attacker who knows the first
+factor can keep starting pending logins after every lockout at no cost.
+
+Events are notifications, not control flow: a listener error is logged and the
+remaining listeners are skipped, so a throttle fed by the event would fail open.
+When a decision depends on a lockout, ask the guard instead.
+`guard.LockedOut(ctx, subject)` reports whether the subject is locked out right
+now. It only reads the lockout, so it reserves no attempt and is safe on every
+request. A cache failure comes back as an error; fail closed on it. After a
+correct password, a login route keeps the attempt counted while the user is
+locked out:
+
+```go
+locked, err := guard.LockedOut(r.Context(), subject)
+if err != nil {
+	return err
+}
+if locked {
+	// This password only parks a pending login: do not refund the attempt.
+}
+```
 
 Lockouts chain, up to 24 hours each, and they also block step-up
 (`ConfirmHandler`). Anyone who holds the password can start pending logins and

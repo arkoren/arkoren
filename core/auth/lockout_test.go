@@ -236,6 +236,63 @@ func TestLockoutWithoutBus(t *testing.T) {
 	}
 }
 
+// TestLockedOutFollowsTheLockout verifies LockedOut is false before a lockout,
+// true until it ends and false again after, and that asking reserves no attempt.
+func TestLockedOutFollowsTheLockout(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		guard, _ := lockoutGuard(t, lockoutWindow)
+		check := func(want bool, when string) {
+			t.Helper()
+
+			for range 5 {
+				if got, err := guard.LockedOut(t.Context(), "7"); err != nil || got != want {
+					t.Fatalf("LockedOut %s = %v, %v, want %v", when, got, err, want)
+				}
+			}
+		}
+
+		check(false, "before any failure")
+		exhaust(t, guard)
+		check(true, "after the attempts are used up")
+		time.Sleep(lockoutWindow - time.Second)
+		check(true, "just before the lockout ends")
+		time.Sleep(time.Second)
+		check(false, "after the lockout ends")
+
+		if got, err := guard.LockedOut(t.Context(), "8"); err != nil || got {
+			t.Fatalf("LockedOut of another subject = %v, %v, want false", got, err)
+		}
+	})
+}
+
+// failingGet is a cache driver whose Get fails, which is how a lockout is read.
+type failingGet struct {
+	cache.Driver
+}
+
+// Get always fails.
+func (failingGet) Get(context.Context, string) ([]byte, error) {
+	return nil, errors.New("cache down")
+}
+
+// TestLockedOutReturnsCacheFailure verifies a cache error is returned, not
+// mistaken for "not locked".
+func TestLockedOutReturnsCacheFailure(t *testing.T) {
+	t.Parallel()
+
+	provider, _ := newDirectory(t)
+	guard, err := auth.NewGuard(provider, cache.New(failingGet{memorycache.New()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := guard.LockedOut(t.Context(), "7"); err == nil {
+		t.Fatal("LockedOut with a failing cache returned no error")
+	}
+}
+
 // TestUnlock verifies Unlock ends the lockout at once and forgets the
 // escalation, so the next lockout lasts one window again.
 func TestUnlock(t *testing.T) {
