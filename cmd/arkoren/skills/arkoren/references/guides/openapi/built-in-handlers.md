@@ -136,7 +136,7 @@ requirements.
 Other handlers depend on provider configuration or implement a protocol that a
 single operation cannot describe. Annotate only the behavior you actually serve:
 
-- [OAuth login](../authentication/oauth.md) uses redirects and provider callbacks.
+- [OAuth login](../oauth/overview.md) uses redirects and provider callbacks.
   Describe actual statuses and the `Location` header with `Response` and
   `ResponseHeader`, rather than assuming JSON. The document API does not support
   OAuth-flow or OpenID Connect security schemes.
@@ -148,7 +148,7 @@ single operation cannot describe. Annotate only the behavior you actually serve:
   actual media types and headers. Use `MediaResponse`, not `JSONResponse`, for
   binary or text output. The [response declarations](operations.md#describe-responses)
   show the pattern.
-- Mounted [MCP endpoints](../mcp/first-server.md) remain a separate protocol.
+- Mounted [MCP endpoints](../mcp-server/first-server.md) remain a separate protocol.
   Export does not traverse their handlers or infer internal operations. Leave
   mounts and catch-all routes unannotated or hidden; visible annotated opaque
   paths fail export.

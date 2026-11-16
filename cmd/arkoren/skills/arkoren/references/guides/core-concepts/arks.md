@@ -3,7 +3,7 @@ title: Arks
 description: Distinguish reusable domain features from service mechanisms, backend drivers, and application policy.
 order: 25
 summary:
-  - Understand arks as optional domain features, with no built-in arks currently available.
+  - Understand arks as optional modules that ship behavior, and see which are available.
   - Separate reusable domain rules from service operations and backend communication.
   - Keep deployment choices and explicit feature integration under application ownership.
 ---
@@ -12,17 +12,29 @@ summary:
 
 Sending an email is a service operation. Deciding that a completed report needs
 an email, who receives it, and what the message means is domain behavior. An
-**ark** is an optional, reusable domain feature that combines Arkoren services
-with those concepts and rules.
+**ark** is an optional module that ships behavior: a reusable feature that
+combines Arkoren services with those concepts and rules, or a protocol client or
+server built on core. A **driver**, by contrast, only implements a core service
+contract for one backend.
 
 ## Current Availability
 
-Arkoren has no built-in arks yet. The feature below illustrates the boundary;
-it is not an installable integration or a promised API.
+Three arks exist. Each has its own group in the Arks section of these guides:
+
+| Ark | Ships |
+| --- | --- |
+| `arkoren.dev/ark/access` | Registration, login, two-factor, API tokens, social connections and their routes, with their tables. See [Access](../access/overview.md). |
+| `arkoren.dev/ark/oauth` | An OAuth 2 and OpenID Connect client for browser and native login and for verifying bearer tokens. See [OAuth](../oauth/overview.md). |
+| `arkoren.dev/ark/mcp` | An MCP server over HTTP for the tools you define with core. See [MCP Server](../mcp-server/first-server.md). |
+
+The report feature below illustrates the boundary; it is not an installable
+integration or a promised API.
 
 An ark is an ordinary Go module that an application explicitly chooses and
-connects. It is not an automatically discovered plugin. You can use Arkoren's
-services directly in application-owned features without introducing an ark.
+connects. It is not an automatically discovered plugin. An ark that owns tables
+ships migrations that your application runs, and keeps user data by subject so
+that forgetting a user removes it. You can use Arkoren's services directly in
+application-owned features without introducing an ark.
 
 ## Domain Boundaries
 

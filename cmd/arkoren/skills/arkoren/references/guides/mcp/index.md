@@ -1,6 +1,6 @@
 ---
 title: MCP
-description: Build and serve typed MCP tools, secure their HTTP endpoint, and separate capability availability from resource authorization.
+description: Define typed MCP tools with input validation, safe failures, and capability availability, keeping resource authorization in shared services.
 order: 167
 section: AI
 ---

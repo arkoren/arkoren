@@ -68,7 +68,7 @@ while IFS= read -r -d '' path; do
   done < <(jq -r '.[]' <<< "$modules")
   case "$owner" in
     driver/*|ark/*|cmd/arkoren) selected+=("$owner"); website=true ;;
-    cmd/arkoren-ci) selected+=("$owner") ;;
+    cmd/arkoren-ci|cmd/arkoren-wiring) selected+=("$owner") ;;
     # Unclassified paths stay conservative until explicitly supported.
     *) full 'Shared or unclassified path changed' ;;
   esac

@@ -1,7 +1,7 @@
 ---
 title: First Server
 description: Build a local HTTP MCP server and discover and call its first tool with an MCP client.
-order: 20
+order: 10
 summary:
   - Create a typed public tool and explicitly register its HTTP MCP endpoint.
   - Discover and call the tool with the MCP Inspector over loopback HTTP.
@@ -117,7 +117,7 @@ not a listening server.
 
 This unauthenticated sample is safe only for the fixed public result shown
 above. Keep it on loopback. Before exposing private tools or remote access,
-configure [TLS, authentication, Host, and Origin policy](securing-mcp.md).
+configure [TLS, authentication, Host, and Origin policy](securing.md).
 
 Append `main` to `main.go`:
 
@@ -202,7 +202,8 @@ graceful shutdown. When adding MCP to an existing application, retain its
 [HTTP lifecycle and timeouts](../http-networking/server.md); register the MCP
 handler without adding a second listener or lifecycle owner.
 
-Continue with [Tools](tools.md) for validated arguments, output contracts, and
-safe failures. For exact declarations and settings, see the
+Continue with [Serving Tools](serving.md) for registration, transport behavior,
+and telemetry, and with core [Tools](../mcp/tools.md) for validated arguments,
+output contracts, and safe failures. For exact declarations and settings, see the
 [core MCP API](https://pkg.go.dev/arkoren.dev/core/mcp) and
 [MCP server API](https://pkg.go.dev/arkoren.dev/ark/mcp/mcpserver).

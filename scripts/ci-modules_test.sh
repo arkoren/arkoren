@@ -173,6 +173,24 @@ fixture 'development command missing manifest'
 rm cmd/arkoren-ci/go.mod
 expect_rejected 'expected real manifest: cmd/arkoren-ci/go.mod'
 
+fixture 'second development module is reviewed and included'
+jq '.development += ["cmd/arkoren-wiring"]' .github/release-modules.json > "$scratch/policy"
+mv "$scratch/policy" .github/release-modules.json
+mkdir cmd/arkoren-wiring
+printf 'module fixture\n' > cmd/arkoren-wiring/go.mod
+run_inventory
+grep -Fxq 'modules=["cmd/arkoren","cmd/arkoren-ci","cmd/arkoren-wiring","core","driver/z","foundation/a"]' "$scratch/output" \
+  || fail 'the wiring module was not included'
+
+fixture 'held-back ark is a development module and stays in CI'
+jq '.development += ["ark/access"]' .github/release-modules.json > "$scratch/policy"
+mv "$scratch/policy" .github/release-modules.json
+mkdir -p ark/access
+printf 'module fixture\n' > ark/access/go.mod
+run_inventory
+grep -Fxq 'modules=["ark/access","cmd/arkoren","cmd/arkoren-ci","core","driver/z","foundation/a"]' "$scratch/output" \
+  || fail 'the held-back ark was not included once'
+
 fixture 'unknown command needs explicit policy review'
 mkdir cmd/unreviewed
 touch cmd/unreviewed/go.mod

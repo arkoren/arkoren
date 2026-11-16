@@ -28,7 +28,7 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
 | Drivers | `driver/<vendor>/` | one per vendor | Implement a `core/service/<x>` contract and run its `<x>test` conformance suite. Seams in `core/auth` (`UserDriver`, `authtest`) do not make a package a driver. A driver may own infrastructure tables (`postgressearch`). Webhook and CAPTCHA adapters are undecided: the contract test decides each one when it is built. `driver/mcp` and `driver/oauth` moved to `ark/mcp` and `ark/oauth`; the latter plugs into `core/auth`. |
-| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Every other opt-in module on core: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features with tables (two-factor, users, tokens, linked accounts). `ark/mcp` and `ark/oauth` are the first. |
+| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Every other opt-in module that ships behaviour: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features, with extra duties for arks that own tables. `ark/access` (users, passwords, two-factor, tokens and linked accounts as five packages that never import each other), `ark/mcp` and `ark/oauth` are the first. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
 | Development | `cmd/arkoren-ci/` | `arkoren.dev/cmd/arkoren-ci` | Repository maintenance only; standard library only, with no dependency on toolkit or consumer CLI modules. Public source and vanity resolution do not imply a supported release/install namespace. Excluded from releases and the library API catalog. |
@@ -72,8 +72,9 @@ after inventory or workflow changes.
 
 Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
 working-tree inspection, or append `--commit FULL_SHA` to validate a committed
-inventory and its same-commit policy. CI/audits currently include 46 modules and
-15 integration suites; releases include only the 45 approved public modules.
+inventory and its same-commit policy. CI/audits currently include 48 modules and
+16 integration suites; releases include only the 45 approved public modules (`ark/access` is
+classified development-only until its first release).
 The development command uses standard flags, JSON stdout and JSON diagnostics on
 stderr. Its focused internal packages own inventory, release planning, exact-SHA
 evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
@@ -102,12 +103,19 @@ Core services that compose contracts without a `Driver` of their own (such
 as a future notification dispatcher or outbox) also live in `core/service/`.
 An ark cannot import `core/internal`; core makes public what arks need.
 
-Rules for every ark: Go API first; no driver imports outside tests; arks never require other
-arks. An ark with tables also stores user data under a subject text column,
-registers `OnForget`, ships `Migrations()` and runs integration tests on all
-three databases. Arks without tables (protocol modules such as OAuth client,
-SAML, MCP server) have none of those four obligations. Keep a provider
-compatibility matrix in the ark's guide wherever providers vary.
+Rules for every ark: it ships behaviour (not only a contract implementation);
+Go API first; no driver imports outside tests; arks never require other arks.
+An ark with tables has four more duties: it stores user data under a subject
+text column (`String(255).Bytewise()`, through `foundation/query/schema` only,
+never dialect SQL or hand-written DDL), registers `OnForget`, ships
+`Migrations()` and runs integration tests on all three databases, with two
+instances. Arks without tables (protocol modules such as OAuth client, SAML, MCP
+server) have none of those four. Keep a provider compatibility matrix in the
+ark's guide wherever providers vary. Modules that need a third-party library
+stay separate arks; `ark/access` is dependency-free (core, foundation, stdlib),
+so it never imports `ark/oauth`. A development-only module,
+`cmd/arkoren-wiring`, requires both and proves they fit; until `ark/access` has
+a release it builds against the checkout with a local `replace`.
 
 ## How the pieces fit
 
@@ -351,10 +359,19 @@ dispatched on the body's "method", Fresh/RequireFresh/RecentLogin freshness,
 the Identity.Session marker with RequireSession, and the auth.External and
 auth.Resolver types. Core names only RFC 8176 methods; modules (twofactor,
 oauth) declare their own and publish auth.CredentialEnrolled. There is no
-provider interface in core. ark/oauth requires core v0.8.x: Client.Name(),
+provider interface in core. ark/access (v0.1.0; owner bootstrap) is the facade over
+these seams: access.New(db, store, configure) builds the guard with the default
+registries (second factor: otp then recovery; step up: pwd then otp; federated is
+no step-up method), Mount registers the JSON routes of the enabled features, and
+every credential handler requires Identity.Session and guard.Fresh (a user with
+no step-up method is fresh after any login). Packages account, password,
+twofactor, apitoken and federation never import each other; subjects are strings
+and cross-package writes join the context transaction of the one Database. A
+password reset calls Users.Rotate, which bumps UserRecord.Version and ends
+sessions, pending logins and API tokens; tokens never carry factors. ark/oauth requires core v0.8.x: Client.Name(),
 LoginHandler() and CallbackHandler(guard, auth.Resolver) (with NonceHandler() and
 NativeHandler(guard, auth.Resolver) for Google and Apple ID tokens) match the
-Provider and NativeProvider interfaces that ark/access will declare, so Client
+Provider and NativeProvider interfaces that ark/access declares, so Client
 satisfies them structurally. CallbackHandler passes the verified auth.External to
 the resolver and the returned subject to Guard.Begin with oauth.MethodFederated
 (the guard stamps the factor time; the provider's auth_time is ignored; federated
@@ -1044,7 +1061,7 @@ on pkg.go.dev; the website's API catalog links modules rather than copying them.
 | Add a vendor module | As above, plus `driver/<vendor>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, and `driver/<vendor>/compose.yaml` when tests need services (fixed `127.0.0.1` ports not used by another module). Verify with `GOWORK=off`; never require another driver module or add local replaces. |
 | Add a core package or middleware | Follow the boundary rules above; include `doc.go`, public examples and relevant consumer guides. Middleware takes `Middleware(required..., configure...)`. |
 | Change a public API | Update Go doc comments/examples, all callers, relevant consumer guides and affected contributor rules. Keep matching public `BuilderFunc` aliases consistent with drafts and callback signatures. |
-| Add an ark | `ark/<name>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, package docs/examples and relevant guides. Verify with `GOWORK=off`; use no local replaces. It may not import `core/internal` or another ark. Update the Arks guide's availability statement and the website module catalog when the first ark ships. |
+| Add an ark | `ark/<name>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, package docs/examples and relevant guides. Verify with `GOWORK=off`; use no local replaces (only `cmd/arkoren-wiring` replaces an ark that has no release yet). It may not import `core/internal` or another ark. Update the Arks guide's availability statement and the website module catalog when the first ark ships. |
 | Add a driver or package that needs tables | Ship `Migrations()` with stable groups and short ids; validate `Builder.Instance`; use read-only readiness checks returning `ErrNotFound` and naming `Migrations()`. Tests must execute migrations before use and exercise two instances. Document application-owned migration execution in package docs and driver guides. Preserve existing group identities and test actual behavior rather than just source spelling. |
 | Add diagnostic MCP tools to a package | `MCPTools(prefix)` on the owner, direct tool/adapter tests, Go doc examples and diagnostic guides. Composition selects and authorizes tools. |
 | Change MCP CLI metadata or safe failures | The `cmd/arkoren` decoding and renderers, its end-to-end MCP tests, and the `guides/cli/` pages. |

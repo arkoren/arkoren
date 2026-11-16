@@ -41,6 +41,16 @@ func TestPolicyRejectsUnreviewedDevelopmentRoot(t *testing.T) {
 	}
 }
 
+func TestPolicyAcceptsWiringDevelopmentRoot(t *testing.T) {
+	policy, err := repository.ParsePolicy([]byte(`{"schema":1,"public":["core","cmd/arkoren"],"development":["cmd/arkoren-ci","cmd/arkoren-wiring"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policy.Development) != 2 {
+		t.Fatalf("development roots not parsed: %v", policy.Development)
+	}
+}
+
 func TestPolicyAcceptsRetiredDirectory(t *testing.T) {
 	policy, err := repository.ParsePolicy([]byte(`{"schema":1,"public":["core","cmd/arkoren"],"development":[],"retired":["driver/oauth"]}`))
 	if err != nil {

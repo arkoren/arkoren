@@ -1,10 +1,12 @@
 go 1.27
 
 use (
+	./ark/access
 	./ark/mcp
 	./ark/oauth
 	./cmd/arkoren
 	./cmd/arkoren-ci
+	./cmd/arkoren-wiring
 	./core
 	./driver/aes
 	./driver/argon2

@@ -11,13 +11,15 @@ enroll and verify:
 ```go
 import "arkoren.dev/foundation/totp"
 
-scheme := totp.New() // SHA1, 6 digits, 30 seconds, one step of drift each side
+// "Acme" is the name authenticator apps show beside the code. The scheme
+// defaults to SHA1, 6 digits, 30 seconds and one step of drift each side.
+scheme := totp.New("Acme")
 
 secret, err := scheme.NewSecret()
 if err != nil {
 	return err
 }
-uri, err := scheme.URI("Example", "alice@example.com", secret)
+uri, err := scheme.URI("alice@example.com", secret)
 if err != nil {
 	return err
 }
@@ -28,6 +30,9 @@ if errors.Is(err, totp.ErrInvalidCode) {
 	// Wrong or expired code.
 }
 ```
+
+The issuer is required, must be non-empty and cannot contain a colon; an invalid
+one is reported by `scheme.Err()` and by every method.
 
 Defaults match what authenticator apps support. SHA256 and SHA512, 7 or 8
 digits and other periods are available through `New` callbacks, but most apps

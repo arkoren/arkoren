@@ -160,12 +160,25 @@ func requireAppleFormPostName(t *testing.T, user, want string) {
 
 	var external auth.External
 
-	if status := client.CallbackHandler(guard, func(_ context.Context, identity auth.External) (string, error) {
+	handler := client.CallbackHandler(guard, func(_ context.Context, identity auth.External) (string, error) {
 		external = identity
 
 		return "user-1", nil
-	}).Record(request).StatusCode; status != http.StatusFound {
-		t.Fatalf("status = %d, want 302", status)
+	})
+
+	posted := handler.Record(request)
+
+	if posted.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST status = %d, want 303", posted.StatusCode)
+	}
+
+	jar.apply(posted)
+
+	follow := jar.attach(httptest.NewRequest(http.MethodGet, posted.Header.Get("Location"), nil))
+	follow = follow.WithContext(session.NewContext(follow.Context(), newSession()))
+
+	if status := handler.Record(follow).StatusCode; status != http.StatusFound {
+		t.Fatalf("GET status = %d, want 302", status)
 	}
 
 	if name, _ := external.Claims["name"].(string); name != want {

@@ -101,7 +101,20 @@ middleware blocks. Register only that callback outside `csrf.Middleware`, or
 use `csrf.Builder.Protection` with an `http.CrossOriginProtection` configured
 with `AddInsecureBypassPattern("POST /oauth/callback")`. Its encrypted login
 state cookie protects that callback; keep CSRF protection on logout and other
-cookie-authenticated state-changing routes.
+cookie-authenticated state-changing routes. The POST callback only verifies the identity: it keeps it in a 30-second sealed `SameSite=Lax` cookie and
+answers `303` to the callback path, where the top-level GET navigation carries the session cookie and finishes the
+login, so connecting Apple to a logged-in user links the identity instead of creating a second account. The identity
+links to the session present at that GET, and the session cookie must be `SameSite=Lax` (the default; Strict
+breaks connect). Route both methods to the callback (`r.Methods([]string{"GET", "POST"}, ...)`), and give the
+client an absolute `RedirectURL` with a path: for a `form_post` provider, `New` rejects a non-empty `RedirectURL`
+that is not absolute with a path. The hand-off expiry check tolerates 5 seconds of clock skew between servers.
+
+### Upgrading
+
+Breaking for `form_post` providers (Apple): the callback must now be mounted for both GET and POST. Before, a
+POST alone was enough. A GET that carries a code is rejected for these providers; only the hand-off from the
+POST completes the login. `ark/access` `Mount` already routes both methods. `RedirectURL` must be absolute with
+a path.
 
 ## Freshness
 
@@ -143,7 +156,7 @@ request tokens for, for Apple the bundle ID.
 Google returns the nonce unchanged. Apple copies the request nonce into the token
 as sent, so the app sends the lowercase hex SHA-256 of the nonce and the handler
 accepts only that. Other presets return `ErrUnsupported`. See the
-[browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/authentication/oauth.md#native-login)
+[native login guide](../../cmd/arkoren/skills/arkoren/references/guides/oauth/native-login.md)
 for the provider facts and their sources.
 
 ## API authentication
@@ -228,8 +241,8 @@ as fixed redaction markers; arbitrary caller-owned dependencies are not traverse
 ## Login cookie
 
 Each login sets one cookie `__Host-<Name>.<12 chars of base64url(sha256(state))>`: encrypted with the crypto
-cipher, HttpOnly, Secure, Path=/, Max-Age=600, SameSite=Lax (None for `form_post` providers). A browser keeps at
-most five; the callback accepts GET or POST, deletes the cookie, and rejects missing, tampered, expired or
+cipher, HttpOnly, Secure, Path=/, Max-Age=600, SameSite=Lax (None for `form_post` providers, which also set a 30-second Lax hand-off cookie). A browser keeps at
+most five; the callback accepts GET or POST (for `form_post` providers a GET that carries a code is rejected), deletes the cookie, and rejects missing, tampered, expired or
 state-mismatched cookies with `ErrInvalidCallback`. The client deletes the browser's
 cookie but keeps no server-side used-state registry; one-time authorization codes
 must be enforced by the provider. Deletion does not revoke a copied cookie before
@@ -324,6 +337,6 @@ Google callbacks use the same direct ordered once-only rules and detach the comp
 OIDC, OAuth2, Apple, Microsoft, and GitHub have no optional builders.
 
 For provider-specific email handling, Apple callback setup, and event payloads,
-follow the [browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/authentication/oauth.md).
+follow the [browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/oauth/overview.md).
 For every exported identifier, see the
 [`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth).

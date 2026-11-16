@@ -120,7 +120,8 @@ type Provider struct {
 
 	// formPost asks the provider to send the callback as a POST form
 	// (response_mode=form_post). Cookies then travel cross-site, so the
-	// login cookie uses SameSite=None instead of Lax.
+	// login cookie uses SameSite=None instead of Lax, and the session cookie
+	// is not sent, so the callback hands the verified identity to a top-level GET navigation.
 	formPost bool
 
 	// noPKCE turns PKCE off for providers that reject it, whatever the

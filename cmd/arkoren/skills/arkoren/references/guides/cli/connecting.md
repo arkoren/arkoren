@@ -27,7 +27,7 @@ omit the supplied value, including in verbose mode.
 Keep private endpoints on loopback or a private network. Use HTTPS beyond
 loopback or a protected tunnel. Server-side authentication, TLS, allowed Host
 values, and Origin validation remain the endpoint owner's responsibility;
-[Securing MCP](../mcp/securing-mcp.md) explains those boundaries. A terminal
+[Securing MCP](../mcp-server/securing.md) explains those boundaries. A terminal
 client does not make browser-facing protections unnecessary.
 
 Select the trusted destination explicitly before supplying a credential:

@@ -114,7 +114,7 @@ if err := gate.Authorize(r.Context(), canExport, canExportReport(report)); err !
 
 Keep checks in the shared application operation when HTTP, tools, and jobs can
 perform the same action. A transport-only gate cannot protect a direct call;
-[MCP security](../mcp/securing-mcp.md) also separates tool availability from
+[MCP security](../mcp-server/securing.md) also separates tool availability from
 resource permission. A check followed by a database write can race with another
 request; use [conditional writes and locking](row-access.md#conditional-writes)
 when permission or state can change between them.
