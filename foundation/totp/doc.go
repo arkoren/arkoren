@@ -1,7 +1,7 @@
 // Package totp generates and verifies time-based one-time passwords as defined
 // by RFC 6238, using only the standard library.
 //
-// A [Scheme] is an immutable set of parameters (hash algorithm, digit count,
+// A [Scheme] is an immutable set of parameters (issuer, hash algorithm, digit count,
 // period and verification window) built once with [New]. Its methods take the
 // shared secret and the current time as arguments: the package has no clock
 // option and no storage, so callers control time in tests and own persistence
@@ -19,12 +19,12 @@
 //
 // Example:
 //
-//	scheme := totp.New()
+//	scheme := totp.New("Acme") // The name authenticator apps show beside the code.
 //	secret, err := scheme.NewSecret()
 //	if err != nil {
 //		return err
 //	}
-//	uri, err := scheme.URI("Example", "alice@example.com", secret)
+//	uri, err := scheme.URI("alice@example.com", secret)
 //	if err != nil {
 //		return err
 //	}

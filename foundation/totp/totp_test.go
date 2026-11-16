@@ -3,6 +3,7 @@ package totp_test
 import (
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ var (
 var vectorTimes = []int64{59, 1111111109, 1111111111, 1234567890, 2000000000, 20000000000}
 
 func rfcScheme(algorithm totp.Algorithm) totp.Scheme {
-	return totp.New(func(scheme *totp.Builder) {
+	return totp.New("Acme", func(scheme *totp.Builder) {
 		scheme.Algorithm(algorithm).Digits(8)
 	})
 }
@@ -55,7 +56,7 @@ func TestGenerateRFC6238SHA512(t *testing.T) {
 
 func TestGenerateDefaultsToSixDigits(t *testing.T) {
 	t.Parallel()
-	got, err := totp.New().Generate(seedSHA1, time.Unix(59, 0))
+	got, err := totp.New("Acme").Generate(seedSHA1, time.Unix(59, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestGenerateDefaultsToSixDigits(t *testing.T) {
 
 func TestVerifyReturnsMatchedStep(t *testing.T) {
 	t.Parallel()
-	step, err := totp.New().Verify(seedSHA1, "287082", time.Unix(59, 0))
+	step, err := totp.New("Acme").Verify(seedSHA1, "287082", time.Unix(59, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +78,7 @@ func TestVerifyReturnsMatchedStep(t *testing.T) {
 
 func TestVerifyAcceptsNeighboringSteps(t *testing.T) {
 	t.Parallel()
-	scheme := totp.New()
+	scheme := totp.New("Acme")
 	now := time.Unix(1111111111, 0)
 	for _, offset := range []time.Duration{-30 * time.Second, 0, 30 * time.Second} {
 		code, err := scheme.Generate(seedSHA1, now.Add(offset))
@@ -92,7 +93,7 @@ func TestVerifyAcceptsNeighboringSteps(t *testing.T) {
 
 func TestVerifyRejectsOutsideWindow(t *testing.T) {
 	t.Parallel()
-	scheme := totp.New()
+	scheme := totp.New("Acme")
 	now := time.Unix(1111111111, 0)
 	for _, offset := range []time.Duration{-60 * time.Second, 60 * time.Second} {
 		code, err := scheme.Generate(seedSHA1, now.Add(offset))
@@ -107,7 +108,7 @@ func TestVerifyRejectsOutsideWindow(t *testing.T) {
 
 func TestVerifyWindowZeroAcceptsOnlyCurrentStep(t *testing.T) {
 	t.Parallel()
-	scheme := totp.New(func(scheme *totp.Builder) { scheme.Window(0) })
+	scheme := totp.New("Acme", func(scheme *totp.Builder) { scheme.Window(0) })
 	now := time.Unix(1111111111, 0)
 	previous, err := scheme.Generate(seedSHA1, now.Add(-30*time.Second))
 	if err != nil {
@@ -121,7 +122,7 @@ func TestVerifyWindowZeroAcceptsOnlyCurrentStep(t *testing.T) {
 func TestVerifyRejectsMalformedCodes(t *testing.T) {
 	t.Parallel()
 	for _, code := range []string{"", "28708", "2870822", "28708a", " 287082"} {
-		if _, err := totp.New().Verify(seedSHA1, code, time.Unix(59, 0)); !errors.Is(err, totp.ErrInvalidCode) {
+		if _, err := totp.New("Acme").Verify(seedSHA1, code, time.Unix(59, 0)); !errors.Is(err, totp.ErrInvalidCode) {
 			t.Fatalf("code %q: err = %v, want ErrInvalidCode", code, err)
 		}
 	}
@@ -129,11 +130,11 @@ func TestVerifyRejectsMalformedCodes(t *testing.T) {
 
 func TestVerifyNearEpochSkipsNegativeSteps(t *testing.T) {
 	t.Parallel()
-	code, err := totp.New().Generate(seedSHA1, time.Unix(0, 0))
+	code, err := totp.New("Acme").Generate(seedSHA1, time.Unix(0, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	step, err := totp.New().Verify(seedSHA1, code, time.Unix(10, 0))
+	step, err := totp.New("Acme").Verify(seedSHA1, code, time.Unix(10, 0))
 	if err != nil || step != 0 {
 		t.Fatalf("step, err = %d, %v", step, err)
 	}
@@ -141,17 +142,17 @@ func TestVerifyNearEpochSkipsNegativeSteps(t *testing.T) {
 
 func TestTimeBeforeEpochIsRejected(t *testing.T) {
 	t.Parallel()
-	if _, err := totp.New().Generate(seedSHA1, time.Unix(-1, 0)); !errors.Is(err, totp.ErrInvalidTime) {
+	if _, err := totp.New("Acme").Generate(seedSHA1, time.Unix(-1, 0)); !errors.Is(err, totp.ErrInvalidTime) {
 		t.Fatalf("err = %v, want ErrInvalidTime", err)
 	}
 }
 
 func TestEmptySecretIsRejected(t *testing.T) {
 	t.Parallel()
-	if _, err := totp.New().Generate(nil, time.Unix(59, 0)); !errors.Is(err, totp.ErrInvalidSecret) {
+	if _, err := totp.New("Acme").Generate(nil, time.Unix(59, 0)); !errors.Is(err, totp.ErrInvalidSecret) {
 		t.Fatalf("generate err = %v", err)
 	}
-	if _, err := totp.New().Verify(nil, "287082", time.Unix(59, 0)); !errors.Is(err, totp.ErrInvalidSecret) {
+	if _, err := totp.New("Acme").Verify(nil, "287082", time.Unix(59, 0)); !errors.Is(err, totp.ErrInvalidSecret) {
 		t.Fatalf("verify err = %v", err)
 	}
 }
@@ -168,7 +169,7 @@ func TestInvalidSettingsAreReported(t *testing.T) {
 		func(scheme *totp.Builder) { scheme.Window(-1) },
 	}
 	for index, setting := range settings {
-		scheme := totp.New(setting)
+		scheme := totp.New("Acme", setting)
 		if !errors.Is(scheme.Err(), totp.ErrInvalidScheme) {
 			t.Fatalf("setting %d: Err = %v", index, scheme.Err())
 		}
@@ -180,7 +181,7 @@ func TestInvalidSettingsAreReported(t *testing.T) {
 
 func TestFirstInvalidSettingWins(t *testing.T) {
 	t.Parallel()
-	scheme := totp.New(func(scheme *totp.Builder) {
+	scheme := totp.New("Acme", func(scheme *totp.Builder) {
 		scheme.Digits(3).Window(5).Digits(6)
 	})
 	if err := scheme.Err(); err == nil || !errors.Is(err, totp.ErrInvalidScheme) {
@@ -236,10 +237,10 @@ func TestDecodeSecretRejectsInvalidInput(t *testing.T) {
 
 func TestURIWritesParameters(t *testing.T) {
 	t.Parallel()
-	scheme := totp.New(func(scheme *totp.Builder) {
+	scheme := totp.New("Example Co", func(scheme *totp.Builder) {
 		scheme.Algorithm(totp.SHA256).Digits(8).Period(60 * time.Second)
 	})
-	raw, err := scheme.URI("Example Co", "alice@example.com", seedSHA1)
+	raw, err := scheme.URI("alice@example.com", seedSHA1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,11 +263,32 @@ func TestURIWritesParameters(t *testing.T) {
 	}
 }
 
-func TestURIRejectsBadLabels(t *testing.T) {
+func TestURIRejectsBadAccounts(t *testing.T) {
 	t.Parallel()
-	for _, pair := range [][2]string{{"", "alice"}, {"Example", ""}, {"Ex:ample", "alice"}, {"Example", "a:lice"}} {
-		if _, err := totp.New().URI(pair[0], pair[1], seedSHA1); !errors.Is(err, totp.ErrInvalidSecret) {
-			t.Fatalf("%v: err = %v", pair, err)
+	for _, account := range []string{"", "a:lice"} {
+		if _, err := totp.New("Acme").URI(account, seedSHA1); !errors.Is(err, totp.ErrInvalidSecret) {
+			t.Fatalf("%q: err = %v", account, err)
 		}
+	}
+}
+
+func TestInvalidIssuerIsReported(t *testing.T) {
+	t.Parallel()
+	for _, issuer := range []string{"", "Ex:ample"} {
+		scheme := totp.New(issuer)
+		if !errors.Is(scheme.Err(), totp.ErrInvalidScheme) {
+			t.Fatalf("%q: Err = %v", issuer, scheme.Err())
+		}
+		if _, err := scheme.URI("alice", seedSHA1); !errors.Is(err, totp.ErrInvalidScheme) {
+			t.Fatalf("%q: URI err = %v", issuer, err)
+		}
+	}
+}
+
+func TestInvalidIssuerIsReportedBeforeSettings(t *testing.T) {
+	t.Parallel()
+	scheme := totp.New("", func(scheme *totp.Builder) { scheme.Digits(3) })
+	if err := scheme.Err(); err == nil || !strings.Contains(err.Error(), "issuer") {
+		t.Fatalf("Err = %v, want issuer error first", err)
 	}
 }

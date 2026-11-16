@@ -10,7 +10,7 @@ import (
 
 // Verify a submitted code and reject a replayed time step.
 func ExampleScheme_Verify() {
-	scheme := totp.New()
+	scheme := totp.New("Acme")
 	secret := []byte("12345678901234567890")
 	lastStep := int64(0) // Loaded from storage; the highest step accepted so far.
 
@@ -30,18 +30,18 @@ func ExampleScheme_Verify() {
 
 // Build a provisioning URI for an authenticator app.
 func ExampleScheme_URI() {
-	uri, err := totp.New().URI("Example", "alice@example.com", []byte("12345678901234567890"))
+	uri, err := totp.New("Acme").URI("alice@example.com", []byte("12345678901234567890"))
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 	fmt.Println(uri)
-	// Output: otpauth://totp/Example:alice@example.com?algorithm=SHA1&digits=6&issuer=Example&period=30&secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
+	// Output: otpauth://totp/Acme:alice@example.com?algorithm=SHA1&digits=6&issuer=Acme&period=30&secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
 }
 
 // Configure an eight-digit SHA-256 scheme.
 func ExampleNew() {
-	scheme := totp.New(func(scheme *totp.Builder) {
+	scheme := totp.New("Acme", func(scheme *totp.Builder) {
 		scheme.Algorithm(totp.SHA256).Digits(8)
 	})
 	code, err := scheme.Generate([]byte("12345678901234567890123456789012"), time.Unix(59, 0))
