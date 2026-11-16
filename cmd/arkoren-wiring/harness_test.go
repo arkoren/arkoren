@@ -22,6 +22,7 @@ import (
 	"arkoren.dev/ark/access"
 	"arkoren.dev/ark/oauth/oauthauth"
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -292,10 +293,9 @@ func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
 	if err := google.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	sys.iam, err = access.New(db, cache.New(memorycache.New()), append([]access.BuilderFunc{func(iam *access.Builder) {
-		iam.TrustRemoteAddr()
+	sys.iam, err = access.New(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), append([]access.BuilderFunc{func(iam *access.Builder) {
 		iam.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })))
-		iam.TwoFactor(newCipher(t), "Example")
+		iam.TwoFactor(totp.New("Example"), newCipher(t))
 		iam.Tokens()
 		iam.Provider(google)
 		iam.Deliver(sys.deliver)
@@ -368,7 +368,7 @@ func code(t *testing.T, encoded string, offset time.Duration) string {
 	if err != nil {
 		t.Fatalf("DecodeSecret: %v", err)
 	}
-	value, err := totp.New().Generate(secret, time.Now().Add(offset))
+	value, err := totp.New("Example").Generate(secret, time.Now().Add(offset))
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

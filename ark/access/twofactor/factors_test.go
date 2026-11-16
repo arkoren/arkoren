@@ -10,6 +10,7 @@ import (
 	"arkoren.dev/core/service/crypto"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
+	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/ark/access/twofactor"
 )
@@ -280,7 +281,7 @@ func TestSecretKeyRotationReencrypts(t *testing.T) {
 		rewind(t, db, instance)
 
 		rotatedCipher, newDriver := newCipher(t, oldDriver)
-		rotated, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), rotatedCipher, "Example", func(factors *twofactor.Builder) {
+		rotated, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), totp.New("Example"), rotatedCipher, func(factors *twofactor.Builder) {
 			factors.Instance(instance)
 		})
 		if err != nil {
@@ -294,7 +295,7 @@ func TestSecretKeyRotationReencrypts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("crypto.New: %v", err)
 		}
-		onlyNew, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), onlyNewCipher, "Example", func(factors *twofactor.Builder) {
+		onlyNew, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), totp.New("Example"), onlyNewCipher, func(factors *twofactor.Builder) {
 			factors.Instance(instance)
 		})
 		if err != nil {
@@ -331,7 +332,7 @@ func TestPingNamesMigrations(t *testing.T) {
 		ctx := testContext(t)
 		cipher, _ := newCipher(t)
 		sys := newSystem(t, db, instance+"_x", cipher)
-		factors, err := twofactor.NewFactors(sys.provider, db, cacheOf(t), cipher, "Example", func(factors *twofactor.Builder) {
+		factors, err := twofactor.NewFactors(sys.provider, db, cacheOf(t), totp.New("Example"), cipher, func(factors *twofactor.Builder) {
 			factors.Instance(instance)
 		})
 		if err != nil {
@@ -351,7 +352,23 @@ func TestPingNamesMigrations(t *testing.T) {
 func TestNewFactorsRejectsBadConfig(t *testing.T) {
 	t.Parallel()
 
-	if _, err := twofactor.NewFactors(nil, nil, nil, nil, "Example"); !errors.Is(err, twofactor.ErrInvalidConfig) {
+	if _, err := twofactor.NewFactors(nil, nil, nil, totp.New("Example"), nil); !errors.Is(err, twofactor.ErrInvalidConfig) {
 		t.Fatalf("nil dependencies error = %v", err)
 	}
+}
+
+// TestNewFactorsRejectsInvalidScheme verifies an invalid scheme (here an empty
+// issuer) is ErrInvalidConfig wrapping the scheme's own error.
+func TestNewFactorsRejectsInvalidScheme(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		cipher, _ := newCipher(t)
+		sys := newSystem(t, db, instance, cipher)
+		scheme := totp.New("")
+		_, err := twofactor.NewFactors(sys.provider, db, cacheOf(t), scheme, cipher)
+		if !errors.Is(err, twofactor.ErrInvalidConfig) || !errors.Is(err, scheme.Err()) {
+			t.Fatalf("NewFactors error = %v, want ErrInvalidConfig wrapping the scheme error", err)
+		}
+	})
 }

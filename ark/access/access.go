@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 
 	"arkoren.dev/core/auth"
@@ -21,12 +22,13 @@ import (
 )
 
 // ErrInvalidConfig is wrapped by the errors of [New] for an unusable
-// configuration: a missing dependency, a duplicate provider name, an invalid
-// instance or a failing package constructor.
+// configuration: a missing dependency (database, store or client address
+// source), a duplicate provider name, an invalid instance or scheme, or a
+// failing package constructor.
 //
 // Example:
 //
-//	_, err := access.New(nil, nil)
+//	_, err := access.New(nil, nil, nil)
 //	fmt.Println(errors.Is(err, access.ErrInvalidConfig)) // true
 var ErrInvalidConfig = errors.New("access: invalid configuration")
 
@@ -66,7 +68,7 @@ var ErrNotMigrated = storage.ErrNotMigrated
 //
 // Example:
 //
-//	iam, err := access.New(db, store, func(iam *access.Builder) {
+//	iam, err := access.New(db, store, ratelimit.TrustedProxyKey(), func(iam *access.Builder) {
 //		iam.Password(hasher)
 //	})
 //	if err != nil {
@@ -77,6 +79,7 @@ var ErrNotMigrated = storage.ErrNotMigrated
 type Access struct {
 	db         *database.Database
 	store      *cache.Cache
+	clientIP   func(*http.Request) string
 	deliver    func(context.Context, Message) error
 	provider   *auth.UserProvider
 	guard      *auth.Guard
@@ -102,14 +105,27 @@ type Access struct {
 	emailProven  func(context.Context, string) error
 	keepPersonal bool
 
+	// register reports whether the users can be created ([Users.Create] or the
+	// built-in directory), which /register needs.
+	register bool
+
 	// secondFactor and stepUp report whether the guard's registries are not
 	// empty, which the handlers that need one check.
 	secondFactor bool
 	stepUp       bool
 }
 
-// New composes the facade over db, the application's single database, and
-// store, the cache that holds sessions and counters. It does no I/O: the
+// New composes the facade over db, the application's single database, store,
+// the cache that holds sessions and counters, and clientIP, which finds the
+// client address for the guard's login records and the throttles of every
+// package. clientIP is required, because the right source depends on the
+// deployment and a wrong default silently breaks the throttles: behind a
+// reverse proxy r.RemoteAddr is the proxy, so every user shares one counter,
+// and a header read without trusting the proxy that set it lets an attacker
+// pick their own counter. Pass ratelimit.TrustedProxyKey with your proxies'
+// prefixes, or with none when no proxy sits in front of the application (it
+// then returns the host of r.RemoteAddr, an IPv6 address reduced to its /64).
+// It does no I/O: the
 // application runs [Access.Migrations] with its migrator, and [Access.Ping]
 // verifies the tables. Errors wrap [ErrInvalidConfig].
 //
@@ -120,13 +136,14 @@ type Access struct {
 //
 // Example:
 //
-//	iam, err := access.New(db, store, func(iam *access.Builder) {
+//	clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
+//	scheme := totp.New("Acme") // the name authenticator apps show for this account
+//	iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 //		iam.Password(hasher)
-//		iam.TwoFactor(cipher, "Example")
+//		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send)
-//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 //	if err != nil {
 //		return err
@@ -134,9 +151,9 @@ type Access struct {
 //	if err := migrator.Add(iam.Migrations()...); err != nil {
 //		return err
 //	}
-func New(db *database.Database, store *cache.Cache, configure ...BuilderFunc) (*Access, error) {
-	if db == nil || store == nil {
-		return nil, fmt.Errorf("%w: database and store are required", ErrInvalidConfig)
+func New(db *database.Database, store *cache.Cache, clientIP func(*http.Request) string, configure ...BuilderFunc) (*Access, error) {
+	if db == nil || store == nil || clientIP == nil {
+		return nil, fmt.Errorf("%w: database, store and client address source are required", ErrInvalidConfig)
 	}
 	settings := Builder{}
 	for _, apply := range configure {
@@ -148,6 +165,7 @@ func New(db *database.Database, store *cache.Cache, configure ...BuilderFunc) (*
 	iam := &Access{
 		db:           db,
 		store:        store,
+		clientIP:     clientIP,
 		deliver:      settings.deliver,
 		providers:    slices.Clone(settings.providers),
 		emailProven:  settings.emailProven,

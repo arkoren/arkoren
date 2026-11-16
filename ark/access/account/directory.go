@@ -21,7 +21,6 @@ import (
 
 	"arkoren.dev/ark/access/internal/background"
 	"arkoren.dev/ark/access/internal/storage"
-	"arkoren.dev/ark/access/internal/throttle"
 )
 
 // DefaultVerifyTTL is how long an email verification token stays valid when
@@ -110,7 +109,7 @@ type userRow struct {
 //
 // Example:
 //
-//	directory, err := account.NewDirectory(db)
+//	directory, err := account.NewDirectory(db, store, ratelimit.TrustedProxyKey())
 //	if err != nil {
 //		return err
 //	}
@@ -129,7 +128,13 @@ type Directory struct {
 	jobs      background.Group
 }
 
-// NewDirectory returns the directory over db. It does no I/O: the tables come
+// NewDirectory returns the directory over db. store counts the verification
+// resends of [Directory.ResendHandler] and clientIP finds the client address
+// they are keyed on; both are required, because an unlimited resend route lets
+// one user flood a mailbox and the right address source depends on the
+// deployment: behind a reverse proxy r.RemoteAddr is the proxy, so pass
+// ratelimit.TrustedProxyKey with your proxies' prefixes, or with none when no
+// proxy sits in front of the application. It does no I/O: the tables come
 // from [Directory.Migrations], which the application's migrator runs, and
 // [Directory.Ping] verifies they exist. Errors wrap [ErrInvalidConfig].
 //
@@ -139,15 +144,15 @@ type Directory struct {
 //
 // Example:
 //
-//	directory, err := account.NewDirectory(db, func(accounts *account.Builder) {
+//	directory, err := account.NewDirectory(db, store, ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 //		accounts.Events(events)
 //	})
 //	if err != nil {
 //		return err
 //	}
-func NewDirectory(db *database.Database, configure ...BuilderFunc) (*Directory, error) {
-	if db == nil {
-		return nil, fmt.Errorf("%w: database is nil", ErrInvalidConfig)
+func NewDirectory(db *database.Database, store *cache.Cache, clientIP func(*http.Request) string, configure ...BuilderFunc) (*Directory, error) {
+	if db == nil || store == nil || clientIP == nil {
+		return nil, fmt.Errorf("%w: database, store and client address source are required", ErrInvalidConfig)
 	}
 	settings := Builder{}
 	for _, apply := range configure {
@@ -164,11 +169,8 @@ func NewDirectory(db *database.Database, configure ...BuilderFunc) (*Directory, 
 		events:    settings.events,
 		deliver:   settings.deliver,
 		verifyTTL: cmp.Or(settings.verifyTTL, DefaultVerifyTTL),
-		store:     settings.store,
-		clientIP:  settings.clientIP,
-	}
-	if directory.clientIP == nil {
-		directory.clientIP = throttle.RemoteHost
+		store:     store,
+		clientIP:  clientIP,
 	}
 	provider, err := auth.NewUserProvider(directory, func(users *auth.UserProviderBuilder) {
 		users.Events(settings.events)

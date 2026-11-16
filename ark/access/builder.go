@@ -3,7 +3,6 @@ package access
 import (
 	"context"
 	"errors"
-	"net/http"
 	"slices"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/crypto"
 	"arkoren.dev/core/service/hash"
+	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/ark/access/apitoken"
 	"arkoren.dev/ark/access/password"
@@ -25,13 +25,13 @@ import (
 //
 // Example:
 //
-//	iam, err := access.New(db, store, func(iam *access.Builder) {
+//	scheme := totp.New("Acme") // the name authenticator apps show for this account
+//	iam, err := access.New(db, store, ratelimit.TrustedProxyKey(), func(iam *access.Builder) {
 //		iam.Password(hasher)
-//		iam.TwoFactor(cipher, "Example")
+//		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send)
-//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 type Builder struct {
 	instance        string
@@ -40,7 +40,7 @@ type Builder struct {
 	hasher          *hash.Hasher
 	password        []password.BuilderFunc
 	cipher          *crypto.Encrypter
-	issuer          string
+	scheme          totp.Scheme
 	twofactor       []twofactor.BuilderFunc
 	tokens          bool
 	apitoken        []apitoken.BuilderFunc
@@ -52,8 +52,6 @@ type Builder struct {
 	guard           []auth.GuardBuilderFunc
 	sessionPolicy   []session.BuilderFunc
 	sessionLifetime time.Duration
-	clientIP        func(*http.Request) string
-	trustRemoteAddr bool
 	keepPersonal    bool
 	emailProven     func(context.Context, string) error
 }
@@ -65,7 +63,7 @@ type Builder struct {
 //	var configure access.BuilderFunc = func(iam *access.Builder) {
 //		iam.Password(hasher)
 //	}
-//	iam, err := access.New(db, store, configure)
+//	iam, err := access.New(db, store, clientIP, configure)
 type BuilderFunc = func(*Builder)
 
 // Instance selects a named instance for every package: tables are prefixed
@@ -130,16 +128,19 @@ func (iam *Builder) Password(hasher *hash.Hasher, configure ...password.BuilderF
 	return iam
 }
 
-// TwoFactor enables the TOTP authenticator and recovery codes. cipher encrypts
-// the secrets (use a key reserved for them) and issuer is the service name
-// authenticator apps show. configure customizes the twofactor package.
+// TwoFactor enables the TOTP authenticator and recovery codes. scheme holds the
+// TOTP parameters and the issuer, the service name authenticator apps show (see
+// [totp.New]); an invalid scheme makes [New] fail with [ErrInvalidConfig].
+// cipher encrypts the secrets (use a key reserved for them). configure
+// customizes the twofactor package.
 //
 // Example:
 //
-//	iam.TwoFactor(cipher, "Example")
-func (iam *Builder) TwoFactor(cipher *crypto.Encrypter, issuer string, configure ...twofactor.BuilderFunc) *Builder {
+//	scheme := totp.New("Acme") // the name authenticator apps show for this account
+//	iam.TwoFactor(scheme, cipher)
+func (iam *Builder) TwoFactor(scheme totp.Scheme, cipher *crypto.Encrypter, configure ...twofactor.BuilderFunc) *Builder {
+	iam.scheme = scheme
 	iam.cipher = cipher
-	iam.issuer = issuer
 	iam.twofactor = slices.Clone(configure)
 
 	return iam
@@ -211,7 +212,9 @@ func (iam *Builder) Provider(providers ...Provider) *Builder {
 }
 
 // Deliver sets the function that sends the verification and reset links.
-// Without it, the forgot-password and email-verification handlers panic at
+// Without it, [Access.Mount] skips the forgot-password, reset and email
+// verification routes, and building their handlers directly
+// ([Access.ForgotPasswordHandler], [Access.VerifyEmailHandler]) panics at
 // composition, because a user who asks for a link must get one.
 //
 // Example:
@@ -266,8 +269,8 @@ func (iam *Builder) Authenticator(authenticators ...auth.Authenticator) *Builder
 // attempt limit, the login limit). The callbacks run first and the facade's own
 // settings after them, so the facade wins: the session lifetime
 // ([Builder.SessionLifetime]), the session handle (always the default one,
-// which the provider handlers of ark/oauth use), the event bus and, when set,
-// the client address ([Builder.ClientIP]) replace whatever the callbacks chose.
+// which the provider handlers of ark/oauth use), the event bus and the
+// client address source given to [New] replace whatever the callbacks chose.
 // The credential registries only append: register second-factor and step-up
 // credentials with [Builder.SecondFactor] and [Builder.StepUp], not here. A
 // credential registered here would be listed to users before the built-in ones,
@@ -315,43 +318,8 @@ func (iam *Builder) SessionLifetime(lifetime time.Duration) *Builder {
 	return iam
 }
 
-// ClientIP sets how the client address is found, for the guard's login records
-// and the throttles of every package. New requires an explicit choice, because
-// the right source depends on the deployment and a wrong default silently
-// breaks the throttles: behind a reverse proxy r.RemoteAddr is the proxy, so
-// every user shares one counter, and a header read without trusting the proxy
-// that set it lets an attacker pick their own counter. Pass
-// ratelimit.TrustedProxyKey with your proxies' prefixes, or use
-// [Builder.TrustRemoteAddr] when no proxy sits in front of the application.
-//
-// Example:
-//
-//	iam.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
-func (iam *Builder) ClientIP(find func(*http.Request) string) *Builder {
-	iam.clientIP = find
-
-	return iam
-}
-
-// TrustRemoteAddr chooses the host of r.RemoteAddr as the client address, for
-// an application that faces the internet directly with no proxy or load
-// balancer in front of it. Behind one, every user would share the proxy's
-// address and the throttles would lock everybody out together: use
-// [Builder.ClientIP] instead. It has no effect when [Builder.ClientIP] is also
-// set, which takes precedence.
-//
-// Example:
-//
-//	iam.TrustRemoteAddr()
-func (iam *Builder) TrustRemoteAddr() *Builder {
-	iam.trustRemoteAddr = true
-
-	return iam
-}
-
 // validate checks the combinations of settings that no package can see, in
-// order: the providers, the application's users, the session lifetime, the
-// client address source.
+// order: the providers, the application's users, the session lifetime.
 func (iam *Builder) validate() error {
 	if err := validateProviders(iam.providers); err != nil {
 		return err
@@ -363,9 +331,6 @@ func (iam *Builder) validate() error {
 	}
 	if iam.sessionLifetime < 0 {
 		return errors.New("negative session lifetime")
-	}
-	if iam.clientIP == nil && !iam.trustRemoteAddr {
-		return errors.New("the client address source is not set: call ClientIP (for example with ratelimit.TrustedProxyKey) or, with no proxy in front, TrustRemoteAddr")
 	}
 
 	return nil

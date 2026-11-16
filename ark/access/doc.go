@@ -20,13 +20,16 @@
 //
 // # Wiring
 //
-//	iam, err := access.New(db, store, func(iam *access.Builder) {
+//	// The client address keys the throttles: list your proxies' prefixes behind
+//	// one, or pass none when the application faces the internet directly.
+//	clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
+//	scheme := totp.New("Acme") // the name authenticator apps show for this account
+//	iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 //		iam.Password(hasher)
-//		iam.TwoFactor(cipher, "Example")
+//		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
 //		iam.Provider(google, github)
 //		iam.Deliver(send) // reset and verification links
-//		iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 //	})
 //	if err != nil {
 //		return err

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"unicode"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
@@ -46,13 +48,21 @@ type NativeProvider interface {
 	NativeHandler(guard *auth.Guard, resolve auth.Resolver) router.Handler
 }
 
-// validateProviders rejects a nil provider, an empty name and a name used twice,
-// since each name is a mounted path.
+// validateProviders rejects a nil provider, an empty name, a name with anything but
+// letters, digits, hyphens and underscores (it must be one safe path segment of
+// "/auth/<name>": the connect handler redirects there and the router would
+// reject or reinterpret a pattern with braces, slashes or dots) and a name used twice, since each name is
+// a mounted path.
 func validateProviders(providers []Provider) error {
 	names := map[string]bool{}
 	for _, provider := range providers {
 		if provider == nil || provider.Name() == "" {
 			return errors.New("a provider is nil or has an empty name")
+		}
+		if strings.IndexFunc(provider.Name(), func(char rune) bool {
+			return !unicode.IsLetter(char) && !unicode.IsDigit(char) && char != '-' && char != '_'
+		}) >= 0 {
+			return fmt.Errorf("provider name %q: use only letters, digits, hyphens and underscores", provider.Name())
 		}
 		if names[provider.Name()] {
 			return fmt.Errorf("duplicate provider name %q: set a distinct name on one of them", provider.Name())

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"arkoren.dev/foundation/totp"
+
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/access"
@@ -83,7 +85,7 @@ func TestBodylessRoutesRequireJSONToo(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")

@@ -5,6 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"arkoren.dev/core/http/middleware/ratelimit"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
+
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
 
@@ -77,7 +81,7 @@ func TestSendVerificationWithoutDelivery(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		directory, err := account.NewDirectory(db, func(accounts *account.Builder) {
+		directory, err := account.NewDirectory(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 			accounts.Instance(instance)
 		})
 		if err != nil {

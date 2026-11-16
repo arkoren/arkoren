@@ -3,11 +3,9 @@ package account
 import (
 	"context"
 	"errors"
-	"net/http"
 	"time"
 
 	"arkoren.dev/core/event"
-	"arkoren.dev/core/service/cache"
 
 	"arkoren.dev/ark/access/internal/storage"
 )
@@ -18,7 +16,7 @@ import (
 //
 // Example:
 //
-//	directory, err := account.NewDirectory(db, func(accounts *account.Builder) {
+//	directory, err := account.NewDirectory(db, store, clientIP, func(accounts *account.Builder) {
 //		accounts.Instance("tenant_a").VerifyTTL(time.Hour)
 //	})
 type Builder struct {
@@ -26,8 +24,6 @@ type Builder struct {
 	events    *event.Bus
 	deliver   func(context.Context, Message) error
 	verifyTTL time.Duration
-	store     *cache.Cache
-	clientIP  func(*http.Request) string
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -37,7 +33,7 @@ type Builder struct {
 //	var configure account.BuilderFunc = func(accounts *account.Builder) {
 //		accounts.Instance("tenant_a")
 //	}
-//	directory, err := account.NewDirectory(db, configure)
+//	directory, err := account.NewDirectory(db, store, clientIP, configure)
 type BuilderFunc = func(*Builder)
 
 // Instance selects a named instance: tables are prefixed "<instance>_" and the
@@ -80,22 +76,6 @@ func (accounts *Builder) Events(bus *event.Bus) *Builder {
 //	})
 func (accounts *Builder) Deliver(deliver func(ctx context.Context, message Message) error) *Builder {
 	accounts.deliver = deliver
-
-	return accounts
-}
-
-// Throttle sets the cache that counts verification resends and how the client
-// address is found. [Directory.ResendHandler] needs it and panics without it,
-// because an unlimited resend route lets one user flood a mailbox. A nil
-// clientIP uses the host of r.RemoteAddr, which behind a reverse proxy is the
-// proxy: pass the function given to the guard, such as ratelimit.TrustedProxyKey.
-//
-// Example:
-//
-//	accounts.Throttle(store, ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
-func (accounts *Builder) Throttle(store *cache.Cache, clientIP func(*http.Request) string) *Builder {
-	accounts.store = store
-	accounts.clientIP = clientIP
 
 	return accounts
 }

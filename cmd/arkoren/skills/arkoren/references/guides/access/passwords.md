@@ -16,10 +16,10 @@ and a way to [deliver](overview.md#delivering-messages) reset and verification
 links:
 
 ```go
-iam, err := access.New(db, store, func(iam *access.Builder) {
+clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	iam.Password(hasher)
 	iam.Deliver(send)
-	iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 })
 ```
 
@@ -91,15 +91,17 @@ cannot lock the real user out. The looser 50 still stops a distributed guess at
 one account, and that user waits for the window or resets the password. IPv6
 clients are counted per /64, because one subscriber controls a whole /64.
 
-`New` requires you to say how to find the client address, because the throttles
-count by it. Behind a reverse proxy, name the proxies you trust:
+`New` requires a function that finds the client address as its third argument,
+because the throttles count by it. Behind a reverse proxy, name the proxies you
+trust:
 
 ```go
-iam.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
+clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
 ```
 
-An application that faces the internet directly with no proxy calls
-`iam.TrustRemoteAddr()` instead. Using it behind a proxy makes every user share
+An application that faces the internet directly with no proxy passes
+`ratelimit.TrustedProxyKey()` with no prefixes, which returns the host of
+`r.RemoteAddr`. Doing that behind a proxy makes every user share
 the proxy's address, and 100 failed attempts from anyone lock login for everyone. Registration, forgot-password and email resend are
 throttled too (see below), per identifier as typed and per client address; still
 put a [rate limit](../abuse-prevention/rate-limiting.md) in front of them.

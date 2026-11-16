@@ -6,6 +6,8 @@ arkoren.dev/core v0.8.1-0.20261115061220-ee142ed01841 h1:xBxhGmVDx6bqrzbP8bOE83d
 arkoren.dev/core v0.8.1-0.20261115061220-ee142ed01841/go.mod h1:09a4ff3ddb8VhE9wQgAGcIbIJWEBHk4Ltxyg1+muE20=
 arkoren.dev/core v0.8.1-0.20261115223453-71b8e64b3621 h1:Ne7nCJV5/hb2v0m3IlWizFU/npeu5QlqsgjZl0dIc60=
 arkoren.dev/core v0.8.1-0.20261115223453-71b8e64b3621/go.mod h1:09a4ff3ddb8VhE9wQgAGcIbIJWEBHk4Ltxyg1+muE20=
+arkoren.dev/core v0.9.0 h1:felifIS22wNgrXLE5OH5T7hjN7IvRDkQt5Nf0Ms6bj8=
+arkoren.dev/core v0.9.0/go.mod h1:09a4ff3ddb8VhE9wQgAGcIbIJWEBHk4Ltxyg1+muE20=
 arkoren.dev/driver/aes v0.1.0 h1:BgKo4KOAF9K0uN57tQudoWc5WbcJwC8UA7iV+lj1UM8=
 arkoren.dev/driver/aes v0.1.0/go.mod h1:iCi4Y5QWmicOE9SmJ4QMfiraItfzKljyzM5Z4DltlPI=
 arkoren.dev/driver/bcrypt v0.1.0 h1:kSI01TV8ZdV7655oTZ5ogSZDB4JSXVX6Abs2wBWl34o=
@@ -26,6 +28,8 @@ arkoren.dev/foundation/query v0.2.0 h1:UiRnVHquwOvX/5hGRV7EAdrIVNJ7C3lptPLi7GyBH
 arkoren.dev/foundation/query v0.2.0/go.mod h1:Oz5hJBjzHRdYSKZPPDmYRUuR2R+2JBtdU68gjpf96Zg=
 arkoren.dev/foundation/totp v0.1.0 h1:chu1DNzoWNVFnHuKlg46D52GS+RtFB833+CnFqgZNl8=
 arkoren.dev/foundation/totp v0.1.0/go.mod h1:iz1KoEIbTGdJcRNaIItGA60g4Qr0CLooZPLFqWxNYVc=
+arkoren.dev/foundation/totp v0.2.0 h1:0kzSC8KjaCBbAssBrPeWsFK9ahk8xf/esuBdoC45p+c=
+arkoren.dev/foundation/totp v0.2.0/go.mod h1:iz1KoEIbTGdJcRNaIItGA60g4Qr0CLooZPLFqWxNYVc=
 arkoren.dev/foundation/validate v0.1.0 h1:CRd5PWg8p6/Z0DQcxskQkJ/9NEd27SikAsw5tlajJaU=
 arkoren.dev/foundation/validate v0.1.0/go.mod h1:+wLxfBcQRxN9H7NWUZ6zoqjOSGeeJ5hH2APvIXJ1Qa0=
 filippo.io/edwards25519 v1.2.0 h1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=

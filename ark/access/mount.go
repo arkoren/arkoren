@@ -23,9 +23,13 @@ import (
 //	            DELETE /connections/{id}
 //	Account     DELETE /account (built-in users only)
 //
-// The password routes need [Builder.Password], and Mount panics when it is
-// enabled without [Builder.Deliver], because the forgot route has no way to send
-// its link. The challenge and pending routes need a registered second factor,
+// The password routes need [Builder.Password]; of them, /register also needs
+// users that can be created ([Users.Create], always true for the built-in
+// users), and /password/forgot and /password/reset need [Builder.Deliver],
+// because without it no user could receive a reset link. Mount skips a route
+// whose requirement is missing instead of panicking, so it never panics for a
+// configuration [New] accepted; the matching XHandler method still panics when
+// asked for directly. The challenge and pending routes need a registered second factor,
 // /confirm a registered step-up method, and the email routes the built-in users
 // and [Builder.Deliver]. /logout and the session routes are always mounted.
 //
@@ -60,16 +64,22 @@ func (iam *Access) Mount(r *router.Router) {
 	}
 }
 
-// mountPassword registers the password routes when [Builder.Password] is set.
+// mountPassword registers the password routes when [Builder.Password] is set:
+// login and change always, registration when users can be created, and the
+// forgot and reset routes when [Builder.Deliver] is set.
 func (iam *Access) mountPassword(r *router.Router) {
 	if iam.verifier == nil {
 		return
 	}
-	r.Post("/register", iam.RegisterHandler())
 	r.Post("/login", iam.LoginHandler())
 	r.Put("/password", iam.ChangePasswordHandler())
-	r.Post("/password/reset", iam.ResetPasswordHandler())
-	r.Post("/password/forgot", iam.ForgotPasswordHandler())
+	if iam.register {
+		r.Post("/register", iam.RegisterHandler())
+	}
+	if iam.deliver != nil {
+		r.Post("/password/reset", iam.ResetPasswordHandler())
+		r.Post("/password/forgot", iam.ForgotPasswordHandler())
+	}
 }
 
 // mountLogin registers the guard's routes: the challenge and pending routes

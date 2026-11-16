@@ -101,12 +101,12 @@ type Status struct {
 //
 // Example:
 //
-//	factors, err := twofactor.NewFactors(provider, db, store, cipher, "Example")
+//	scheme := totp.New("Acme") // the name authenticator apps show for this account
+//	factors, err := twofactor.NewFactors(provider, db, store, scheme, cipher)
 type Factors struct {
 	db       *database.Database
 	store    *cache.Cache
 	cipher   *crypto.Encrypter
-	issuer   string
 	instance string
 	secrets  string
 	codes    string
@@ -119,10 +119,11 @@ type Factors struct {
 	extra    []auth.Credential
 }
 
-// NewFactors returns the two-factor store. cipher encrypts the secrets (use a
-// key reserved for them), store counts wrong activation codes, and issuer is the
-// service name authenticator apps show: it is required and may not contain a
-// colon. It does no I/O; the tables come from [Factors.Migrations]. Errors wrap
+// NewFactors returns the two-factor store. scheme holds the TOTP parameters and
+// the issuer, the service name authenticator apps show (see [totp.New]); an
+// invalid scheme is [ErrInvalidConfig] wrapping [totp.Scheme.Err]. cipher
+// encrypts the secrets (use a key reserved for them) and store counts wrong
+// activation codes. It does no I/O; the tables come from [Factors.Migrations]. Errors wrap
 // [ErrInvalidConfig].
 //
 // It registers a forget hook on provider that deletes the user's secret and
@@ -130,15 +131,16 @@ type Factors struct {
 //
 // Example:
 //
-//	factors, err := twofactor.NewFactors(provider, db, store, cipher, "Example")
-func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache.Cache, cipher *crypto.Encrypter, issuer string, configure ...BuilderFunc) (*Factors, error) {
+//	scheme := totp.New("Acme") // the name authenticator apps show for this account
+//	factors, err := twofactor.NewFactors(provider, db, store, scheme, cipher)
+func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache.Cache, scheme totp.Scheme, cipher *crypto.Encrypter, configure ...BuilderFunc) (*Factors, error) {
 	if provider == nil || db == nil || store == nil || cipher == nil {
 		return nil, fmt.Errorf("%w: provider, database, store and cipher are required", ErrInvalidConfig)
 	}
-	if issuer == "" || strings.Contains(issuer, ":") {
-		return nil, fmt.Errorf("%w: issuer must be non-empty and contain no colon", ErrInvalidConfig)
+	if err := scheme.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
-	settings := Builder{scheme: totp.New()}
+	settings := Builder{}
 	for _, apply := range configure {
 		apply(&settings)
 	}
@@ -149,12 +151,11 @@ func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache
 		db:       db,
 		store:    store,
 		cipher:   cipher,
-		issuer:   issuer,
 		instance: settings.instance,
 		secrets:  storage.Table(settings.instance, "totp_secrets"),
 		codes:    storage.Table(settings.instance, "recovery_codes"),
 		events:   settings.events,
-		scheme:   settings.scheme,
+		scheme:   scheme,
 		count:    cmp.Or(settings.codes, DefaultRecoveryCodes),
 		window:   cmp.Or(settings.window, DefaultStepUpWindow),
 		verified: settings.verified,
@@ -301,7 +302,7 @@ func (factors *Factors) Enroll(ctx context.Context, subject, label string) (Enro
 	if err != nil {
 		return Enrollment{}, fmt.Errorf("twofactor: new secret: %w", err)
 	}
-	uri, err := factors.scheme.URI(factors.issuer, strings.ReplaceAll(label, ":", " "), secret)
+	uri, err := factors.scheme.URI(strings.ReplaceAll(label, ":", " "), secret)
 	if err != nil {
 		return Enrollment{}, fmt.Errorf("twofactor: provisioning uri: %w", err)
 	}

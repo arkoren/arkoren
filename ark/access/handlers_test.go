@@ -3,8 +3,6 @@ package access_test
 import (
 	"testing"
 
-	"arkoren.dev/core/http/router"
-
 	"arkoren.dev/ark/access"
 )
 
@@ -65,7 +63,8 @@ func panics(f func()) (panicked bool) {
 }
 
 // TestDeliverIsRequiredForForgotAndVerify verifies the composition-time panics
-// for a missing delivery function.
+// of the handler methods for a missing delivery function; Mount instead skips
+// those routes (see TestMountNeverPanicsOnAcceptedConfiguration).
 func TestDeliverIsRequiredForForgotAndVerify(t *testing.T) {
 	t.Parallel()
 
@@ -77,7 +76,6 @@ func TestDeliverIsRequiredForForgotAndVerify(t *testing.T) {
 		"ForgotPasswordHandler":     func() { iam.ForgotPasswordHandler() },
 		"VerifyEmailHandler":        func() { iam.VerifyEmailHandler() },
 		"ResendVerificationHandler": func() { iam.ResendVerificationHandler() },
-		"Mount":                     func() { iam.Mount(router.New()) },
 	} {
 		if !panics(build) {
 			t.Errorf("%s did not panic without Deliver", name)

@@ -9,7 +9,6 @@ import (
 	"arkoren.dev/ark/access/internal/storage"
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
-	"arkoren.dev/foundation/totp"
 )
 
 // Builder configures [NewFactors] before publication. Callbacks run directly
@@ -17,13 +16,13 @@ import (
 //
 // Example:
 //
-//	factors, err := twofactor.NewFactors(provider, db, store, cipher, "Example", func(factors *twofactor.Builder) {
+//	scheme := totp.New("Acme") // the name authenticator apps show for this account
+//	factors, err := twofactor.NewFactors(provider, db, store, scheme, cipher, func(factors *twofactor.Builder) {
 //		factors.RecoveryCodes(8)
 //	})
 type Builder struct {
 	instance string
 	events   *event.Bus
-	scheme   totp.Scheme
 	codes    int
 	window   time.Duration
 	verified func(context.Context, string) (bool, error)
@@ -38,7 +37,7 @@ type Builder struct {
 //	var configure twofactor.BuilderFunc = func(factors *twofactor.Builder) {
 //		factors.Instance("tenant_a")
 //	}
-//	factors, err := twofactor.NewFactors(provider, db, store, cipher, "Example", configure)
+//	factors, err := twofactor.NewFactors(provider, db, store, totp.New("Acme"), cipher, configure)
 type BuilderFunc = func(*Builder)
 
 // Instance selects a named instance: tables are prefixed "<instance>_" and the
@@ -62,21 +61,6 @@ func (factors *Builder) Instance(name string) *Builder {
 //	factors.Events(events)
 func (factors *Builder) Events(bus *event.Bus) *Builder {
 	factors.events = bus
-
-	return factors
-}
-
-// Scheme replaces the TOTP parameters (hash, digits, period, window). The
-// default is [totp.New]: SHA-1, 6 digits, 30 seconds, one step of drift, which
-// every authenticator app supports.
-//
-// Example:
-//
-//	factors.Scheme(totp.New(func(scheme *totp.Builder) {
-//		scheme.Digits(8)
-//	}))
-func (factors *Builder) Scheme(scheme totp.Scheme) *Builder {
-	factors.scheme = scheme
 
 	return factors
 }
@@ -159,9 +143,6 @@ func (factors *Builder) Methods(credentials ...auth.Credential) *Builder {
 // validate checks the settings no setter can check alone.
 func (factors *Builder) validate() error {
 	if err := storage.ValidInstance(factors.instance); err != nil {
-		return err
-	}
-	if err := factors.scheme.Err(); err != nil {
 		return err
 	}
 	if factors.codes < 0 || factors.codes > maxRecoveryCodes {
