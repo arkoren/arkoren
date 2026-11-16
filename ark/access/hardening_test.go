@@ -29,9 +29,9 @@ func TestVictimsVerifyClickDoesNotVerifyTheAttackersAccount(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.TwoFactor(totp.New("Example"), cipher(t))
-			iam.Provider(fakeProvider{name: "fake"})
+			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
 		register(t, sys.client, "victim@example.com")
 		subject, _, err := sys.iam.Directory().Lookup(ctx, "victim@example.com")
@@ -88,7 +88,7 @@ func TestEnablingTwoFactorFailsClosed(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.TwoFactor(totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
 				factors.OnEnable(func(context.Context, string) error { return errors.New("revocation down") })
 			})
@@ -126,7 +126,7 @@ func TestOwnUsersNeedTheVerifiedHooks(t *testing.T) {
 			_, err := access.New(db, cache.New(memorycache.New()), testClientIP, func(iam *access.Builder) {
 				iam.Instance(instance)
 				iam.Users(own)
-				iam.Password(hasher())
+				iam.Password(hasher(), registration)
 			})
 			if !errors.Is(err, access.ErrInvalidConfig) {
 				t.Errorf("%s: New error = %v, want ErrInvalidConfig", name, err)
@@ -144,7 +144,7 @@ func TestOnEmailProvenRunsInTheReset(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var proven []string
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.OnEmailProven(func(_ context.Context, subject string) error {
 				proven = append(proven, subject)
 

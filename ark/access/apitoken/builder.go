@@ -21,15 +21,22 @@ var prefixPattern = regexp.MustCompile(`^[a-z0-9]{2,16}$`)
 //
 // Example:
 //
-//	issuer, err := apitoken.NewIssuer(provider, db, func(tokens *apitoken.Builder) {
-//		tokens.Scopes("posts:read", "posts:write").MaxTTL(90 * 24 * time.Hour)
+//	issuer, err := apitoken.NewIssuer(provider, db, store, func(tokens *apitoken.Builder) {
+//		tokens.Grants(apitoken.AnyScope, "posts:read", "posts:write").MaxTTL(90 * 24 * time.Hour)
 //	})
 type Builder struct {
-	instance string
-	events   *event.Bus
-	scopes   []string
-	prefix   string
-	maxTTL   time.Duration
+	instance  string
+	events    *event.Bus
+	grantable func(context.Context, string) ([]string, error)
+	scopes    []string
+	grantTTL  time.Duration
+	prefix    string
+	maxTTL    time.Duration
+
+	// personal and device are [Builder.PersonalTokens] and
+	// [Builder.DeviceTokens]; both start true.
+	personal bool
+	device   bool
 
 	// deviceIdleTTL is [Builder.DeviceIdleTTL] before its default is applied.
 	deviceIdleTTL time.Duration
@@ -41,9 +48,9 @@ type Builder struct {
 // Example:
 //
 //	var configure apitoken.BuilderFunc = func(tokens *apitoken.Builder) {
-//		tokens.Scopes("posts:read")
+//		tokens.MaxTTL(time.Hour)
 //	}
-//	issuer, err := apitoken.NewIssuer(provider, db, configure)
+//	issuer, err := apitoken.NewIssuer(provider, db, store, configure)
 type BuilderFunc = func(*Builder)
 
 // Instance selects a named instance: the table is prefixed "<instance>_" and the
@@ -70,15 +77,94 @@ func (tokens *Builder) Events(bus *event.Bus) *Builder {
 	return tokens
 }
 
-// Scopes declares the catalog of scopes the application knows. Personal tokens
-// may carry any subset; device tokens carry all of them. Without a catalog
-// tokens carry no scopes. The names are copied.
+// Grants declares the catalog of scopes the application knows and which of them
+// each user may hold. scopes is the catalog; grantable returns, for a subject,
+// the catalog scopes that user may hold now: a personal token may carry any
+// subset of catalog and grant, and a device token carries all of it. Names in
+// grantable's answer outside the catalog are ignored, so it may return the
+// user's whole permission set; the one exception is the wildcard "*", which
+// stands for the whole catalog (it is what [AnyScope] returns), so a
+// permission set that can contain a literal "*" must be filtered before it is
+// returned. Use [AnyScope] when every user may hold every scope. grantable is required with a catalog, which is why both are arguments
+// of one method: a catalog with no ceiling would let a user mint a token that
+// can do more than they can. Without Grants, tokens carry no scopes. The names
+// are copied; an empty or duplicate name, or the wildcard "*", is
+// [ErrInvalidConfig], as is a nil grantable with a catalog.
+//
+// The grant is a ceiling checked at issue (a scope outside it is
+// [ErrScopeNotGranted]) and again when the token authenticates, so a user who
+// loses a permission loses the matching scope of tokens already issued; see
+// [Builder.GrantTTL] for how often that check runs. A change of the user's
+// UserRecord.Version (a password reset, the application's own rotation)
+// ends every token whatever the mode.
 //
 // Example:
 //
-//	tokens.Scopes("posts:read", "posts:write")
-func (tokens *Builder) Scopes(scopes ...string) *Builder {
+//	tokens.Grants(func(ctx context.Context, subject string) ([]string, error) {
+//		if isAdmin(ctx, subject) {
+//			return []string{"posts:read", "posts:write", "users:write"}, nil
+//		}
+//		return []string{"posts:read", "posts:write"}, nil
+//	}, "posts:read", "posts:write", "users:write")
+func (tokens *Builder) Grants(grantable func(ctx context.Context, subject string) ([]string, error), scopes ...string) *Builder {
+	tokens.grantable = grantable
 	tokens.scopes = slices.Clone(scopes)
+
+	return tokens
+}
+
+// GrantTTL sets how often an authenticating token re-checks the user's grant
+// ([Builder.Grants]):
+//
+//   - zero (the default) calls the grant function on every request that
+//     authenticates with a token, so a change applies at once, at the cost of
+//     one call per request;
+//   - a positive ttl caches the answer per subject for ttl in the shared store,
+//     so a change applies within ttl and the function runs at most about once
+//     per ttl per user (concurrent misses are coalesced);
+//   - a negative value fixes the scopes at creation: the token keeps what it was
+//     issued with and the function is not called again. A demoted user keeps
+//     their tokens' scopes until they are revoked.
+//
+// Whatever the mode, a token ends when the user's UserRecord.Version
+// changes (a password reset, the application's own rotation), and an error from
+// the grant function or the store fails the request instead of widening the
+// scopes. It has no effect without a catalog.
+//
+// Example:
+//
+//	tokens.GrantTTL(time.Minute)
+func (tokens *Builder) GrantTTL(ttl time.Duration) *Builder {
+	tokens.grantTTL = ttl
+
+	return tokens
+}
+
+// PersonalTokens enables the personal access tokens users create for
+// themselves ([Issuer.CreateHandler]); the default is true. With false,
+// [Issuer.CreateHandler] panics at composition and the facade mounts no
+// POST /tokens. [Issuer.Issue] stays available to the application.
+//
+// Example:
+//
+//	tokens.PersonalTokens(false) // device tokens only
+func (tokens *Builder) PersonalTokens(enabled bool) *Builder {
+	tokens.personal = enabled
+
+	return tokens
+}
+
+// DeviceTokens enables the device tokens a first-party app gets for a login
+// ([Issuer.ExchangeHandler], [Issuer.DeleteCurrentHandler]); the default is
+// true. With false both panic at composition and the facade mounts neither
+// POST /device-tokens nor DELETE /device-tokens/current. [Issuer.IssueDevice]
+// stays available to the application.
+//
+// Example:
+//
+//	tokens.DeviceTokens(false) // personal tokens only
+func (tokens *Builder) DeviceTokens(enabled bool) *Builder {
+	tokens.device = enabled
 
 	return tokens
 }
@@ -169,9 +255,23 @@ func (tokens *Builder) validate() error {
 	if tokens.maxTTL < 0 {
 		return errors.New("negative maximum lifetime")
 	}
+	if !tokens.personal && !tokens.device {
+		return errors.New("tokens enabled with no token kind: enable personal or device tokens")
+	}
+
+	return tokens.validateGrants()
+}
+
+// validateGrants checks the scope catalog and its grant function: names are
+// unique, non-empty and not the wildcard, and a catalog comes with the function
+// that caps it.
+func (tokens *Builder) validateGrants() error {
 	catalog := slices.Sorted(slices.Values(tokens.scopes))
-	if slices.Contains(catalog, "") || len(slices.Compact(catalog)) != len(tokens.scopes) {
-		return errors.New("scopes must be unique and non-empty")
+	if slices.Contains(catalog, "") || slices.Contains(catalog, anyScope) || len(slices.Compact(catalog)) != len(tokens.scopes) {
+		return fmt.Errorf("scopes must be unique, non-empty and not %q", anyScope)
+	}
+	if tokens.grantable == nil && len(catalog) > 0 {
+		return errors.New("a scope catalog needs a grant function: pass AnyScope to grant every scope")
 	}
 
 	return nil

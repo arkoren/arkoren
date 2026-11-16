@@ -28,7 +28,7 @@ func (iam *Access) build(settings *Builder) error {
 	if err != nil {
 		return err
 	}
-	iam.provider, iam.verified, iam.register = users.Provider, users.Verified, users.Create != nil
+	iam.provider, iam.verified = users.Provider, users.Verified
 	if err := iam.buildPassword(settings, users); err != nil {
 		return err
 	}
@@ -57,12 +57,13 @@ func (iam *Access) buildUsers(settings *Builder) (Users, error) {
 	if settings.users != nil {
 		return *settings.users, nil
 	}
-	directory, err := account.NewDirectory(iam.db, iam.store, iam.clientIP, func(accounts *account.Builder) {
+	configure := append([]account.BuilderFunc{func(accounts *account.Builder) {
 		accounts.Instance(settings.instance).Events(settings.events)
 		if iam.deliver != nil {
 			accounts.Deliver(iam.deliverVerification)
 		}
-	})
+	}}, settings.directory...)
+	directory, err := account.NewDirectory(iam.db, iam.store, iam.clientIP, configure...)
 	if err != nil {
 		return Users{}, err
 	}
@@ -124,7 +125,7 @@ func (iam *Access) passwordPolicy(settings *Builder) password.BuilderFunc {
 
 // buildTwoFactor builds the two-factor store when [Builder.TwoFactor] is set.
 func (iam *Access) buildTwoFactor(settings *Builder) error {
-	if settings.cipher == nil {
+	if !settings.twoFactor {
 		return nil
 	}
 	configure := append([]twofactor.BuilderFunc{func(factors *twofactor.Builder) {
@@ -149,7 +150,7 @@ func (iam *Access) buildTokens(settings *Builder) error {
 	configure := append([]apitoken.BuilderFunc{func(tokens *apitoken.Builder) {
 		tokens.Instance(settings.instance).Events(settings.events).Verified(iam.verified)
 	}}, settings.apitoken...)
-	issuer, err := apitoken.NewIssuer(iam.provider, iam.db, configure...)
+	issuer, err := apitoken.NewIssuer(iam.provider, iam.db, iam.store, configure...)
 	if err != nil {
 		return err
 	}
@@ -165,13 +166,14 @@ func (iam *Access) buildLinks(settings *Builder, users Users) error {
 	if len(iam.providers) == 0 {
 		return nil
 	}
-	links, err := federation.NewLinks(iam.provider, iam.db, func(links *federation.Builder) {
+	configure := append([]federation.BuilderFunc{func(links *federation.Builder) {
 		links.Instance(settings.instance).Events(settings.events).Verified(iam.verified)
 		links.Create(createExternal(users.Create))
 		if iam.verifier != nil {
 			links.Fallback(iam.verifier.Has)
 		}
-	})
+	}}, settings.federation...)
+	links, err := federation.NewLinks(iam.provider, iam.db, configure...)
 	if err != nil {
 		return err
 	}
@@ -248,8 +250,9 @@ func (iam *Access) chain(settings *Builder, lifetime time.Duration) router.Middl
 
 // createExternal returns the function that makes a user for an unknown external
 // identity with the provider's email, verified according to
-// [auth.External.EmailVerified]. It is nil without [Users.Create], so unknown
-// identities are refused.
+// [auth.External.EmailVerified]. It is nil without [Users.Create], which makes
+// [federation.Builder.SignUp] fail construction. Whether it is used at all is
+// SignUp's decision.
 func createExternal(create func(context.Context, string, bool) (string, error)) func(context.Context, auth.External) (string, error) {
 	if create == nil {
 		return nil

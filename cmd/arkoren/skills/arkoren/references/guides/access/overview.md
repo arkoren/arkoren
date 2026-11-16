@@ -1,7 +1,7 @@
 ---
 title: Access Overview
 nav: Overview
-description: Compose registration, login, two-factor, tokens and provider sign-in into one facade, then install its middleware and mount its routes.
+description: Compose login, two-factor, tokens and provider sign-in, with optional registration, into one facade, then install its middleware and mount its routes.
 order: 10
 summary:
   - Decide when the access facade fits better than the hand-built login of core authentication.
@@ -18,8 +18,8 @@ stores for passwords, authenticators, tokens and connections, and the JSON route
 that use them, so you enable the features you want instead of writing each
 handler.
 
-Use it when you want registration, login, two-factor, API tokens and provider
-sign-in working and tested. Keep the hand-built approach of
+Use it when you want login, two-factor, API tokens, provider sign-in and,
+if you choose, registration working and tested. Keep the hand-built approach of
 [Session Login](../authentication/session-login.md) when your login is unusual
 enough that you would replace most of the handlers anyway. The module depends
 only on core, Arkoren's foundation libraries and the standard library, and it
@@ -48,10 +48,15 @@ arguments of `New`; each feature is off until you enable it in the callback:
 clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
 scheme := totp.New("Acme") // the name authenticator apps show for this account
 iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher)
+	iam.Password(hasher, func(passwords *password.Builder) {
+		passwords.Registration(true)
+	})
 	iam.TwoFactor(scheme, cipher)
 	iam.Tokens()
 	iam.Provider(google, github)
+	iam.Federation(func(links *federation.Builder) {
+		links.SignUp(true)
+	})
 	iam.Deliver(send)
 })
 if err != nil {
@@ -59,23 +64,31 @@ if err != nil {
 }
 ```
 
+Registration and provider sign-up are the two ways a user can appear without
+your code creating them, and both are off until you enable them as above. With
+both off, you add users yourself through `iam.Directory()` or your own users; see
+[Adding Users](accounts.md#adding-users).
+
 `New` does no I/O. It returns an error wrapping `access.ErrInvalidConfig` when a
 dependency is missing (the database, the cache or the client address function), a
 provider name is used twice or contains anything but letters, digits, hyphens and underscores, or a package
-rejects its settings, such as an invalid TOTP scheme. `New` never guesses the
+rejects its settings, such as an invalid TOTP scheme, a nil cipher for
+two-factor, registration or sign-up over users that cannot be created, a scope
+catalog without a grant function, or tokens with neither kind enabled. `New` never guesses the
 client address, because the right source depends on the deployment (see
 [Shared Settings](#shared-settings)).
 
 | Feature | Builder method | Guide |
 | --- | --- | --- |
-| Registration, login, reset | `iam.Password(hasher)` | [Passwords](passwords.md) |
+| Login, reset, and registration when enabled | `iam.Password(hasher)` | [Passwords](passwords.md) |
 | Authenticator app and recovery codes | `iam.TwoFactor(scheme, cipher)` | [Two-Factor](two-factor.md) |
 | Personal and device tokens | `iam.Tokens()` | [API Tokens](tokens.md) |
-| Sign-in with external providers | `iam.Provider(clients...)` | [Connections](connections.md) |
+| Sign-in with external providers, and sign-up when enabled | `iam.Provider(clients...)` | [Connections](connections.md) |
 | Reset and verification links | `iam.Deliver(send)` | [Delivering Messages](#delivering-messages) |
 
 The facade also owns the built-in `users` table, which identifies users by
-email. To keep your own users instead, see [Your Own Users](own-users.md).
+email; `iam.Directory(...)` configures it and `iam.Directory()` on the built
+facade adds users. To keep your own users instead, see [Your Own Users](own-users.md).
 
 ## Protecting Routes
 

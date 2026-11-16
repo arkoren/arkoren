@@ -19,7 +19,7 @@ var errLostRace = errors.New("federation: lost link race")
 // expects. See [Links] for the rules. It reads the logged-in identity and the
 // session from ctx, which protocol modules take from the request, so the
 // callback route needs the session and auth middleware. Errors that are
-// problems ([ErrNotLinked], [ErrLinkedElsewhere], the error of [Builder.Create])
+// problems ([ErrNoAccount], [ErrLinkedElsewhere], the error of [Builder.Create])
 // reach the client as problem responses.
 //
 // Example:
@@ -72,8 +72,8 @@ func (links *Links) login(ctx context.Context, found row) (string, error) {
 // transaction. When a concurrent first login of the same identity wins the
 // insert, this one rolls its user back and returns the winner's subject.
 func (links *Links) createUser(ctx context.Context, external auth.External) (string, error) {
-	if links.create == nil {
-		return "", ErrNotLinked
+	if !links.signUp {
+		return "", ErrNoAccount
 	}
 	var subject string
 	err := links.db.WithTransaction(ctx, func(ctx context.Context) error {

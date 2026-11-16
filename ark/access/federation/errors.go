@@ -19,9 +19,10 @@ import (
 //	}
 var ErrNotMigrated = storage.ErrNotMigrated
 
-// ErrNotLinked is returned when an external identity belongs to no user and
-// none may be created for it (no [Builder.Create] function, or a lookup that
-// never creates). It is a problem with status 401.
+// ErrNotLinked is returned by [Links.Lookup], which never creates anything, for
+// an external identity that belongs to no user, and by a login that lost the
+// race to create one and then found no connection. A login that finds no user
+// and may not create one is [ErrNoAccount]. It is a problem with status 401.
 //
 // Example:
 //
@@ -34,6 +35,27 @@ var ErrNotLinked = problem.New(func(details *problem.Builder) {
 	details.Title("Account not linked")
 	details.Detail("No account is connected to this identity. Log in and connect the provider from your settings.")
 	details.Status(http.StatusUnauthorized)
+})
+
+// ErrNoAccount is returned when a logged-out login presents a verified
+// external identity that is connected to no user while [Builder.SignUp] is off
+// (the default), so no user is created. It is a problem with status 403: the
+// provider verified the person, and the application refuses them an account;
+// 401 would invite retrying with other credentials, and 404 would suggest a
+// missing route. The detail tells the person to ask for an account or to log
+// in another way and connect the provider. Nothing is stored, and the response
+// is the same for every unknown identity.
+//
+// Example:
+//
+//	if errors.Is(err, federation.ErrNoAccount) {
+//		// the application does not create accounts from provider logins
+//	}
+var ErrNoAccount = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:federation:no-account")
+	details.Title("No account for this identity")
+	details.Detail("No account is connected to this identity and sign-up with a provider is not open. Log in another way and connect the provider from your settings, or ask for an account.")
+	details.Status(http.StatusForbidden)
 })
 
 // ErrLinkedElsewhere is returned when an external identity is already connected

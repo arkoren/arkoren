@@ -93,7 +93,7 @@ func TestProviderFirstLoginCreatesVerifiedUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Provider(fakeProvider{name: "fake"})
+			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
 		first := sys.client.NewDevice()
 		if reply := first.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
@@ -112,6 +112,52 @@ func TestProviderFirstLoginCreatesVerifiedUser(t *testing.T) {
 	})
 }
 
+// TestProviderFirstLoginWithoutSignUpIsRefused verifies sign-up is off by
+// default: an unknown identity gets 403 no-account and no user is created.
+func TestProviderFirstLoginWithoutSignUpIsRefused(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Provider(fakeProvider{name: "fake"})
+		})
+		device := sys.client.NewDevice()
+		reply := device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
+		if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "federation:no-account") {
+			t.Fatalf("callback = %d %s, want 403 no-account", reply.Status, reply.Body)
+		}
+		if _, _, err := sys.iam.Directory().Lookup(testContext(t), "ada@example.com"); !errors.Is(err, auth.ErrUserNotFound) {
+			t.Fatalf("Lookup after a refused login = %v, want no user", err)
+		}
+	})
+}
+
+// TestConnectWithoutSignUpStillWorks verifies a logged-in user connects a
+// provider and then logs in with it while sign-up is off.
+func TestConnectWithoutSignUpStillWorks(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"})
+		})
+		registerVerified(t, sys, sys.client, "ada@example.com")
+		sys.client.Post("/connections/fake", "")
+		if reply := sys.client.Do(http.MethodGet, callbackPath("fake", "g1", "", false), ""); reply.Status != http.StatusNoContent {
+			t.Fatalf("connecting callback = %d %s", reply.Status, reply.Body)
+		}
+		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		other := sys.client.NewDevice()
+		if reply := other.Do(http.MethodGet, callbackPath("fake", "g1", "", false), ""); reply.Status != http.StatusNoContent {
+			t.Fatalf("login with the connected identity = %d %s", reply.Status, reply.Body)
+		}
+		if me := other.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, subject+"|") {
+			t.Fatalf("/me = %q, want user %s", me.Body, subject)
+		}
+	})
+}
+
 // TestProviderUnverifiedEmailCreatesUnverifiedUser verifies EmailVerified
 // decides whether the new user's email counts as verified.
 func TestProviderUnverifiedEmailCreatesUnverifiedUser(t *testing.T) {
@@ -119,7 +165,7 @@ func TestProviderUnverifiedEmailCreatesUnverifiedUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Provider(fakeProvider{name: "fake"})
+			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
 		device := sys.client.NewDevice()
 		device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), "")
@@ -138,8 +184,8 @@ func TestProviderNeverLinksByEmail(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
-			iam.Provider(fakeProvider{name: "fake"})
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		device := sys.client.NewDevice()
@@ -160,8 +206,8 @@ func TestConnectFlowLinksAndListsAndDisconnects(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
-			iam.Provider(fakeProvider{name: "fake"})
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		connect := sys.client.Post("/connections/fake", "")
@@ -195,7 +241,7 @@ func TestDisconnectLastWayInConflicts(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Provider(fakeProvider{name: "fake"})
+			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
 		device := sys.client.NewDevice()
 		device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
@@ -214,8 +260,8 @@ func TestSilentFederatedReloginNotFreshForUserWithPassword(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
-			iam.Provider(fakeProvider{name: "fake"})
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		sys.client.Post("/connections/fake", "")
@@ -278,7 +324,7 @@ func TestResolveWithoutProvidersIsNotLinked(t *testing.T) {
 	t.Parallel()
 
 	sys := newApp(t, memoryDatabase(t), "", func(iam *access.Builder) {
-		iam.Password(hasher())
+		iam.Password(hasher(), registration)
 	})
 	if _, err := sys.iam.Resolve(context.Background(), auth.External{Issuer: "x", Subject: "y"}); err == nil {
 		t.Fatal("Resolve without providers succeeded")

@@ -36,7 +36,10 @@ func (issuer *Issuer) parse(text string) (id, secret string, recognized, ok bool
 // anonymously (so another authenticator, such as a JWT one, can try); a
 // malformed, unknown, expired, revoked or outdated token is
 // [auth.ErrUnauthenticated] with a Bearer challenge. The identity carries the
-// token's scopes and the user's record, and no factors: it is never a browser
+// token's scopes, narrowed to what the user may still hold ([Builder.Grants],
+// [Builder.GrantTTL]; a failing check rejects the request with 401, as any
+// error of a bearer check does), and
+// the user's record, and no factors: it is never a browser
 // session, [auth.RequireLevel] rejects it, and the credential handlers of this
 // module refuse it.
 //
@@ -62,10 +65,16 @@ func (issuer *Issuer) authenticate(ctx context.Context, text string) (auth.Ident
 	if err != nil {
 		return auth.Identity{}, err
 	}
+	// A failing grant check rejects the request: the stored scopes may be wider
+	// than what the user may hold now.
+	scopes, err := issuer.effective(ctx, stored.Subject, stored.token().Scopes)
+	if err != nil {
+		return auth.Identity{}, err
+	}
 	issuer.touch(ctx, stored, now)
 
 	return auth.NewIdentity(stored.Subject, func(principal *auth.IdentityBuilder) {
-		principal.Scopes(stored.token().Scopes...).Record(record)
+		principal.Scopes(scopes...).Record(record)
 	}), nil
 }
 

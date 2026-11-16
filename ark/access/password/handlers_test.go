@@ -397,8 +397,9 @@ func TestChangeEndsOtherLoginsEvenWhenTheHookFails(t *testing.T) {
 	})
 }
 
-// TestRegisterHandlerWithoutCreatePanics verifies the composition-time panic.
-func TestRegisterHandlerWithoutCreatePanics(t *testing.T) {
+// TestRegisterHandlerWithoutRegistrationPanics verifies registration is off by
+// default and the handler fails at composition then.
+func TestRegisterHandlerWithoutRegistrationPanics(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
@@ -407,10 +408,14 @@ func TestRegisterHandlerWithoutCreatePanics(t *testing.T) {
 		provider, _ := auth.NewUserProvider(users.driver)
 		verifier, err := password.NewVerifier(provider, db, sys.store, testClientIP, sys.hasher, password.Users{
 			Lookup: users.Lookup,
+			Create: users.Create,
 			Rotate: users.Rotate,
 		})
 		if err != nil {
 			t.Fatalf("NewVerifier: %v", err)
+		}
+		if verifier.Registration() {
+			t.Fatal("Registration() is true by default")
 		}
 		defer func() {
 			if recover() == nil {
@@ -418,5 +423,26 @@ func TestRegisterHandlerWithoutCreatePanics(t *testing.T) {
 			}
 		}()
 		verifier.RegisterHandler()
+	})
+}
+
+// TestRegistrationRequiresCreate verifies Registration(true) without
+// Users.Create is an invalid configuration.
+func TestRegistrationRequiresCreate(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		users := newFakeUsers()
+		provider, _ := auth.NewUserProvider(users.driver)
+		_, err := password.NewVerifier(provider, db, sys.store, testClientIP, sys.hasher, password.Users{
+			Lookup: users.Lookup,
+			Rotate: users.Rotate,
+		}, func(passwords *password.Builder) {
+			passwords.Registration(true)
+		})
+		if !errors.Is(err, password.ErrInvalidConfig) {
+			t.Fatalf("NewVerifier error = %v, want ErrInvalidConfig", err)
+		}
 	})
 }

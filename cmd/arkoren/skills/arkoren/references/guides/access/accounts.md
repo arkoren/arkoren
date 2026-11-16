@@ -5,6 +5,7 @@ description: List and end logins, delete an account, and see how the facade prot
 order: 70
 summary:
   - List a user's logins and end one or all others from the sessions routes.
+  - Add users through the built-in directory when registration and provider sign-up are off.
   - Delete an account together with every feature's rows in one transaction.
   - Know which routes need a browser session, a fresh login or a verified email, and what a changed credential ends.
 ---
@@ -42,6 +43,42 @@ and answers `204`. An unknown id changes nothing. `DELETE /sessions` ends every
 login of the user except the one that made the request, and answers `204`. All
 three routes need a browser session; a bearer token is `401`. They do not need a
 fresh login.
+
+## Adding Users
+
+Registration (`passwords.Registration(true)`) and provider sign-up
+(`links.SignUp(true)`) are both off by default. Without them, no request creates a
+user, and your application adds users through the built-in directory, which the
+facade exposes as `iam.Directory()`:
+
+```go
+subject, err := iam.Directory().CreateVerified(ctx, "ada@example.com")
+if err != nil {
+	return err
+}
+err = iam.Verifier().Set(ctx, subject, initialPassword)
+```
+
+`Create` adds a user with an unverified email, and the facade then refuses them
+connecting a provider, enrolling two-factor and creating tokens until
+`iam.Directory().SendVerification(ctx, subject)` has delivered a link they
+followed. `CreateVerified` is for users whose address you already know to be
+theirs, such as an invitation they accepted. An email already in use is
+`account.ErrEmailTaken`, and the facade never merges accounts. Run both calls in
+one `db.WithTransaction` when a half-created user must not remain, and give
+the user a way to log in: a password with `iam.Verifier().Set`, or a provider
+they connect themselves. With [your own users](own-users.md) you create users in
+your own store and the facade only sees their subjects.
+
+Configure the built-in users with `iam.Directory`, for example the lifetime of
+verification links. It cannot be combined with `iam.Users`, which replaces the
+built-in table; `New` fails with `access.ErrInvalidConfig`.
+
+```go
+iam.Directory(func(accounts *account.Builder) {
+	accounts.VerifyTTL(time.Hour)
+})
+```
 
 ## Deleting Accounts
 

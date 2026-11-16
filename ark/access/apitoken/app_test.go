@@ -29,8 +29,16 @@ type system struct {
 }
 
 // newSystem migrates the issuer on db and serves its handlers. Users "1" and
-// "2" exist; the scope catalog is posts:read and posts:write.
+// "2" exist; the scope catalog is posts:read and posts:write, granted to every
+// user (apitoken.AnyScope) unless configure says otherwise.
 func newSystem(t *testing.T, db *database.Database, instance string, configure ...apitoken.BuilderFunc) *system {
+	t.Helper()
+
+	return newSystemOn(t, db, instance, cache.New(memorycache.New()), configure...)
+}
+
+// newSystemOn is newSystem over store, which the issuer and the guard share.
+func newSystemOn(t *testing.T, db *database.Database, instance string, store *cache.Cache, configure ...apitoken.BuilderFunc) *system {
 	t.Helper()
 
 	users := memoryauth.New()
@@ -43,15 +51,14 @@ func newSystem(t *testing.T, db *database.Database, instance string, configure .
 	if err != nil {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
-	issuer, err := apitoken.NewIssuer(provider, db, append([]apitoken.BuilderFunc{func(tokens *apitoken.Builder) {
+	issuer, err := apitoken.NewIssuer(provider, db, store, append([]apitoken.BuilderFunc{func(tokens *apitoken.Builder) {
 		tokens.Instance(instance)
-		tokens.Scopes("posts:read", "posts:write")
+		tokens.Grants(apitoken.AnyScope, "posts:read", "posts:write")
 	}}, configure...)...)
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
 	migrateUp(t, db, issuer.Migrations()...)
-	store := cache.New(memorycache.New())
 	guard, err := auth.NewGuard(provider, store)
 	if err != nil {
 		t.Fatalf("NewGuard: %v", err)
@@ -66,10 +73,15 @@ func newSystem(t *testing.T, db *database.Database, instance string, configure .
 			return outcome.Response(w)
 		})
 		r.Get("/tokens", issuer.ListHandler())
-		r.Post("/tokens", issuer.CreateHandler(guard))
+		if issuer.PersonalTokens() {
+			r.Post("/tokens", issuer.CreateHandler(guard))
+		}
 		r.Delete("/tokens/{id}", issuer.DeleteHandler())
-		r.Post("/device-tokens", issuer.ExchangeHandler(guard))
-		r.Delete("/device-tokens/current", issuer.DeleteCurrentHandler())
+		if issuer.DeviceTokens() {
+			r.Post("/device-tokens", issuer.ExchangeHandler(guard))
+			r.Delete("/device-tokens/current", issuer.DeleteCurrentHandler())
+		}
+
 		r.Get("/whoami", func(w http.ResponseWriter, r *http.Request) error {
 			identity, ok := auth.FromContext(r.Context())
 			if !ok {

@@ -11,6 +11,8 @@
 // the [auth.Credential] that lets a user re-prove themselves with their
 // password ([Verifier.Credential]), and the JSON handlers behind
 // /register, /login, PUT /password, /password/forgot and /password/reset.
+// Registration is off until [Builder.Registration] enables it; the other
+// handlers need no switch.
 //
 // # Rules
 //
@@ -58,7 +60,7 @@
 //		Create: directory.Create,
 //		Rotate: directory.Rotate,
 //	}, func(passwords *password.Builder) {
-//		passwords.Deliver(send)
+//		passwords.Registration(true).Deliver(send)
 //	})
 //	if err != nil {
 //		return err
@@ -66,5 +68,6 @@
 //	guard, err := auth.NewGuard(provider, store, func(policy *auth.GuardBuilder) {
 //		policy.StepUp(verifier.Credential())
 //	})
+//	web.Post("/register", verifier.RegisterHandler())
 //	web.Post("/login", verifier.LoginHandler(guard))
 package password

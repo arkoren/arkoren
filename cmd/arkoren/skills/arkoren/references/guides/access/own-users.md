@@ -37,7 +37,7 @@ iam.Users(access.Users{
 | `Provider` | The `*auth.UserProvider` over your users, shared by every feature. | Always |
 | `Lookup` | Maps the identifier a user logs in with to their subject and the stored address to mail. | With passwords |
 | `Rotate` | Bumps the user record's `Version`. | With passwords |
-| `Create` | Adds a user for registration and for a first provider login. | When registration or provider sign-in creates users |
+| `Create` | Adds a user for registration and for a first provider login. | With `Registration(true)` or `SignUp(true)` |
 | `Verified` | Reports whether the user's email is verified. | With `Create`, together with `ProveEmail` |
 | `ProveEmail` | Marks the email verified and reports whether it was unverified. | With `Create`, together with `Verified` |
 
@@ -63,12 +63,15 @@ get taken over. For an identifier in use, return an error wrapping
 `access.ErrIdentifierTaken`: registration then answers `202` like for a new user
 and sends the owner an `access.KindRegistration` message, instead of revealing the
 account. Leave it nil when users are created elsewhere. Then registration
-and creating users from a provider login are unavailable, and an unknown provider
-identity is refused.
+and creating users from a provider login are unavailable: `Registration(true)` and
+`SignUp(true)` make `New` fail with `access.ErrInvalidConfig`.
 
 > [!NOTE]
-> `Mount` registers `POST /register` only when `Create` is set. Without it, the
-> other password routes still mount and users are created elsewhere.
+> Registration and provider sign-up are off by default, so `Create` serves them
+> only when you enable them with `passwords.Registration(true)` and
+> `links.SignUp(true)`. Without `Create` the other password routes still mount, an
+> unknown provider identity is refused with `403`, and users are created
+> elsewhere.
 
 ## Verified Emails
 

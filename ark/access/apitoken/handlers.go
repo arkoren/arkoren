@@ -57,12 +57,18 @@ func (issuer *Issuer) ListHandler() router.Handler {
 // expiry is optional). It answers 201 with {"token": {...}, "secret": "ark_..."};
 // the secret is shown once. It needs a browser session and a fresh login
 // ([auth.Guard.Fresh]), so a hijacked old session cannot mint a long-lived
-// credential. An invalid request is [ErrInvalidRequest] (422).
+// credential. An invalid request is [ErrInvalidRequest] (422) and a scope the
+// user may not hold [ErrScopeNotGranted] (403). It panics at composition unless
+// [Builder.PersonalTokens] is enabled (the default).
 //
 // Example:
 //
 //	web.Post("/tokens", issuer.CreateHandler(guard))
 func (issuer *Issuer) CreateHandler(guard *auth.Guard) router.Handler {
+	if !issuer.personal {
+		panic("apitoken: CreateHandler requires Builder.PersonalTokens")
+	}
+
 	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
@@ -119,12 +125,18 @@ func (issuer *Issuer) DeleteHandler() router.Handler {
 // extend that, and a stale session answers [auth.ErrNoStepUpMethod] (403: log in
 // again). A device therefore logs in through the ordinary routes (password, then
 // the second factor if any) and exchanges right away, which reuses every login
-// rule, throttle and attempt limit with no second password route.
+// rule, throttle and attempt limit with no second password route. The token
+// carries the scopes the user may hold now ([Builder.Grants]). It panics at
+// composition unless [Builder.DeviceTokens] is enabled (the default).
 //
 // Example:
 //
 //	web.Post("/device-tokens", issuer.ExchangeHandler(guard))
 func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
+	if !issuer.device {
+		panic("apitoken: ExchangeHandler requires Builder.DeviceTokens")
+	}
+
 	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
@@ -158,12 +170,17 @@ func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
 // revokes the token the request presented and answers 204, which is how a
 // device logs out. It accepts any token of this issuer, not a browser session
 // (use the guard's logout for that). Mount it on a router whose middleware
-// includes [Issuer.Authenticator].
+// includes [Issuer.Authenticator]. It panics at composition unless
+// [Builder.DeviceTokens] is enabled (the default).
 //
 // Example:
 //
 //	api.Delete("/device-tokens/current", issuer.DeleteCurrentHandler())
 func (issuer *Issuer) DeleteCurrentHandler() router.Handler {
+	if !issuer.device {
+		panic("apitoken: DeleteCurrentHandler requires Builder.DeviceTokens")
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := request.Identity(r)
 		if err != nil {

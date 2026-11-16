@@ -7,15 +7,16 @@ import (
 // Mount registers the default routes of the enabled features on r. Only the
 // routes of enabled features are mounted; "Always" routes need nothing.
 //
-//	Login       POST /register, POST /login, POST /login/challenge,
+//	Login       POST /register (with Registration), POST /login, POST /login/challenge,
 //	            GET /login/pending, POST /logout
 //	Step-up     POST /confirm
 //	Email       POST /email/verify, POST /email/verify/resend
 //	Password    POST /password/forgot, POST /password/reset, PUT /password
 //	Two-factor  POST /two-factor/setup, POST /two-factor, DELETE /two-factor,
 //	            POST /two-factor/recovery-codes
-//	Tokens      GET /tokens, POST /tokens, DELETE /tokens/{id},
-//	            POST /device-tokens, DELETE /device-tokens/current
+//	Tokens      GET /tokens, DELETE /tokens/{id}, POST /tokens (personal
+//	            tokens), POST /device-tokens, DELETE /device-tokens/current
+//	            (device tokens)
 //	Sessions    GET /sessions, DELETE /sessions/{id}, DELETE /sessions (always)
 //	Providers   GET /auth/<name>, GET and POST /auth/<name>/callback, and for
 //	            native providers GET /auth/<name>/nonce, POST /auth/<name>/native
@@ -24,14 +25,17 @@ import (
 //	Account     DELETE /account (built-in users only)
 //
 // The password routes need [Builder.Password]; of them, /register also needs
-// users that can be created ([Users.Create], always true for the built-in
-// users), and /password/forgot and /password/reset need [Builder.Deliver],
+// [password.Builder.Registration] (off by default; New refuses it without users
+// that can be created), and /password/forgot and /password/reset need [Builder.Deliver],
 // because without it no user could receive a reset link. Mount skips a route
 // whose requirement is missing instead of panicking, so it never panics for a
 // configuration [New] accepted; the matching XHandler method still panics when
 // asked for directly. The challenge and pending routes need a registered second factor,
 // /confirm a registered step-up method, and the email routes the built-in users
-// and [Builder.Deliver]. /logout and the session routes are always mounted.
+// and [Builder.Deliver]. The token routes need [Builder.Tokens]: listing and
+// revoking serve both kinds, POST /tokens needs [apitoken.Builder.PersonalTokens]
+// and the two device routes [apitoken.Builder.DeviceTokens] (both default to
+// on). /logout and the session routes are always mounted.
 //
 // r must already run [Access.Middleware]. The routes live at the paths above:
 // the connect handler redirects to "/auth/<name>" and the providers' callbacks
@@ -73,7 +77,7 @@ func (iam *Access) mountPassword(r *router.Router) {
 	}
 	r.Post("/login", iam.LoginHandler())
 	r.Put("/password", iam.ChangePasswordHandler())
-	if iam.register {
+	if iam.verifier.Registration() {
 		r.Post("/register", iam.RegisterHandler())
 	}
 	if iam.deliver != nil {
@@ -123,10 +127,14 @@ func (iam *Access) mountTokens(r *router.Router) {
 		return
 	}
 	r.Get("/tokens", iam.ListTokensHandler())
-	r.Post("/tokens", iam.CreateTokenHandler())
 	r.Delete("/tokens/{id}", iam.DeleteTokenHandler())
-	r.Post("/device-tokens", iam.ExchangeHandler())
-	r.Delete("/device-tokens/current", iam.DeleteDeviceTokenHandler())
+	if iam.issuer.PersonalTokens() {
+		r.Post("/tokens", iam.CreateTokenHandler())
+	}
+	if iam.issuer.DeviceTokens() {
+		r.Post("/device-tokens", iam.ExchangeHandler())
+		r.Delete("/device-tokens/current", iam.DeleteDeviceTokenHandler())
+	}
 }
 
 // mountConnections registers the connection routes when [Builder.Provider]

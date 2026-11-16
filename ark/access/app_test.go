@@ -23,7 +23,9 @@ import (
 	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/federation"
 	"arkoren.dev/ark/access/internal/apptest"
+	"arkoren.dev/ark/access/password"
 )
 
 // outbox collects the messages the facade delivers.
@@ -65,6 +67,16 @@ func (box *outbox) last(t *testing.T, kind access.Kind) access.Message {
 	t.Fatalf("no %s message was delivered", kind)
 
 	return access.Message{}
+}
+
+// registration enables POST /register, which is off by default.
+func registration(passwords *password.Builder) {
+	passwords.Registration(true)
+}
+
+// signUp lets a first provider login create a user, which is off by default.
+func signUp(links *federation.Builder) {
+	links.SignUp(true)
 }
 
 // hasher returns a fast bcrypt hasher for tests.
