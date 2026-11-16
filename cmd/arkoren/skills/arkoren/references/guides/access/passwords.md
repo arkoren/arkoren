@@ -208,8 +208,7 @@ expired or used link is `422` with the `invalid-token` problem.
 A reset rotates the user, which ends every session, pending login and API token,
 and it also invalidates every other reset link sent before, because the password
 they were bound to is gone. It never logs the user in, so it cannot bypass a
-second factor. A completed reset clears the failed-login count kept against the
-address across clients.
+second factor.
 
 A reset proves the user controls the mailbox. When the email was not verified yet,
 it also marks the email verified and removes what a squatter could have attached

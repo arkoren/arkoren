@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,36 +69,6 @@ func TestResetLinkDiesWhenThePasswordChanges(t *testing.T) {
 	})
 }
 
-// TestResetClearsTheIdentifierLockout verifies a completed reset clears the
-// failures counted against the address across all clients.
-func TestResetClearsTheIdentifierLockout(t *testing.T) {
-	t.Parallel()
-
-	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		ctx := testContext(t)
-		sys := newSystem(t, db, instance)
-		sys.registerAda(t, sys.client)
-		login := func(secret, ip string) int {
-			return sys.client.NewDevice().Do(http.MethodPost, "/login", `{"email":"ada@example.com","password":"`+secret+`"}`, "X-Test-IP: "+ip).Status
-		}
-		for i := range 50 {
-			login("wrong horse!", "10.0."+strconv.Itoa(i/10)+"."+strconv.Itoa(i%10))
-		}
-		if got := login("correct horse", "10.1.0.1"); got != http.StatusTooManyRequests {
-			t.Fatalf("login after the failures = %d, want 429", got)
-		}
-		if err := sys.verifier.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
-			t.Fatalf("SendReset: %v", err)
-		}
-		if _, err := sys.verifier.Reset(ctx, (*sys.sent)[0].Signed, "reset horse ok"); err != nil {
-			t.Fatalf("Reset: %v", err)
-		}
-		if got := login("reset horse ok", "10.1.0.2"); got != http.StatusNoContent {
-			t.Fatalf("login after the reset = %d, want 204", got)
-		}
-	})
-}
-
 // TestResetLinkExpired verifies a link past its expiry is the invalid answer.
 // The link is signed inside a synctest bubble, whose clock starts in the year
 // 2000, so it has expired by the real clock without any sleeping.
@@ -124,7 +92,7 @@ func TestResetLinkExpired(t *testing.T) {
 		}
 		var expired string
 		synctest.Test(t, func(t *testing.T) {
-			expired, err = signer.Temporary("/password/reset?subject=1&address=ada%40example.com", time.Hour, link.Bind(stored))
+			expired, err = signer.Temporary("/password/reset?subject=1", time.Hour, link.Bind(stored))
 			if err != nil {
 				t.Fatalf("Temporary: %v", err)
 			}
@@ -134,7 +102,7 @@ func TestResetLinkExpired(t *testing.T) {
 		}
 		// The control: the same construction, signed by the real clock, works, so
 		// the refusal above is the expiry and not a wrong binding.
-		current, err := signer.Temporary("/password/reset?subject=1&address=ada%40example.com", time.Hour, link.Bind(stored))
+		current, err := signer.Temporary("/password/reset?subject=1", time.Hour, link.Bind(stored))
 		if err != nil {
 			t.Fatalf("Temporary: %v", err)
 		}

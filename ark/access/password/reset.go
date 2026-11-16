@@ -17,9 +17,8 @@ import (
 
 // resetPath is the path every reset link is signed for. The signature covers
 // it, so a link signed for another purpose with the same signer (an email
-// verification, say) is never a reset link. The subject and the address the link
-// went to travel in the query as "subject" and "address"; they are only trusted
-// after the signature verified.
+// verification, say) is never a reset link. The subject travels in the query as
+// "subject"; it is only trusted after the signature verified.
 const resetPath = "/password/reset"
 
 // ResetRequest is what [Builder.Reset]'s dispatch function receives for every
@@ -154,7 +153,7 @@ func (verifier *Verifier) SendReset(ctx context.Context, request ResetRequest) e
 	if err != nil {
 		return err
 	}
-	signed, err := verifier.signer.Temporary(resetLink(subject, address), verifier.resetTTL, link.Bind(stored))
+	signed, err := verifier.signer.Temporary(resetLink(subject), verifier.resetTTL, link.Bind(stored))
 	if err != nil {
 		return fmt.Errorf("password: sign reset link: %w", err)
 	}
@@ -167,11 +166,10 @@ func (verifier *Verifier) SendReset(ctx context.Context, request ResetRequest) e
 	})
 }
 
-// resetLink returns the path and query that a reset link of subject, sent to
-// address, is signed for. The address lets a completed reset clear the login
-// lockout counted against it; it is the user's own and goes only to them.
-func resetLink(subject, address string) string {
-	return (&url.URL{Path: resetPath, RawQuery: url.Values{"subject": {subject}, "address": {address}}.Encode()}).String()
+// resetLink returns the path and query that a reset link of subject is signed
+// for.
+func resetLink(subject string) string {
+	return (&url.URL{Path: resetPath, RawQuery: url.Values{"subject": {subject}}.Encode()}).String()
 }
 
 // errNoTarget is returned by [Verifier.resetTarget] for an unknown or disabled
@@ -260,11 +258,6 @@ func (verifier *Verifier) Reset(ctx context.Context, signed, password string) (s
 	if err != nil {
 		return "", fmt.Errorf("password: reset: %w", err)
 	}
-	// The owner proved the mailbox, so failed logins counted against the
-	// identifier (by whoever was guessing) no longer lock them out. Only the
-	// cap across addresses can be cleared: the per-address counters are the
-	// guesser's. It matches when the user typed the address at login.
-	verifier.clear(ctx, verifier.identifierKey(target.Query().Get("address")))
 	verifier.emit(ctx, WasReset, subject)
 
 	return subject, nil
