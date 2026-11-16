@@ -173,5 +173,31 @@ change and enabling two-factor [revoke only device tokens](accounts.md#credentia
 for applications whose users depend on long-lived personal tokens. Tokens publish
 `apitoken.Issued` and `apitoken.Revoked` events.
 
+## Pruning
+
+A token that can no longer authenticate still has a row. Expired tokens and
+device tokens that nobody uses would stay in the table forever, so delete them on
+a schedule. `iam.Prune` removes, for every user, tokens past `expires_at`, device
+tokens whose last use is older than the idle limit, and device tokens that were
+never used and were created before it. With `tokens.DeviceIdleTTL` negative, only
+the expired tokens go. Personal tokens are never pruned for idleness. It deletes
+only rows that already answer `401`, so it changes no behavior, and it is safe to
+run at any time and from several instances. Without tokens enabled it does nothing
+and returns `nil`.
+
+`iam.Prune` has the shape `func(context.Context) error`, so it is a
+[scheduled task](../scheduled-tasks/calendar-schedules.md) as it stands. Run it
+daily; it keeps the table small and does not need to run often:
+
+```go
+err := scheduler.Add(schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {
+	entry.When(schedule.UTC().Hour(3))
+}))
+```
+
+An error stops that run at the failing delete and the next run repeats the work.
+The listing at `GET /tokens` shows expired tokens until a new token is issued or
+`Prune` runs.
+
 For every function and option, see
 [the `apitoken` API reference](https://pkg.go.dev/arkoren.dev/ark/access/apitoken).

@@ -367,6 +367,30 @@ func (iam *Access) Ping(ctx context.Context) error {
 	return nil
 }
 
+// Prune deletes the tokens that can no longer authenticate: expired tokens,
+// device tokens unused for longer than [apitoken.Builder.DeviceIdleTTL] and
+// device tokens that were never used and are older than that; see
+// [apitoken.Issuer.Prune]. Without [Builder.Tokens] there is nothing to prune
+// and it returns nil, so one scheduled entry works for every composition. It
+// changes no behavior (the bearer check already rejects these tokens), only
+// keeps the table small, and it is safe to run concurrently and repeatedly.
+//
+// It has the shape func(context.Context) error, so it can be a scheduled entry
+// run daily.
+//
+// Example:
+//
+//	err := scheduler.Add(schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {
+//		entry.When(schedule.UTC().Hour(3))
+//	}))
+func (iam *Access) Prune(ctx context.Context) error {
+	if iam.issuer == nil {
+		return nil
+	}
+
+	return iam.issuer.Prune(ctx)
+}
+
 // Middleware returns the middleware to install on every route that identifies
 // users: the session middleware, then the authenticators in order (the guard's
 // browser session, the token issuer's bearer tokens when enabled, and those

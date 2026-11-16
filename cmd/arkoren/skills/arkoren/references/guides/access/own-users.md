@@ -92,11 +92,18 @@ prove := func(ctx context.Context, subject string) (bool, error) {
 ```
 
 `Verified` gates the connect, two-factor setup and token routes with `403`
-`email-unverified`. `ProveEmail` runs inside a completed password reset because the
+`email-unverified`, and it is what `iam.RequireVerified()` asks on every request:
+without `Users.Verified` that method panics at composition. `ProveEmail` runs inside a completed password reset because the
 link reached the mailbox. If it reports that the email was unverified, the facade
 deletes the user's connections, authenticator, recovery codes and tokens, and an
 error from it rolls the reset back. Both are required when you set `Create`,
 because users it makes start unverified.
+
+With `Lookup`, `ProveEmail` and `Rotate` set, a provider login whose email the
+provider verified also takes over an unverified user with that email, as
+[Connections](connections.md#unverified-accounts) describes: `ProveEmail` must
+report whether the email was unverified atomically, so a user verified a moment
+earlier is never taken over.
 
 Without them, for users created elsewhere, the facade can neither gate those routes
 nor purge on reset, so enforce the same rules in your application. See
@@ -112,7 +119,6 @@ panic at composition when you use your own:
   their handler methods, which panic.
 - `DELETE /account`. Delete your users yourself and call `provider.Forget` in the
   same transaction, which removes every feature's rows.
-- `iam.RequireVerified()`. Check your own verification state.
 
 The other features work unchanged, because they only see subjects. Store subjects
 in your own tables as bytewise text columns, because default database collations

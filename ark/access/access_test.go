@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"arkoren.dev/foundation/query"
 	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/core/auth"
@@ -520,6 +521,42 @@ func TestSendWorkersForwardToThePackages(t *testing.T) {
 		}
 		if err := bare.SendVerification(ctx, account.VerifyRequest{}); !errors.Is(err, account.ErrInvalidConfig) {
 			t.Fatalf("SendVerification without Verification = %v, want account.ErrInvalidConfig", err)
+		}
+	})
+}
+
+// TestPruneDeletesIdleDeviceTokens verifies the facade forwards Prune to the
+// issuer, and that it is a no-op without tokens.
+func TestPruneDeletesIdleDeviceTokens(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		plain := newApp(t, db, instance+"p")
+		if err := plain.iam.Prune(ctx); err != nil {
+			t.Fatalf("Prune without tokens = %v, want nil", err)
+		}
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher(), registration)
+			iam.Tokens()
+		})
+		registerVerified(t, sys, sys.client, "ada@example.com")
+		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		if _, _, err := sys.iam.Issuer().IssueDevice(ctx, subject, "phone"); err != nil {
+			t.Fatalf("IssueDevice: %v", err)
+		}
+		longAgo := time.Now().Add(-200 * 24 * time.Hour).Unix()
+		_, err := db.Exec(ctx, query.Table(instance+"_api_tokens", func(statement *query.Builder) {
+			statement.Unfiltered().Update(map[string]any{"created_at": longAgo})
+		}))
+		if err != nil {
+			t.Fatalf("age the token: %v", err)
+		}
+		if err := sys.iam.Prune(ctx); err != nil {
+			t.Fatalf("Prune: %v", err)
+		}
+		if tokens, err := sys.iam.Issuer().Tokens(ctx, subject); err != nil || len(tokens) != 0 {
+			t.Fatalf("tokens after Prune = %v, %v; want none", tokens, err)
 		}
 	})
 }

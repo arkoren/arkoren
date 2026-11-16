@@ -133,9 +133,15 @@ iam.Mount(web)
 > yourself, from `arkoren.dev/core/http/middleware/csrf`. Every `POST`, `PUT` and
 > `PATCH` route of the facade also requires `Content-Type: application/json` and
 > answers `415` otherwise, which stops a cross-site HTML form but is not CSRF
-> protection: it does not cover `DELETE`, other request types or a site that
-> sends JSON itself. Native clients that send no `Origin` header pass the CSRF
+> protection: it does not cover a `DELETE` without a body, other request types or
+> a site that sends JSON itself. Native clients that send no `Origin` header pass the CSRF
 > middleware, and bearer tokens need no cookie.
+
+## Scheduled Cleanup
+
+The facade starts no goroutines, so deleting idle device tokens and expired
+tokens is a task you schedule. Give `iam.Prune` to your scheduler as an entry
+that runs daily; see [Pruning](tokens.md#pruning).
 
 ## Migrations and Readiness
 

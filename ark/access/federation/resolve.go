@@ -68,27 +68,30 @@ func (links *Links) login(ctx context.Context, found row) (string, error) {
 	return found.Subject, nil
 }
 
-// createUser makes a user for an unknown identity and connects it, in one
-// transaction. When a concurrent first login of the same identity wins the
-// insert, this one rolls its user back and returns the winner's subject.
+// createUser connects an unknown identity to a user, in one transaction: the
+// unverified user [Builder.TakeOver] hands over, or else a new one from
+// [Builder.Create] when [Builder.SignUp] is enabled. Without either it is
+// [ErrNoAccount] and nothing is written. When a concurrent first login of the
+// same identity wins the insert, this one rolls back and returns the winner's
+// subject.
 func (links *Links) createUser(ctx context.Context, external auth.External) (string, error) {
-	if !links.signUp {
+	if !links.signUp && links.takeOver == nil {
 		return "", ErrNoAccount
 	}
 	var subject string
 	err := links.db.WithTransaction(ctx, func(ctx context.Context) error {
-		created, err := links.create(ctx, external)
+		var err error
+		subject, err = links.owner(ctx, external)
 		if err != nil {
 			return err
 		}
-		written, err := links.insert(ctx, created, external)
+		written, err := links.insert(ctx, subject, external)
 		if err != nil {
 			return err
 		}
 		if !written {
 			return errLostRace
 		}
-		subject = created
 
 		return nil
 	})
@@ -101,6 +104,36 @@ func (links *Links) createUser(ctx context.Context, external auth.External) (str
 	links.emit(ctx, LinkCreated, subject)
 
 	return subject, nil
+}
+
+// owner returns the user that gets an unknown identity, inside the transaction
+// of [Links.createUser]: the user [Builder.TakeOver] hands over, or a new user.
+// A taken-over user must still be allowed in: a disabled one is
+// [auth.ErrUnauthenticated], which rolls the takeover back, so no login ever
+// re-enables or empties a disabled account.
+func (links *Links) owner(ctx context.Context, external auth.External) (string, error) {
+	if links.takeOver != nil {
+		subject, err := links.takeOver(ctx, external)
+		if err != nil {
+			return "", err
+		}
+		if subject != "" {
+			if _, err := links.provider.Find(ctx, subject); err != nil {
+				if errors.Is(err, auth.ErrUserNotFound) || errors.Is(err, auth.ErrUserDisabled) {
+					return "", auth.ErrUnauthenticated
+				}
+
+				return "", err
+			}
+
+			return subject, nil
+		}
+	}
+	if !links.signUp {
+		return "", ErrNoAccount
+	}
+
+	return links.create(ctx, external)
 }
 
 // loginWinner logs in the user that a concurrent first login of external

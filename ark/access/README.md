@@ -54,6 +54,15 @@ worker runs `iam.SendReset` or `iam.SendVerification`, which call your `deliver`
 function to send the email. Without them the forgot-password, reset and
 verification routes are not mounted.
 
+Device tokens that nobody uses and expired tokens stay in the table until you
+prune them. `iam.Prune` has the shape of a scheduled function; run it daily:
+
+```go
+schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {
+	entry.When(schedule.UTC().Hour(3))
+})
+```
+
 Read the [Access guide](../../cmd/arkoren/skills/arkoren/references/guides/access/overview.md)
 for the route table, the responses and the security rules, and the API on
 [pkg.go.dev](https://pkg.go.dev/arkoren.dev/ark/access).

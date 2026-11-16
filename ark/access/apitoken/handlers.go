@@ -69,7 +69,7 @@ func (issuer *Issuer) CreateHandler(guard *auth.Guard) router.Handler {
 		panic("apitoken: CreateHandler requires Builder.PersonalTokens")
 	}
 
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -137,7 +137,7 @@ func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
 		panic("apitoken: ExchangeHandler requires Builder.DeviceTokens")
 	}
 
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err

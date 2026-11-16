@@ -5,13 +5,12 @@ package web
 
 import (
 	"context"
-	"mime"
 	"net/http"
 	"net/url"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/middleware/contenttype"
 	"arkoren.dev/core/http/request"
-	"arkoren.dev/core/http/router"
 	"arkoren.dev/foundation/problem"
 )
 
@@ -60,29 +59,23 @@ func Verified(ctx context.Context, verified func(context.Context, string) (bool,
 	return nil
 }
 
-// JSON returns next for requests that declare the media type application/json
-// and [request.ErrUnsupportedMediaType] (415) for POST, PUT and PATCH requests
-// that declare anything else or nothing. It checks the header, not the body, so
-// it also covers routes that read no body (logout, a password reset's
-// confirmation): a cross-site HTML form can only send a form media type, and so
-// cannot reach any state-changing route of this module. Parameters such as
-// charset are allowed; the match is exact on the media type, never a prefix.
-// DELETE and safe methods pass: a form cannot send DELETE.
+// RequireJSON is core's [contenttype.Middleware] limited to application/json.
+// Applied inside every handler constructor, so it also holds for handlers an
+// application mounts on its own paths, it answers 415 (see
+// [contenttype.ErrUnsupportedMediaType]) to a request that carries a body of
+// another media type, and to a POST, PUT or PATCH that declares another media
+// type or none even without a body. That covers routes that read no body
+// (logout, a password reset's confirmation): a cross-site HTML form can only
+// send a form media type, so it cannot reach any state-changing route of this
+// module. Parameters such as charset are allowed; the match is on the exact
+// media type, never a prefix. A DELETE without a Content-Type passes, because
+// a form cannot send DELETE.
 //
 // It is only a guard against cross-site forms. It does not authenticate a
 // request and is no replacement for CSRF protection.
-func JSON(next router.Handler) router.Handler {
-	return func(w http.ResponseWriter, r *http.Request) error {
-		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
-			mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			if err != nil || mediaType != "application/json" {
-				return request.ErrUnsupportedMediaType
-			}
-		}
-
-		return next(w, r)
-	}
-}
+var RequireJSON = contenttype.Middleware(func(content *contenttype.Builder) {
+	content.Allowed("application/json")
+})
 
 // MaxBody is the largest JSON body a handler of this module reads, in bytes.
 // Every request of the module carries a handful of short strings.

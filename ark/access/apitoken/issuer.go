@@ -494,7 +494,7 @@ func (issuer *Issuer) issue(ctx context.Context, subject string, kind Kind, name
 		created.ExpiresAt = expiresAt.Unix()
 	}
 	err = issuer.db.WithTransaction(ctx, func(ctx context.Context) error {
-		if err := issuer.prune(ctx, subject, created.UserVersion); err != nil {
+		if err := issuer.pruneSubject(ctx, subject, created.UserVersion); err != nil {
 			return err
 		}
 		_, err := issuer.db.Exec(ctx, query.Table(issuer.table, func(statement *query.Builder) {
@@ -516,9 +516,9 @@ func (issuer *Issuer) issue(ctx context.Context, subject string, kind Kind, name
 	return token, issuer.prefix + "_" + id + "_" + secret, nil
 }
 
-// prune deletes the tokens of subject that can never authenticate again: those
-// bound to an older user version and those that expired.
-func (issuer *Issuer) prune(ctx context.Context, subject, version string) error {
+// pruneSubject deletes the tokens of subject that can never authenticate again:
+// those bound to an older user version and those that expired.
+func (issuer *Issuer) pruneSubject(ctx context.Context, subject, version string) error {
 	for _, condition := range []func(*query.Builder){
 		func(statement *query.Builder) { statement.Where("user_version", "<>", version) },
 		func(statement *query.Builder) {
@@ -537,8 +537,57 @@ func (issuer *Issuer) prune(ctx context.Context, subject, version string) error 
 	return nil
 }
 
+// Prune deletes, for every user, the tokens that can no longer authenticate and
+// would otherwise stay in the table forever: tokens past their expiry, device
+// tokens unused for longer than [Builder.DeviceIdleTTL] (counted from the last
+// use) and device tokens that were never used and are older than that (counted
+// from creation). With the idle limit turned off (a negative DeviceIdleTTL) only
+// the expired tokens are deleted. Personal tokens are never idle-pruned.
+//
+// Pruning only removes rows the bearer check already rejects, so it changes no
+// behavior and it is safe to run at any time, concurrently and repeatedly. It
+// has the shape func(context.Context) error, so it can be a scheduled entry;
+// run it daily. An error stops it at the failing delete, and the next run
+// repeats the work.
+//
+// Example:
+//
+//	entry := schedule.NewEntry("access-prune", issuer.Prune, func(entry *schedule.EntryBuilder) {
+//		entry.When(schedule.UTC().Hour(3))
+//	})
+func (issuer *Issuer) Prune(ctx context.Context) error {
+	now := time.Now()
+	deletions := []func(*query.Builder){
+		func(statement *query.Builder) {
+			statement.Where("expires_at", ">", 0).Where("expires_at", "<=", now.Unix())
+		},
+	}
+	if issuer.deviceIdle > 0 {
+		cutoff := now.Add(-issuer.deviceIdle).Unix()
+		deletions = append(deletions,
+			func(statement *query.Builder) {
+				statement.Where("kind", string(KindDevice)).Where("last_used_at", ">", 0).Where("last_used_at", "<", cutoff)
+			},
+			func(statement *query.Builder) {
+				statement.Where("kind", string(KindDevice)).Where("last_used_at", 0).Where("created_at", "<", cutoff)
+			},
+		)
+	}
+	for _, condition := range deletions {
+		_, err := issuer.db.Exec(ctx, query.Table(issuer.table, func(statement *query.Builder) {
+			statement.Delete()
+			condition(statement)
+		}))
+		if err != nil {
+			return fmt.Errorf("apitoken: prune tokens: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // Tokens lists the tokens of subject, newest first, including expired ones
-// until the next issue removes them. The secrets are not recoverable.
+// until the next issue or [Issuer.Prune] removes them. The secrets are not recoverable.
 //
 // Example:
 //

@@ -84,7 +84,7 @@ func (links *Links) ConnectHandler(guard *auth.Guard, targets map[string]string)
 		fixed[name] = target
 	}
 
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err

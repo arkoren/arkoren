@@ -52,9 +52,16 @@ routes accept and answer: [Passwords](passwords.md), [Two-Factor](two-factor.md)
 Request and response bodies are JSON, and handlers read at most 64 KiB of body.
 Every `POST`, `PUT` and `PATCH` route requires the media type `application/json`,
 with or without a `charset`, even routes that read no body such as `/logout`;
-a form or a missing `Content-Type` answers `415`. The provider routes under
-`/auth/{name}` are exempt, because identity providers redirect with a query or
-post a form (`form_post`). The check is not a replacement for
+a form or a missing `Content-Type` answers `415` with the problem of core's
+[content type middleware](../http-fundamentals/content-type.md)
+(`tag:arkoren.dev,2026-09:core:http/middleware/contenttype:unsupported-media-type`).
+A `DELETE` or
+`QUERY` request without a body passes without a `Content-Type`, but one that
+declares another media type is `415`. The check is built into each handler, not
+into `Mount`, so it also holds when you [serve a route on your own
+path](#custom-paths). The provider routes under `/auth/{name}` are exempt,
+because identity providers redirect with a query or post a form (`form_post`).
+The check is not a replacement for
 [CSRF protection](../browser-security/csrf-protection.md), which you add next to
 `iam.Middleware()`.
 A login that is complete answers `204`. When the user must also answer a second
@@ -125,8 +132,8 @@ The methods are `RegisterHandler`, `LoginHandler`, `ChallengeHandler`,
 feature you did not enable and it panics at composition, so the mistake surfaces
 at startup and not on the first request.
 
-The verified-email, fresh-login and browser-session checks live in the handlers
-themselves, so they hold on custom paths too.
+The verified-email, fresh-login, browser-session and `application/json` checks
+live in the handlers themselves, so they hold on custom paths too.
 
 ## Mounting Rules
 
