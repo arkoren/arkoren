@@ -27,7 +27,7 @@ export function releaseModules(repo = RELEASE_REPO): string[] {
     .strictObject({
       schema: z.literal(1),
       public: z.array(z.string().regex(MODULE)).min(1),
-      development: z.array(z.enum(["cmd/arkoren-ci", "cmd/arkoren-wiring"])),
+      development: z.array(z.enum(["ark/access", "cmd/arkoren-ci", "cmd/arkoren-wiring"])),
       retired: z.array(z.string().regex(MODULE)).optional(),
     })
     .refine(
