@@ -38,12 +38,14 @@ var ErrInvalidPassword = problem.New(func(details *problem.Builder) {
 	details.Status(http.StatusUnprocessableEntity)
 })
 
-// ErrInvalidToken is returned for a reset token that is unknown, expired, used
-// or replaced. It is a problem with status 422.
+// ErrInvalidToken is returned for a reset link that is malformed, forged,
+// expired or already used (the password it was bound to has changed). One
+// answer covers all of them, so a client learns nothing about which. It is a
+// problem with status 422.
 //
 // Example:
 //
-//	_, err := verifier.Reset(ctx, token, "a new password")
+//	_, err := verifier.Reset(ctx, signed, "a new password")
 //	if errors.Is(err, password.ErrInvalidToken) {
 //		// ask the user to request a new link
 //	}
@@ -78,16 +80,6 @@ var ErrThrottled = problem.New(func(details *problem.Builder) {
 //	_, err := password.NewVerifier(nil, nil, nil, nil, nil, password.Users{})
 //	fmt.Println(errors.Is(err, password.ErrInvalidConfig)) // true
 var ErrInvalidConfig = errors.New("password: invalid configuration")
-
-// ErrNoDelivery is returned by [Verifier.SendReset] when no [Builder.Deliver]
-// function is configured. It is a configuration error and answers 500.
-//
-// Example:
-//
-//	if errors.Is(err, password.ErrNoDelivery) {
-//		// configure Builder.Deliver
-//	}
-var ErrNoDelivery = errors.New("password: no delivery function configured")
 
 // ErrIdentifierTaken is what [Users.Create] returns, or wraps, when the
 // identifier already belongs to a user. [Verifier.RegisterHandler] answers the

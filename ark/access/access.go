@@ -24,7 +24,9 @@ import (
 // ErrInvalidConfig is wrapped by the errors of [New] for an unusable
 // configuration: a missing dependency (database, store or client address
 // source), a duplicate provider name, an invalid instance or scheme, a nil
-// two-factor cipher, [Builder.Directory] combined with [Builder.Users], or a
+// two-factor cipher, [Builder.Directory] combined with [Builder.Users],
+// registration with the built-in users when neither [password.Builder.Reset] nor
+// [account.Builder.Verification] is configured, or a
 // failing package constructor (registration or sign-up without users that can
 // be created, tokens with no kind enabled, a scope catalog without a grant
 // function).
@@ -37,7 +39,7 @@ var ErrInvalidConfig = errors.New("access: invalid configuration")
 
 // ErrIdentifierTaken is what [Users.Create] returns, or wraps, for an identifier
 // that already belongs to a user. Registration then answers 202 like for a new
-// user and sends the owner a [KindRegistration] message. It is
+// user and notifies the owner. It is
 // [password.ErrIdentifierTaken].
 //
 // Example:
@@ -85,7 +87,6 @@ type Access struct {
 	db         *database.Database
 	store      *cache.Cache
 	clientIP   func(*http.Request) string
-	deliver    func(context.Context, Message) error
 	provider   *auth.UserProvider
 	guard      *auth.Guard
 	directory  *account.Directory
@@ -146,7 +147,6 @@ type Access struct {
 //		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
 //		iam.Provider(google, github)
-//		iam.Deliver(send)
 //	})
 //	if err != nil {
 //		return err
@@ -169,7 +169,6 @@ func New(db *database.Database, store *cache.Cache, clientIP func(*http.Request)
 		db:           db,
 		store:        store,
 		clientIP:     clientIP,
-		deliver:      settings.deliver,
 		providers:    slices.Clone(settings.providers),
 		emailProven:  settings.emailProven,
 		keepPersonal: settings.keepPersonal,
@@ -293,28 +292,45 @@ func (iam *Access) MustAccept(methods ...auth.Method) {
 	}
 }
 
-// Wait blocks until the emails that the forgot-password and resend handlers sent
-// in the background have been handed to [Builder.Deliver], or returns the error
-// of ctx when it ends first. Those handlers answer 202 at once and deliver
-// afterwards, so call Wait during shutdown, after the server stopped accepting
-// requests; tests call it before asserting on what was delivered.
+// SendReset is the worker side of a password reset; see
+// [password.Verifier.SendReset]. It has the shape func(context.Context,
+// password.ResetRequest) error, so a queue consumer or a workflow step can use
+// it directly: the dispatch function of [password.Builder.Reset] stores a
+// [password.ResetRequest] and the worker passes it here. An unknown user sends
+// nothing and returns nil; an error of the deliver function is returned so the
+// queue retries, which means one request may deliver more than once. Without
+// [Builder.Password] it returns an error wrapping [ErrInvalidConfig], and without
+// [password.Builder.Reset] one wrapping [password.ErrInvalidConfig].
 //
 // Example:
 //
-//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-//	defer cancel()
-//	_ = iam.Wait(ctx)
-func (iam *Access) Wait(ctx context.Context) error {
-	if iam.verifier != nil {
-		if err := iam.verifier.Wait(ctx); err != nil {
-			return err
-		}
-	}
-	if iam.directory != nil {
-		return iam.directory.Wait(ctx)
+//	consumer.Handle(resetJob, iam.SendReset)
+func (iam *Access) SendReset(ctx context.Context, request password.ResetRequest) error {
+	if iam.verifier == nil {
+		return fmt.Errorf("%w: SendReset requires Builder.Password", ErrInvalidConfig)
 	}
 
-	return nil
+	return iam.verifier.SendReset(ctx, request)
+}
+
+// SendVerification is the worker side of an email verification; see
+// [account.Directory.SendVerification]. It has the shape func(context.Context,
+// account.VerifyRequest) error, so a queue consumer or a workflow step can use
+// it directly. A deleted or already verified user sends nothing and returns nil;
+// an error of the deliver function is returned so the queue retries, which means
+// one request may deliver more than once. It returns an error wrapping
+// [ErrInvalidConfig] with the application's own [Builder.Users], or without
+// [account.Builder.Verification].
+//
+// Example:
+//
+//	consumer.Handle(verifyJob, iam.SendVerification)
+func (iam *Access) SendVerification(ctx context.Context, request account.VerifyRequest) error {
+	if iam.directory == nil {
+		return fmt.Errorf("%w: SendVerification requires the built-in users", ErrInvalidConfig)
+	}
+
+	return iam.directory.SendVerification(ctx, request)
 }
 
 // Migrations returns the migrations of the enabled features only, in the order

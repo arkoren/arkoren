@@ -2,6 +2,7 @@ package access_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -49,8 +50,8 @@ func TestMountOnlyMountsEnabledFeatures(t *testing.T) {
 
 // TestMountNeverPanicsOnAcceptedConfiguration verifies Mount succeeds for every
 // feature combination New accepts, and mounts a route only when its requirement
-// holds: forgot and reset need Deliver, register needs Registration, and each
-// token kind's routes need that kind.
+// holds: forgot and reset need Reset, the email routes need Verification,
+// register needs Registration, and each token kind's routes need that kind.
 func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 	t.Parallel()
 
@@ -64,69 +65,67 @@ func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 
 		return provider, users
 	}
-	deliver := func(iam *access.Builder) { iam.Deliver(func(context.Context, access.Message) error { return nil }) }
 	verified := func(context.Context, string) (bool, error) { return true, nil }
 	proved := func(context.Context, string) (bool, error) { return false, nil }
+	emailRoutes := []string{"POST /email/verify", "POST /email/verify/resend"}
+	resetRoutes := []string{"POST /password/forgot", "POST /password/reset"}
 	tests := []struct {
 		name      string
+		wire      wire
 		configure func(t *testing.T, iam *access.Builder)
 		// absent lists routes that must not be mounted.
 		absent []string
 	}{
-		{"nothing", func(*testing.T, *access.Builder) {}, nil},
-		{"password without registration", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher()); deliver(iam) },
+		{"nothing", wire{}, func(*testing.T, *access.Builder) {}, slices.Concat(emailRoutes, resetRoutes)},
+		{"password with neither reset nor verification", wire{}, func(_ *testing.T, iam *access.Builder) { iam.Password(hasher()) },
+			slices.Concat([]string{"POST /register"}, emailRoutes, resetRoutes)},
+		{"password without registration", both, func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), reset) },
 			[]string{"POST /register"}},
-		{"password with registration, without deliver", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration) },
-			[]string{"POST /password/forgot", "POST /password/reset", "POST /email/verify"}},
-		{"password with registration and deliver", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration); deliver(iam) }, nil},
-		{"twofactor", func(t *testing.T, iam *access.Builder) { iam.TwoFactor(totp.New("Example"), cipher(t)) }, nil},
-		{"tokens", func(_ *testing.T, iam *access.Builder) { iam.Tokens() }, nil},
-		{"personal tokens only", func(_ *testing.T, iam *access.Builder) {
+		{"password with registration and reset only", wire{reset: true}, func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration) },
+			emailRoutes},
+		{"password with registration and verification only", wire{verify: true}, func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration) },
+			resetRoutes},
+		{"password with registration, reset and verification", both, func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration) }, nil},
+		{"twofactor", both, func(t *testing.T, iam *access.Builder) { iam.TwoFactor(totp.New("Example"), cipher(t)) }, resetRoutes},
+		{"tokens", both, func(_ *testing.T, iam *access.Builder) { iam.Tokens() }, resetRoutes},
+		{"personal tokens only", both, func(_ *testing.T, iam *access.Builder) {
 			iam.Tokens(func(tokens *apitoken.Builder) { tokens.DeviceTokens(false) })
 		}, []string{"POST /device-tokens", "DELETE /device-tokens/current"}},
-		{"device tokens only", func(_ *testing.T, iam *access.Builder) {
+		{"device tokens only", both, func(_ *testing.T, iam *access.Builder) {
 			iam.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
 		}, []string{"POST /tokens"}},
-		{"token catalog with a grant function", func(_ *testing.T, iam *access.Builder) {
+		{"token catalog with a grant function", both, func(_ *testing.T, iam *access.Builder) {
 			iam.Tokens(func(tokens *apitoken.Builder) { tokens.Grants(apitoken.AnyScope, "posts:read").GrantTTL(time.Minute) })
 		}, nil},
-		{"providers", func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}) }, nil},
-		{"providers with sign-up", func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}).Federation(signUp) }, nil},
-		{"everything", func(t *testing.T, iam *access.Builder) {
+		{"providers", both, func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}) }, nil},
+		{"providers with sign-up", both, func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}).Federation(signUp) }, nil},
+		{"everything", both, func(t *testing.T, iam *access.Builder) {
 			iam.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}).Federation(signUp)
-			deliver(iam)
 		}, nil},
-		{"own users without create", func(t *testing.T, iam *access.Builder) {
+		{"own users without create", wire{}, func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
 			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}).Password(hasher())
-		}, []string{"POST /register", "POST /password/forgot", "POST /password/reset", "DELETE /account", "POST /email/verify"}},
-		{"own users without create, with deliver", func(t *testing.T, iam *access.Builder) {
+		}, slices.Concat([]string{"POST /register", "DELETE /account"}, emailRoutes, resetRoutes)},
+		{"own users without create, with reset", wire{reset: true}, func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
-			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}).Password(hasher())
-			deliver(iam)
-		}, []string{"POST /register", "DELETE /account", "POST /email/verify"}},
-		{"own users with create", func(t *testing.T, iam *access.Builder) {
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}).Password(hasher(), reset)
+		}, slices.Concat([]string{"POST /register", "DELETE /account"}, emailRoutes)},
+		{"own users with create and registration", wire{}, func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
 			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher(), registration)
-		}, []string{"POST /password/forgot", "POST /password/reset", "DELETE /account"}},
-		{"own users with create, without registration", func(t *testing.T, iam *access.Builder) {
+		}, slices.Concat([]string{"DELETE /account"}, emailRoutes, resetRoutes)},
+		{"own users with create, without registration", wire{}, func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
 			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher())
 		}, []string{"POST /register", "DELETE /account"}},
-		{"own users with verification hooks but no create", func(t *testing.T, iam *access.Builder) {
-			provider, users := ownProvider(t)
-			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher())
-			deliver(iam)
-		}, []string{"POST /register", "DELETE /account"}},
-		{"own users with everything", func(t *testing.T, iam *access.Builder) {
+		{"own users with everything", wire{reset: true}, func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
 			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved})
 			iam.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}).Federation(signUp)
-			deliver(iam)
-		}, []string{"DELETE /account", "POST /email/verify"}},
+		}, slices.Concat([]string{"DELETE /account"}, emailRoutes)},
 	}
 	for _, test := range tests {
-		iam, err := newFacade(t, func(iam *access.Builder) { test.configure(t, iam) })
+		iam, err := newFacadeWith(t, test.wire, func(iam *access.Builder) { test.configure(t, iam) })
 		if err != nil {
 			t.Fatalf("%s: New: %v", test.name, err)
 		}

@@ -59,9 +59,6 @@ func (iam *Access) buildUsers(settings *Builder) (Users, error) {
 	}
 	configure := append([]account.BuilderFunc{func(accounts *account.Builder) {
 		accounts.Instance(settings.instance).Events(settings.events)
-		if iam.deliver != nil {
-			accounts.Deliver(iam.deliverVerification)
-		}
 	}}, settings.directory...)
 	directory, err := account.NewDirectory(iam.db, iam.store, iam.clientIP, configure...)
 	if err != nil {
@@ -82,6 +79,9 @@ func (iam *Access) buildPassword(settings *Builder, users Users) error {
 	verifier, err := password.NewVerifier(iam.provider, iam.db, iam.store, iam.clientIP, settings.hasher, iam.passwordUsers(users), configure...)
 	if err != nil {
 		return err
+	}
+	if iam.directory != nil && verifier.Registration() && !verifier.ResetEnabled() && !iam.directory.VerificationEnabled() {
+		return errors.New("registration with the built-in users needs password.Builder.Reset or account.Builder.Verification, or a new user could never prove their email")
 	}
 	iam.verifier = verifier
 	iam.add(verifier.Migrations(), verifier.Ping)
@@ -109,16 +109,15 @@ func (iam *Access) passwordUsers(users Users) password.Users {
 }
 
 // passwordPolicy is the facade's own password settings, applied before the
-// application's.
+// application's. With the built-in users, registration asks for an email
+// through two hooks that read the directory and the verifier when they run: a
+// new user gets a verification, and the owner of a taken address a notice
+// ([Access.tellOwner]).
 func (iam *Access) passwordPolicy(settings *Builder) password.BuilderFunc {
 	return func(passwords *password.Builder) {
 		passwords.Instance(settings.instance).Events(settings.events).AfterChange(iam.revokeTokens)
-		if iam.deliver == nil {
-			return
-		}
-		passwords.Deliver(iam.deliverReset)
 		if iam.directory != nil {
-			passwords.Registered(iam.sendVerification)
+			passwords.Registered(iam.verifyNew).Taken(iam.tellOwner)
 		}
 	}
 }
@@ -280,23 +279,36 @@ func (iam *Access) revokeTokens(ctx context.Context, subject string) error {
 	return iam.issuer.RevokeAll(ctx, subject)
 }
 
-// deliverVerification hands a verification email to [Builder.Deliver].
-func (iam *Access) deliverVerification(ctx context.Context, message account.Message) error {
-	return iam.deliver(ctx, Message{Kind: KindVerify, Identifier: message.Email, Token: message.Token, ExpiresAt: message.ExpiresAt})
-}
-
-// deliverReset hands a reset email, or the notice of a registration attempt on
-// a taken address, to [Builder.Deliver].
-func (iam *Access) deliverReset(ctx context.Context, message password.Message) error {
-	kind := KindReset
-	if message.Registration {
-		kind = KindRegistration
+// verifyNew asks for the verification email of a user who just registered. It
+// does nothing without [account.Builder.Verification].
+func (iam *Access) verifyNew(ctx context.Context, subject, _ string) error {
+	if !iam.directory.VerificationEnabled() {
+		return nil
 	}
 
-	return iam.deliver(ctx, Message{Kind: kind, Identifier: message.Identifier, Token: message.Token, ExpiresAt: message.ExpiresAt})
+	return iam.directory.RequestVerification(ctx, subject)
 }
 
-// sendVerification sends the verification email of a user who just registered.
-func (iam *Access) sendVerification(ctx context.Context, subject, _ string) error {
-	return iam.directory.SendVerification(ctx, subject)
+// tellOwner is the work of a registration that meets a taken address, chosen so
+// that it costs what the work for a new address costs ([Access.verifyNew]):
+// without [account.Builder.Verification] nothing is dispatched on either path.
+// With it, the owner gets a reset notice ([password.Builder.Reset]), whose link
+// also proves the mailbox, or else a verification email. An unknown identifier
+// is no owner.
+func (iam *Access) tellOwner(ctx context.Context, identifier string) error {
+	if !iam.directory.VerificationEnabled() {
+		return nil
+	}
+	if iam.verifier.ResetEnabled() {
+		return iam.verifier.RequestReset(ctx, password.ResetRequest{Identifier: identifier, Notice: true})
+	}
+	subject, _, err := iam.directory.Lookup(ctx, identifier)
+	if errors.Is(err, auth.ErrUserNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	return iam.directory.RequestVerification(ctx, subject)
 }

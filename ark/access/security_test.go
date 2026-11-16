@@ -84,12 +84,11 @@ func TestResetDefeatsPreRegistrationHijack(t *testing.T) {
 		if reply := victim.Post("/password/forgot", `{"email":"Victim@Example.com"}`); reply.Status != http.StatusAccepted {
 			t.Fatalf("forgot = %d", reply.Status)
 		}
-		sys.settle(t)
-		message := sys.box.last(t, access.KindReset)
-		if message.Identifier != "victim@example.com" {
-			t.Fatalf("reset sent to %q", message.Identifier)
+		message := sys.box.lastReset(t)
+		if message.Address != "victim@example.com" {
+			t.Fatalf("reset sent to %q", message.Address)
 		}
-		if reply := victim.Post("/password/reset", `{"token":"`+message.Token+`","password":"victim horse ok"}`); reply.Status != http.StatusNoContent {
+		if reply := victim.Post("/password/reset", `{"token":"`+message.Signed+`","password":"victim horse ok"}`); reply.Status != http.StatusNoContent {
 			t.Fatalf("reset = %d %s", reply.Status, reply.Body)
 		}
 
@@ -141,8 +140,7 @@ func TestResetOfVerifiedAccountKeepsItsFactors(t *testing.T) {
 			t.Fatalf("Activate: %v", err)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
-		sys.settle(t)
-		token := sys.box.last(t, access.KindReset).Token
+		token := sys.box.lastReset(t).Signed
 		sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		if enrolled, _ := sys.iam.Factors().Enrolled(ctx, subject); !enrolled {
 			t.Fatal("a verified user's authenticator was removed by a reset")
@@ -165,14 +163,11 @@ func TestMailGoesToTheStoredAddress(t *testing.T) {
 		if reply := sys.client.NewDevice().Post("/password/forgot", `{"email":"bob@gmaİl.com"}`); reply.Status != http.StatusAccepted {
 			t.Fatalf("forgot = %d", reply.Status)
 		}
-		sys.settle(t)
-		for _, message := range sys.box.all() {
-			if message.Identifier != "bob@gmail.com" {
-				t.Fatalf("%s mail went to %q, want the stored bob@gmail.com", message.Kind, message.Identifier)
-			}
+		if got := sys.box.lastReset(t).Address; got != "bob@gmail.com" {
+			t.Fatalf("reset sent to %q, want the stored bob@gmail.com", got)
 		}
-		if got := sys.box.last(t, access.KindReset).Identifier; got != "bob@gmail.com" {
-			t.Fatalf("reset sent to %q", got)
+		if got := sys.box.dispatchedResets; len(got) != 1 || got[0].Identifier != "bob@gmaİl.com" {
+			t.Fatalf("dispatched = %+v, want the identifier exactly as typed", got)
 		}
 	})
 }
@@ -365,29 +360,26 @@ func checkPasswordChangeTokens(t *testing.T, keepPersonal bool, personalStatus i
 }
 
 // TestForgotRegisterResendAreThrottledAndUniform verifies the per-identifier and
-// per-address limits, that a failing mailer is not visible to the client and
-// that the answer for an unknown user is the same 202.
+// per-address limits and that the answer for an unknown user is the same 202.
 func TestForgotRegisterResendAreThrottledAndUniform(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
-			iam.Deliver(func(context.Context, access.Message) error { return errors.New("smtp down") })
 		})
 		post := func(path, body, ip string) apptest.Reply {
 			return sys.client.Do(http.MethodPost, path, body, "X-Test-IP: "+ip)
 		}
-		// A failing mailer: still 202, for a known and for an unknown user.
+		// A known and an unknown user get the same empty 202.
 		if reply := post("/register", `{"email":"ada@example.com","password":"correct horse"}`, "10.0.0.1"); reply.Status != http.StatusAccepted {
-			t.Fatalf("register with a failing mailer = %d %s, want 202", reply.Status, reply.Body)
+			t.Fatalf("register = %d %s, want 202", reply.Status, reply.Body)
 		}
 		for _, email := range []string{"ada@example.com", "nobody@example.com"} {
 			if reply := post("/password/forgot", `{"email":"`+email+`"}`, "10.0.0.2"); reply.Status != http.StatusAccepted || reply.Body != "" {
 				t.Fatalf("forgot %s = %d %q, want an empty 202", email, reply.Status, reply.Body)
 			}
 		}
-		sys.settle(t)
 
 		// Per identifier as typed: the sixth request is throttled, known or not.
 		for i := range 6 {
@@ -426,7 +418,6 @@ func TestForgotRegisterResendAreThrottledAndUniform(t *testing.T) {
 				t.Fatalf("resend #%d = %d %s, want %d", i+1, reply.Status, reply.Body, want)
 			}
 		}
-		sys.settle(t)
 	})
 }
 
@@ -490,7 +481,7 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 		var created []bool
 		proven := false
 		verified := false
-		sys := newApp(t, db, instance, func(iam *access.Builder) {
+		sys := newAppWith(t, db, instance, wire{reset: true}, func(iam *access.Builder) {
 			iam.Users(access.Users{
 				Provider: provider,
 				Lookup:   users.lookup,
@@ -531,8 +522,7 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 			t.Fatalf("tokens while Verified is true = %d %s", reply.Status, reply.Body)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
-		sys.settle(t)
-		token := sys.box.last(t, access.KindReset).Token
+		token := sys.box.lastReset(t).Signed
 		sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		if !proven {
 			t.Fatal("Users.ProveEmail was not called by the reset")
@@ -644,7 +634,7 @@ func TestLoginFailsClosedWhenTheLockoutCannotBeRead(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		driver := &brokenLockouts{Driver: memorycache.New()}
-		sys := newAppOn(t, db, instance, cache.New(driver), func(iam *access.Builder) {
+		sys := newAppOn(t, db, instance, cache.New(driver), both, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
 		})
 		register(t, sys.client, "ada@example.com")

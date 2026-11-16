@@ -61,8 +61,8 @@ err = iam.Verifier().Set(ctx, subject, initialPassword)
 
 `Create` adds a user with an unverified email, and the facade then refuses them
 connecting a provider, enrolling two-factor and creating tokens until
-`iam.Directory().SendVerification(ctx, subject)` has delivered a link they
-followed. `CreateVerified` is for users whose address you already know to be
+`iam.Directory().RequestVerification(ctx, subject)` has dispatched an email
+whose link they followed (see [Sending Email Links](overview.md#sending-email-links)). `CreateVerified` is for users whose address you already know to be
 theirs, such as an invitation they accepted. An email already in use is
 `account.ErrEmailTaken`, and the facade never merges accounts. Run both calls in
 one `db.WithTransaction` when a half-created user must not remain, and give
@@ -70,13 +70,13 @@ the user a way to log in: a password with `iam.Verifier().Set`, or a provider
 they connect themselves. With [your own users](own-users.md) you create users in
 your own store and the facade only sees their subjects.
 
-Configure the built-in users with `iam.Directory`, for example the lifetime of
-verification links. It cannot be combined with `iam.Users`, which replaces the
+Configure the built-in users with `iam.Directory`: email verification and the
+lifetime of its links. It cannot be combined with `iam.Users`, which replaces the
 built-in table; `New` fails with `access.ErrInvalidConfig`.
 
 ```go
 iam.Directory(func(accounts *account.Builder) {
-	accounts.VerifyTTL(time.Hour)
+	accounts.Verification(signer, dispatch, deliver).VerifyTTL(time.Hour)
 })
 ```
 
@@ -84,7 +84,7 @@ iam.Directory(func(accounts *account.Builder) {
 
 `DELETE /account` deletes the logged-in user and answers `204`. It needs a browser
 session and a fresh login. The user's row and every feature's rows (passwords,
-two-factor, tokens, connections, pending verifications and login records) are
+two-factor, tokens, connections and login records) are
 removed in one transaction by the provider's forget hooks, and a failure of any
 leaves the user in place. The request's own session ends, and the facade publishes
 `account.UserDeleted` and core's `auth.UserForgotten`.

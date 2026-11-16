@@ -3,8 +3,13 @@ package account_test
 import (
 	"context"
 	"errors"
+	"net/url"
+	"slices"
+	"sync"
 	"testing"
 
+	"arkoren.dev/core/event"
+	"arkoren.dev/core/http/link"
 	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/cache/memorycache"
@@ -12,24 +17,81 @@ import (
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/database"
 	sqlite "arkoren.dev/driver/sqlite/sqlitedatabase"
+	"arkoren.dev/foundation/key"
 
 	"arkoren.dev/ark/access/account"
 )
 
-// newDirectory builds a migrated directory on db that records delivered
-// messages.
-func newDirectory(t *testing.T, db *database.Database, instance string, delivered *[]account.Message) *account.Directory {
+// outbox records what a directory dispatches and delivers.
+type outbox struct {
+	mu         sync.Mutex
+	dispatched []account.VerifyRequest
+	delivered  []account.VerifyMessage
+}
+
+// dispatch is the dispatch function of [account.Builder.Verification]: it
+// records the request and leaves running the worker to the test.
+func (box *outbox) dispatch(_ context.Context, request account.VerifyRequest) error {
+	box.mu.Lock()
+	defer box.mu.Unlock()
+
+	box.dispatched = append(box.dispatched, request)
+
+	return nil
+}
+
+// deliver is the deliver function of [account.Builder.Verification].
+func (box *outbox) deliver(_ context.Context, message account.VerifyMessage) error {
+	box.mu.Lock()
+	defer box.mu.Unlock()
+
+	box.delivered = append(box.delivered, message)
+
+	return nil
+}
+
+// sent returns a copy of the delivered messages.
+func (box *outbox) sent() []account.VerifyMessage {
+	box.mu.Lock()
+	defer box.mu.Unlock()
+
+	return slices.Clone(box.delivered)
+}
+
+// newSigner returns a link signer over a fresh key: relative when origin is
+// empty, otherwise absolute under origin.
+func newSigner(t *testing.T, origin string) *link.Signer {
+	t.Helper()
+
+	secret, err := key.GenerateShared()
+	if err != nil {
+		t.Fatalf("GenerateShared: %v", err)
+	}
+	signer, err := link.New(secret, func(signer *link.Builder) {
+		signer.Origin(origin)
+	})
+	if err != nil {
+		t.Fatalf("link.New: %v", err)
+	}
+
+	return signer
+}
+
+// newDirectory builds a migrated directory on db whose verification dispatches
+// and delivers into box, signing relative links.
+func newDirectory(t *testing.T, db *database.Database, instance string, box *outbox) *account.Directory {
+	t.Helper()
+
+	return newDirectoryWith(t, db, instance, newSigner(t, ""), box, nil)
+}
+
+// newDirectoryWith is [newDirectory] with the signer and the events bus chosen.
+func newDirectoryWith(t *testing.T, db *database.Database, instance string, signer *link.Signer, box *outbox, bus *event.Bus) *account.Directory {
 	t.Helper()
 
 	directory, err := account.NewDirectory(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
-		accounts.Instance(instance)
-		accounts.Deliver(func(_ context.Context, message account.Message) error {
-			if delivered != nil {
-				*delivered = append(*delivered, message)
-			}
-
-			return nil
-		})
+		accounts.Instance(instance).Events(bus)
+		accounts.Verification(signer, box.dispatch, box.deliver)
 	})
 	if err != nil {
 		t.Fatalf("NewDirectory: %v", err)
@@ -46,7 +108,7 @@ func TestCreateFindRoundTrip(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		subject, err := directory.Create(ctx, "  Ada@Example.COM ")
 		if err != nil {
 			t.Fatalf("Create: %v", err)
@@ -76,7 +138,7 @@ func TestCreateDuplicateEmailIsTaken(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		if _, err := directory.Create(ctx, "ada@example.com"); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
@@ -96,7 +158,7 @@ func TestCreateRejectsInvalidEmail(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		for _, email := range []string{"", "nobody", "Ada <ada@example.com>", "a@b@c"} {
 			if _, err := directory.Create(ctx, email); !errors.Is(err, account.ErrInvalidEmail) {
 				t.Errorf("Create(%q) error = %v, want ErrInvalidEmail", email, err)
@@ -114,7 +176,7 @@ func TestFindUnknownAndInvalidSubject(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		if _, err := directory.Find(ctx, "missing"); !errors.Is(err, auth.ErrUserNotFound) {
 			t.Errorf("Find(missing) error = %v, want ErrUserNotFound", err)
 		}
@@ -131,7 +193,7 @@ func TestSubjectComparisonIsBytewise(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		subject, err := directory.Create(ctx, "ada@example.com")
 		if err != nil {
 			t.Fatalf("Create: %v", err)
@@ -159,7 +221,7 @@ func TestRotateChangesVersion(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		subject, _ := directory.Create(ctx, "ada@example.com")
 		before, _ := directory.Find(ctx, subject)
 		if err := directory.Rotate(ctx, subject); err != nil {
@@ -182,7 +244,7 @@ func TestDisabledUserIsDisabled(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		subject, _ := directory.Create(ctx, "ada@example.com")
 		if err := directory.Disable(ctx, subject); err != nil {
 			t.Fatalf("Disable: %v", err)
@@ -206,7 +268,7 @@ func TestLookupReturnsTheStoredAddress(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		subject, _ := directory.Create(ctx, "bob@gmail.com")
 		found, address, err := directory.Lookup(ctx, "bob@gmaİl.com")
 		if err != nil || found != subject || address != "bob@gmail.com" {
@@ -216,16 +278,16 @@ func TestLookupReturnsTheStoredAddress(t *testing.T) {
 }
 
 // TestProveEmailReportsOnlyTheFirstProof verifies the atomic transition from
-// unverified to verified, which also drops the pending verification token.
+// unverified to verified, which also ends the links sent before.
 func TestProveEmailReportsOnlyTheFirstProof(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		var delivered []account.Message
-		directory := newDirectory(t, db, instance, &delivered)
+		box := &outbox{}
+		directory := newDirectory(t, db, instance, box)
 		subject, _ := directory.Create(ctx, "ada@example.com")
-		if err := directory.SendVerification(ctx, subject); err != nil {
+		if err := directory.SendVerification(ctx, account.VerifyRequest{Subject: subject}); err != nil {
 			t.Fatalf("SendVerification: %v", err)
 		}
 		changed, err := directory.ProveEmail(ctx, subject)
@@ -235,8 +297,8 @@ func TestProveEmailReportsOnlyTheFirstProof(t *testing.T) {
 		if changed, err := directory.ProveEmail(ctx, subject); err != nil || changed {
 			t.Fatalf("second ProveEmail = %v, %v; want false", changed, err)
 		}
-		if _, err := directory.Verify(ctx, delivered[0].Token); !errors.Is(err, account.ErrInvalidToken) {
-			t.Fatalf("the pending token survived: %v", err)
+		if _, err := directory.Verify(ctx, box.sent()[0].Signed); !errors.Is(err, account.ErrInvalidToken) {
+			t.Fatalf("the link sent before survived: %v", err)
 		}
 		if _, err := directory.ProveEmail(ctx, "00000000000000000000000000000000"); !errors.Is(err, auth.ErrUserNotFound) {
 			t.Fatalf("unknown subject error = %v", err)
@@ -252,7 +314,7 @@ func TestDeleteRunsForgetHooks(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory := newDirectory(t, db, instance, nil)
+		directory := newDirectory(t, db, instance, &outbox{})
 		subject, _ := directory.Create(ctx, "ada@example.com")
 		var forgotten []string
 		fail := true
@@ -353,4 +415,17 @@ func TestNewDirectoryRejectsBadConfig(t *testing.T) {
 			t.Errorf("instance %q error = %v", instance, err)
 		}
 	}
+}
+
+// postedValue returns what a front end posts for a delivered link: the fragment
+// of href, decoded as location.hash is with decodeURIComponent.
+func postedValue(t *testing.T, href string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(href)
+	if err != nil || parsed.Fragment == "" {
+		t.Fatalf("link %q has no fragment: %v", href, err)
+	}
+
+	return parsed.Fragment
 }

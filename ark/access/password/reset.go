@@ -2,109 +2,174 @@ package password
 
 import (
 	"context"
-	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
 	"time"
 
 	"arkoren.dev/core/auth"
-	"arkoren.dev/core/service/database"
+	"arkoren.dev/core/http/link"
 	"arkoren.dev/foundation/query"
 
-	"arkoren.dev/ark/access/internal/storage"
+	"arkoren.dev/ark/access/internal/web"
 )
 
-// Message is what [Builder.Deliver] receives to write a reset email. The token
-// is a credential until it is used or expires; never log it.
+// resetPath is the path every reset link is signed for. The signature covers
+// it, so a link signed for another purpose with the same signer (an email
+// verification, say) is never a reset link. The subject travels in the query as
+// "subject"; it is only trusted after the signature verified.
+const resetPath = "/password/reset"
+
+// ResetRequest is what [Builder.Reset]'s dispatch function receives for every
+// forgot-password request, and what [Verifier.SendReset] takes: the work of
+// sending one reset email. It is plain data with JSON tags, so a queue job or a
+// workflow input can carry it as is.
+//
+// Stored requests must stay decodable across upgrades: new fields are only ever
+// added, never renamed, repurposed or removed, and a missing field keeps its
+// zero value. Decode old payloads with the same type.
 //
 // Example:
 //
-//	link := message.Link("https://app.example.com/reset-password")
-type Message struct {
-	// Identifier is the address to write to, as returned by [Users.Lookup]: the
-	// one stored with the user, never the text of the request.
-	Identifier string
+//	job := queue.NewJob[password.ResetRequest]("send-reset")
+//	err := dispatcher.Dispatch(ctx, job, password.ResetRequest{Identifier: "ada@example.com"})
+type ResetRequest struct {
+	// Identifier is exactly what the user typed, never looked up before the
+	// request was dispatched: the response of the forgot-password route must
+	// not depend on whether the user exists. [Verifier.SendReset] resolves it.
+	Identifier string `json:"identifier"`
 
-	// Token is the single-use secret that [Verifier.Reset] accepts.
-	Token string
+	// Notice marks the notice to the owner of an identifier that someone tried to
+	// register ([Builder.Taken]): the same link, with an email that says so.
+	Notice bool `json:"notice,omitzero"`
+}
 
-	// ExpiresAt is when the token stops working.
+// ResetMessage is what [Builder.Reset]'s deliver function receives to write one
+// reset email. Signed is a credential until it expires or the password changes;
+// never log it.
+//
+// Example:
+//
+//	href := message.Link("https://app.example.com/reset-password")
+type ResetMessage struct {
+	// Address is where to send the email: the address [Users.Lookup] returned
+	// for the user, never the text of the request, so a request cannot send a
+	// victim's link elsewhere.
+	Address string
+
+	// Signed is the signed link value that [Verifier.Reset] accepts. It is a URL
+	// (relative, or absolute under the signer's origin) that the front end posts
+	// back verbatim; it is not a page address.
+	Signed string
+
+	// ExpiresAt is when the link stops working.
 	ExpiresAt time.Time
 
-	// Registration is true when the reset was not asked for by the owner but
-	// started by a registration with an identifier that already belongs to a
-	// user ([Verifier.RegisterHandler]): the email should say that someone tried
-	// to register with this address, and that the link sets a new password if it
-	// was not them. It is false for [Verifier.SendReset].
-	Registration bool
+	// Notice is true for the notice to the owner of an identifier that someone
+	// tried to register ([ResetRequest.Notice]): the email should say so, and
+	// that the link sets a new password if it was not them. It is false for a
+	// request of the owner.
+	Notice bool
 }
 
-// Link returns base with the token in the URL fragment, as "#token=...",
-// escaped, so the token is not sent to the server, its logs or proxies. The
-// reset page reads it from location.hash and posts it; [Message.QueryLink] is
-// the form for a server-rendered page. base must not already carry a fragment.
+// Link returns base with the signed value in the URL fragment, escaped, as
+// base#<value>. A fragment is never sent to the server, so the link stays out of
+// access logs, proxies and the Referer header of the page it opens. The page
+// reads location.hash, decodes it with decodeURIComponent after removing the
+// leading "#", removes it from the address bar and posts it as the "token" of
+// POST /password/reset. base must not already carry a fragment.
 //
 // Example:
 //
-//	message := password.Message{Token: "abc"}
-//	fmt.Println(message.Link("https://app.example.com/reset")) // https://app.example.com/reset#token=abc
-func (message Message) Link(base string) string {
-	return base + "#" + url.Values{"token": {message.Token}}.Encode()
+//	message := password.ResetMessage{Signed: "/password/reset?subject=u1"}
+//	fmt.Println(message.Link("https://app.example.com/reset")) // https://app.example.com/reset#%2Fpassword%2Freset%3Fsubject%3Du1
+func (message ResetMessage) Link(base string) string {
+	return base + "#" + url.QueryEscape(message.Signed)
 }
 
-// QueryLink returns base with the token as its "token" query parameter,
-// escaped, for a page that a server renders. The token then reaches the server,
-// its logs and proxies: prefer [Message.Link]. base must not already carry a
-// query.
+// ResetEnabled reports whether [Builder.Reset] was configured, which the
+// facade reads to decide whether to mount the forgot and reset routes.
 //
 // Example:
 //
-//	message := password.Message{Token: "abc"}
-//	fmt.Println(message.QueryLink("https://app.example.com/reset")) // https://app.example.com/reset?token=abc
-func (message Message) QueryLink(base string) string {
-	return base + "?" + url.Values{"token": {message.Token}}.Encode()
-}
-
-// SendReset starts a password reset for identifier: it creates a single-use
-// token and hands it to [Builder.Deliver] with the address that [Users.Lookup]
-// returned for the user, never the text of identifier. A user keeps up to three
-// live tokens: asking again does not invalidate a link already sent, and the
-// oldest is dropped only beyond three. An unknown or disabled user gets nothing
-// and the call returns nil, so the caller cannot learn which identifiers
-// exist. It returns [ErrNoDelivery] without a delivery function, and an error
-// when [Users.Lookup] returns no address. It does not throttle:
-// [Verifier.ForgotHandler] does, and runs this in the background.
-//
-// Example:
-//
-//	if err := verifier.SendReset(ctx, "ada@example.com"); err != nil {
-//		return err
+//	if verifier.ResetEnabled() {
+//		web.Post("/password/forgot", verifier.ForgotHandler())
 //	}
-func (verifier *Verifier) SendReset(ctx context.Context, identifier string) error {
-	return verifier.sendReset(ctx, identifier, false)
+func (verifier *Verifier) ResetEnabled() bool {
+	return verifier.signer != nil
 }
 
-// sendReset is [Verifier.SendReset]; registration marks the message as the
-// notice of a registration attempt on a taken identifier.
-func (verifier *Verifier) sendReset(ctx context.Context, identifier string, registration bool) error {
-	if verifier.deliver == nil {
-		return ErrNoDelivery
+// RequestReset calls the dispatch function of [Builder.Reset] with request, in
+// the caller's request, which is how the forgot-password route and a [Builder.Taken]
+// hook ask for a reset email. The email is sent later by the worker that runs
+// [Verifier.SendReset]. It returns the error of dispatch, which means the work
+// was not stored, or one wrapping [ErrInvalidConfig] without [Builder.Reset].
+//
+// Example:
+//
+//	err := verifier.RequestReset(ctx, password.ResetRequest{Identifier: "ada@example.com", Notice: true})
+func (verifier *Verifier) RequestReset(ctx context.Context, request ResetRequest) error {
+	if !verifier.ResetEnabled() {
+		return fmt.Errorf("%w: RequestReset requires Builder.Reset", ErrInvalidConfig)
 	}
-	token := rand.Text()
-	subject, address, err := verifier.resetTarget(ctx, identifier, token)
+	if err := verifier.dispatch(ctx, request); err != nil {
+		return fmt.Errorf("password: dispatch reset: %w", err)
+	}
+
+	return nil
+}
+
+// SendReset is the worker side of a password reset: it looks request.Identifier
+// up with [Users.Lookup], signs a link bound to the user's current password hash
+// and calls the deliver function of [Builder.Reset] with the address that
+// Lookup returned, never the text of the identifier. An unknown or disabled
+// user gets nothing and the call returns nil, so a retry never repeats pointless
+// work. The error of deliver is returned as is, so a queue retries; because of
+// that, deliver may run more than once for one request, and the links of the
+// attempts all work until the password changes or they expire. An error is also
+// returned when [Users.Lookup] returns no address. It does not throttle:
+// [Verifier.ForgotHandler] does, before dispatching. Without
+// [Builder.Reset] it returns an error wrapping [ErrInvalidConfig].
+//
+// It has the shape func(context.Context, ResetRequest) error, so it plugs into
+// a queue consumer or a workflow step directly.
+//
+// Example:
+//
+//	consumer.Handle(resetJob, verifier.SendReset)
+func (verifier *Verifier) SendReset(ctx context.Context, request ResetRequest) error {
+	if !verifier.ResetEnabled() {
+		return fmt.Errorf("%w: SendReset requires Builder.Reset", ErrInvalidConfig)
+	}
+	subject, address, err := verifier.resetTarget(ctx, request.Identifier)
 	if errors.Is(err, errNoTarget) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	expiresAt := time.Now().Add(verifier.resetTTL)
-	if err := verifier.storeReset(ctx, subject, address, token, expiresAt); err != nil {
-		return fmt.Errorf("password: store reset: %w", err)
+	stored, _, err := verifier.load(ctx, subject)
+	if err != nil {
+		return err
+	}
+	signed, err := verifier.signer.Temporary(resetLink(subject), verifier.resetTTL, link.Bind(stored))
+	if err != nil {
+		return fmt.Errorf("password: sign reset link: %w", err)
 	}
 
-	return verifier.deliver(ctx, Message{Identifier: address, Token: token, ExpiresAt: expiresAt, Registration: registration})
+	return verifier.deliver(ctx, ResetMessage{
+		Address:   address,
+		Signed:    signed,
+		ExpiresAt: time.Now().Add(verifier.resetTTL),
+		Notice:    request.Notice,
+	})
+}
+
+// resetLink returns the path and query that a reset link of subject is signed
+// for.
+func resetLink(subject string) string {
+	return (&url.URL{Path: resetPath, RawQuery: url.Values{"subject": {subject}}.Encode()}).String()
 }
 
 // errNoTarget is returned by [Verifier.resetTarget] for an unknown or disabled
@@ -113,12 +178,9 @@ var errNoTarget = errors.New("password: no reset target")
 
 // resetTarget returns the subject of identifier and the address stored with
 // the user, or [errNoTarget] when the user is unknown or disabled.
-func (verifier *Verifier) resetTarget(ctx context.Context, identifier, token string) (subject, address string, err error) {
+func (verifier *Verifier) resetTarget(ctx context.Context, identifier string) (subject, address string, err error) {
 	subject, address, err = verifier.users.Lookup(ctx, identifier)
 	if errors.Is(err, auth.ErrUserNotFound) {
-		// Spend the hashing time of the known path so timing stays level.
-		_ = storage.Hash(token)
-
 		return "", "", errNoTarget
 	}
 	if err != nil {
@@ -138,94 +200,57 @@ func (verifier *Verifier) resetTarget(ctx context.Context, identifier, token str
 	return subject, address, nil
 }
 
-// storeReset stores the hash of token for subject in one transaction, after
-// making room for it with [Verifier.trimResets].
-func (verifier *Verifier) storeReset(ctx context.Context, subject, address, token string, expiresAt time.Time) error {
-	return verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
-		if err := verifier.trimResets(ctx, subject); err != nil {
-			return err
-		}
-		_, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-			statement.Insert(map[string]any{
-				"subject":    subject,
-				"token_hash": storage.Hash(token),
-				"expires_at": expiresAt.Unix(),
-				"created_at": time.Now().UnixNano(),
-				"address":    address,
-			})
-		}))
-
-		return err
-	})
-}
-
-// trimResets deletes the expired tokens of subject and the oldest live ones
-// beyond maxLiveResets-1, so a new token makes at most maxLiveResets. It runs
-// in the caller's transaction.
-func (verifier *Verifier) trimResets(ctx context.Context, subject string) error {
-	// Lock the user's existing tokens first (a no-op update) so concurrent
-	// requests count and trim one after the other and the limit holds. With
-	// no token yet there is nothing to lock; then the throttle, not this
-	// lock, bounds a burst, and the next request trims the surplus.
-	_, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-		statement.Where("subject", subject).Update(map[string]any{"subject": subject})
-	}))
-	if err != nil {
-		return err
-	}
-	// Expired tokens are dead weight.
-	_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-		statement.Where("subject", subject).Where("expires_at", "<=", time.Now().Unix()).Delete()
-	}))
-	if err != nil {
-		return err
-	}
-	live, err := verifier.db.Select[string](ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-		statement.Select("token_hash").Where("subject", subject).OrderBy("created_at")
-	}))
-	if err != nil {
-		return err
-	}
-	excess := len(live) - (maxLiveResets - 1)
-	if excess <= 0 {
-		return nil
-	}
-	_, err = verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-		statement.WhereIn("token_hash", live[:excess]...).Delete()
-	}))
-
-	return err
-}
-
-// Reset consumes a reset token (and the user's other live ones), sets the
-// password, calls [Users.ProveEmail] when set and then [Users.Rotate], in one
-// transaction, and returns the subject. The link only reached someone who
-// controls the mailbox, so the reset is the proof of ownership an unverified
-// registration lacks. Rotation ends every session,
-// pending login and API token of the user; call [auth.Guard.RevokeAll] to
-// remove their login records as well, as [Verifier.ResetHandler] does. Reset
-// never logs the user in, so it cannot bypass a second factor. An unknown,
-// expired, used or replaced token is [ErrInvalidToken]; a password that fails
-// the policy is [ErrInvalidPassword] and leaves the token usable.
+// Reset checks a signed reset link and sets the password, calls
+// [Users.ProveEmail] when set and then [Users.Rotate], in one transaction, and
+// returns the subject. The link only reached someone who controls the mailbox,
+// so the reset is the proof of ownership an unverified registration lacks.
+// Rotation ends every session, pending login and API token of the user; call
+// [auth.Guard.RevokeAll] to remove their login records as well, as
+// [Verifier.ResetHandler] does. Reset never logs the user in, so it cannot
+// bypass a second factor.
+//
+// The steps run in this order. A password that fails the policy is
+// [ErrInvalidPassword] and is checked first, so a weak password does not use up
+// the link. The signed value is parsed and its subject read, the user's current
+// hash is loaded and the signature is verified against it. The password is then
+// stored by a conditional write inside the transaction: an update that matches
+// only the hash the link was signed for (or an insert that does nothing on
+// conflict for a user without a password, such as one who signed up with a
+// provider). Zero affected rows means a concurrent reset or password change won,
+// so of two concurrent submits of one link exactly one succeeds. Ownership
+// proof, rotation and the other effects run only when the row changed. Invalid,
+// forged, expired, used and replaced links are all [ErrInvalidToken].
 //
 // Example:
 //
-//	subject, err := verifier.Reset(ctx, token, "a new long password")
+//	subject, err := verifier.Reset(ctx, signed, "a new long password")
 //	if errors.Is(err, password.ErrInvalidToken) {
 //		// ask for a new link
 //	}
-func (verifier *Verifier) Reset(ctx context.Context, token, password string) (string, error) {
+func (verifier *Verifier) Reset(ctx context.Context, signed, password string) (string, error) {
+	if !verifier.ResetEnabled() {
+		return "", fmt.Errorf("%w: Reset requires Builder.Reset", ErrInvalidConfig)
+	}
 	if err := verifier.policy(ctx, password); err != nil {
 		return "", err
 	}
-	var pending resetRow
-	err := verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
-		var err error
-		if pending, err = verifier.consumeReset(ctx, storage.Hash(token)); err != nil {
-			return err
-		}
-
-		return verifier.applyReset(ctx, pending.Subject, password)
+	target, subject, ok := web.ParseSigned(signed, resetPath)
+	if !ok {
+		return "", ErrInvalidToken
+	}
+	stored, has, err := verifier.load(ctx, subject)
+	if err != nil {
+		return "", err
+	}
+	if err := verifier.signer.VerifyURL(target, link.Bind(stored)); err != nil {
+		return "", ErrInvalidToken
+	}
+	encoded, err := verifier.encode(password)
+	if err != nil {
+		return "", err
+	}
+	err = verifier.db.WithTransaction(ctx, func(ctx context.Context) error {
+		return verifier.applyReset(ctx, subject, stored, has, encoded)
 	})
 	if errors.Is(err, ErrInvalidToken) {
 		return "", ErrInvalidToken
@@ -233,60 +258,21 @@ func (verifier *Verifier) Reset(ctx context.Context, token, password string) (st
 	if err != nil {
 		return "", fmt.Errorf("password: reset: %w", err)
 	}
-	// The owner proved the mailbox, so failed logins counted against the
-	// identifier (by whoever was guessing) no longer lock them out. Only the
-	// cap across addresses can be cleared: the per-address counters are the
-	// guesser's. It matches when the user typed the address at login.
-	verifier.clear(ctx, verifier.identifierKey(pending.Address))
-	verifier.emit(ctx, WasReset, pending.Subject)
+	verifier.emit(ctx, WasReset, subject)
 
-	return pending.Subject, nil
+	return subject, nil
 }
 
-// resetRow is the part of a reset token row that a reset reads.
-type resetRow struct {
-	Subject string `db:"subject"`
-	Address string `db:"address"`
-}
-
-// consumeReset deletes the live token whose hash is hashed, and the user's
-// other tokens with it, and returns its row. An unknown, expired or already
-// used token is [ErrInvalidToken]. It runs in the caller's transaction.
-func (verifier *Verifier) consumeReset(ctx context.Context, hashed string) (resetRow, error) {
-	pending, err := verifier.db.Find[resetRow](ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-		statement.Select("subject", "address").Where("token_hash", hashed).Where("expires_at", ">", time.Now().Unix()).Limit(1)
-	}))
-	if errors.Is(err, database.ErrNoRows) {
-		return resetRow{}, ErrInvalidToken
-	}
+// applyReset is the transaction of [Verifier.Reset]: it swaps the hash and only
+// when a row changed proves the email and rotates the user, so a link already
+// used is [ErrInvalidToken] and has no other effect.
+func (verifier *Verifier) applyReset(ctx context.Context, subject string, stored []byte, has bool, encoded string) error {
+	changed, err := verifier.swapHash(ctx, subject, stored, has, encoded)
 	if err != nil {
-		return resetRow{}, err
-	}
-	// The delete is the single-use gate: of two concurrent requests with the
-	// same token only one removes the row.
-	affected, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-		statement.Where("token_hash", hashed).Delete()
-	}))
-	if err != nil {
-		return resetRow{}, err
-	}
-	if affected == 0 {
-		return resetRow{}, ErrInvalidToken
-	}
-	// The user's other live tokens die with this one: the password they
-	// were meant to reset no longer exists.
-	if err := verifier.deleteResets(ctx, pending.Subject); err != nil {
-		return resetRow{}, err
-	}
-
-	return pending, nil
-}
-
-// applyReset sets the password of subject, calls [Users.ProveEmail] when set
-// and then [Users.Rotate]. It runs in the caller's transaction.
-func (verifier *Verifier) applyReset(ctx context.Context, subject, password string) error {
-	if err := verifier.save(ctx, subject, password); err != nil {
 		return err
+	}
+	if !changed {
+		return ErrInvalidToken
 	}
 	if verifier.users.ProveEmail != nil {
 		if err := verifier.users.ProveEmail(ctx, subject); err != nil {
@@ -297,11 +283,28 @@ func (verifier *Verifier) applyReset(ctx context.Context, subject, password stri
 	return verifier.users.Rotate(ctx, subject)
 }
 
-// deleteResets deletes every reset token of subject.
-func (verifier *Verifier) deleteResets(ctx context.Context, subject string) error {
-	_, err := verifier.db.Exec(ctx, query.Table(verifier.resets, func(statement *query.Builder) {
-		statement.Where("subject", subject).Delete()
-	}))
+// swapHash stores encoded as the hash of subject if and only if the stored hash
+// is still the one the link was signed for, and reports whether a row changed.
+// It is the single-use gate of a reset link: the update matches the old hash,
+// and a user who had no hash gets an insert that does nothing when a concurrent
+// reset created the row first. It runs in the caller's transaction.
+func (verifier *Verifier) swapHash(ctx context.Context, subject string, stored []byte, has bool, encoded string) (bool, error) {
+	now := time.Now().Unix()
+	var affected int64
+	var err error
+	if has {
+		affected, err = verifier.db.Exec(ctx, query.Table(verifier.hashes, func(statement *query.Builder) {
+			statement.Where("subject", subject).Where("hash", base64.StdEncoding.EncodeToString(stored)).Update(map[string]any{"hash": encoded, "changed_at": now})
+		}))
+	} else {
+		affected, err = verifier.db.Exec(ctx, query.Table(verifier.hashes, func(statement *query.Builder) {
+			statement.Insert(map[string]any{"subject": subject, "hash": encoded, "changed_at": now})
+			statement.OnConflict("subject").DoNothing()
+		}))
+	}
+	if err != nil {
+		return false, fmt.Errorf("password: store hash: %w", err)
+	}
 
-	return err
+	return affected > 0, nil
 }

@@ -25,7 +25,7 @@ type UserEvent struct {
 //	})
 var Changed = event.NewTopic[UserEvent]("password.credential.changed")
 
-// WasReset is published after a reset token replaced a user's password.
+// WasReset is published after a reset link replaced a user's password.
 //
 // Example:
 //

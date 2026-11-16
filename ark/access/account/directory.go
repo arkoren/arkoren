@@ -13,17 +13,17 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/http/link"
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/foundation/query"
 	"arkoren.dev/foundation/query/schema"
 
-	"arkoren.dev/ark/access/internal/background"
 	"arkoren.dev/ark/access/internal/storage"
 )
 
-// DefaultVerifyTTL is how long an email verification token stays valid when
+// DefaultVerifyTTL is how long an email verification link stays valid when
 // [Builder.VerifyTTL] is not set: 24 hours.
 //
 // Example:
@@ -118,14 +118,14 @@ type Directory struct {
 	db        *database.Database
 	instance  string
 	users     string
-	verifs    string
 	events    *event.Bus
-	deliver   func(context.Context, Message) error
+	signer    *link.Signer
+	dispatch  func(context.Context, VerifyRequest) error
+	deliver   func(context.Context, VerifyMessage) error
 	verifyTTL time.Duration
 	provider  *auth.UserProvider
 	store     *cache.Cache
 	clientIP  func(*http.Request) string
-	jobs      background.Group
 }
 
 // NewDirectory returns the directory over db. store counts the verification
@@ -137,10 +137,6 @@ type Directory struct {
 // proxy sits in front of the application. It does no I/O: the tables come
 // from [Directory.Migrations], which the application's migrator runs, and
 // [Directory.Ping] verifies they exist. Errors wrap [ErrInvalidConfig].
-//
-// The directory registers a forget hook on its provider that removes the
-// user's pending verification, so forgetting a user in one transaction leaves
-// no row of this package behind.
 //
 // Example:
 //
@@ -165,8 +161,9 @@ func NewDirectory(db *database.Database, store *cache.Cache, clientIP func(*http
 		db:        db,
 		instance:  settings.instance,
 		users:     storage.Table(settings.instance, "users"),
-		verifs:    storage.Table(settings.instance, "email_verifications"),
 		events:    settings.events,
+		signer:    settings.signer,
+		dispatch:  settings.dispatch,
 		deliver:   settings.deliver,
 		verifyTTL: cmp.Or(settings.verifyTTL, DefaultVerifyTTL),
 		store:     store,
@@ -178,7 +175,6 @@ func NewDirectory(db *database.Database, store *cache.Cache, clientIP func(*http
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
-	provider.OnForget(directory.forget)
 	directory.provider = provider
 
 	return directory, nil
@@ -195,10 +191,10 @@ func (directory *Directory) Provider() *auth.UserProvider {
 	return directory.provider
 }
 
-// Migrations returns the migrations that create the "users" and
-// "email_verifications" tables (prefixed "<instance>_" for a named instance) in
-// the group "arkoren.dev:ark/access:account", plus ":<instance>". Each creates
-// one table strictly, and its down step drops it. The application adds them
+// Migrations returns the migration that creates the "users" table (prefixed
+// "<instance>_" for a named instance) in the group
+// "arkoren.dev:ark/access:account", plus ":<instance>". It creates the table
+// strictly, and its down step drops it. The application adds them
 // to its migrator ahead of any migration that needs them; constructing or
 // reading them never runs DDL.
 //
@@ -220,18 +216,10 @@ func (directory *Directory) Migrations() []migrate.Definition {
 			})))
 			migration.Down(migrate.Schema(schema.Drop(directory.users)))
 		}),
-		migrate.NewMigration("email-verifications-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(directory.verifs, func(table *schema.Table) {
-				table.String("subject", 255).Bytewise().Primary()
-				table.String("token_hash", 64).Bytewise().Unique()
-				table.BigInteger("expires_at")
-			})))
-			migration.Down(migrate.Schema(schema.Drop(directory.verifs)))
-		}),
 	)
 }
 
-// Ping verifies, read-only, that both tables exist. A missing table returns an
+// Ping verifies, read-only, that the table exists. A missing table returns an
 // error wrapping [ErrNotMigrated] that names Migrations. Use it as a readiness
 // check.
 //
@@ -241,7 +229,7 @@ func (directory *Directory) Migrations() []migrate.Definition {
 //		return err
 //	}
 func (directory *Directory) Ping(ctx context.Context) error {
-	return storage.Ping(ctx, directory.db, directory.users, directory.verifs)
+	return storage.Ping(ctx, directory.db, directory.users)
 }
 
 // Find returns the record of subject, which makes the directory an
@@ -410,8 +398,9 @@ func (directory *Directory) Verified(ctx context.Context, subject string) (bool,
 }
 
 // ProveEmail marks the user's email verified because the user just proved they
-// control the mailbox, as a completed password reset does, and drops any
-// pending verification token. It reports whether the user was unverified
+// control the mailbox, as a completed password reset does; verification links
+// sent before stop working, because they are bound to the unverified state. It
+// reports whether the user was unverified
 // before: that is the signal that someone else may have registered the address
 // first, so the caller must then remove everything an earlier holder could have
 // attached (connections, two-factor, tokens). The update is atomic, so of two
@@ -438,9 +427,6 @@ func (directory *Directory) ProveEmail(ctx context.Context, subject string) (boo
 	if affected == 0 {
 		_, err := directory.row(ctx, "id", subject)
 
-		return false, err
-	}
-	if err := directory.forget(ctx, subject); err != nil {
 		return false, err
 	}
 	directory.emit(ctx, EmailVerified, subject)
@@ -541,34 +527,6 @@ func (directory *Directory) Delete(ctx context.Context, subject string) error {
 	directory.emit(ctx, UserDeleted, subject)
 
 	return nil
-}
-
-// forget removes the rows of this package that reference subject, in the
-// caller's transaction. The user row itself is removed by [Directory.Delete].
-func (directory *Directory) forget(ctx context.Context, subject string) error {
-	_, err := directory.db.Exec(ctx, query.Table(directory.verifs, func(statement *query.Builder) {
-		statement.Where("subject", subject).Delete()
-	}))
-	if err != nil {
-		return fmt.Errorf("account: forget verification: %w", err)
-	}
-
-	return nil
-}
-
-// Wait blocks until the verification emails that [Directory.ResendHandler] sent
-// in the background have been handed to [Builder.Deliver], or returns the error
-// of ctx when it ends first. Call it during shutdown, after the server stopped
-// accepting requests, so no message is lost; tests call it before asserting on
-// what was delivered.
-//
-// Example:
-//
-//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-//	defer cancel()
-//	_ = directory.Wait(ctx)
-func (directory *Directory) Wait(ctx context.Context) error {
-	return directory.jobs.Wait(ctx)
 }
 
 // emit publishes topic with the subject once the surrounding transaction, if
