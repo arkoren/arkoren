@@ -51,6 +51,8 @@ export function releaseModules(repo = RELEASE_REPO): string[] {
   const directories = files
     .filter((file) => file.endsWith("/go.mod") && MODULE.test(file.slice(0, -7)))
     .map((file) => file.slice(0, -7))
+    // A canonical module held back from release (development) has no release history.
+    .filter((directory) => !(policy.development as string[]).includes(directory))
     .sort();
   if (JSON.stringify(directories) !== JSON.stringify([...policy.public].sort())) {
     throw new Error("committed public inventory differs from module policy");
