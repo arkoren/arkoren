@@ -59,11 +59,11 @@ var (
 	ErrInvalidCode = errors.New("totp: invalid code")
 	// ErrInvalidScheme reports unusable parameters: an unknown algorithm,
 	// digits outside 6 to 8, a period that is not a positive whole number of
-	// seconds, or a window outside 0 to [MaxWindow]. Methods wrap it with the
-	// first offending setting.
+	// seconds, a window outside 0 to [MaxWindow], or an issuer that is empty or
+	// contains a colon. Methods wrap it with the first offending setting.
 	ErrInvalidScheme = errors.New("totp: invalid scheme")
 	// ErrInvalidSecret reports an empty secret, an undecodable base32 string,
-	// or a label that cannot be placed in an otpauth URI.
+	// or an account name that cannot be placed in an otpauth URI.
 	ErrInvalidSecret = errors.New("totp: invalid secret")
 	// ErrInvalidTime reports a time before the Unix epoch, which has no
 	// time step.
@@ -74,6 +74,7 @@ var (
 // value is invalid and every method returns an error wrapping
 // [ErrInvalidScheme]. A Scheme holds no secret and is safe for concurrent use.
 type Scheme struct {
+	issuer    string
 	algorithm Algorithm
 	digits    int
 	period    time.Duration
@@ -91,26 +92,36 @@ type Builder struct {
 // BuilderFunc configures a [Builder] during [New].
 type BuilderFunc = func(*Builder)
 
-// New builds a [Scheme] from the defaults (SHA1, 6 digits, 30 seconds, a window
-// of one step each side) and then runs each callback once, in order. A nil
-// callback panics. Invalid settings do not panic: they surface from
-// [Scheme.Err] and from every method.
+// New builds a [Scheme] for issuer from the defaults (SHA1, 6 digits, 30
+// seconds, a window of one step each side) and then runs each callback once, in
+// order. A nil callback panics.
+//
+// The issuer is the service name authenticator apps show beside the code and
+// is written to every provisioning URI. It has no default, so it is a required
+// argument: it must be non-empty and contain no colon, which separates issuer
+// and account in the URI label. Invalid settings, including the issuer, do not
+// panic: the first one surfaces from [Scheme.Err] and from every method. The
+// issuer is checked before any callback runs, so a bad issuer is reported first.
 //
 // Example:
 //
-//	scheme := totp.New(func(scheme *totp.Builder) {
+//	scheme := totp.New("Acme", func(scheme *totp.Builder) {
 //		scheme.Algorithm(totp.SHA256).Digits(8).Window(0)
 //	})
 //	if err := scheme.Err(); err != nil {
 //		return err
 //	}
-func New(configure ...BuilderFunc) Scheme {
+func New(issuer string, configure ...BuilderFunc) Scheme {
 	draft := &Builder{scheme: Scheme{
+		issuer:    issuer,
 		algorithm: SHA1,
 		digits:    DefaultDigits,
 		period:    DefaultPeriod,
 		window:    DefaultWindow,
 	}}
+	if issuer == "" || strings.Contains(issuer, ":") {
+		draft.fail("issuer %q must be non-empty and contain no colon", issuer)
+	}
 	for _, apply := range configure {
 		apply(draft)
 	}
@@ -201,7 +212,7 @@ func (scheme Scheme) Step(at time.Time) (int64, error) {
 //
 // Example:
 //
-//	code, err := totp.New().Generate(secret, time.Now())
+//	code, err := totp.New("Acme").Generate(secret, time.Now())
 func (scheme Scheme) Generate(secret []byte, at time.Time) (string, error) {
 	step, err := scheme.Step(at)
 	if err != nil {
@@ -290,32 +301,32 @@ func DecodeSecret(text string) ([]byte, error) {
 }
 
 // URI returns the otpauth:// provisioning URI that authenticator apps read from
-// a QR code, with the scheme's algorithm, digits and period written
-// explicitly. Issuer names the service and account identifies the user (an
-// email address or username). Issuer must be non-empty and neither may contain
-// a colon, which separates them in the URI label; violations return
-// [ErrInvalidSecret].
+// a QR code, with the scheme's issuer, algorithm, digits and period written
+// explicitly. Account identifies the user (an email address or username). It
+// must be non-empty and contain no colon, which separates issuer and account in
+// the URI label; a violation returns [ErrInvalidSecret]. An invalid scheme,
+// including an invalid issuer, returns its [Scheme.Err].
 //
 // The URI contains the secret. Render it only to the enrolling user and never
 // log it.
 //
 // Example:
 //
-//	uri, err := totp.New().URI("Example", "alice@example.com", secret)
-//	// otpauth://totp/Example:alice@example.com?algorithm=SHA1&digits=6&issuer=Example&period=30&secret=...
-func (scheme Scheme) URI(issuer, account string, secret []byte) (string, error) {
+//	uri, err := totp.New("Acme").URI("alice@example.com", secret)
+//	// otpauth://totp/Acme:alice@example.com?algorithm=SHA1&digits=6&issuer=Acme&period=30&secret=...
+func (scheme Scheme) URI(account string, secret []byte) (string, error) {
 	if err := scheme.Err(); err != nil {
 		return "", err
 	}
 	if len(secret) == 0 {
 		return "", fmt.Errorf("%w: empty", ErrInvalidSecret)
 	}
-	if issuer == "" || account == "" || strings.Contains(issuer, ":") || strings.Contains(account, ":") {
-		return "", fmt.Errorf("%w: issuer and account must be non-empty and contain no colon", ErrInvalidSecret)
+	if account == "" || strings.Contains(account, ":") {
+		return "", fmt.Errorf("%w: account must be non-empty and contain no colon", ErrInvalidSecret)
 	}
 	query := url.Values{
 		"secret":    {EncodeSecret(secret)},
-		"issuer":    {issuer},
+		"issuer":    {scheme.issuer},
 		"algorithm": {string(scheme.algorithm)},
 		"digits":    {strconv.Itoa(scheme.digits)},
 		"period":    {strconv.FormatInt(int64(scheme.period/time.Second), 10)},
@@ -323,7 +334,7 @@ func (scheme Scheme) URI(issuer, account string, secret []byte) (string, error) 
 	uri := url.URL{
 		Scheme:   "otpauth",
 		Host:     "totp",
-		Path:     "/" + issuer + ":" + account,
+		Path:     "/" + scheme.issuer + ":" + account,
 		RawQuery: query.Encode(),
 	}
 	return uri.String(), nil
