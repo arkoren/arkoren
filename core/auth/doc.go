@@ -160,8 +160,9 @@
 // [RequireLevel] and [Guard.RequireFresh] protect routes by the factors of the
 // identity in the context, so they also work for tokens that carry factors. No
 // identity is rejected like [Require]. Factor time is this server's clock: the
-// guard stamps every factor when it records it, whatever the login method
-// reports, and a factor dated in the future is not fresh. The rule of
+// guard stamps every factor when it records it, keeping a time the login method
+// reports only when it is earlier, so a provider can make a factor older but
+// never fresher, and a factor dated in the future is not fresh. The rule of
 // [Guard.Fresh]: fresh means a factor of an enrolled [GuardBuilder.StepUp] method
 // within [GuardBuilder.FreshFor] (15 minutes by default); a user with no step-up
 // method counts any recent factor. Too weak or too old is [ErrStepUpRequired]

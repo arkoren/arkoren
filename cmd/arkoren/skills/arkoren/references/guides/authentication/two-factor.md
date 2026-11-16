@@ -42,9 +42,10 @@ return outcome.Response(w) // 204, or 202 with the methods to choose from
 ```
 
 A factor has a `Method` (how it was verified), a `Kind` (what it proves) and a
-time. The time is always the server's clock: the guard stamps it when it records
-the factor, whatever the login method reports, so a provider cannot make an old
-login look fresh. Core names only the RFC 8176 methods `MethodPassword` (`pwd`),
+time. The time is the server's clock: the guard stamps it when it records the
+factor. A login method may report an earlier time, which the guard keeps, but a
+later or missing time becomes now, so a provider can make a login look older but
+never fresher. Core names only the RFC 8176 methods `MethodPassword` (`pwd`),
 `MethodOTP` (`otp`), `MethodHardwareKey` (`hwk`) and `MethodSoftwareKey` (`swk`).
 A module that verifies something else, such as a recovery code or a federated
 login, declares its own `auth.Method`. Kinds are `KindKnowledge`,

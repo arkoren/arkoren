@@ -1,6 +1,7 @@
 package ratelimit_test
 
 import (
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -298,4 +299,36 @@ func TestRatePolicyLargestWindowKeepsRetryAfterPositive(t *testing.T) {
 			t.Fatalf("Retry-After = %q, want full two-window recovery", got)
 		}
 	})
+}
+
+// TestAddressKey verifies the reduction of client addresses to limiter keys.
+func TestAddressKey(t *testing.T) {
+	t.Parallel()
+
+	for address, want := range map[string]string{
+		"192.0.2.1":        "192.0.2.1",
+		"::ffff:192.0.2.1": "192.0.2.1",
+		"2001:db8::1":      "2001:db8::/64",
+		"2001:db8::ffff:1": "2001:db8::/64",
+		"2001:db8:0:1::1":  "2001:db8:0:1::/64",
+		"fe80::1%eth0":     "fe80::/64",
+		"not an address":   "not an address",
+		"192.0.2.1:443":    "192.0.2.1:443",
+		"":                 "",
+	} {
+		if got := ratelimit.AddressKey(address); got != want {
+			t.Errorf("AddressKey(%q) = %q, want %q", address, got, want)
+		}
+	}
+}
+
+// ExampleAddressKey shows the keys of the address families.
+func ExampleAddressKey() {
+	fmt.Println(ratelimit.AddressKey("192.0.2.1"))
+	fmt.Println(ratelimit.AddressKey("::ffff:192.0.2.1"))
+	fmt.Println(ratelimit.AddressKey("2001:db8::1"))
+	// Output:
+	// 192.0.2.1
+	// 192.0.2.1
+	// 2001:db8::/64
 }
