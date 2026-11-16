@@ -47,14 +47,18 @@ The decision uses `ContentLength`, not a speculative read from the body:
 
 - A nonzero length, including unknown length `-1`, requires an allowed header
   regardless of method.
-- At length zero, POST, PUT, PATCH, DELETE, and QUERY reject a supplied header
-  when it is malformed or disallowed. A missing header passes.
+- At length zero, POST, PUT, and PATCH require an allowed header: a missing,
+  malformed, or disallowed one is rejected.
+- At length zero, DELETE and QUERY reject a supplied header when it is
+  malformed or disallowed. A missing header passes.
 - Other methods at length zero pass without this media-type check.
 
 A bodyless GET therefore does not require `Content-Type`, while an empty POST
-declaring `text/plain` is rejected. This prevents a disallowed form format from
-bypassing the policy merely because its body is empty. Do not use method or
-media type as a substitute for authorization.
+with no header or with `text/plain` is rejected. This prevents a cross-site
+form post from bypassing the policy merely because its body is empty. Clients
+that send a bodyless POST, PUT, or PATCH, such as an action endpoint that takes
+no payload, must still set `Content-Type: application/json`. Do not use method
+or media type as a substitute for authorization.
 
 ## Allow Other Formats
 

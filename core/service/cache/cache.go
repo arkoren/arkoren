@@ -113,6 +113,14 @@ type Driver interface {
 	// Add stores value only when key is absent or expired. It reports whether
 	// the value was stored and leaves an existing entry and its TTL untouched.
 	//
+	// Add is an atomic claim: when any number of callers add the same absent
+	// key concurrently, exactly one reports added == true and its value is the
+	// one stored. This holds across goroutines and across processes sharing the
+	// same backend, so a driver must perform the absence check and the write
+	// as one backend operation, never a read followed by a write. Single-use
+	// tokens such as link consumption depend on it; the cachetest suite checks
+	// it.
+	//
 	// Example:
 	//
 	//	added, err := driver.Add(ctx, "receipt", []byte("claimed"), time.Hour)
@@ -427,6 +435,9 @@ func (cache *Cache) Delete[T any](ctx context.Context, key Key[T]) (err error) {
 // Add JSON-encodes value and stores it with key.TTL only when the entry is
 // absent. An existing entry and its expiry remain unchanged. Validation precedes
 // encoding and driver I/O; zero TTL means no expiry.
+//
+// Add is atomic: of any number of concurrent calls for one absent key, in this
+// or another process sharing the backend, exactly one reports added == true.
 //
 //	added, err := store.Add(ctx, cache.NewKey[string]("version"), "v1")
 //	if err != nil {

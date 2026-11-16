@@ -160,8 +160,9 @@ account.Use(csrf.Middleware(), contenttype.Middleware(), requireAccount)
 ```
 
 The default media-type policy accepts `application/json` and `+json` types,
-rejecting disallowed form and plain-text declarations. Missing headers on empty
-requests can pass; see [empty-request checks](../http-fundamentals/content-type.md#check-empty-requests).
+rejecting disallowed form and plain-text declarations. Bodyless POST, PUT, and PATCH
+requests must still send an allowed header, while bodyless DELETE and QUERY
+requests can omit it; see [empty-request checks](../http-fundamentals/content-type.md#check-empty-requests).
 The media-type check neither validates the JSON contents nor replaces CSRF or
 resource authorization. Keep CSRF protection when allowing browser form formats.
 
