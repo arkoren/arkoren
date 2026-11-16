@@ -73,7 +73,8 @@ after inventory or workflow changes.
 Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
 working-tree inspection, or append `--commit FULL_SHA` to validate a committed
 inventory and its same-commit policy. CI/audits currently include 48 modules and
-16 integration suites; releases include only the 46 approved public modules.
+16 integration suites; releases include only the 45 approved public modules (`ark/access` is
+classified development-only until its first release).
 The development command uses standard flags, JSON stdout and JSON diagnostics on
 stderr. Its focused internal packages own inventory, release planning, exact-SHA
 evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
