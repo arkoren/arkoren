@@ -85,6 +85,7 @@ func Run(t *testing.T, newDriver func(t *testing.T) cache.Driver, opts ...Option
 		{"Basics", basics},
 		{"Expiry", expiry},
 		{"Add", addCases},
+		{"AddConcurrency", addConcurrency},
 		{"CompareAndPut", compareAndPutCases},
 		{"CompareAndPutExpiry", compareAndPutExpiry},
 		{"CompareAndPutFailures", compareAndPutFailures},
