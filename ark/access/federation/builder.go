@@ -25,6 +25,7 @@ type Builder struct {
 	create   func(context.Context, auth.External) (string, error)
 	fallback func(context.Context, string) (bool, error)
 	verified func(context.Context, string) (bool, error)
+	takeOver func(context.Context, auth.External) (string, error)
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -98,6 +99,38 @@ func (links *Builder) SignUp(enabled bool) *Builder {
 //	})
 func (links *Builder) Create(create func(ctx context.Context, external auth.External) (string, error)) *Builder {
 	links.create = create
+
+	return links
+}
+
+// TakeOver sets the function that gives an identity whose email the provider
+// verified to the existing, never verified user who holds that address. A
+// logged-out login with an identity that is not connected calls it first, in
+// the transaction that connects the identity; this is how the real owner of an
+// address recovers an account that someone else registered with it before
+// verifying it. It works whether or not [Builder.SignUp] is enabled, because no
+// user is created.
+//
+// The function returns the subject to connect and log in, or "" when there is
+// none (no such user, or the user is verified), and it must leave nothing the
+// previous holder attached: the facade deletes the password, connections,
+// two-factor enrolment and tokens, marks the email verified and rotates the
+// user, all in the transaction of ctx, which a returned error rolls back. It
+// must only take over a user whose email was unverified and only when
+// [auth.External.EmailVerified] is true. A disabled user is never logged in:
+// the login is [auth.ErrUnauthenticated] and everything rolls back. Without
+// TakeOver the package never links by email.
+//
+// Example:
+//
+//	links.TakeOver(func(ctx context.Context, external auth.External) (string, error) {
+//		if !external.EmailVerified {
+//			return "", nil
+//		}
+//		return claimUnverified(ctx, external.Email)
+//	})
+func (links *Builder) TakeOver(takeOver func(ctx context.Context, external auth.External) (string, error)) *Builder {
+	links.takeOver = takeOver
 
 	return links
 }

@@ -3,6 +3,7 @@ package access
 import (
 	"net/http"
 
+	"arkoren.dev/core/http/request"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
 
@@ -63,7 +64,7 @@ func (iam *Access) LoginHandler() router.Handler {
 func (iam *Access) ChallengeHandler() router.Handler {
 	need(iam.secondFactor, "ChallengeHandler", "Builder.TwoFactor or Builder.SecondFactor")
 
-	return web.JSON(iam.guard.ChallengeHandler())
+	return web.RequireJSON(iam.guard.ChallengeHandler())
 }
 
 // PendingHandler returns the handler of GET /login/pending, which tells a client
@@ -86,7 +87,7 @@ func (iam *Access) PendingHandler() router.Handler {
 //
 //	web.Post("/logout", iam.LogoutHandler())
 func (iam *Access) LogoutHandler() router.Handler {
-	return web.JSON(iam.guard.LogoutHandler())
+	return web.RequireJSON(iam.guard.LogoutHandler())
 }
 
 // ConfirmHandler returns the handler of POST /confirm, which re-proves a
@@ -100,7 +101,7 @@ func (iam *Access) LogoutHandler() router.Handler {
 func (iam *Access) ConfirmHandler() router.Handler {
 	need(iam.stepUp, "ConfirmHandler", "Builder.Password, Builder.TwoFactor or Builder.StepUp")
 
-	return web.JSON(iam.guard.ConfirmHandler())
+	return web.RequireJSON(iam.guard.ConfirmHandler())
 }
 
 // VerifyEmailHandler returns the handler of POST /email/verify; see
@@ -456,15 +457,39 @@ func (iam *Access) DeleteAccountHandler() router.Handler {
 }
 
 // RequireVerified returns middleware that admits only users whose email is
-// verified; see [account.RequireVerified]. It panics without the built-in
-// directory: with [Builder.Users] the application knows its own verification
-// state.
+// verified. An anonymous request returns [auth.ErrUnauthenticated]; an
+// unverified user [account.ErrEmailUnverified] (403). Install it after auth
+// middleware.
+//
+// With the built-in users it is [account.RequireVerified]: it judges by the
+// "email_verified" claim the session recorded at login, so a user who verified
+// since then passes after logging in again. With [Builder.Users] it asks
+// [Users.Verified] for the user's current state on every request, so a user who
+// just verified passes at once, and the answer is as fresh as the application's
+// own lookup; an error of that function passes through. It panics at
+// composition only when there is neither the built-in directory nor
+// [Users.Verified].
 //
 // Example:
 //
 //	posts := web.With(auth.Require(), iam.RequireVerified())
 func (iam *Access) RequireVerified() router.Middleware {
-	need(iam.directory != nil, "RequireVerified", "the built-in users table")
+	need(iam.verified != nil, "RequireVerified", "the built-in users table or Users.Verified")
+	if iam.directory != nil {
+		return account.RequireVerified()
+	}
 
-	return account.RequireVerified()
+	return func(next router.Handler) router.Handler {
+		return func(w http.ResponseWriter, r *http.Request) error {
+			identity, err := request.Identity(r)
+			if err != nil {
+				return err
+			}
+			if err := web.Verified(r.Context(), iam.verified, identity.Subject()); err != nil {
+				return err
+			}
+
+			return next(w, r)
+		}
+	}
 }

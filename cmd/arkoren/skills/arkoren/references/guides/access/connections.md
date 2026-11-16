@@ -58,10 +58,11 @@ connected always logs its user in, and a logged-in user can always connect a
 provider. With registration and sign-up both off, add users yourself; see
 [Adding Users](accounts.md#adding-users).
 
-Accounts are never linked by email. If the email belongs to an existing user, the
-callback answers `409`: that user logs in and connects the provider from their
-settings. Concurrent first logins of one identity create one user when sign-up
-is on.
+Accounts are never linked by email, with one exception for unverified accounts
+described under [Unverified Accounts](#unverified-accounts). If the email belongs
+to an existing, verified user, the callback answers `409`: that user logs in and
+connects the provider from their settings. Concurrent first logins of one
+identity create one user when sign-up is on.
 
 A login with a second factor enrolled is held pending like any other. The callback
 redirects to the OAuth client's challenge URL, where the page posts to
@@ -69,6 +70,37 @@ redirects to the OAuth client's challenge URL, where the page posts to
 two-factor on; without it the callback fails. See
 [Browser Login](../oauth/browser-login.md) for the routes, login state and failures
 on the OAuth side.
+
+## Unverified Accounts
+
+Registering with a password creates an unverified user, so someone can register
+an address that is not theirs. When the real owner later arrives with a provider
+that verified that address, the owner takes the account over instead of being
+turned away. In one transaction the facade:
+
+1. deletes the stored password of the registered user;
+2. deletes what that user attached: connections, authenticator, recovery codes and
+   tokens;
+3. marks the email verified;
+4. rotates the user, which ends every session of the person who registered it;
+5. connects the new identity and logs the owner in.
+
+If any step fails, nothing changes. This is the same removal a
+[password reset](passwords.md#verify-emails) performs when it proves the
+mailbox, plus the password. It needs no sign-up, because no user is created, so
+it also applies when sign-up is off. A disabled user is never taken over: the
+callback answers `401` and nothing changes.
+
+Only a verified email counts. The `EmailVerified` of the provider's identity must
+be true and the existing user must be unverified; an unverified or empty email
+goes through the usual rules and a verified user is never touched. The OAuth
+presets set it from the provider's own evidence: Google's `email_verified`,
+GitHub's primary verified address, Apple's `email_verified` and Microsoft's
+`xms_edov` claim (the email domain is verified by its owner). Microsoft's plain
+`email` claim is mutable and unverified, so the preset withholds the address
+without `xms_edov`: add that optional claim in the app registration, or Microsoft
+logins never carry an email. If you write your own provider, set `EmailVerified`
+only on positive evidence from it, because this rule trusts it with an account.
 
 ## Connecting a Provider
 
@@ -111,7 +143,10 @@ has a password or an authenticator is not made fresh by signing in again through
 provider, so changing a credential still needs `POST /confirm` with one of their
 methods. A user who signs in only through providers has no step-up method and is
 fresh right after logging in. The server's clock stamps the proof at the callback;
-whatever the provider says about when the user authenticated is ignored.
+whatever the provider says about when the user authenticated is ignored. A provider
+that approves silently, because the browser already has a session there, still
+counts as a login now, so ask for `guard.RecentLogin` where a deliberate sign-in
+matters.
 
 Connections publish `federation.LinkCreated` and `federation.LinkDeleted` events.
 

@@ -137,8 +137,11 @@
 //     Verification is configured); with only Reset it dispatches nothing. A failed
 //     dispatch is logged. It runs within the registration throttle.
 //   - Every POST, PUT and PATCH route requires the media type application/json
-//     (415 otherwise), which stops cross-site HTML forms. It is not CSRF
-//     protection: mount core's csrf.Middleware next to [Access.Middleware].
+//     (415 otherwise, even without a body), which stops cross-site HTML forms.
+//     It is core's contenttype middleware, applied inside each handler so it also
+//     holds on custom paths; DELETE routes are not checked. It is
+//     not CSRF protection: mount core's csrf.Middleware next to
+//     [Access.Middleware].
 //   - Forgot-password and resend answer an empty 202 once their work is
 //     dispatched, so neither the answer nor its timing says whether the user
 //     exists. Mail goes to the address stored with the user, never to the text of
@@ -162,11 +165,19 @@
 //     within [apitoken.Builder.GrantTTL] of a change.
 //   - A first login with an unknown provider identity creates no user unless
 //     [federation.Builder.SignUp] is on (403 no-account).
-//   - Federation never links by email. Connecting a provider is a POST that
-//     leaves a ten-minute, single-use intent in the session. A user cannot remove
-//     their last way to log in (409).
+//   - Federation never links by email, with one exception: an identity whose
+//     email the provider verified takes over the user who holds that email and
+//     never verified it, with or without sign-up. In one transaction the
+//     password, connections, authenticator, recovery codes and tokens are
+//     deleted, the email is marked verified, the user is rotated (ending the
+//     registrant's sessions), the identity is linked and the owner is logged in.
+//     A verified or disabled user is never taken over. Connecting a provider is a
+//     POST that leaves a ten-minute, single-use intent in the session. A user
+//     cannot remove their last way to log in (409).
 //   - Email verification never blocks login; protect routes with
-//     [Access.RequireVerified].
+//     [Access.RequireVerified], which also works with [Users.Verified].
+//   - Device tokens unused past their idle limit and expired tokens are deleted
+//     by [Access.Prune], which you schedule (it is func(context.Context) error).
 //   - Events carry subjects only (see each package) on [Builder.Events].
 //
 // # Your own users
@@ -174,8 +185,8 @@
 // [Builder.Users] replaces the built-in users table (identified by email) with
 // the application's: a provider plus Lookup, Create and Rotate functions. No
 // users table is migrated, and the routes and handlers that need the directory
-// (email verification, account deletion, [Access.RequireVerified]) are absent or
-// panic at composition. The other packages work unchanged, because they only
+// (email verification, account deletion) are absent or panic at composition,
+// and [Access.RequireVerified] needs [Users.Verified]. The other packages work unchanged, because they only
 // see subjects. Lookup returns the stored address mail goes to, Create gets
 // whether the provider verified the email and must fail on an existing
 // identifier, and the unverified-account rules above apply only when you give

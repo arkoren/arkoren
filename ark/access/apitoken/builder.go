@@ -203,7 +203,9 @@ func (tokens *Builder) MaxTTL(ttl time.Duration) *Builder {
 // [DefaultDeviceIdleTTL], 90 days; zero selects it, and a negative value turns
 // the limit off. A device token that is only revoked at logout otherwise lives
 // forever on a phone nobody uses. It does not apply to personal tokens, which
-// have [Builder.MaxTTL] and their own expiry.
+// have [Builder.MaxTTL] and their own expiry. A lapsed token is rejected whether
+// or not its row still exists; [Issuer.Prune] deletes the rows, and a negative
+// ttl makes it skip them.
 //
 // Example:
 //
