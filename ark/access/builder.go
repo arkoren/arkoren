@@ -38,7 +38,6 @@ import (
 //		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
 //		iam.Provider(google, github)
-//		iam.Deliver(send)
 //	})
 type Builder struct {
 	instance        string
@@ -56,7 +55,6 @@ type Builder struct {
 	apitoken        []apitoken.BuilderFunc
 	providers       []Provider
 	federation      []federation.BuilderFunc
-	deliver         func(context.Context, Message) error
 	secondFactor    []auth.Credential
 	stepUp          []auth.Credential
 	authenticators  []auth.Authenticator
@@ -121,16 +119,16 @@ func (iam *Builder) Users(users Users) *Builder {
 	return iam
 }
 
-// Directory configures the built-in users table, for example the lifetime of
-// verification links ([account.Builder.VerifyTTL]). The callbacks run after the
-// facade's own settings (the instance, the events, delivery), which they should
-// leave alone. It cannot be combined with [Builder.Users], which replaces the
+// Directory configures the built-in users table: email verification
+// ([account.Builder.Verification]) and the lifetime of its links
+// ([account.Builder.VerifyTTL]). The callbacks run after the facade's own
+// settings (the instance and the events), which they should leave alone. It cannot be combined with [Builder.Users], which replaces the
 // built-in table: [New] then fails with [ErrInvalidConfig].
 //
 // Example:
 //
 //	iam.Directory(func(accounts *account.Builder) {
-//		accounts.VerifyTTL(time.Hour)
+//		accounts.Verification(signer, dispatch, deliver).VerifyTTL(time.Hour)
 //	})
 func (iam *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 	iam.directorySet = true
@@ -139,11 +137,12 @@ func (iam *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 	return iam
 }
 
-// Password enables login, password confirmation, change, forgot and reset,
-// hashing with hasher. Registration is not part of it: enable it with
-// [password.Builder.Registration] in configure, or add users some other way
-// (see [Access.Directory]). configure customizes the password package (the
-// policy, the reset lifetime, registration); the facade has already set the
+// Password enables login, password confirmation and change, hashing with
+// hasher. Registration and forgotten-password recovery are not part of it:
+// enable them with [password.Builder.Registration] and [password.Builder.Reset]
+// in configure (the facade then mounts the forgot and reset routes), or add
+// users some other way (see [Access.Directory]). configure customizes the
+// password package (the policy, the reset lifetime, registration); the facade has already set the
 // instance, the events and the client address. While a user is in a second-factor lockout
 // ([auth.Guard.LockedOut]), a correct password of that user is not refunded by
 // the login throttle, so starting pending logins that cannot finish keeps
@@ -153,7 +152,7 @@ func (iam *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 // Example:
 //
 //	iam.Password(hasher, func(passwords *password.Builder) {
-//		passwords.Registration(true)
+//		passwords.Registration(true).Reset(signer, dispatchReset, deliverReset)
 //	})
 func (iam *Builder) Password(hasher *hash.Hasher, configure ...password.BuilderFunc) *Builder {
 	iam.hasher = hasher
@@ -264,23 +263,6 @@ func (iam *Builder) Provider(providers ...Provider) *Builder {
 //	})
 func (iam *Builder) Federation(configure ...federation.BuilderFunc) *Builder {
 	iam.federation = append(iam.federation, configure...)
-
-	return iam
-}
-
-// Deliver sets the function that sends the verification and reset links.
-// Without it, [Access.Mount] skips the forgot-password, reset and email
-// verification routes, and building their handlers directly
-// ([Access.ForgotPasswordHandler], [Access.VerifyEmailHandler]) panics at
-// composition, because a user who asks for a link must get one.
-//
-// Example:
-//
-//	iam.Deliver(func(ctx context.Context, message access.Message) error {
-//		return mailer.Send(ctx, message.Identifier, message.Link("https://app.example.com/verify"))
-//	})
-func (iam *Builder) Deliver(deliver func(ctx context.Context, message Message) error) *Builder {
-	iam.deliver = deliver
 
 	return iam
 }

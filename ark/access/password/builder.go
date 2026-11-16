@@ -5,8 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"arkoren.dev/ark/access/internal/storage"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/http/link"
+
+	"arkoren.dev/ark/access/internal/storage"
 )
 
 // Builder configures [NewVerifier] before publication. Callbacks run directly
@@ -15,16 +17,20 @@ import (
 // Example:
 //
 //	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, users, func(passwords *password.Builder) {
-//		passwords.Deliver(send).ResetTTL(30 * time.Minute)
+//		passwords.Reset(signer, dispatch, deliver).ResetTTL(30 * time.Minute)
 //	})
 type Builder struct {
 	instance     string
 	events       *event.Bus
 	registration bool
-	deliver      func(context.Context, Message) error
+	resetSet     bool
+	signer       *link.Signer
+	dispatch     func(context.Context, ResetRequest) error
+	deliver      func(context.Context, ResetMessage) error
 	resetTTL     time.Duration
 	policy       func(context.Context, string) error
 	registered   func(context.Context, string, string) error
+	taken        func(context.Context, string) error
 	changed      func(context.Context, string) error
 }
 
@@ -79,21 +85,50 @@ func (passwords *Builder) Registration(enabled bool) *Builder {
 	return passwords
 }
 
-// Deliver sets the function that sends reset links. Without it
-// [Verifier.SendReset] returns [ErrNoDelivery].
+// Reset turns on forgotten-password recovery: [Verifier.ForgotHandler] and
+// [Verifier.ResetHandler] work, and [Verifier.SendReset] exists for the worker.
+// The package keeps no reset table and runs no goroutine; a reset link is a
+// value that signer signs and that stops working by itself:
+//
+//   - It is bound to the user's current stored password hash
+//     ([link.Bind]), so the first successful reset or password change
+//     invalidates every link sent before, and it expires after
+//     [Builder.ResetTTL].
+//   - dispatch runs in the request, once per forgot-password request (and for
+//     the notice to the owner of a taken identifier, with
+//     [ResetRequest.Notice] set, see [Builder.Taken]). It must store the work durably (a queue job, a
+//     workflow run, an outbox row) and return, or return an error, which answers
+//     500 so the client retries. It receives the identifier exactly as typed and
+//     is called whether or not the user exists, so the response and its timing
+//     reveal nothing.
+//   - The stored work later reaches [Verifier.SendReset] in a worker, which
+//     looks the user up, signs the link and calls deliver with the
+//     [ResetMessage] to send. deliver renders and sends the email; its error is
+//     returned by SendReset so the queue retries, which means deliver may run
+//     more than once for one request.
+//
+// signer, dispatch and deliver are all required: [NewVerifier] fails with
+// [ErrInvalidConfig] when any is nil. Use a signer whose key is reserved for
+// links, and share it only with code that signs distinct paths; a reset link is
+// authenticated for its path, so links of other features never work here.
 //
 // Example:
 //
-//	passwords.Deliver(func(ctx context.Context, message password.Message) error {
-//		return mailer.Send(ctx, message.Identifier, message.Link("https://app.example.com/reset"))
+//	passwords.Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
+//		return dispatcher.Dispatch(ctx, resetJob, request)
+//	}, func(ctx context.Context, message password.ResetMessage) error {
+//		return mailer.Send(ctx, resetEmail(message.Address, message.Link("https://app.example.com/reset-password")))
 //	})
-func (passwords *Builder) Deliver(deliver func(ctx context.Context, message Message) error) *Builder {
+func (passwords *Builder) Reset(signer *link.Signer, dispatch func(ctx context.Context, request ResetRequest) error, deliver func(ctx context.Context, message ResetMessage) error) *Builder {
+	passwords.signer = signer
+	passwords.dispatch = dispatch
 	passwords.deliver = deliver
+	passwords.resetSet = true
 
 	return passwords
 }
 
-// ResetTTL sets how long a reset token is valid; zero selects
+// ResetTTL sets how long a reset link is valid; zero selects
 // [DefaultResetTTL].
 //
 // Example:
@@ -132,10 +167,29 @@ func (passwords *Builder) Policy(check func(ctx context.Context, password string
 // Example:
 //
 //	passwords.Registered(func(ctx context.Context, subject, identifier string) error {
-//		return directory.SendVerification(ctx, subject)
+//		return directory.RequestVerification(ctx, subject)
 //	})
 func (passwords *Builder) Registered(hook func(ctx context.Context, subject, identifier string) error) *Builder {
 	passwords.registered = hook
+
+	return passwords
+}
+
+// Taken sets a function that runs when [Verifier.RegisterHandler] meets an
+// identifier that already belongs to a user, with the identifier as typed. It is
+// where the owner is told that someone tried to register: dispatch the same kind
+// of work as [Builder.Registered] does for a new user, so the two paths cost the
+// same and the answer, 202 for both, reveals nothing. [Verifier.RequestReset]
+// with [ResetRequest.Notice] set is the reset notice. An error is logged and
+// does not change the answer.
+//
+// Example:
+//
+//	passwords.Taken(func(ctx context.Context, identifier string) error {
+//		return verifier.RequestReset(ctx, password.ResetRequest{Identifier: identifier, Notice: true})
+//	})
+func (passwords *Builder) Taken(hook func(ctx context.Context, identifier string) error) *Builder {
+	passwords.taken = hook
 
 	return passwords
 }
@@ -161,6 +215,9 @@ func (passwords *Builder) validate() error {
 	}
 	if passwords.resetTTL < 0 {
 		return errors.New("negative reset lifetime")
+	}
+	if passwords.resetSet && (passwords.signer == nil || passwords.dispatch == nil || passwords.deliver == nil) {
+		return errors.New("Reset needs a signer, a dispatch function and a deliver function")
 	}
 
 	return nil

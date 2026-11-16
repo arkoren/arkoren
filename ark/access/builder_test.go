@@ -35,7 +35,7 @@ func ownUsersWithoutCreate(t *testing.T) access.Users {
 func TestRegistrationWithoutCreateIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	_, err := newFacade(t, func(iam *access.Builder) {
+	_, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
 		iam.Users(ownUsersWithoutCreate(t)).Password(hasher(), registration)
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
@@ -48,7 +48,7 @@ func TestRegistrationWithoutCreateIsInvalid(t *testing.T) {
 func TestSignUpWithoutCreateIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	_, err := newFacade(t, func(iam *access.Builder) {
+	_, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
 		iam.Users(ownUsersWithoutCreate(t)).Provider(fakeProvider{name: "fake"}).Federation(signUp)
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
@@ -61,7 +61,7 @@ func TestSignUpWithoutCreateIsInvalid(t *testing.T) {
 func TestSignUpOffNeedsNoCreate(t *testing.T) {
 	t.Parallel()
 
-	if _, err := newFacade(t, func(iam *access.Builder) {
+	if _, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
 		iam.Users(ownUsersWithoutCreate(t)).Provider(fakeProvider{name: "fake"})
 	}); err != nil {
 		t.Fatalf("New: %v", err)
@@ -73,7 +73,7 @@ func TestSignUpOffNeedsNoCreate(t *testing.T) {
 func TestDirectoryWithUsersIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	_, err := newFacade(t, func(iam *access.Builder) {
+	_, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
 		iam.Users(ownUsersWithoutCreate(t)).Directory(func(accounts *account.Builder) { accounts.VerifyTTL(time.Hour) })
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
@@ -86,7 +86,7 @@ func TestDirectoryWithUsersIsInvalid(t *testing.T) {
 func TestTwoFactorWithNilCipherIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	_, err := newFacade(t, func(iam *access.Builder) {
+	_, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
 		iam.TwoFactor(totp.New("Example"), nil)
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
@@ -99,7 +99,7 @@ func TestTwoFactorWithNilCipherIsInvalid(t *testing.T) {
 func TestTokensWithNoKindIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	_, err := newFacade(t, func(iam *access.Builder) {
+	_, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
 		iam.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false).DeviceTokens(false) })
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
@@ -112,7 +112,7 @@ func TestTokensWithNoKindIsInvalid(t *testing.T) {
 func TestTokenCatalogWithoutGrantsIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	_, err := newFacade(t, func(iam *access.Builder) {
+	_, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
 		iam.Tokens(func(tokens *apitoken.Builder) { tokens.Grants(nil, "posts:read") })
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
@@ -134,10 +134,10 @@ func TestDirectoryCallbacksReachTheBuiltInUsers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		if err := sys.iam.Directory().SendVerification(ctx, subject); err != nil {
+		if err := sys.iam.Directory().SendVerification(ctx, account.VerifyRequest{Subject: subject}); err != nil {
 			t.Fatalf("SendVerification: %v", err)
 		}
-		if left := time.Until(sys.box.last(t, access.KindVerify).ExpiresAt); left <= 0 || left > time.Hour {
+		if left := time.Until(sys.box.lastVerify(t).ExpiresAt); left <= 0 || left > time.Hour {
 			t.Fatalf("verification link expires in %v, want at most an hour", left)
 		}
 	})

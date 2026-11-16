@@ -60,9 +60,10 @@ provider's email, which may be empty, and whether the provider verified it. Its
 errors pass through to the client. It must fail on an existing identifier and never
 return the existing user: connecting an identity to someone by email is how accounts
 get taken over. For an identifier in use, return an error wrapping
-`access.ErrIdentifierTaken`: registration then answers `202` like for a new user
-and sends the owner an `access.KindRegistration` message, instead of revealing the
-account. Leave it nil when users are created elsewhere. Then registration
+`access.ErrIdentifierTaken`: registration then answers `202` like for a new user,
+instead of revealing the account. The application proves emails itself with your own
+users, so the facade dispatches no email on registration; add a
+`passwords.Taken` hook to tell the owner. Leave it nil when users are created elsewhere. Then registration
 and creating users from a provider login are unavailable: `Registration(true)` and
 `SignUp(true)` make `New` fail with `access.ErrInvalidConfig`.
 

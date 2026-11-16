@@ -99,13 +99,13 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 // It always answers 202 with no body and never logs the user in, so the answer
 // does not say whether the identifier was free: the user logs in afterwards
 // ([Verifier.LoginHandler]). When [Users.Create] returns [ErrIdentifierTaken] it
-// creates nothing, still hashes the password so the time taken matches, and in
-// the background sends the owner a reset message with [Message.Registration]
-// set, at most as often as the throttle lets registrations through, so the route
-// cannot be used to flood a mailbox. Without [Builder.Deliver] the owner is not
-// told. Any other error of [Users.Create] (an invalid identifier, say) passes
-// through. A failing [Builder.Registered] hook is logged and does not fail the
-// request. A new user is unverified, and with the facade cannot connect a
+// creates nothing, still hashes the password so the time taken matches, and runs
+// the [Builder.Taken] hook, which is where the application tells the owner (the
+// facade dispatches a reset notice or a verification there). The hook runs at
+// most as often as the throttle lets registrations through, so the route cannot
+// be used to flood a mailbox. Any other error of [Users.Create] (an invalid
+// identifier, say) passes through. A failing [Builder.Registered] or
+// [Builder.Taken] hook is logged and does not change the answer. A new user is unverified, and with the facade cannot connect a
 // provider, enroll two-factor or create tokens until the email is verified. It
 // panics at composition unless [Builder.Registration] is enabled (it is off by
 // default, and [NewVerifier] already refuses it without [Users.Create]).
@@ -132,7 +132,7 @@ func (verifier *Verifier) RegisterHandler() router.Handler {
 		}
 		_, err = verifier.register(r.Context(), identifier, body.Password)
 		if errors.Is(err, ErrIdentifierTaken) {
-			verifier.notifyOwner(identifier, body.Password)
+			verifier.notifyOwner(r.Context(), identifier, body.Password)
 		} else if err != nil {
 			return err
 		}
@@ -142,18 +142,16 @@ func (verifier *Verifier) RegisterHandler() router.Handler {
 }
 
 // notifyOwner is the registration of a taken identifier: it spends the hashing
-// time of a real registration, then sends the owner a reset message in the
-// background. A hash that fails is only a timing difference and is ignored.
-func (verifier *Verifier) notifyOwner(identifier, password string) {
+// time of a real registration, then runs the [Builder.Taken] hook. A hash that
+// fails is only a timing difference and is ignored. A failure is logged, never
+// shown, so the answer is the one of a new identifier.
+func (verifier *Verifier) notifyOwner(ctx context.Context, identifier, password string) {
 	_, _ = verifier.hasher.Hash(password)
-	if verifier.deliver == nil {
-		return
-	}
-	verifier.jobs.Go(func(ctx context.Context) {
-		if err := verifier.sendReset(ctx, identifier, true); err != nil {
-			slog.ErrorContext(ctx, "access: registration notice failed", "error", err)
+	if verifier.taken != nil {
+		if err := verifier.taken(ctx, identifier); err != nil {
+			slog.ErrorContext(ctx, "access: registration of a taken identifier hook failed", "error", err)
 		}
-	})
+	}
 }
 
 // ChangeHandler returns the handler of PUT /password. The body is
@@ -166,8 +164,8 @@ func (verifier *Verifier) notifyOwner(identifier, password string) {
 // is 204. It publishes [Changed] and runs [Builder.AfterChange] (the facade
 // revokes the user's device tokens there, because a device keeps no session to
 // end). It does not rotate the user, so tokens the hook leaves, such as
-// personal access tokens, survive a change. It also deletes the user's live
-// reset links. If the hook fails the response is its error (500), but the
+// personal access tokens, survive a change. Reset links sent before are bound to
+// the old hash, so they stop working. If the hook fails the response is its error (500), but the
 // password is already changed and the other logins already ended; the client
 // should repeat the change so the hook runs again.
 //
@@ -228,8 +226,8 @@ func (verifier *Verifier) register(ctx context.Context, identifier, password str
 	return subject, nil
 }
 
-// change checks the policy and the current password, stores the new one and
-// drops the reset links sent before.
+// change checks the policy and the current password and stores the new one.
+// Reset links sent before are bound to the old hash and die with it.
 func (verifier *Verifier) change(ctx context.Context, subject, current, password string) error {
 	if err := verifier.policy(ctx, password); err != nil {
 		return err
@@ -242,8 +240,7 @@ func (verifier *Verifier) change(ctx context.Context, subject, current, password
 	}
 	verifier.emit(ctx, Changed, subject)
 
-	// Reset links sent before the change no longer belong to this password.
-	return verifier.deleteResets(ctx, subject)
+	return nil
 }
 
 // checkCurrent verifies the current password of a user who has one, counting
@@ -283,58 +280,62 @@ func (verifier *Verifier) endOtherLogins(guard *auth.Guard, r *http.Request, sub
 }
 
 // ForgotHandler returns the handler of POST /password/forgot. The body is
-// {"email": "..."} (or "identifier"). It starts a reset ([Verifier.SendReset])
-// and answers 202 whether or not the user exists and whether or not the
-// delivery works.
+// {"email": "..."} (or "identifier"). It counts the request, then calls the
+// dispatch function of [Builder.Reset] with a [ResetRequest] holding the
+// identifier exactly as typed, whether or not the user exists, and answers an
+// empty 202. Nothing is looked up in the request, so the answer and its time
+// say nothing about which identifiers exist; the lookup, the signing and the
+// email happen in the worker that runs [Verifier.SendReset], and the email goes
+// to the address stored with the user, never to the text of the request.
 //
-// The reset runs in the background, after the response, so the time taken says
-// nothing about whether the user exists or how fast the mail server is. A
-// failure is logged (never with the token) and not shown to the client. Wait for
-// the sends with [Verifier.Wait] at shutdown. The email goes to the address
-// stored with the user, never to the text of the request.
-//
-// Requests are counted before the lookup: more than 5 per identifier as typed
-// or 30 per client address in 15 minutes is [ErrThrottled] (429), which holds
-// whatever the identifier is. Without a delivery function the request fails
-// with [ErrNoDelivery] (500).
+// Requests are counted before anything else: more than 5 per identifier as
+// typed or 30 per client address in 15 minutes is [ErrThrottled] (429), which
+// holds whatever the identifier is. A dispatch error is returned (500), because
+// the work was not stored and the client should try again. It panics at
+// composition without [Builder.Reset].
 //
 // Example:
 //
 //	web.Post("/password/forgot", verifier.ForgotHandler())
 func (verifier *Verifier) ForgotHandler() router.Handler {
+	if !verifier.ResetEnabled() {
+		panic("password: ForgotHandler requires Builder.Reset")
+	}
+
 	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err
 		}
-		if verifier.deliver == nil {
-			return ErrNoDelivery
-		}
 		identifier := body.value()
 		if err := verifier.throttleAction(r, "forgot", identifier, maxForgot, maxClientForgot); err != nil {
 			return err
 		}
-		verifier.jobs.Go(func(ctx context.Context) {
-			if err := verifier.SendReset(ctx, identifier); err != nil {
-				slog.ErrorContext(ctx, "access: password reset email failed", "error", err)
-			}
-		})
+		if err := verifier.RequestReset(r.Context(), ResetRequest{Identifier: identifier}); err != nil {
+			return err
+		}
 
 		return response.Status(w, http.StatusAccepted)
 	})
 }
 
 // ResetHandler returns the handler of POST /password/reset. The body is
-// {"token": "...", "password": "..."}. It runs [Verifier.Reset], which rotates
-// the user, then removes the user's login records with
-// [auth.Guard.RevokeAll]. It never logs the user in: after a reset the user logs
-// in again, with their second factor if they have one. Success is 204 and the
-// publisher of [WasReset] has run.
+// {"token": "...", "password": "..."}, where the token is the signed value of
+// [ResetMessage.Signed]. It runs [Verifier.Reset], which rotates the user, then
+// removes the user's login records with [auth.Guard.RevokeAll]. It never logs
+// the user in: after a reset the user logs in again, with their second factor if
+// they have one. Success is 204 and the publisher of [WasReset] has run. An
+// invalid, expired or used link is [ErrInvalidToken] (422). It panics at
+// composition without [Builder.Reset].
 //
 // Example:
 //
 //	web.Post("/password/reset", verifier.ResetHandler(guard))
 func (verifier *Verifier) ResetHandler(guard *auth.Guard) router.Handler {
+	if !verifier.ResetEnabled() {
+		panic("password: ResetHandler requires Builder.Reset")
+	}
+
 	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {

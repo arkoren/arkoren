@@ -1,10 +1,18 @@
 package access_test
 
 import (
+	"context"
+	"errors"
+	"net/http"
 	"testing"
 
+	"arkoren.dev/core/service/database"
+
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/account"
 	"arkoren.dev/ark/access/apitoken"
+	"arkoren.dev/ark/access/internal/apptest"
+	"arkoren.dev/ark/access/password"
 )
 
 // TestHandlersPanicWhenFeatureDisabled verifies each handler of a disabled
@@ -12,7 +20,7 @@ import (
 func TestHandlersPanicWhenFeatureDisabled(t *testing.T) {
 	t.Parallel()
 
-	iam, err := newFacade(t)
+	iam, err := newFacadeWith(t, wire{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -108,23 +116,197 @@ func TestTokenKindHandlersPanicWhenKindDisabled(t *testing.T) {
 	}
 }
 
-// TestDeliverIsRequiredForForgotAndVerify verifies the composition-time panics
-// of the handler methods for a missing delivery function; Mount instead skips
-// those routes (see TestMountNeverPanicsOnAcceptedConfiguration).
-func TestDeliverIsRequiredForForgotAndVerify(t *testing.T) {
+// TestResetAndVerificationAreRequiredForTheirHandlers verifies the
+// composition-time panics of the handler methods for a missing Reset or
+// Verification; Mount instead skips those routes (see
+// TestMountNeverPanicsOnAcceptedConfiguration).
+func TestResetAndVerificationAreRequiredForTheirHandlers(t *testing.T) {
 	t.Parallel()
 
-	iam, err := newFacade(t, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+	iam, err := newFacadeWith(t, wire{}, func(iam *access.Builder) { iam.Password(hasher()) })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	for name, build := range map[string]func(){
 		"ForgotPasswordHandler":     func() { iam.ForgotPasswordHandler() },
+		"ResetPasswordHandler":      func() { iam.ResetPasswordHandler() },
 		"VerifyEmailHandler":        func() { iam.VerifyEmailHandler() },
 		"ResendVerificationHandler": func() { iam.ResendVerificationHandler() },
 	} {
 		if !panics(build) {
-			t.Errorf("%s did not panic without Deliver", name)
+			t.Errorf("%s did not panic without Reset or Verification", name)
 		}
 	}
+}
+
+// registerBoth registers ada@example.com as a new address and then again, typed
+// differently, as a taken one, on separate devices, and returns the two replies.
+func registerBoth(sys *app) (fresh, taken apptest.Reply) {
+	fresh = sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
+	taken = sys.client.NewDevice().Post("/register", `{"email":"Ada@example.com","password":"another horse"}`)
+
+	return fresh, taken
+}
+
+// TestRegisterWithResetAndVerificationDispatchesOnBothPaths verifies a new
+// address dispatches a verification for the new subject and a taken one a reset
+// notice for the identifier as typed, with identical answers.
+func TestRegisterWithResetAndVerificationDispatchesOnBothPaths(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newAppWith(t, db, instance, both, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+		fresh, taken := registerBoth(sys)
+		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
+			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
+		}
+		subject := mustSubject(t, sys)
+		if got := sys.box.dispatchedVerifies; len(got) != 1 || got[0].Subject != subject {
+			t.Fatalf("verifications dispatched = %+v, want one for the new subject", got)
+		}
+		if got := sys.box.dispatchedResets; len(got) != 1 || got[0] != (password.ResetRequest{Identifier: "Ada@example.com", Notice: true}) {
+			t.Fatalf("resets dispatched = %+v, want one notice for the identifier as typed", got)
+		}
+	})
+}
+
+// TestRegisterWithVerificationOnlyAsksTheOwnerToVerify verifies without Reset a
+// taken address dispatches a verification for its owner's subject, as the new
+// address does for the new subject.
+func TestRegisterWithVerificationOnlyAsksTheOwnerToVerify(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newAppWith(t, db, instance, wire{verify: true}, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+		fresh, taken := registerBoth(sys)
+		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
+			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
+		}
+		subject := mustSubject(t, sys)
+		if got := sys.box.dispatchedVerifies; len(got) != 2 || got[0].Subject != subject || got[1].Subject != subject {
+			t.Fatalf("verifications dispatched = %+v, want two for %s", got, subject)
+		}
+		if len(sys.box.dispatchedResets) != 0 {
+			t.Fatalf("resets dispatched = %+v, want none", sys.box.dispatchedResets)
+		}
+	})
+}
+
+// TestRegisterWithResetOnlyDispatchesNothing verifies with Reset and no
+// Verification neither path dispatches anything, so they cost the same.
+func TestRegisterWithResetOnlyDispatchesNothing(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newAppWith(t, db, instance, wire{reset: true}, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+		fresh, taken := registerBoth(sys)
+		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
+			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
+		}
+		if len(sys.box.dispatchedVerifies) != 0 || len(sys.box.dispatchedResets) != 0 {
+			t.Fatalf("dispatched verifications %+v and resets %+v, want none", sys.box.dispatchedVerifies, sys.box.dispatchedResets)
+		}
+	})
+}
+
+// TestRegisterDispatchFailureStaysAccepted verifies a dispatch that fails, on
+// the new path and on the taken one, is logged and the answer is still 202.
+func TestRegisterDispatchFailureStaysAccepted(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newAppWith(t, db, instance, both, func(iam *access.Builder) {
+			iam.Password(hasher(), registration)
+			iam.Directory(func(accounts *account.Builder) {
+				accounts.Verification(newSigner(t, ""), func(context.Context, account.VerifyRequest) error { return errors.New("queue down") }, func(context.Context, account.VerifyMessage) error { return nil })
+			})
+		})
+		fresh, taken := registerBoth(sys)
+		if fresh.Status != http.StatusAccepted || taken.Status != http.StatusAccepted {
+			t.Fatalf("new = %d %s, taken = %d %s, want 202 for both", fresh.Status, fresh.Body, taken.Status, taken.Body)
+		}
+	})
+}
+
+// TestResendDispatchesAndTheWorkerSkipsAVerifiedUser verifies the resend route
+// dispatches for the logged-in subject whatever their state, and the worker
+// sends only while the email is unverified.
+func TestResendDispatchesAndTheWorkerSkipsAVerifiedUser(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+		register(t, sys.client, "ada@example.com")
+		if reply := sys.client.Post("/email/verify/resend", ""); reply.Status != http.StatusAccepted {
+			t.Fatalf("resend = %d %s", reply.Status, reply.Body)
+		}
+		if _, verifications := sys.box.counts(); verifications != 2 {
+			t.Fatalf("verification emails after a resend = %d, want 2", verifications)
+		}
+		if reply := sys.client.Post("/email/verify", `{"token":"`+sys.box.lastVerify(t).Signed+`"}`); reply.Status != http.StatusNoContent {
+			t.Fatalf("verify = %d %s", reply.Status, reply.Body)
+		}
+		if reply := sys.client.Post("/email/verify/resend", ""); reply.Status != http.StatusAccepted {
+			t.Fatalf("resend after verifying = %d %s", reply.Status, reply.Body)
+		}
+		if got := len(sys.box.dispatchedVerifies); got != 3 {
+			t.Fatalf("dispatched %d verifications, want 3: the route dispatches for a verified user too", got)
+		}
+		if _, verifications := sys.box.counts(); verifications != 2 {
+			t.Fatalf("verification emails = %d, want 2: a verified user is sent nothing", verifications)
+		}
+	})
+}
+
+// TestVerifyLinkSecondClickIsInvalid verifies the second click on a link is the
+// invalid-link problem, not a second success.
+func TestVerifyLinkSecondClickIsInvalid(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+		register(t, sys.client, "ada@example.com")
+		body := `{"token":"` + sys.box.lastVerify(t).Signed + `"}`
+		if reply := sys.client.Post("/email/verify", body); reply.Status != http.StatusNoContent {
+			t.Fatalf("first click = %d %s", reply.Status, reply.Body)
+		}
+		if reply := sys.client.Post("/email/verify", body); reply.Status != http.StatusUnprocessableEntity {
+			t.Fatalf("second click = %d %s, want 422", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestSendWorkersForwardToThePackages verifies the facade's worker methods send
+// for a known user, send nothing and return nil for an unknown one, and report a
+// missing feature as a configuration error.
+func TestSendWorkersForwardToThePackages(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+		register(t, sys.client, "ada@example.com")
+		if err := sys.iam.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
+			t.Fatalf("SendReset: %v", err)
+		}
+		if err := sys.iam.SendReset(ctx, password.ResetRequest{Identifier: "nobody@example.com"}); err != nil {
+			t.Fatalf("SendReset for an unknown user = %v, want nil", err)
+		}
+		if resets, _ := sys.box.counts(); resets != 1 {
+			t.Fatalf("reset emails = %d, want 1", resets)
+		}
+		if err := sys.iam.SendVerification(ctx, account.VerifyRequest{Subject: "missing"}); err != nil {
+			t.Fatalf("SendVerification for an unknown subject = %v, want nil", err)
+		}
+		bare, err := newFacadeWith(t, wire{})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := bare.SendReset(ctx, password.ResetRequest{}); !errors.Is(err, access.ErrInvalidConfig) {
+			t.Fatalf("SendReset without Password = %v, want ErrInvalidConfig", err)
+		}
+		if err := bare.SendVerification(ctx, account.VerifyRequest{}); !errors.Is(err, account.ErrInvalidConfig) {
+			t.Fatalf("SendVerification without Verification = %v, want account.ErrInvalidConfig", err)
+		}
+	})
 }

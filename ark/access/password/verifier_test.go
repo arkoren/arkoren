@@ -8,7 +8,6 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/database"
-	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/access/password"
 )
@@ -92,8 +91,7 @@ func TestConfirmWithPasswordCredential(t *testing.T) {
 	})
 }
 
-// TestForgetHookDeletesRows verifies forgetting a user removes the hash and the
-// pending reset.
+// TestForgetHookDeletesRows verifies forgetting a user removes the hash.
 func TestForgetHookDeletesRows(t *testing.T) {
 	t.Parallel()
 
@@ -101,18 +99,11 @@ func TestForgetHookDeletesRows(t *testing.T) {
 		ctx := testContext(t)
 		sys := newSystem(t, db, instance)
 		sys.registerAda(t, sys.client)
-		_ = sys.verifier.SendReset(ctx, "ada@example.com")
 		if err := sys.provider.Forget(ctx, "1"); err != nil {
 			t.Fatalf("Forget: %v", err)
 		}
 		if has, err := sys.verifier.Has(ctx, "1"); err != nil || has {
 			t.Fatalf("Has after forget = %v, %v", has, err)
-		}
-		rows, err := db.Select[int](ctx, query.Table(instance+"_password_resets", func(statement *query.Builder) {
-			statement.SelectRaw("COUNT(*)")
-		}))
-		if err != nil || rows[0] != 0 {
-			t.Fatalf("resets left = %v, %v", rows, err)
 		}
 	})
 }

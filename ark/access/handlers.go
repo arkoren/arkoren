@@ -20,9 +20,13 @@ func need(enabled bool, handler, requirement string) {
 
 // RegisterHandler returns the handler of POST /register; see
 // [password.Verifier.RegisterHandler]. It always answers 202 and does not log
-// the user in; for a taken address it creates nothing and sends the owner a
-// [KindRegistration] message with a reset link. With the built-in directory a new
-// user gets a verification email when [Builder.Deliver] is set. It panics unless
+// the user in. With the built-in users and [account.Builder.Verification] it
+// dispatches a verification email for a new user; for a taken address it creates
+// nothing and dispatches, in the same way, a reset notice to the owner
+// ([password.Builder.Reset]) or, without Reset, a verification email for the
+// owner. Without Verification nothing is dispatched on either path. The work is
+// the same on both paths, so the answer and its time do not tell them apart; a
+// failing dispatch is logged and the answer stays 202. It panics unless
 // [Builder.Password] is enabled with [password.Builder.Registration].
 //
 // Example:
@@ -103,56 +107,69 @@ func (iam *Access) ConfirmHandler() router.Handler {
 // [account.Directory.VerifyHandler]. It needs a browser session of the account
 // the link belongs to (the user opens the link while logged in), so someone
 // else's click cannot verify an account they do not hold. It panics without the
-// built-in directory or without [Builder.Deliver].
+// built-in directory or without [account.Builder.Verification].
 //
 // Example:
 //
 //	web.Post("/email/verify", iam.VerifyEmailHandler())
 func (iam *Access) VerifyEmailHandler() router.Handler {
-	need(iam.directory != nil && iam.deliver != nil, "VerifyEmailHandler", "the built-in users table and Builder.Deliver")
+	need(iam.verification(), "VerifyEmailHandler", "the built-in users table and account.Builder.Verification")
 
 	return iam.directory.VerifyHandler()
 }
 
 // ResendVerificationHandler returns the handler of POST /email/verify/resend;
 // see [account.Directory.ResendHandler]. It panics without the built-in
-// directory or without [Builder.Deliver]. It is throttled per user and per
-// client address and sends in the background ([Access.Wait]).
+// directory or without [account.Builder.Verification]. It is throttled per user
+// and per client address and dispatches the work for the worker that runs
+// [Access.SendVerification].
 //
 // Example:
 //
 //	web.Post("/email/verify/resend", iam.ResendVerificationHandler())
 func (iam *Access) ResendVerificationHandler() router.Handler {
-	need(iam.directory != nil && iam.deliver != nil, "ResendVerificationHandler", "the built-in users table and Builder.Deliver")
+	need(iam.verification(), "ResendVerificationHandler", "the built-in users table and account.Builder.Verification")
 
 	return iam.directory.ResendHandler()
 }
 
 // ForgotPasswordHandler returns the handler of POST /password/forgot; see
-// [password.Verifier.ForgotHandler]. It panics unless [Builder.Password] and
-// [Builder.Deliver] are set. The email is sent in the background ([Access.Wait])
-// and the answer is an empty 202 whatever happens.
+// [password.Verifier.ForgotHandler]. It panics unless [Builder.Password] is
+// enabled with [password.Builder.Reset]. The work is dispatched for the worker
+// that runs [Access.SendReset], and the answer is an empty 202 whether or not
+// the user exists.
 //
 // Example:
 //
 //	web.Post("/password/forgot", iam.ForgotPasswordHandler())
 func (iam *Access) ForgotPasswordHandler() router.Handler {
-	need(iam.verifier != nil && iam.deliver != nil, "ForgotPasswordHandler", "Builder.Password and Builder.Deliver")
+	need(iam.reset(), "ForgotPasswordHandler", "Builder.Password and password.Builder.Reset")
 
 	return iam.verifier.ForgotHandler()
 }
 
 // ResetPasswordHandler returns the handler of POST /password/reset; see
 // [password.Verifier.ResetHandler]. It panics unless [Builder.Password] is
-// enabled.
+// enabled with [password.Builder.Reset].
 //
 // Example:
 //
 //	web.Post("/password/reset", iam.ResetPasswordHandler())
 func (iam *Access) ResetPasswordHandler() router.Handler {
-	need(iam.verifier != nil, "ResetPasswordHandler", "Builder.Password")
+	need(iam.reset(), "ResetPasswordHandler", "Builder.Password and password.Builder.Reset")
 
 	return iam.verifier.ResetHandler(iam.guard)
+}
+
+// reset reports whether password reset is configured.
+func (iam *Access) reset() bool {
+	return iam.verifier != nil && iam.verifier.ResetEnabled()
+}
+
+// verification reports whether email verification is configured: the built-in
+// users with [account.Builder.Verification].
+func (iam *Access) verification() bool {
+	return iam.directory != nil && iam.directory.VerificationEnabled()
 }
 
 // ChangePasswordHandler returns the handler of PUT /password; see

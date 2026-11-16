@@ -26,13 +26,14 @@ import (
 //
 // The password routes need [Builder.Password]; of them, /register also needs
 // [password.Builder.Registration] (off by default; New refuses it without users
-// that can be created), and /password/forgot and /password/reset need [Builder.Deliver],
-// because without it no user could receive a reset link. Mount skips a route
+// that can be created), and /password/forgot and /password/reset need
+// [password.Builder.Reset], because without it no user could receive a reset
+// link. Mount skips a route
 // whose requirement is missing instead of panicking, so it never panics for a
 // configuration [New] accepted; the matching XHandler method still panics when
 // asked for directly. The challenge and pending routes need a registered second factor,
 // /confirm a registered step-up method, and the email routes the built-in users
-// and [Builder.Deliver]. The token routes need [Builder.Tokens]: listing and
+// and [account.Builder.Verification]. The token routes need [Builder.Tokens]: listing and
 // revoking serve both kinds, POST /tokens needs [apitoken.Builder.PersonalTokens]
 // and the two device routes [apitoken.Builder.DeviceTokens] (both default to
 // on). /logout and the session routes are always mounted.
@@ -70,7 +71,7 @@ func (iam *Access) Mount(r *router.Router) {
 
 // mountPassword registers the password routes when [Builder.Password] is set:
 // login and change always, registration when users can be created, and the
-// forgot and reset routes when [Builder.Deliver] is set.
+// forgot and reset routes when [password.Builder.Reset] is set.
 func (iam *Access) mountPassword(r *router.Router) {
 	if iam.verifier == nil {
 		return
@@ -80,7 +81,7 @@ func (iam *Access) mountPassword(r *router.Router) {
 	if iam.verifier.Registration() {
 		r.Post("/register", iam.RegisterHandler())
 	}
-	if iam.deliver != nil {
+	if iam.reset() {
 		r.Post("/password/reset", iam.ResetPasswordHandler())
 		r.Post("/password/forgot", iam.ForgotPasswordHandler())
 	}
@@ -100,9 +101,9 @@ func (iam *Access) mountLogin(r *router.Router) {
 }
 
 // mountEmail registers the email verification routes with the built-in users
-// and [Builder.Deliver].
+// and [account.Builder.Verification].
 func (iam *Access) mountEmail(r *router.Router) {
-	if iam.directory == nil || iam.deliver == nil {
+	if !iam.verification() {
 		return
 	}
 	r.Post("/email/verify", iam.VerifyEmailHandler())

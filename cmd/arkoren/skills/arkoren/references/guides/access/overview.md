@@ -6,7 +6,7 @@ order: 10
 summary:
   - Decide when the access facade fits better than the hand-built login of core authentication.
   - Install the module, enable the features you need and install its middleware and routes.
-  - Run its migrations, check readiness, send reset and verification links and listen to its events.
+  - Run its migrations, check readiness, send signed reset and verification links through your own queue or workflow and listen to its events.
 ---
 
 # Access Overview
@@ -49,7 +49,10 @@ clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
 scheme := totp.New("Acme") // the name authenticator apps show for this account
 iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	iam.Password(hasher, func(passwords *password.Builder) {
-		passwords.Registration(true)
+		passwords.Registration(true).Reset(signer, dispatchReset, deliverReset)
+	})
+	iam.Directory(func(accounts *account.Builder) {
+		accounts.Verification(signer, dispatchVerification, deliverVerification)
 	})
 	iam.TwoFactor(scheme, cipher)
 	iam.Tokens()
@@ -57,12 +60,16 @@ iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	iam.Federation(func(links *federation.Builder) {
 		links.SignUp(true)
 	})
-	iam.Deliver(send)
 })
 if err != nil {
 	return err
 }
 ```
+
+`signer`, `dispatchReset`, `deliverReset`, `dispatchVerification` and
+`deliverVerification` come from [Sending Email Links](#sending-email-links). The
+module never sends mail itself: password reset and email verification stay off
+until you give them those functions.
 
 Registration and provider sign-up are the two ways a user can appear without
 your code creating them, and both are off until you enable them as above. With
@@ -73,18 +80,21 @@ both off, you add users yourself through `iam.Directory()` or your own users; se
 dependency is missing (the database, the cache or the client address function), a
 provider name is used twice or contains anything but letters, digits, hyphens and underscores, or a package
 rejects its settings, such as an invalid TOTP scheme, a nil cipher for
-two-factor, registration or sign-up over users that cannot be created, a scope
-catalog without a grant function, or tokens with neither kind enabled. `New` never guesses the
+two-factor, registration or sign-up over users that cannot be created, registration with the
+built-in users when neither reset nor verification is configured (a new user could
+never prove their email), a scope catalog without a grant function, or tokens with
+neither kind enabled. `New` never guesses the
 client address, because the right source depends on the deployment (see
 [Shared Settings](#shared-settings)).
 
 | Feature | Builder method | Guide |
 | --- | --- | --- |
-| Login, reset, and registration when enabled | `iam.Password(hasher)` | [Passwords](passwords.md) |
+| Login, change, and registration when enabled | `iam.Password(hasher)` | [Passwords](passwords.md) |
+| Forgotten-password reset | `passwords.Reset(signer, dispatch, deliver)` | [Sending Email Links](#sending-email-links) |
+| Email verification | `accounts.Verification(signer, dispatch, deliver)` | [Sending Email Links](#sending-email-links) |
 | Authenticator app and recovery codes | `iam.TwoFactor(scheme, cipher)` | [Two-Factor](two-factor.md) |
 | Personal and device tokens | `iam.Tokens()` | [API Tokens](tokens.md) |
 | Sign-in with external providers, and sign-up when enabled | `iam.Provider(clients...)` | [Connections](connections.md) |
-| Reset and verification links | `iam.Deliver(send)` | [Delivering Messages](#delivering-messages) |
 
 The facade also owns the built-in `users` table, which identifies users by
 email; `iam.Directory(...)` configures it and `iam.Directory()` on the built
@@ -142,35 +152,157 @@ if err := migrator.Add(iam.Migrations()...); err != nil {
 missing it returns an error wrapping `access.ErrNotMigrated` that names the
 table, so it works as a readiness check.
 
-## Delivering Messages
+## Sending Email Links
 
-A user who asks for a password reset or an email verification must receive a
-secret link, and sending mail is your application's job. `iam.Deliver` takes the
-function the facade calls with the kind of message, who to write to, the token
-and its expiry:
+A user who asks for a password reset or an email verification must receive a link
+that proves they control the mailbox. The facade never sends mail and starts no
+goroutines for it. You give each feature two functions:
+
+- `dispatch` runs inside the request. It stores the work durably, for example as
+  a queue job, a workflow run or an outbox row, and returns, or returns an error.
+- `deliver` runs later, in your worker. It receives the address and the signed
+  link, renders the email and sends it.
+
+The link is a signed value, so the module keeps no token tables. It is bound to the
+state the action changes, which makes it single use without storing anything: a
+reset link is bound to the user's current password hash, so it stops working as
+soon as the password changes, and a verification link is bound to the user's email
+and whether it is verified. Both also expire, after an hour for a reset
+(`passwords.ResetTTL`) and 24 hours for a verification (`accounts.VerifyTTL`).
+
+### Build the Signer
+
+Reset and verification links share one signer, built from a random 32-byte key
+that you reserve for links; see [Signed Links](../http-capabilities/secure-links.md)
+for provisioning it. Give it your public origin so the signed value is an absolute
+URL:
 
 ```go
-iam.Deliver(func(ctx context.Context, message access.Message) error {
-	base := "https://app.example.com/verify-email"
-	if message.Kind == access.KindReset || message.Kind == access.KindRegistration {
-		base = "https://app.example.com/reset-password"
-	}
-
-	return mailer.Send(ctx, message.Identifier, message.Link(base))
+secret, err := key.LoadShared("link-key.key")
+if err != nil {
+	return err
+}
+signer, err := link.New(secret, func(links *link.Builder) {
+	links.Origin("https://app.example.com")
 })
 ```
 
-`KindRegistration` is sent to the owner of an address when someone tries to
-register with it. Its token is a reset token, so link it to the same page and
-word the email as "someone tried to register with this address; if it was not
-you, set a new password". `message.Link(base)` puts the token in the URL fragment, as
-`https://app.example.com/reset-password#token=...`. A browser never sends the
-fragment to a server, so the token stays out of access logs, proxies and the
-`Referer` header of the page the link opens. Your page reads it from
-`location.hash`, removes it from the address bar and posts it:
+Without an origin the signed value is a relative path and query. Both forms verify,
+as long as the same signer verifies what it signed. Each link is signed for its own
+path, so a verification link never works as a reset link.
+
+### Dispatch with a Queue
+
+`dispatch` receives a plain request value with JSON tags, so it is the payload of a
+[queue job](../queues/overview.md):
+
+```go
+resetJob := queue.NewJob[password.ResetRequest]("send-reset")
+verifyJob := queue.NewJob[account.VerifyRequest]("send-verification")
+
+dispatchReset := func(ctx context.Context, request password.ResetRequest) error {
+	return dispatcher.Dispatch(ctx, resetJob, request)
+}
+dispatchVerification := func(ctx context.Context, request account.VerifyRequest) error {
+	return dispatcher.Dispatch(ctx, verifyJob, request)
+}
+```
+
+`password.ResetRequest` carries the identifier exactly as the user typed it,
+because the forgot-password route never looks the user up: whether the user exists
+must not change the response or its timing. `account.VerifyRequest` carries the
+subject. Request values only ever gain fields, so jobs stored before an upgrade
+still decode.
+
+The worker passes each stored request to the facade, which does the lookup, signs
+the link and calls your `deliver`. `iam.SendReset` and `iam.SendVerification` have
+the shape of a job handler:
+
+```go
+if err := consumer.Handle(resetJob, iam.SendReset); err != nil {
+	return err
+}
+if err := consumer.Handle(verifyJob, iam.SendVerification); err != nil {
+	return err
+}
+```
+
+An unknown identifier, a deleted user or a user whose email is already verified is
+not an error: nothing is sent and the call returns nil, so the queue does not
+retry it. If `deliver` fails, its error is returned and the queue retries, so
+`deliver` can run more than once for one request. Each attempt signs a new link and
+all of them work until the state they are bound to changes or they expire, so a
+repeated email is harmless.
+
+### Dispatch with a Workflow
+
+A [workflow](../workflows/overview.md) fits when you want retries and history
+under its control. Wrap the facade's function in a step and start a run from
+`dispatch`. `dispatch` runs while the facade is being built and the step needs the
+facade, so declare the workflow variable first and assign it after `access.New`:
+
+```go
+var resetEmail *workflow.Workflow[password.ResetRequest, struct{}]
+
+dispatchReset := func(ctx context.Context, request password.ResetRequest) error {
+	_, err := client.Start(ctx, resetEmail, rand.Text(), request)
+
+	return err
+}
+```
+
+Once `iam` exists, define the step and the workflow, and register both on the
+worker with `workflow.Handlers(resetEmail, sendReset)`:
+
+```go
+sendReset := workflow.NewStep("send-reset", func(ctx context.Context, request password.ResetRequest) (struct{}, error) {
+	return struct{}{}, iam.SendReset(ctx, request)
+})
+resetEmail = workflow.New("reset-email", func(c *workflow.Context, request password.ResetRequest) (struct{}, error) {
+	return c.Step(sendReset, request)
+}, func(definition *workflow.Builder) {
+	definition.MaxDuration(time.Hour)
+})
+```
+
+Verification is the same with a second step around `iam.SendVerification`.
+
+### Deliver with Mail
+
+`deliver` receives the recipient, the signed value and when it expires. The address
+is the one stored with the user, never the text of a request, so a request cannot
+send someone else's link elsewhere. `message.Link(base)` returns the signed value
+in the URL fragment, as `https://app.example.com/reset-password#<escaped value>`:
+
+```go
+deliverReset := func(ctx context.Context, message password.ResetMessage) error {
+	text := "Set a new password: " + message.Link("https://app.example.com/reset-password")
+	if message.Notice {
+		text = "Someone tried to register with this address. If it was not you, set a new password: " +
+			message.Link("https://app.example.com/reset-password")
+	}
+	email := mail.NewMessage(mail.Recipients{To: []mail.Address{{Email: message.Address}}}, mail.Body{Text: text}, func(letter *mail.MessageBuilder) {
+		letter.Subject("Reset your password")
+	})
+	_, err := mailer.Send(ctx, email)
+
+	return err
+}
+```
+
+`message.Notice` is true for the notice that goes to the owner of an address when
+someone tries to register with it. Verification is the same with an
+`account.VerifyMessage`, which has no `Notice`. The signed value is a credential
+until it is used or expires, so never log it.
+
+### Read the Link in the Page
+
+A browser never sends the fragment to a server, so the link stays out of access
+logs, proxies and the `Referer` header of the page it opens. Your page reads it
+from `location.hash`, removes it from the address bar and posts it as the `token`:
 
 ```js
-const token = new URLSearchParams(location.hash.slice(1)).get("token");
+const token = decodeURIComponent(location.hash.slice(1));
 history.replaceState(null, "", location.pathname + location.search);
 await fetch("/password/reset", {
   method: "POST",
@@ -179,21 +311,21 @@ await fetch("/password/reset", {
 });
 ```
 
-If a server renders the page and so needs the token in the request, use
-`message.QueryLink(base)` instead, which adds it as the `token` query parameter.
-The token then reaches your server, its logs and every proxy in front of it, so
-set `Referrer-Policy: no-referrer` on that page. The token is a credential until it is used or expires, so never log it. `Identifier` is the
-address stored with the user, never the text of a request.
+The verification page posts the same `token` to `/email/verify`. A reset answers
+`422` with the invalid-token problem for a link that is malformed, forged, expired
+or already used, and the same for a verification link, so a client learns nothing
+about which.
 
-Forgot-password and resend requests answer before they send. The facade delivers
-in the background, so call `iam.Wait(ctx)` during shutdown, after the server stops
-accepting requests, to let queued messages finish. Tests call it before asserting
-on what was delivered.
+### What Mount Does Without Them
 
-Without `iam.Deliver`, `Mount` skips the routes that need to send a link:
-`POST /password/forgot`, `POST /password/reset` and the email verification
-routes. The matching handler methods, such as `iam.ForgotPasswordHandler()`,
-panic at composition instead of returning a handler that cannot work.
+Without `passwords.Reset`, `Mount` skips `POST /password/forgot` and
+`POST /password/reset`. Without `accounts.Verification`, or with your own users,
+it skips the email verification routes. The matching handler methods, such as
+`iam.ForgotPasswordHandler()`, panic at composition instead of returning a handler
+that cannot work.
+
+In tests, make `dispatch` call `iam.SendReset` or `iam.SendVerification` directly,
+so the email is delivered before the request returns and no queue is needed.
 
 ## Events
 

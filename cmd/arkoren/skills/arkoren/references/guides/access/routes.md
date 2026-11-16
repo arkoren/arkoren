@@ -24,8 +24,8 @@ Only the routes of enabled features are mounted. `r` must already run
 | Login | `POST /login/challenge`, `GET /login/pending` | A second factor |
 | Login | `POST /logout` | Always |
 | Step-up | `POST /confirm` | A step-up method |
-| Email | `POST /email/verify`, `POST /email/verify/resend` | Built-in users and `iam.Deliver` |
-| Password | `POST /password/forgot`, `POST /password/reset` | Passwords and `iam.Deliver` |
+| Email | `POST /email/verify`, `POST /email/verify/resend` | Built-in users with `accounts.Verification` |
+| Password | `POST /password/forgot`, `POST /password/reset` | Passwords with `passwords.Reset` |
 | Password | `PUT /password` | Passwords |
 | Two-factor | `POST /two-factor/setup`, `POST /two-factor`, `DELETE /two-factor`, `POST /two-factor/recovery-codes` | Two-factor |
 | Tokens | `GET /tokens`, `DELETE /tokens/{id}` | Tokens |
@@ -35,10 +35,10 @@ Only the routes of enabled features are mounted. `r` must already run
 | Providers | `GET /auth/{name}`, `GET` or `POST /auth/{name}/callback` | A provider |
 | Providers | `GET /auth/{name}/nonce`, `POST /auth/{name}/native` | A provider with native login |
 | Connections | `GET /connections`, `POST /connections/{provider}`, `DELETE /connections/{id}` | A provider |
+| Account | `DELETE /account` | Built-in users |
 
 Providers mount their routes whether or not sign-up with providers is on; sign-up
 only decides whether an unknown identity creates a user (`403` otherwise).
-| Account | `DELETE /account` | Built-in users |
 
 A step-up method exists when passwords or two-factor are enabled, or when you add
 one with `iam.StepUp`. A second factor exists when two-factor is enabled or you
@@ -144,8 +144,9 @@ web.Post("/connections/{provider}", iam.Links().ConnectHandler(iam.Guard(), map[
 ```
 
 `Mount` skips a route whose requirement is missing instead of panicking: no
-forgot or reset routes without `iam.Deliver`, because no user could receive a
-link, and no `POST /register` unless registration is enabled. It never
+forgot or reset routes without `passwords.Reset` and no email verification routes
+without `accounts.Verification`, because no user could receive a link, and no
+`POST /register` unless registration is enabled. It never
 panics for a configuration `New` accepted, except for one mistake: mounting
 twice, or on a router that already has one of these patterns, panics like any
 duplicate route.

@@ -1,7 +1,6 @@
 package account
 
 import (
-	"errors"
 	"net/http"
 
 	"arkoren.dev/foundation/problem"
@@ -41,13 +40,14 @@ var ErrInvalidEmail = problem.New(func(details *problem.Builder) {
 	details.Status(http.StatusUnprocessableEntity)
 })
 
-// ErrInvalidToken is returned for a verification token that is unknown,
-// expired, already used or replaced by a newer one. One response covers all of
-// them. It is a problem with status 422.
+// ErrInvalidToken is returned for a verification link that is malformed,
+// forged, expired or no longer matches the user: the email was verified or
+// changed since it was sent, which includes a second click on the same link. One
+// response covers all of them. It is a problem with status 422.
 //
 // Example:
 //
-//	_, err := directory.Verify(ctx, token)
+//	_, err := directory.Verify(ctx, signed)
 //	if errors.Is(err, account.ErrInvalidToken) {
 //		// ask the user to request a new link
 //	}
@@ -69,8 +69,8 @@ var ErrInvalidToken = problem.New(func(details *problem.Builder) {
 var ErrEmailUnverified = web.ErrEmailUnverified
 
 // ErrWrongAccount is returned by [Directory.VerifyFor] and the verify handler
-// when the verification token belongs to another account than the logged-in
-// one. The token is not consumed. It is a problem with status 403.
+// when the verification link belongs to another account than the logged-in
+// one. Nothing changes. It is a problem with status 403.
 //
 // Example:
 //
@@ -100,14 +100,3 @@ var ErrThrottled = problem.New(func(details *problem.Builder) {
 	details.Detail("Too many verification emails were requested. Try again later.")
 	details.Status(http.StatusTooManyRequests)
 })
-
-// ErrNoDelivery is returned by [Directory.SendVerification] when no
-// [Builder.Deliver] function is configured. It is a configuration error, not a
-// problem, so a request that hits it answers 500.
-//
-// Example:
-//
-//	if errors.Is(err, account.ErrNoDelivery) {
-//		// configure Builder.Deliver
-//	}
-var ErrNoDelivery = errors.New("account: no delivery function configured")

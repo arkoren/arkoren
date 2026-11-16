@@ -143,25 +143,68 @@ func TestRegisterAnswersTheSameForNewAndTaken(t *testing.T) {
 }
 
 // TestRegisterTakenNotifiesTheOwner verifies the owner of a taken identifier
-// gets one reset message marked as a registration attempt, and a new identifier
-// gets none.
+// gets one reset message marked as a registration notice, and a new identifier
+// dispatches nothing.
 func TestRegisterTakenNotifiesTheOwner(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newSystem(t, db, instance)
 		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
-		sys.settle(t)
-		if len(*sys.sent) != 0 {
-			t.Fatalf("a new registration sent %d messages, want none", len(*sys.sent))
+		if len(*sys.dispatched) != 0 || len(*sys.sent) != 0 {
+			t.Fatalf("a new registration dispatched %d and sent %d, want none", len(*sys.dispatched), len(*sys.sent))
 		}
 		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
-		sys.settle(t)
+		if len(*sys.dispatched) != 1 || (*sys.dispatched)[0] != (password.ResetRequest{Identifier: "ada@example.com", Notice: true}) {
+			t.Fatalf("dispatched = %+v, want one notice for ada", *sys.dispatched)
+		}
 		if len(*sys.sent) != 1 {
 			t.Fatalf("messages after the taken registration = %d, want 1", len(*sys.sent))
 		}
-		if message := (*sys.sent)[0]; !message.Registration || message.Identifier != "ada@example.com" || message.Token == "" {
-			t.Fatalf("message = %+v, want a registration reset for ada", message)
+		if message := (*sys.sent)[0]; !message.Notice || message.Address != "ada@example.com" || message.Signed == "" {
+			t.Fatalf("message = %+v, want a registration notice for ada", message)
+		}
+	})
+}
+
+// TestRegisterTakenDispatchFailureStaysAccepted verifies a failing dispatch on
+// the taken path is logged and the answer is still the 202 of a new identifier.
+func TestRegisterTakenDispatchFailureStaysAccepted(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
+			passwords.Reset(newSigner(t, ""), func(context.Context, password.ResetRequest) error { return errors.New("queue down") }, func(context.Context, password.ResetMessage) error { return nil })
+		})
+		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
+		reply := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
+		if reply.Status != http.StatusAccepted {
+			t.Fatalf("taken registration with a failing dispatch = %d %s, want 202", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestRegisterTakenRunsTheTakenHook verifies the Taken hook runs for a taken
+// identifier only.
+func TestRegisterTakenRunsTheTakenHook(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		var taken []string
+		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
+			passwords.Taken(func(_ context.Context, identifier string) error {
+				taken = append(taken, identifier)
+
+				return nil
+			})
+		})
+		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
+		if len(taken) != 0 {
+			t.Fatalf("Taken ran for a new identifier: %v", taken)
+		}
+		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
+		if len(taken) != 1 || taken[0] != "ada@example.com" {
+			t.Fatalf("taken = %v, want [ada@example.com]", taken)
 		}
 	})
 }
@@ -185,9 +228,6 @@ func TestRegisterNoticesAreThrottled(t *testing.T) {
 			if reply.Status != want {
 				t.Fatalf("registration #%d = %d %s, want %d", i+1, reply.Status, reply.Body, want)
 			}
-			// One send at a time: concurrent resets of one user may deadlock on
-			// MySQL, which is not what this test is about.
-			sys.settle(t)
 		}
 		if got := len(*sys.sent) - before; got != 4 {
 			t.Fatalf("notices = %d, want 4: registerAda used one of the five registrations", got)
@@ -304,11 +344,10 @@ func TestResetFlowEndsEveryLogin(t *testing.T) {
 		if reply := sys.client.Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusAccepted {
 			t.Fatalf("forgot = %d", reply.Status)
 		}
-		sys.settle(t)
 		if len(*sys.sent) != 1 {
 			t.Fatalf("sent %d messages, want 1", len(*sys.sent))
 		}
-		token := (*sys.sent)[0].Token
+		token := (*sys.sent)[0].Signed
 		if reply := sys.client.Post("/password/reset", `{"token":"`+token+`","password":"short"}`); reply.Status != http.StatusUnprocessableEntity {
 			t.Fatalf("weak reset = %d", reply.Status)
 		}
@@ -339,35 +378,75 @@ func TestResetDoesNotLogIn(t *testing.T) {
 		sys := newSystem(t, db, instance)
 		sys.registerAda(t, sys.client)
 		_ = sys.client.Post("/password/forgot", `{"email":"ada@example.com"}`)
-		sys.settle(t)
 		device := sys.client.NewDevice()
-		device.Post("/password/reset", `{"token":"`+(*sys.sent)[0].Token+`","password":"reset horse ok"}`)
+		device.Post("/password/reset", `{"token":"`+(*sys.sent)[0].Signed+`","password":"reset horse ok"}`)
 		if reply := device.Do(http.MethodGet, "/me", ""); reply.Status != http.StatusUnauthorized {
 			t.Fatalf("/me after reset = %d, want 401", reply.Status)
 		}
 	})
 }
 
-// TestForgotUnknownIdentifierIs202 verifies nothing is sent and the response
-// does not differ.
+// TestForgotUnknownIdentifierIs202 verifies the request is dispatched exactly as
+// typed even for an identifier nobody owns, the answer does not differ from a
+// known one, and the worker sends nothing.
 func TestForgotUnknownIdentifierIs202(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newSystem(t, db, instance)
-		if reply := sys.client.Post("/password/forgot", `{"email":"nobody@example.com"}`); reply.Status != http.StatusAccepted {
-			t.Fatalf("forgot = %d", reply.Status)
+		sys.registerAda(t, sys.client)
+		known := sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
+		unknown := sys.client.NewDevice().Post("/password/forgot", `{"email":"Nobody@Example.com"}`)
+		if unknown.Status != http.StatusAccepted || known.Status != unknown.Status || known.Body != unknown.Body {
+			t.Fatalf("known = %d %q, unknown = %d %q, want the same 202", known.Status, known.Body, unknown.Status, unknown.Body)
 		}
-		sys.settle(t)
-		if len(*sys.sent) != 0 {
-			t.Fatalf("sent %d messages", len(*sys.sent))
+		want := []password.ResetRequest{{Identifier: "ada@example.com"}, {Identifier: "Nobody@Example.com"}}
+		if len(*sys.dispatched) != 2 || (*sys.dispatched)[0] != want[0] || (*sys.dispatched)[1] != want[1] {
+			t.Fatalf("dispatched = %+v, want %+v", *sys.dispatched, want)
+		}
+		if len(*sys.sent) != 1 {
+			t.Fatalf("sent %d messages, want 1: only ada exists", len(*sys.sent))
+		}
+	})
+}
+
+// TestForgotDispatchErrorIs500 verifies work that could not be stored is an
+// error, not a silent 202, so the client tries again.
+func TestForgotDispatchErrorIs500(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
+			passwords.Reset(newSigner(t, ""), func(context.Context, password.ResetRequest) error { return errors.New("queue down") }, func(context.Context, password.ResetMessage) error { return nil })
+		})
+		if reply := sys.client.Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusInternalServerError {
+			t.Fatalf("forgot with a failing dispatch = %d %s, want 500", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestForgotIsThrottledBeforeDispatch verifies the sixth request for one
+// identifier is 429 and never reaches the dispatch function.
+func TestForgotIsThrottledBeforeDispatch(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		for range 5 {
+			sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
+		}
+		if reply := sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusTooManyRequests {
+			t.Fatalf("sixth forgot = %d, want 429", reply.Status)
+		}
+		if len(*sys.dispatched) != 5 {
+			t.Fatalf("dispatched %d requests, want 5", len(*sys.dispatched))
 		}
 	})
 }
 
 // TestChangeEndsOtherLoginsEvenWhenTheHookFails verifies a failing AfterChange
 // hook is returned to the client only after the other logins ended, and that a
-// change deletes the user's live reset links.
+// change ends the user's unused reset links.
 func TestChangeEndsOtherLoginsEvenWhenTheHookFails(t *testing.T) {
 	t.Parallel()
 
@@ -381,7 +460,7 @@ func TestChangeEndsOtherLoginsEvenWhenTheHookFails(t *testing.T) {
 		if reply := loginAda(other, "correct horse"); reply.Status != http.StatusNoContent {
 			t.Fatalf("other login = %d", reply.Status)
 		}
-		if err := sys.verifier.SendReset(ctx, "ada@example.com"); err != nil {
+		if err := sys.verifier.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
 			t.Fatalf("SendReset: %v", err)
 		}
 		reply := sys.client.Do(http.MethodPut, "/password", `{"current_password":"correct horse","password":"changed horse ok"}`)
@@ -391,8 +470,46 @@ func TestChangeEndsOtherLoginsEvenWhenTheHookFails(t *testing.T) {
 		if reply := other.Do(http.MethodGet, "/me", ""); reply.Status != http.StatusUnauthorized {
 			t.Fatalf("the other login after a failed hook = %d, want it ended", reply.Status)
 		}
-		if _, err := sys.verifier.Reset(ctx, (*sys.sent)[0].Token, "reset horse ok"); !errors.Is(err, password.ErrInvalidToken) {
+		if _, err := sys.verifier.Reset(ctx, (*sys.sent)[0].Signed, "reset horse ok"); !errors.Is(err, password.ErrInvalidToken) {
 			t.Fatalf("a reset link survived the change: %v", err)
+		}
+	})
+}
+
+// TestResetHandlersWithoutResetPanic verifies the forgot and reset handlers fail
+// at composition without Builder.Reset.
+func TestResetHandlersWithoutResetPanic(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		users := newFakeUsers()
+		provider, _ := auth.NewUserProvider(users.driver)
+		verifier, err := password.NewVerifier(provider, db, sys.store, testClientIP, sys.hasher, password.Users{
+			Lookup: users.Lookup,
+			Rotate: users.Rotate,
+		})
+		if err != nil {
+			t.Fatalf("NewVerifier: %v", err)
+		}
+		if verifier.ResetEnabled() {
+			t.Fatal("ResetEnabled() is true by default")
+		}
+		for name, build := range map[string]func(){
+			"ForgotHandler": func() { verifier.ForgotHandler() },
+			"ResetHandler":  func() { verifier.ResetHandler(sys.guard) },
+		} {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Errorf("%s did not panic without Reset", name)
+					}
+				}()
+				build()
+			}()
+		}
+		if err := verifier.SendReset(testContext(t), password.ResetRequest{Identifier: "x"}); !errors.Is(err, password.ErrInvalidConfig) {
+			t.Fatalf("SendReset error = %v, want ErrInvalidConfig", err)
 		}
 	})
 }

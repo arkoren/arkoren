@@ -28,7 +28,7 @@ func register(t *testing.T, sys *system, b *browser) {
 		t.Fatalf("login = %d %s", r.status, r.body)
 	}
 	sys.mu.Lock()
-	token := sys.sent[len(sys.sent)-1].Token
+	token := sys.verified[len(sys.verified)-1].Signed
 	sys.mu.Unlock()
 	if r := b.post("/email/verify", `{"token":"`+token+`"}`); r.status != http.StatusNoContent {
 		t.Fatalf("verify = %d %s", r.status, r.body)
@@ -146,7 +146,7 @@ func TestOwnUsersThroughAccessUsers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
-	sys := newSystem(t, func(iam *access.Builder) {
+	sys := newSystemWith(t, false, func(iam *access.Builder) {
 		iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
 			Verified:   func(context.Context, string) (bool, error) { return true, nil },
 			ProveEmail: func(context.Context, string) (bool, error) { return false, nil },

@@ -5,22 +5,24 @@ order: 30
 summary:
   - Enable passwords with a hasher, switch registration on when you want it, and read the login, confirm and change requests and their statuses.
   - Understand login throttling, the single invalid-credentials answer and what a change or reset ends.
-  - Send reset links, verify emails and require a verified email on selected routes.
+  - Reset forgotten passwords with signed links, verify emails and require a verified email on selected routes.
 ---
 
 # Passwords
 
 Passwords give users a way to log in with an email and a secret only they know.
-Enable them by giving the facade a [hasher](../hashing/overview.md) and a way to
-[deliver](overview.md#delivering-messages) reset and verification links:
+Enable them by giving the facade a [hasher](../hashing/overview.md):
 
 ```go
 clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
 iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	iam.Password(hasher)
-	iam.Deliver(send)
 })
 ```
+
+Login, confirm and change need nothing more. Forgotten-password reset also needs
+a signer and your own functions to dispatch and deliver the email; see
+[Reset](#reset).
 
 Self-service registration is off by default: an open `POST /register` route is
 an abuse surface that applications with invitations, an admin console or
@@ -35,7 +37,10 @@ iam.Password(hasher, func(passwords *password.Builder) {
 ```
 
 With your own users, `Registration(true)` needs `Users.Create`, and `New` fails
-with `access.ErrInvalidConfig` without it.
+with `access.ErrInvalidConfig` without it. With the built-in users it needs
+`Reset` or [email verification](#verify-emails), because without either a new user
+could never prove their address; `New` fails with `access.ErrInvalidConfig`
+otherwise.
 
 With the built-in users, the email address is the identifier, and the requests
 below take `email`. Applications that use [their own users](own-users.md) may
@@ -53,12 +58,10 @@ client calls `POST /login` next.
 
 The answer is the same `202` when the email already belongs to a user, so the
 route cannot be used to find out who has an account. In that case nothing is
-created or changed, and the owner receives a message of kind
-`access.KindRegistration` (see [Delivering Messages](overview.md#delivering-messages))
-that says someone tried to register with their address, with a reset link in case
-it was not them. The facade never links accounts by email. Registrations are
-throttled per email and per client address, and the notices count against the
-same limits, so the route cannot flood a mailbox. A malformed email is `422`, and
+created or changed, and the owner is told instead. The facade never links
+accounts by email. Registrations are throttled per email and per client address,
+and what they dispatch counts against the same limits, so the route cannot flood a
+mailbox. A malformed email is `422`, and
 a password outside the policy is `422`. The default policy
 requires 8 to 72 bytes, because bcrypt hashers reject more. Replace it with
 `password.Builder.Policy`:
@@ -75,9 +78,19 @@ iam.Password(hasher, func(passwords *password.Builder) {
 })
 ```
 
-A new user starts with an unverified email. If `iam.Deliver` is set,
-registration also sends the verification link, and a failing send is logged
-without failing the signup.
+A new user starts with an unverified email. What registration dispatches depends
+on which email features you configured, and it is the same work on both paths so
+the answer and its timing do not tell a new address from a taken one:
+
+| Configured | New address | Taken address |
+| --- | --- | --- |
+| Reset and verification | Dispatches a verification for the new user | Dispatches a reset notice to the owner (`Notice` set) |
+| Verification only | Dispatches a verification for the new user | Dispatches a verification for the owner, who is sent nothing if already verified |
+| Reset only | Dispatches nothing | Dispatches nothing |
+
+A failing dispatch on registration is logged and the answer stays `202`. With your
+own users the application proves emails itself, so the facade dispatches nothing
+on registration.
 
 `POST /login` takes the same body and answers `204`, or `202` when the user has a
 second factor to answer. Every failure is one `422` problem: an unknown email, a
@@ -142,8 +155,7 @@ login:
 The current password is required unless the user has none yet, such as someone
 created by a provider login, who sets their first one without it. The current
 password is checked with a per-user failure limit. A change stores the new
-password, deletes the user's pending reset links, ends the user's other logins and
-keeps the caller's session, which also records the password as a fresh proof.
+password, ends the user's other logins and keeps the caller's session, which also records the password as a fresh proof.
 It revokes the user's device tokens, because a device has no session to end, but
 it does not rotate the user, so personal access tokens survive. See
 [Credential Changes](accounts.md#credential-changes) to revoke those too.
@@ -154,37 +166,50 @@ steps run again.
 
 ## Reset
 
-A user who forgot their password asks for a link. `POST /password/forgot` takes
-`{"email": "..."}` and answers an empty `202` whether or not the user exists and
-whether or not the mailer works. The email is sent in the background, so neither
-the answer nor its timing reveals anything, and a delivery failure is logged,
-never shown. Call `iam.Wait(ctx)` at shutdown so queued messages are not lost.
+A user who forgot their password asks for a link. Reset is off until you configure
+it in the password settings, with the signer and the two functions described in
+[Sending Email Links](overview.md#sending-email-links):
 
-At most 5 requests per identifier as typed and 30 per client address in 15
-minutes are accepted, then `429`. For a known user the facade hands a single-use
-token to your [delivery function](overview.md#delivering-messages), addressed to
-the email stored with the user, never to the text of the request: `bob@gmaİl.com`
-finds `bob@gmail.com`, and the link goes to `bob@gmail.com`.
+```go
+iam.Password(hasher, func(passwords *password.Builder) {
+	passwords.Reset(signer, dispatchReset, deliverReset)
+})
+```
 
-The token has 130 random bits, is stored only as a hash and expires after an hour.
-A user keeps up to three live tokens, so asking again does not kill the link
-already in their inbox, and the fourth request drops the oldest. To change the
-lifetime, pass `passwords.ResetTTL(d)` in the `iam.Password` callback.
+`POST /password/forgot` takes `{"email": "..."}`, counts the request, calls your
+`dispatch` function with the identifier exactly as typed and answers an empty
+`202`, whether or not the user exists. Nothing is looked up in the request, so
+neither the answer nor its timing reveals anything. If `dispatch` fails the work
+was not stored, so the answer is `500` and the client can try again. At most 5
+requests per identifier as typed and 30 per client address in 15 minutes are
+accepted, then `429`, before anything is dispatched.
 
-The link carries the token in the fragment (`#token=...`), so your reset page
-reads it from `location.hash` and posts it with the new password to
-`POST /password/reset`:
+The worker then runs `iam.SendReset`: for a known user it signs a link bound to the
+user's current password hash and calls your `deliver` function, addressed to the
+email stored with the user, never to the text of the request: `bob@gmaİl.com` finds
+`bob@gmail.com`, and the link goes to `bob@gmail.com`. An unknown identifier sends
+nothing. The link expires after an hour; change that with `passwords.ResetTTL(d)`.
+
+Your reset page reads the link from the fragment and posts it with the new
+password to `POST /password/reset`:
 
 ```json
 { "token": "...", "password": "a new longer password" }
 ```
 
-A reset sets the password, deletes the user's other reset tokens and rotates the
-user, which ends every session, pending login and API token. It never logs the
-user in, so it cannot bypass a second factor. A bad, used or expired token is
-`422`, and a password that fails the policy is `422` and leaves the token usable.
-A completed reset also clears the failed-login count kept against the address
-across clients.
+The password policy is checked first, so a password that fails it is `422` and
+leaves the link usable. Then the link is verified against the user's current hash
+and the new hash is stored by a conditional write inside one transaction: it
+matches only the hash the link was signed for, so a link works once, and of two
+concurrent submits exactly one succeeds. A user who had no password, such as one
+created by a provider login, sets their first one the same way. A bad, forged,
+expired or used link is `422` with the `invalid-token` problem.
+
+A reset rotates the user, which ends every session, pending login and API token,
+and it also invalidates every other reset link sent before, because the password
+they were bound to is gone. It never logs the user in, so it cannot bypass a
+second factor. A completed reset clears the failed-login count kept against the
+address across clients.
 
 A reset proves the user controls the mailbox. When the email was not verified yet,
 it also marks the email verified and removes what a squatter could have attached
@@ -192,25 +217,40 @@ to the account; see [Credential Changes](accounts.md#unverified-accounts).
 
 ## Verify Emails
 
-`POST /email/verify` takes `{"token": "..."}` from the link, which carries it in
-the fragment (`#token=...`) for your page to read from `location.hash`, and
-answers `204`. The
-token lasts 24 hours, and a new link replaces an earlier one. The flow is: the
-user logs in, then your verify page posts the token. It needs a browser session
-of the user the link belongs to, so a page that receives the link while logged out
-should send the user to log in first and then post the token. Without a session
-the answer is `401`, and a session of another user is `403`
-(`account:verify-wrong-account`). Neither consumes the token.
+Verification is off until you configure it on the built-in users, with the same
+signer and your own `dispatch` and `deliver` functions
+([Sending Email Links](overview.md#sending-email-links)):
+
+```go
+iam.Directory(func(accounts *account.Builder) {
+	accounts.Verification(signer, dispatchVerification, deliverVerification)
+})
+```
+
+Registration, and `POST /email/verify/resend`, dispatch an
+`account.VerifyRequest` for the user; the worker runs `iam.SendVerification`,
+which signs a link bound to the user's email and verified state and calls
+`deliver`. A user who is already verified is sent nothing. The link lasts 24 hours.
+
+`POST /email/verify` takes `{"token": "..."}` from the link, which your page reads
+from the fragment, and answers `204`. The flow is: the user logs in, then your
+verify page posts the token. It needs a browser session of the user the link
+belongs to, so a page that receives the link while logged out should send the user
+to log in first and then post the token. Without a session the answer is `401`,
+and a session of another user is `403` (`account:verify-wrong-account`). Neither
+changes anything. A second click on a link that already verified the email is
+`422` with the `invalid-token` problem, and the `EmailVerified` event is published
+only once.
 
 This is deliberate. Otherwise an attacker could register your address with their
 own password and let your click verify it. Only a password reset, which also
 deletes whatever the registrant attached, proves ownership of such an account.
 
-`POST /email/verify/resend` sends a new link to the logged-in user's stored
-address and answers an empty `202`, as forgot-password does. It sends nothing to
-a user who is already verified, and it accepts at most 5 requests per user and 20
-per client address in 15 minutes. Registration is limited to 5 per identifier as
-typed and 30 per client address.
+`POST /email/verify/resend` dispatches a new verification for the logged-in user
+and answers an empty `202`, as forgot-password does, or `500` when `dispatch`
+fails. It accepts at most 5 requests per user and 20 per client address in 15
+minutes. Registration is limited to 5 per identifier as typed and 30 per client
+address.
 
 Verification never blocks login. Require it where it matters:
 
