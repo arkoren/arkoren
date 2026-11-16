@@ -191,7 +191,7 @@ func Middleware(c *cache.Cache, configure ...BuilderFunc) router.Middleware {
 const forwardedForHeader = "X-Forwarded-For"
 
 // clientIP returns the request remote address without its port, reduced by
-// [addressKey]. An address that does not parse is returned unchanged.
+// [AddressKey].
 func clientIP(request *http.Request) string {
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 
@@ -199,28 +199,39 @@ func clientIP(request *http.Request) string {
 		host = request.RemoteAddr
 	}
 
-	address, err := netip.ParseAddr(host)
-
-	if err != nil {
-		return host
-	}
-
-	return addressKey(address)
+	return AddressKey(host)
 }
 
-// addressKey returns the key for address. IPv4-mapped IPv6 addresses are
-// unmapped and IPv6 addresses are reduced to their /64 prefix, the usual
-// per-client allocation, so a client cannot rotate addresses to escape its
-// limit.
-func addressKey(address netip.Addr) string {
-	address = address.Unmap()
+// AddressKey returns the rate-limit key for a client address as a client-IP
+// function returns it, such as the host from a request's RemoteAddr or a
+// trusted X-Forwarded-For entry. IPv4-mapped IPv6 addresses are unmapped, IPv6
+// addresses (and a zone, which is dropped) are reduced to their /64 prefix, the
+// usual per-client allocation, so a client cannot rotate addresses to escape its
+// limit, and IPv4 addresses are returned as is. An address that does not parse,
+// including one with a port, is returned unchanged. The default key function and
+// [TrustedProxyKey] use it, so custom [Builder.KeyFunc] functions can share
+// their keys.
+//
+// Example:
+//
+//	ratelimit.AddressKey("2001:db8::1")        // "2001:db8::/64"
+//	ratelimit.AddressKey("::ffff:192.0.2.1")   // "192.0.2.1"
+//	ratelimit.AddressKey("192.0.2.1")          // "192.0.2.1"
+func AddressKey(address string) string {
+	parsed, err := netip.ParseAddr(address)
 
-	if address.Is4() {
-		return address.String()
+	if err != nil {
+		return address
 	}
 
-	// Callers pass parsed addresses; a non-IPv4 address always accepts a /64 prefix.
-	prefix, _ := address.WithZone("").Prefix(64)
+	parsed = parsed.Unmap()
+
+	if parsed.Is4() {
+		return parsed.String()
+	}
+
+	// A parsed non-IPv4 address always accepts a /64 prefix.
+	prefix, _ := parsed.WithZone("").Prefix(64)
 
 	return prefix.String()
 }
@@ -265,7 +276,7 @@ func TrustedProxyKey(trusted ...netip.Prefix) func(*http.Request) string {
 		hop = hop.Unmap().WithZone("")
 
 		if !trustedAddress(hop) {
-			return addressKey(hop)
+			return AddressKey(hop.String())
 		}
 
 		chain := strings.Join(request.Header.Values(forwardedForHeader), ",")
@@ -280,12 +291,12 @@ func TrustedProxyKey(trusted ...netip.Prefix) func(*http.Request) string {
 			address = address.Unmap().WithZone("")
 
 			if !trustedAddress(address) {
-				return addressKey(address)
+				return AddressKey(address.String())
 			}
 
 			hop = address
 		}
 
-		return addressKey(hop)
+		return AddressKey(hop.String())
 	}
 }
