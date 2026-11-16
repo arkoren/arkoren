@@ -80,10 +80,12 @@ type Factor struct {
 	// Kind is what the factor proves. [Identity.Level] is derived from it.
 	Kind Kind `json:"kind"`
 
-	// At is when this server verified the factor. [Guard] sets it from its own
-	// clock whatever the caller passed, so a provider's claim about when the user
-	// authenticated never makes a factor fresh. The zero time (an identity built
-	// by hand) means unknown and is never fresh.
+	// At is when the factor was verified. [Guard] stamps it with its own clock,
+	// except that a non-zero time earlier than the guard's clock is kept, so a
+	// provider's claim about when the user authenticated can make a factor older
+	// but never fresher: the zero time, and any later or future time, become the
+	// guard's clock. The zero time on an identity built by hand means unknown and
+	// is never fresh.
 	At time.Time `json:"at"`
 }
 

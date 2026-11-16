@@ -144,7 +144,8 @@ type PendingLogin struct {
 // Begin is the single entry for every login method. Call it after the method
 // verified its credential, passing every factor the login proved: a password
 // login passes one, a passkey that proved possession and inherence passes two. The
-// guard stamps each factor with its own clock (see [Factor.At]). Begin looks
+// guard stamps each factor with its own clock, keeping only a supplied [Factor.At]
+// that is earlier than that clock (a claim can age a factor, never refresh it). Begin looks
 // subject up with the provider first: a deleted or disabled user is
 // [ErrUnauthenticated], and other provider errors, including [ErrInvalidSubject],
 // are returned unchanged. Passing no factor is an error.

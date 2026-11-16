@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/cache/memorycache"
 	"arkoren.dev/foundation/problem"
@@ -339,6 +340,64 @@ func TestChallengeInfraErrorRefundsAttempt(t *testing.T) {
 	}
 }
 
+// recordingKeys is a cache driver that remembers the keys it incremented.
+type recordingKeys struct {
+	cache.Driver
+	keys []string
+}
+
+// IncrementWithTTL records key and delegates to the wrapped driver.
+func (driver *recordingKeys) IncrementWithTTL(ctx context.Context, key string, delta int64, ttl time.Duration) (int64, time.Duration, error) {
+	driver.keys = append(driver.keys, key)
+
+	return driver.Driver.IncrementWithTTL(ctx, key, delta, ttl)
+}
+
+// TestChallengeRefundKeepsCounterExpiry verifies a refunded attempt leaves the
+// counter with an expiry: the key is still there right after the refund and is
+// gone once the challenge window has passed, so a refund never makes it persist.
+func TestChallengeRefundKeepsCounterExpiry(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		failing := secondFactor(true, nil)
+		failing.Verify = func(*http.Request, string, jsontext.Value) (auth.Factor, error) {
+			return auth.Factor{}, errors.New("backend down")
+		}
+
+		provider, _ := newDirectory(t)
+		driver := &recordingKeys{Driver: memorycache.New()}
+		guard, err := auth.NewGuard(provider, cache.New(driver), withChecks(failing), func(policy *auth.GuardBuilder) {
+			policy.ChallengeTTL(lockoutWindow)
+		})
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		r := sessionRequest(newSession())
+		begin(t, guard, r, "7")
+
+		if err := challenge(guard, r, goodOTP); err == nil {
+			t.Fatal("challenge succeeded")
+		}
+
+		if len(driver.keys) != 2 {
+			t.Fatalf("incremented keys = %v, want reserve and refund", driver.keys)
+		}
+
+		if _, err := driver.Get(t.Context(), driver.keys[1]); err != nil {
+			t.Fatalf("counter after the refund = %v", err)
+		}
+
+		time.Sleep(lockoutWindow)
+
+		if _, err := driver.Get(t.Context(), driver.keys[1]); !errors.Is(err, cache.ErrNotFound) {
+			t.Fatalf("counter after the window = %v, want expired", err)
+		}
+	})
+}
+
 // TestChallengeAttemptsSharedAcrossMethods verifies one counter covers every
 // method: wrong codes of different methods lock the user out together.
 func TestChallengeAttemptsSharedAcrossMethods(t *testing.T) {
@@ -430,25 +489,95 @@ func TestFactorReplacedByMethodAndKind(t *testing.T) {
 	})
 }
 
-// TestFactorTimeIsServerClock verifies a time claimed by the caller is ignored.
-func TestFactorTimeIsServerClock(t *testing.T) {
+// TestFactorTimeOnlyMakesLoginOlder verifies a time supplied by the caller is
+// kept only when it is earlier than the guard's clock: a zero, later or future
+// time becomes now, and an earlier one leaves the factor stale. Begin, a
+// same-subject Begin (confirm) and a challenge (step-up) behave the same.
+func TestFactorTimeOnlyMakesLoginOlder(t *testing.T) {
 	t.Parallel()
 
-	synctest.Test(t, func(t *testing.T) {
-		guard, _ := newGuard(t)
-		current := newSession()
-		claimed := auth.Factor{Method: federatedMethod, Kind: auth.KindFederated, At: time.Now().Add(-48 * time.Hour)}
+	for name, offset := range map[string]time.Duration{
+		"earlier": -48 * time.Hour,
+		"zero":    0,
+		"later":   time.Minute,
+		"future":  48 * time.Hour,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-		if _, err := guard.Begin(sessionRequest(current), "7", claimed); err != nil {
-			t.Fatal(err)
-		}
+			synctest.Test(t, func(t *testing.T) {
+				supplied := time.Time{}
 
-		identity, err := authenticate(guard, current)
+				if name != "zero" {
+					supplied = time.Now().Add(offset)
+				}
 
-		if err != nil || !identity.Factors()[0].At.Equal(time.Now()) {
-			t.Fatalf("factors = %+v, %v", identity.Factors(), err)
-		}
-	})
+				// expected is the time the guard must record for a factor stamped now.
+				expected := func() time.Time {
+					if name == "earlier" {
+						return supplied
+					}
+
+					return time.Now()
+				}
+
+				claimed := auth.Factor{Method: federatedMethod, Kind: auth.KindFederated, At: supplied}
+				verify := secondFactor(true, nil)
+				verify.Verify = func(*http.Request, string, jsontext.Value) (auth.Factor, error) {
+					return auth.Factor{Method: auth.MethodOTP, Kind: auth.KindPossession, At: supplied}, nil
+				}
+
+				check := func(label string, guard *auth.Guard, current *session.Session, method auth.Method) {
+					t.Helper()
+
+					identity, err := authenticate(guard, current)
+
+					if err != nil {
+						t.Fatalf("%s: %v", label, err)
+					}
+
+					i := slices.IndexFunc(identity.Factors(), func(factor auth.Factor) bool { return factor.Method == method })
+
+					if i < 0 || !identity.Factors()[i].At.Equal(expected()) {
+						t.Fatalf("%s: factors = %+v, want At %v", label, identity.Factors(), expected())
+					}
+				}
+
+				guard, _ := newGuard(t, withStepUp(credential(auth.MethodPassword, auth.KindKnowledge, no)))
+				current := newSession()
+				r := sessionRequest(current)
+
+				if _, err := guard.Begin(r, "7", claimed); err != nil {
+					t.Fatal(err)
+				}
+
+				check("begin", guard, current, federatedMethod)
+
+				if err := freshness(guard, r); (err == nil) == (name == "earlier") {
+					t.Fatalf("freshness = %v", err)
+				}
+
+				time.Sleep(time.Second)
+
+				if _, err := guard.Begin(r, "7", claimed); err != nil {
+					t.Fatal(err)
+				}
+
+				check("confirm", guard, current, federatedMethod)
+
+				stepped, _ := newGuard(t, withChecks(verify))
+				current = newSession()
+				r = sessionRequest(current)
+				begin(t, stepped, r, "7")
+
+				if err := challenge(stepped, r, goodOTP); err != nil {
+					t.Fatal(err)
+				}
+
+				check("challenge", stepped, current, auth.MethodOTP)
+			})
+		})
+	}
 }
 
 // TestSilentReloginNotFreshWithStepUpMethod verifies a same-subject federated

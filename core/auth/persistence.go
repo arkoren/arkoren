@@ -69,11 +69,16 @@ func hashVersion(version string) string {
 // the same method and kind, or is appended, so each (method, kind) pair appears
 // once with its latest time. A passkey can therefore prove possession and
 // inherence at once as two factors, and replacing one leaves the other. The
-// factor's At is always overwritten with now, in UTC: factor time is this
-// server's clock, set when the guard recorded a factor its own code verified.
-// It never modifies factors.
+// factor's At is now, in UTC, unless the caller supplied a non-zero time earlier
+// than now, which is kept: a provider's claim can make a factor older but never
+// fresher, so the zero time and any later or future time become now. It never
+// modifies factors.
 func withFactor(factors []Factor, factor Factor, now time.Time) []Factor {
-	factor.At = now.UTC()
+	if factor.At.IsZero() || factor.At.After(now) {
+		factor.At = now
+	}
+
+	factor.At = factor.At.UTC()
 	factors = slices.Clone(factors)
 
 	if i := slices.IndexFunc(factors, func(existing Factor) bool {

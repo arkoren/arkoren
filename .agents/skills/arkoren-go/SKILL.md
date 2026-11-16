@@ -465,8 +465,9 @@ delivery, and lifecycle protocols explicit.
   ark; both registries keep registration order and reject duplicate methods.
   The attempt counter is reserved atomically before Verify and shared across
   methods; ErrInvalidCredential keeps the attempt, any other Verify error
-  refunds it. Factor time is the guard's clock and factors replace by (Method,
-  Kind). Fresh needs an enrolled StepUp method's factor (any recent factor when
+  refunds it. Factor time is the guard's clock unless the caller supplies an earlier
+  non-zero Factor.At, which is kept (a claim can age a factor, never refresh
+  it); factors replace by (Method, Kind). Fresh needs an enrolled StepUp method's factor (any recent factor when
   the user has none); Identity.Session is set only by Guard.Authenticator and
   RequireSession guards credential routes. Each login also creates a LoginRecord (random ID kept in
   the session record's login_id) in one cache entry per subject under

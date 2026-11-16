@@ -44,7 +44,7 @@ owns the logout route: it ends the login, publishes `auth.LoggedOut` and
 answers 204, or 303 with `LogoutBuilder.Redirect`. `RequireLevel` and
 `guard.RequireFresh` protect routes by the factors of the identity, so they also
 work for tokens; `auth.RequireSession` keeps credential routes away from tokens.
-Factor time is the server's clock, and a user who has a step-up method is fresh
+Factor time is the server's clock (a provider may only supply an earlier time, which makes a factor older), and a user who has a step-up method is fresh
 only through one of them. The provider is asked on every
 request, so a deleted or disabled user is anonymous. Each login also creates a
 login record, so a user can list devices with `Logins` and log them out with
