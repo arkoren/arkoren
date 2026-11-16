@@ -87,7 +87,7 @@ func (factors *Factors) enrolledMethods(ctx context.Context, subject string) ([]
 //
 //	web.Post("/two-factor/setup", factors.SetupHandler(guard))
 func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -123,7 +123,7 @@ func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
 //
 //	web.Post("/two-factor", factors.EnableHandler(guard))
 func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -222,7 +222,7 @@ func (factors *Factors) DisableHandler(guard *auth.Guard) router.Handler {
 //
 //	web.Post("/two-factor/recovery-codes", factors.RecoveryCodesHandler(guard))
 func (factors *Factors) RecoveryCodesHandler(guard *auth.Guard) router.Handler {
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err

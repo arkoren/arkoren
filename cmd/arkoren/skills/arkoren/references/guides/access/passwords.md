@@ -257,13 +257,14 @@ Verification never blocks login. Require it where it matters:
 posts := web.With(auth.Require(), iam.RequireVerified())
 ```
 
-`RequireVerified` answers `403` to a user whose email is not verified. It reads
-the claim recorded at login, so a user who verified since their last login passes
-only after logging in again. A user created by a provider whose email the provider
-verified starts verified. Until an email is verified, the account cannot connect
-a provider, enroll two-factor or create tokens (`403` `email-unverified`). With
-[your own users](own-users.md), `RequireVerified` panics at composition because
-you own the verification state.
+`RequireVerified` answers `403` to a user whose email is not verified. With the
+built-in users it reads the claim recorded at login, so a user who verified since
+their last login passes only after logging in again. A user created by a provider
+whose email the provider verified starts verified. Until an email is verified,
+the account cannot connect a provider, enroll two-factor or create tokens (`403`
+`email-unverified`). With [your own users](own-users.md), it asks your
+`Users.Verified` function on every request instead, so the answer is as current as
+your own data; it panics at composition only when you gave no `Users.Verified`.
 
 For every function and option, see
 [the `password` API reference](https://pkg.go.dev/arkoren.dev/ark/access/password).

@@ -356,3 +356,155 @@ func TestProviderNamesMustBeOnePathSegment(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifiedProviderEmailTakesOverUnverifiedAccount verifies the owner of an
+// address a provider verified takes over the account someone registered with
+// it and never verified, even with sign-up off: the squatter's password and
+// session stop working, and the owner is logged in to the same user.
+func TestVerifiedProviderEmailTakesOverUnverifiedAccount(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"})
+		})
+		register(t, sys.client, "ada@example.com")
+		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+
+		owner := sys.client.NewDevice()
+		if reply := owner.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
+			t.Fatalf("owner callback = %d %s, want 204", reply.Status, reply.Body)
+		}
+		if me := owner.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, squatted+"|") {
+			t.Fatalf("owner /me = %q, want the registered user %s", me.Body, squatted)
+		}
+		if verified, err := sys.iam.Directory().Verified(testContext(t), squatted); err != nil || !verified {
+			t.Fatalf("Verified after the takeover = %v, %v", verified, err)
+		}
+		if me := sys.client.Do(http.MethodGet, "/me", ""); me.Body != "anonymous" {
+			t.Fatalf("the squatter's session survived: %q", me.Body)
+		}
+		if reply := sys.client.NewDevice().Post("/login", login); reply.Status == http.StatusNoContent {
+			t.Fatalf("the squatter's password still logs in: %d", reply.Status)
+		}
+	})
+}
+
+// TestUnverifiedProviderEmailDoesNotTakeOver verifies a provider that does not
+// vouch for the address gets nothing: no login, and the registered user keeps
+// their password and stays unverified.
+func TestUnverifiedProviderEmailDoesNotTakeOver(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"})
+		})
+		register(t, sys.client, "ada@example.com")
+		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+
+		device := sys.client.NewDevice()
+		if reply := device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), ""); reply.Status != http.StatusForbidden {
+			t.Fatalf("callback = %d %s, want 403 no-account", reply.Status, reply.Body)
+		}
+		if verified, _ := sys.iam.Directory().Verified(testContext(t), subject); verified {
+			t.Fatal("an unverified provider email verified the account")
+		}
+		if reply := sys.client.NewDevice().Post("/login", login); reply.Status != http.StatusNoContent {
+			t.Fatalf("the registered password stopped working: %d", reply.Status)
+		}
+	})
+}
+
+// TestTakeOverRemovesWhatTheSquatterConnected verifies the takeover purges the
+// connections of the user: an account a provider created with an unverified
+// email, taken over by the verified owner through another provider, no longer
+// admits the first provider's identity.
+func TestTakeOverRemovesWhatTheSquatterConnected(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Provider(fakeProvider{name: "squatter"}, fakeProvider{name: "owner"}).Federation(signUp)
+		})
+		squatter := sys.client.NewDevice()
+		squatter.Do(http.MethodGet, callbackPath("squatter", "s1", "ada@example.com", false), "")
+		subject := strings.SplitN(squatter.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+
+		owner := sys.client.NewDevice()
+		if reply := owner.Do(http.MethodGet, callbackPath("owner", "o1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
+			t.Fatalf("owner callback = %d %s", reply.Status, reply.Body)
+		}
+		if me := owner.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, subject+"|") {
+			t.Fatalf("owner /me = %q, want user %s", me.Body, subject)
+		}
+		if me := squatter.Do(http.MethodGet, "/me", ""); me.Body != "anonymous" {
+			t.Fatalf("the squatter's session survived: %q", me.Body)
+		}
+		again := sys.client.NewDevice()
+		if reply := again.Do(http.MethodGet, callbackPath("squatter", "s1", "ada@example.com", false), ""); reply.Status != http.StatusConflict {
+			t.Fatalf("the squatter's identity after the takeover = %d %s, want 409", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestTakeOverNeverReenablesADisabledUser verifies a disabled unverified user
+// stays disabled and untouched: the login is refused and the takeover rolls
+// back.
+func TestTakeOverNeverReenablesADisabledUser(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"})
+		})
+		register(t, sys.client, "ada@example.com")
+		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		if err := sys.iam.Directory().Disable(testContext(t), subject); err != nil {
+			t.Fatalf("Disable: %v", err)
+		}
+		device := sys.client.NewDevice()
+		if reply := device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusUnauthorized {
+			t.Fatalf("callback = %d %s, want 401", reply.Status, reply.Body)
+		}
+		if verified, _ := sys.iam.Directory().Verified(testContext(t), subject); verified {
+			t.Fatal("the refused takeover verified the disabled user")
+		}
+		if has, _ := sys.iam.Verifier().Has(testContext(t), subject); !has {
+			t.Fatal("the refused takeover deleted the disabled user's password")
+		}
+	})
+}
+
+// TestInvitedUserIsClaimedByTheirFirstProviderLogin verifies the invite-only
+// flow: a user the application created without a password signs in with a
+// provider that verified their email, with sign-up off, and keeps signing in
+// through the connection.
+func TestInvitedUserIsClaimedByTheirFirstProviderLogin(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Provider(fakeProvider{name: "fake"})
+		})
+		invited, err := sys.iam.Directory().Create(testContext(t), "ada@example.com")
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		first := sys.client.NewDevice()
+		if reply := first.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
+			t.Fatalf("first callback = %d %s, want 204", reply.Status, reply.Body)
+		}
+		if me := first.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, invited+"|") {
+			t.Fatalf("/me = %q, want the invited user %s", me.Body, invited)
+		}
+		later := sys.client.NewDevice()
+		later.Do(http.MethodGet, callbackPath("fake", "g1", "", false), "")
+		if me := later.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, invited+"|") {
+			t.Fatalf("second login /me = %q, want the invited user %s", me.Body, invited)
+		}
+	})
+}

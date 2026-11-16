@@ -151,11 +151,13 @@ What a change ends:
 ## Unverified Accounts
 
 Someone can register an address they do not own before its owner does, then attach
-a provider or an authenticator and wait. The facade closes this in two ways. Until
+a provider or an authenticator and wait. The facade closes this in three ways. Until
 the email is verified, the account cannot connect a provider, enroll two-factor or
-create tokens. And a completed password reset, which proves the mailbox, marks the
+create tokens. A completed password reset, which proves the mailbox, marks the
 email verified and deletes every connection, the authenticator, the recovery codes
-and all tokens, in the reset's transaction.
+and all tokens, in the reset's transaction. And a provider login whose email the
+provider verified [takes the account over](connections.md#unverified-accounts),
+which also deletes its password.
 
 If other modules registered credentials through `iam.SecondFactor` or `iam.StepUp`
 (a passkey package, say), the facade cannot know what to delete. Give it a hook:
@@ -164,8 +166,9 @@ If other modules registered credentials through `iam.SecondFactor` or `iam.StepU
 iam.OnEmailProven(passkeys.RemoveAll)
 ```
 
-The hook receives the subject and runs inside the reset, after the built-in purge.
-An error rolls the reset back. It does not run when the email was already verified.
+The hook receives the subject and runs inside the reset, or inside a provider login
+that [takes the account over](connections.md#unverified-accounts), after the
+built-in purge. An error rolls that reset or login back. It does not run when the email was already verified.
 With your own users, the purge needs `Users.Verified` and `Users.ProveEmail`; see
 [Your Own Users](own-users.md#verified-emails).
 

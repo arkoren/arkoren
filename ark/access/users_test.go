@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/account"
 )
 
 // ownUsers is the application's own user store, as the facade sees it.
@@ -147,5 +149,43 @@ func TestOwnUsersValidation(t *testing.T) {
 	}
 	if !panics(func() { iam.DeleteAccountHandler() }) || !panics(func() { iam.RequireVerified() }) {
 		t.Error("the directory-only handlers did not panic with the application's own users")
+	}
+}
+
+// TestRequireVerifiedUsesTheApplicationsVerified verifies RequireVerified works
+// with the application's own users: it asks Users.Verified for each request,
+// admits a verified user, answers 403 to an unverified one and 401 to nobody.
+func TestRequireVerifiedUsesTheApplicationsVerified(t *testing.T) {
+	t.Parallel()
+
+	users := newOwnUsers(t)
+	provider, _ := auth.NewUserProvider(users.driver)
+	iam, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
+		iam.Users(access.Users{
+			Provider:   provider,
+			Verified:   func(_ context.Context, subject string) (bool, error) { return subject == "u1", nil },
+			ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
+		})
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	guarded := iam.RequireVerified()(func(http.ResponseWriter, *http.Request) error { return nil })
+	serve := func(subject string) error {
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		if subject != "" {
+			request = request.WithContext(auth.NewContext(request.Context(), auth.NewIdentity(subject)))
+		}
+
+		return guarded(httptest.NewRecorder(), request)
+	}
+	if err := serve("u1"); err != nil {
+		t.Errorf("verified user = %v, want admitted", err)
+	}
+	if err := serve("u2"); !errors.Is(err, account.ErrEmailUnverified) {
+		t.Errorf("unverified user = %v, want ErrEmailUnverified", err)
+	}
+	if err := serve(""); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Errorf("anonymous = %v, want ErrUnauthenticated", err)
 	}
 }

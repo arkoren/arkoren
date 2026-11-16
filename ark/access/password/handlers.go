@@ -56,7 +56,7 @@ var passwordFactor = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKno
 //
 //	web.Post("/login", verifier.LoginHandler(guard))
 func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err
@@ -118,7 +118,7 @@ func (verifier *Verifier) RegisterHandler() router.Handler {
 		panic("password: RegisterHandler requires Builder.Registration")
 	}
 
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err
@@ -173,7 +173,7 @@ func (verifier *Verifier) notifyOwner(ctx context.Context, identifier, password 
 //
 //	web.Put("/password", verifier.ChangeHandler(guard))
 func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
@@ -302,7 +302,7 @@ func (verifier *Verifier) ForgotHandler() router.Handler {
 		panic("password: ForgotHandler requires Builder.Reset")
 	}
 
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err
@@ -336,7 +336,7 @@ func (verifier *Verifier) ResetHandler(guard *auth.Guard) router.Handler {
 		panic("password: ResetHandler requires Builder.Reset")
 	}
 
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		body, err := web.Decode[requestBody](r)
 		if err != nil {
 			return err

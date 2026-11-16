@@ -276,7 +276,7 @@ func (directory *Directory) VerifyHandler() router.Handler {
 		panic("account: VerifyHandler requires Builder.Verification")
 	}
 
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err
@@ -316,7 +316,7 @@ func (directory *Directory) ResendHandler() router.Handler {
 		panic("account: ResendHandler requires Builder.Verification")
 	}
 
-	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
+	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {
 			return err

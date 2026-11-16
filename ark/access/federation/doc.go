@@ -13,7 +13,10 @@
 //     provider while logged in never depend on it.
 //   - It never links by email. An address that belongs to an existing user makes
 //     [Builder.Create] fail (a 409 with the directory); the user logs in and
-//     connects the provider from their settings.
+//     connects the provider from their settings. The one exception is
+//     [Builder.TakeOver], which the facade sets: a first login whose email the
+//     provider verified may be handed an existing user whose email never was, so
+//     whoever registered an address first cannot keep its owner out.
 //   - A user holds one connection per issuer, and an external identity belongs to
 //     at most one user. Concurrent first logins of one identity create one user:
 //     the loser rolls back and returns the winner's subject.

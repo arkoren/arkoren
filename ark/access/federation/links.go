@@ -51,9 +51,11 @@ type Link struct {
 //
 //   - A known identity logs its user in (a deleted or disabled user is
 //     [auth.ErrUnauthenticated]).
-//   - An unknown identity creates a user through [Builder.Create] when
-//     [Builder.SignUp] is enabled, and otherwise is [ErrNoAccount]. The package
-//     never links by email.
+//   - An unknown identity first goes to [Builder.TakeOver], when set, which may
+//     hand it an existing user whose email was never verified (the identity's
+//     verified email proves the mailbox). Otherwise it creates a user through
+//     [Builder.Create] when [Builder.SignUp] is enabled, and is [ErrNoAccount]
+//     when not. The package never links by email by itself.
 //   - A logged-in user who started a connection ([Links.ConnectHandler]) links
 //     the identity to their own account instead. The intent lives in their
 //     session for ten minutes, is single use, and exists so that a cross-site
@@ -77,6 +79,7 @@ type Links struct {
 	create   func(context.Context, auth.External) (string, error)
 	fallback func(context.Context, string) (bool, error)
 	verified func(context.Context, string) (bool, error)
+	takeOver func(context.Context, auth.External) (string, error)
 }
 
 // NewLinks returns the connection store. provider finds users and db holds the
@@ -112,6 +115,7 @@ func NewLinks(provider *auth.UserProvider, db *database.Database, configure ...B
 		create:   settings.create,
 		fallback: settings.fallback,
 		verified: settings.verified,
+		takeOver: settings.takeOver,
 	}
 	provider.OnForget(links.forget)
 

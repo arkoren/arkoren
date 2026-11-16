@@ -217,13 +217,14 @@ func (iam *Builder) KeepPersonalTokens() *Builder {
 	return iam
 }
 
-// OnEmailProven sets a function that runs when a completed password reset
-// proved the mailbox of a user whose email was not verified, in the reset's
-// transaction and after the built-in purge of connections, authenticator,
-// recovery codes and tokens. Use it to delete what the application or a module
+// OnEmailProven sets a function that runs when a completed password reset, or a
+// provider login that verified the email of an unverified user and took the
+// account over, proved the mailbox of a user whose email was not verified. It
+// runs in that transaction and after the built-in purge of connections,
+// authenticator, recovery codes and tokens. Use it to delete what the application or a module
 // registered through [Builder.SecondFactor] or [Builder.StepUp] (passkeys, say)
 // may have attached in the meantime; the facade cannot know of them. An error
-// rolls the reset back. It does not run when the email was already verified.
+// rolls the reset or the login back. It does not run when the email was already verified.
 //
 // Example:
 //

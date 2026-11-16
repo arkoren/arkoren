@@ -494,7 +494,7 @@ func (issuer *Issuer) issue(ctx context.Context, subject string, kind Kind, name
 		created.ExpiresAt = expiresAt.Unix()
 	}
 	err = issuer.db.WithTransaction(ctx, func(ctx context.Context) error {
-		if err := issuer.prune(ctx, subject, created.UserVersion); err != nil {
+		if err := issuer.pruneSubject(ctx, subject, created.UserVersion); err != nil {
 			return err
 		}
 		_, err := issuer.db.Exec(ctx, query.Table(issuer.table, func(statement *query.Builder) {
@@ -516,9 +516,9 @@ func (issuer *Issuer) issue(ctx context.Context, subject string, kind Kind, name
 	return token, issuer.prefix + "_" + id + "_" + secret, nil
 }
 
-// prune deletes the tokens of subject that can never authenticate again: those
-// bound to an older user version and those that expired.
-func (issuer *Issuer) prune(ctx context.Context, subject, version string) error {
+// pruneSubject deletes the tokens of subject that can never authenticate again:
+// those bound to an older user version and those that expired.
+func (issuer *Issuer) pruneSubject(ctx context.Context, subject, version string) error {
 	for _, condition := range []func(*query.Builder){
 		func(statement *query.Builder) { statement.Where("user_version", "<>", version) },
 		func(statement *query.Builder) {
@@ -538,7 +538,7 @@ func (issuer *Issuer) prune(ctx context.Context, subject, version string) error 
 }
 
 // Tokens lists the tokens of subject, newest first, including expired ones
-// until the next issue removes them. The secrets are not recoverable.
+// until the next issue or [Issuer.Prune] removes them. The secrets are not recoverable.
 //
 // Example:
 //

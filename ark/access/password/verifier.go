@@ -234,7 +234,7 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 	if verifier.policy == nil {
 		verifier.policy = defaultPolicy
 	}
-	provider.OnForget(verifier.forget)
+	provider.OnForget(verifier.Remove)
 
 	return verifier, nil
 }
@@ -297,8 +297,21 @@ func (verifier *Verifier) Ping(ctx context.Context) error {
 	return storage.Ping(ctx, verifier.db, verifier.hashes)
 }
 
-// forget deletes the hash of subject in the caller's transaction.
-func (verifier *Verifier) forget(ctx context.Context, subject string) error {
+// Remove deletes the password of subject, so the user can no longer log in with
+// one and [Verifier.Has] reports false. It is idempotent and runs in the
+// transaction carried by ctx, which makes it part of larger changes: the
+// verifier registers it to forget a deleted user, and the facade calls it when
+// the owner of a verified provider email takes over an account that was
+// registered with a password and never verified. It does not end the user's
+// logins; whoever calls it rotates the user ([auth.UserRecord.Version]) if
+// they must end.
+//
+// Example:
+//
+//	err := db.WithTransaction(ctx, func(ctx context.Context) error {
+//		return verifier.Remove(ctx, subject)
+//	})
+func (verifier *Verifier) Remove(ctx context.Context, subject string) error {
 	_, err := verifier.db.Exec(ctx, query.Table(verifier.hashes, func(statement *query.Builder) {
 		statement.Where("subject", subject).Delete()
 	}))
