@@ -106,6 +106,6 @@ var ErrThrottled = problem.New(func(details *problem.Builder) {
 //
 // Example:
 //
-//	_, err := twofactor.NewFactors(nil, nil, nil, nil, "")
+//	_, err := twofactor.NewFactors(nil, nil, nil, totp.Scheme{}, nil)
 //	fmt.Println(errors.Is(err, twofactor.ErrInvalidConfig)) // true
 var ErrInvalidConfig = errors.New("twofactor: invalid configuration")

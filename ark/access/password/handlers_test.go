@@ -405,7 +405,7 @@ func TestRegisterHandlerWithoutCreatePanics(t *testing.T) {
 		sys := newSystem(t, db, instance)
 		users := newFakeUsers()
 		provider, _ := auth.NewUserProvider(users.driver)
-		verifier, err := password.NewVerifier(provider, db, sys.store, sys.hasher, password.Users{
+		verifier, err := password.NewVerifier(provider, db, sys.store, testClientIP, sys.hasher, password.Users{
 			Lookup: users.Lookup,
 			Rotate: users.Rotate,
 		})

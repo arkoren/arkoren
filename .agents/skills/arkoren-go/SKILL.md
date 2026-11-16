@@ -493,7 +493,7 @@ delivery, and lifecycle protocols explicit.
   ID token after NonceHandler, and guard.LogoutHandler() owns the logout route;
   a second factor redirects to ClientBuilder.ChallengeURL or fails with
   ErrNoChallengeURL.
-  ark/access composes the guard, the packages and the routes: `access.New(db, store,
+  ark/access composes the guard, the packages and the routes: `access.New(db, store, clientIP,
   func(iam *access.Builder) { ... })` (variable `iam`, builder `iam`), `iam.Mount(web)`
   and `iam.XHandler()` for custom paths. Its packages (account, password, twofactor,
   apitoken, federation) take a `*auth.UserProvider` and never import each other;

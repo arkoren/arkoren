@@ -75,7 +75,7 @@ var ErrThrottled = problem.New(func(details *problem.Builder) {
 //
 // Example:
 //
-//	_, err := password.NewVerifier(nil, nil, nil, nil, password.Users{})
+//	_, err := password.NewVerifier(nil, nil, nil, nil, nil, password.Users{})
 //	fmt.Println(errors.Is(err, password.ErrInvalidConfig)) // true
 var ErrInvalidConfig = errors.New("password: invalid configuration")
 

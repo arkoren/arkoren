@@ -3,7 +3,6 @@ package password
 import (
 	"context"
 	"errors"
-	"net/http"
 	"time"
 
 	"arkoren.dev/ark/access/internal/storage"
@@ -15,7 +14,7 @@ import (
 //
 // Example:
 //
-//	verifier, err := password.NewVerifier(provider, db, store, hasher, users, func(passwords *password.Builder) {
+//	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, users, func(passwords *password.Builder) {
 //		passwords.Deliver(send).ResetTTL(30 * time.Minute)
 //	})
 type Builder struct {
@@ -24,7 +23,6 @@ type Builder struct {
 	deliver    func(context.Context, Message) error
 	resetTTL   time.Duration
 	policy     func(context.Context, string) error
-	clientIP   func(*http.Request) string
 	registered func(context.Context, string, string) error
 	changed    func(context.Context, string) error
 }
@@ -36,7 +34,7 @@ type Builder struct {
 //	var configure password.BuilderFunc = func(passwords *password.Builder) {
 //		passwords.Instance("tenant_a")
 //	}
-//	verifier, err := password.NewVerifier(provider, db, store, hasher, users, configure)
+//	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, users, configure)
 type BuilderFunc = func(*Builder)
 
 // Instance selects a named instance: tables are prefixed "<instance>_" and the
@@ -103,20 +101,6 @@ func (passwords *Builder) ResetTTL(ttl time.Duration) *Builder {
 //	})
 func (passwords *Builder) Policy(check func(ctx context.Context, password string) error) *Builder {
 	passwords.policy = check
-
-	return passwords
-}
-
-// ClientIP sets how the client address of the login throttle is found. The
-// default is the host of r.RemoteAddr, which behind a reverse proxy is the
-// proxy: pass the same function given to the guard's ClientIP, such as
-// ratelimit.TrustedProxyKey.
-//
-// Example:
-//
-//	passwords.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
-func (passwords *Builder) ClientIP(find func(*http.Request) string) *Builder {
-	passwords.clientIP = find
 
 	return passwords
 }

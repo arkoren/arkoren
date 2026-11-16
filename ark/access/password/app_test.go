@@ -11,6 +11,7 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/auth/memoryauth"
+	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/cache/memorycache"
@@ -21,6 +22,16 @@ import (
 	"arkoren.dev/ark/access/internal/apptest"
 	"arkoren.dev/ark/access/password"
 )
+
+// testClientIP is the client address source of the tests: the X-Test-IP header
+// when a test sets one to play several clients, else the host of r.RemoteAddr.
+func testClientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Test-IP"); ip != "" {
+		return ip
+	}
+
+	return ratelimit.TrustedProxyKey()(r)
+}
 
 // fakeUsers is an in-memory user store: the application's own users, as far as
 // the password package can tell.
@@ -138,7 +149,7 @@ func newConfiguredSystem(t *testing.T, db *database.Database, instance string, c
 	}))
 	sent := &[]password.Message{}
 	var sentMu sync.Mutex
-	verifier, err := password.NewVerifier(provider, db, store, hasher, password.Users{
+	verifier, err := password.NewVerifier(provider, db, store, testClientIP, hasher, password.Users{
 		Lookup: users.Lookup,
 		Create: users.Create,
 		Rotate: users.Rotate,

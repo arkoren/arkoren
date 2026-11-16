@@ -1,7 +1,13 @@
 package access_test
 
 import (
+	"context"
+	"strings"
 	"testing"
+
+	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/router"
+	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/ark/access"
 )
@@ -21,7 +27,7 @@ func TestMountOnlyMountsEnabledFeatures(t *testing.T) {
 	}
 	features := map[string]access.BuilderFunc{
 		"password":  func(iam *access.Builder) { iam.Password(hasher()) },
-		"twofactor": func(iam *access.Builder) { iam.TwoFactor(cipher(t), "Example") },
+		"twofactor": func(iam *access.Builder) { iam.TwoFactor(totp.New("Example"), cipher(t)) },
 		"tokens":    func(iam *access.Builder) { iam.Tokens() },
 		"providers": func(iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}) },
 		"always":    func(iam *access.Builder) {},
@@ -34,6 +40,85 @@ func TestMountOnlyMountsEnabledFeatures(t *testing.T) {
 				if got := sys.router.Has(route.method, route.path); got != want {
 					t.Errorf("with only %s: %s %s mounted = %v, want %v", enabled, route.method, route.path, got, want)
 				}
+			}
+		}
+	}
+}
+
+// TestMountNeverPanicsOnAcceptedConfiguration verifies Mount succeeds for every
+// feature combination New accepts, and mounts a route only when its requirement
+// holds: forgot and reset need Deliver, register needs users that can be created.
+func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
+	t.Parallel()
+
+	ownProvider := func(t *testing.T) (*auth.UserProvider, *ownUsers) {
+		t.Helper()
+		users := newOwnUsers(t)
+		provider, err := auth.NewUserProvider(users.driver)
+		if err != nil {
+			t.Fatalf("NewUserProvider: %v", err)
+		}
+
+		return provider, users
+	}
+	deliver := func(iam *access.Builder) { iam.Deliver(func(context.Context, access.Message) error { return nil }) }
+	verified := func(context.Context, string) (bool, error) { return true, nil }
+	proved := func(context.Context, string) (bool, error) { return false, nil }
+	tests := []struct {
+		name      string
+		configure func(t *testing.T, iam *access.Builder)
+		// absent lists routes that must not be mounted.
+		absent []string
+	}{
+		{"nothing", func(*testing.T, *access.Builder) {}, nil},
+		{"password without deliver", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher()) },
+			[]string{"POST /password/forgot", "POST /password/reset", "POST /email/verify"}},
+		{"password with deliver", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher()); deliver(iam) }, nil},
+		{"twofactor", func(t *testing.T, iam *access.Builder) { iam.TwoFactor(totp.New("Example"), cipher(t)) }, nil},
+		{"tokens", func(_ *testing.T, iam *access.Builder) { iam.Tokens() }, nil},
+		{"providers", func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}) }, nil},
+		{"everything", func(t *testing.T, iam *access.Builder) {
+			iam.Password(hasher()).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"})
+			deliver(iam)
+		}, nil},
+		{"own users without create", func(t *testing.T, iam *access.Builder) {
+			provider, users := ownProvider(t)
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}).Password(hasher())
+		}, []string{"POST /register", "POST /password/forgot", "POST /password/reset", "DELETE /account", "POST /email/verify"}},
+		{"own users without create, with deliver", func(t *testing.T, iam *access.Builder) {
+			provider, users := ownProvider(t)
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}).Password(hasher())
+			deliver(iam)
+		}, []string{"POST /register", "DELETE /account", "POST /email/verify"}},
+		{"own users with create", func(t *testing.T, iam *access.Builder) {
+			provider, users := ownProvider(t)
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher())
+		}, []string{"POST /password/forgot", "POST /password/reset", "DELETE /account"}},
+		{"own users with verification hooks but no create", func(t *testing.T, iam *access.Builder) {
+			provider, users := ownProvider(t)
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher())
+			deliver(iam)
+		}, []string{"POST /register", "DELETE /account"}},
+		{"own users with everything", func(t *testing.T, iam *access.Builder) {
+			provider, users := ownProvider(t)
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved})
+			iam.Password(hasher()).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"})
+			deliver(iam)
+		}, []string{"DELETE /account", "POST /email/verify"}},
+	}
+	for _, test := range tests {
+		iam, err := newFacade(t, func(iam *access.Builder) { test.configure(t, iam) })
+		if err != nil {
+			t.Fatalf("%s: New: %v", test.name, err)
+		}
+		r := router.New()
+		if panics(func() { iam.Mount(r) }) {
+			t.Errorf("%s: Mount panicked", test.name)
+		}
+		for _, route := range test.absent {
+			method, path, _ := strings.Cut(route, " ")
+			if r.Has(method, path) {
+				t.Errorf("%s: %s is mounted without its requirement", test.name, route)
 			}
 		}
 	}

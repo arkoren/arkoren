@@ -12,11 +12,25 @@ summary:
 
 A password alone can be guessed, phished or leaked. Two-factor adds a time-based
 one-time password (TOTP) from an authenticator app, plus single-use recovery codes
-for a lost phone. Enable it with a [cipher](../encryption/overview.md) that
-encrypts the secrets and the name authenticator apps show:
+for a lost phone. Enable it with a TOTP scheme, which
+carries the name authenticator apps show for the account, and a
+[cipher](../encryption/overview.md) that encrypts the secrets:
 
 ```go
-iam.TwoFactor(cipher, "Example")
+scheme := totp.New("Acme") // the name authenticator apps show for this account
+iam.TwoFactor(scheme, cipher)
+```
+
+The issuer must be non-empty and contain no colon; an invalid scheme makes `New`
+fail with `access.ErrInvalidConfig`. The scheme also sets the hash, the digit
+count, the period and the accepted drift. The defaults (SHA-1, 6 digits, 30
+seconds, one step of drift) work with every authenticator app, so change them only
+for a reason:
+
+```go
+scheme := totp.New("Acme", func(scheme *totp.Builder) {
+	scheme.Digits(8)
+})
 ```
 
 Use a key reserved for these secrets. Each user has one authenticator. The guard
@@ -100,7 +114,7 @@ To change the window, configure the package, and set the same value as the guard
 `FreshFor` if you changed that too:
 
 ```go
-iam.TwoFactor(cipher, "Example", func(factors *twofactor.Builder) {
+iam.TwoFactor(scheme, cipher, func(factors *twofactor.Builder) {
 	factors.StepUpWindow(5 * time.Minute)
 })
 ```

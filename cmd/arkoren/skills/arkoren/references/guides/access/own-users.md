@@ -67,9 +67,8 @@ and creating users from a provider login are unavailable, and an unknown provide
 identity is refused.
 
 > [!NOTE]
-> `Mount` registers `POST /register`, whose handler needs `Create`. If you enable
-> passwords without `Create`, register the other password handlers yourself, as
-> [Routes](routes.md#custom-paths) shows, instead of calling `Mount`.
+> `Mount` registers `POST /register` only when `Create` is set. Without it, the
+> other password routes still mount and users are created elsewhere.
 
 ## Verified Emails
 

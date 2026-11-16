@@ -5,12 +5,12 @@ go 1.27
 require (
 	arkoren.dev/ark/access v0.0.0
 	arkoren.dev/ark/oauth v0.3.0
-	arkoren.dev/core v0.8.1-0.20261115223453-71b8e64b3621
+	arkoren.dev/core v0.9.0
 	arkoren.dev/driver/aes v0.1.0
 	arkoren.dev/driver/bcrypt v0.1.0
 	arkoren.dev/driver/sqlite v0.1.0
 	arkoren.dev/foundation/key v0.1.0
-	arkoren.dev/foundation/totp v0.1.0
+	arkoren.dev/foundation/totp v0.2.0
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-jose/go-jose/v4 v4.1.6
 )

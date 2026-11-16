@@ -50,7 +50,7 @@
 //
 // Example:
 //
-//	factors, err := twofactor.NewFactors(provider, db, store, cipher, "Example")
+//	factors, err := twofactor.NewFactors(provider, db, store, totp.New("Acme"), cipher)
 //	if err != nil {
 //		return err
 //	}

@@ -37,18 +37,22 @@ go get arkoren.dev/ark/access
 ## Composing
 
 The application brings the database, the cache that holds sessions and counters,
-a [hasher](../hashing/overview.md) for passwords and a
-[cipher](../encryption/overview.md) for two-factor secrets. Each feature is off
-until you enable it:
+a function that finds the client address, a [hasher](../hashing/overview.md) for
+passwords and a [cipher](../encryption/overview.md) for two-factor secrets. The
+database, the cache and the client address function are required positional
+arguments of `New`; each feature is off until you enable it in the callback:
 
 ```go
-iam, err := access.New(db, store, func(iam *access.Builder) {
+// Behind a reverse proxy, list the prefixes of your proxies. With no proxy in
+// front of the application, call ratelimit.TrustedProxyKey() with no arguments.
+clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
+scheme := totp.New("Acme") // the name authenticator apps show for this account
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	iam.Password(hasher)
-	iam.TwoFactor(cipher, "Example")
+	iam.TwoFactor(scheme, cipher)
 	iam.Tokens()
 	iam.Provider(google, github)
 	iam.Deliver(send)
-	iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 })
 if err != nil {
 	return err
@@ -56,14 +60,16 @@ if err != nil {
 ```
 
 `New` does no I/O. It returns an error wrapping `access.ErrInvalidConfig` when a
-dependency is missing, no client address source is set (see
-[Shared Settings](#shared-settings)), a provider name is used twice or a package
-rejects its settings.
+dependency is missing (the database, the cache or the client address function), a
+provider name is used twice or contains anything but letters, digits, hyphens and underscores, or a package
+rejects its settings, such as an invalid TOTP scheme. `New` never guesses the
+client address, because the right source depends on the deployment (see
+[Shared Settings](#shared-settings)).
 
 | Feature | Builder method | Guide |
 | --- | --- | --- |
 | Registration, login, reset | `iam.Password(hasher)` | [Passwords](passwords.md) |
-| Authenticator app and recovery codes | `iam.TwoFactor(cipher, issuer)` | [Two-Factor](two-factor.md) |
+| Authenticator app and recovery codes | `iam.TwoFactor(scheme, cipher)` | [Two-Factor](two-factor.md) |
 | Personal and device tokens | `iam.Tokens()` | [API Tokens](tokens.md) |
 | Sign-in with external providers | `iam.Provider(clients...)` | [Connections](connections.md) |
 | Reset and verification links | `iam.Deliver(send)` | [Delivering Messages](#delivering-messages) |
@@ -171,8 +177,10 @@ in the background, so call `iam.Wait(ctx)` during shutdown, after the server sto
 accepting requests, to let queued messages finish. Tests call it before asserting
 on what was delivered.
 
-If you enable passwords without `iam.Deliver`, `Mount` panics, because the forgot
-route cannot send its link.
+Without `iam.Deliver`, `Mount` skips the routes that need to send a link:
+`POST /password/forgot`, `POST /password/reset` and the email verification
+routes. The matching handler methods, such as `iam.ForgotPasswordHandler()`,
+panic at composition instead of returning a handler that cannot work.
 
 ## Events
 
@@ -212,19 +220,22 @@ starts with a letter.
 
 ## Shared Settings
 
-Four builder methods configure what the facade shares between features:
+These builder methods configure what the facade shares between features; the
+client address function is the third argument of `New`:
 
 - `iam.SessionLifetime(d)` sets the absolute lifetime of a login for the session
   middleware and the guard together.
-- `iam.ClientIP(find)` sets how the client address is found for login records and
-  throttles, and `New` requires it. Behind a reverse proxy pass
-  `ratelimit.TrustedProxyKey(...)` with your proxies' prefixes. Only an
-  application that faces the internet directly may call `iam.TrustRemoteAddr()`
-  instead, which uses the host of `r.RemoteAddr`.
+- The client address function, passed to `New`, finds the client address for
+  login records and throttles. Behind a reverse proxy pass
+  `ratelimit.TrustedProxyKey(prefixes...)` with your proxies' prefixes: it trusts
+  `X-Forwarded-For` only from a request that arrives from those prefixes. An
+  application that faces the internet directly passes
+  `ratelimit.TrustedProxyKey()` with no prefixes, which returns the host of
+  `r.RemoteAddr`. Both reduce an IPv6 address to its `/64` prefix.
 - `iam.Guard(configure)` customizes the guard, such as the step-up window with
   `FreshFor`. The facade applies its own settings after your callback, so the
-  session lifetime, the session handle and the client address you set with
-  `iam.ClientIP` always win. Register credentials with `iam.SecondFactor`
+  session lifetime, the session handle and the client address function you passed
+  to `New` always win. Register credentials with `iam.SecondFactor`
   and `iam.StepUp`, not there: the registries only append.
 - `iam.Session(configure)` customizes the session cookie, such as its name. The
   facade applies the maximum lifetime and the default handle after your callback,
