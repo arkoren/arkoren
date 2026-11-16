@@ -23,13 +23,14 @@ func need(enabled bool, handler, requirement string) {
 // the user in; for a taken address it creates nothing and sends the owner a
 // [KindRegistration] message with a reset link. With the built-in directory a new
 // user gets a verification email when [Builder.Deliver] is set. It panics unless
-// [Builder.Password] is enabled and users can be created.
+// [Builder.Password] is enabled with [password.Builder.Registration].
 //
 // Example:
 //
 //	web.Post("/register", iam.RegisterHandler())
 func (iam *Access) RegisterHandler() router.Handler {
 	need(iam.verifier != nil, "RegisterHandler", "Builder.Password")
+	need(iam.verifier.Registration(), "RegisterHandler", "password.Builder.Registration")
 
 	return iam.verifier.RegisterHandler()
 }
@@ -239,8 +240,9 @@ func (iam *Access) ListTokensHandler() router.Handler {
 }
 
 // CreateTokenHandler returns the handler of POST /tokens; see
-// [apitoken.Issuer.CreateHandler]. It panics unless [Builder.Tokens] is
-// enabled.
+// [apitoken.Issuer.CreateHandler]. It panics unless [Builder.Tokens] is enabled
+// with [apitoken.Builder.PersonalTokens] (the default). A scope the user may not
+// hold is 403 [apitoken.ErrScopeNotGranted].
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
 // [Users.Verified] with your own users).
@@ -250,6 +252,7 @@ func (iam *Access) ListTokensHandler() router.Handler {
 //	web.Post("/tokens", iam.CreateTokenHandler())
 func (iam *Access) CreateTokenHandler() router.Handler {
 	need(iam.issuer != nil, "CreateTokenHandler", "Builder.Tokens")
+	need(iam.issuer.PersonalTokens(), "CreateTokenHandler", "apitoken.Builder.PersonalTokens")
 
 	return iam.issuer.CreateHandler(iam.guard)
 }
@@ -270,7 +273,7 @@ func (iam *Access) DeleteTokenHandler() router.Handler {
 // ExchangeHandler returns the handler of POST /device-tokens, which trades a
 // fresh login for a device token and ends the session; see
 // [apitoken.Issuer.ExchangeHandler]. It panics unless [Builder.Tokens] is
-// enabled.
+// enabled with [apitoken.Builder.DeviceTokens] (the default).
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
 // [Users.Verified] with your own users).
@@ -280,6 +283,7 @@ func (iam *Access) DeleteTokenHandler() router.Handler {
 //	web.Post("/device-tokens", iam.ExchangeHandler())
 func (iam *Access) ExchangeHandler() router.Handler {
 	need(iam.issuer != nil, "ExchangeHandler", "Builder.Tokens")
+	need(iam.issuer.DeviceTokens(), "ExchangeHandler", "apitoken.Builder.DeviceTokens")
 
 	return iam.issuer.ExchangeHandler(iam.guard)
 }
@@ -287,13 +291,14 @@ func (iam *Access) ExchangeHandler() router.Handler {
 // DeleteDeviceTokenHandler returns the handler of DELETE /device-tokens/current,
 // which revokes the presented token (a device's logout); see
 // [apitoken.Issuer.DeleteCurrentHandler]. It panics unless [Builder.Tokens] is
-// enabled.
+// enabled with [apitoken.Builder.DeviceTokens] (the default).
 //
 // Example:
 //
 //	api.Delete("/device-tokens/current", iam.DeleteDeviceTokenHandler())
 func (iam *Access) DeleteDeviceTokenHandler() router.Handler {
 	need(iam.issuer != nil, "DeleteDeviceTokenHandler", "Builder.Tokens")
+	need(iam.issuer.DeviceTokens(), "DeleteDeviceTokenHandler", "apitoken.Builder.DeviceTokens")
 
 	return iam.issuer.DeleteCurrentHandler()
 }

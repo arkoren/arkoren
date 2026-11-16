@@ -122,3 +122,36 @@ func TestHandlersRejectTokenIdentity(t *testing.T) {
 		}
 	})
 }
+
+// TestDisabledTokenKindHandlersPanic verifies the handlers of a disabled kind
+// fail at composition and those of the enabled kind do not.
+func TestDisabledTokenKindHandlersPanic(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		personalOnly := newSystem(t, db, instance+"_a", func(tokens *apitoken.Builder) { tokens.DeviceTokens(false) })
+		deviceOnly := newSystem(t, db, instance+"_b", func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
+		personalOnly.issuer.CreateHandler(personalOnly.guard)
+		deviceOnly.issuer.ExchangeHandler(deviceOnly.guard)
+		deviceOnly.issuer.DeleteCurrentHandler()
+		for name, build := range map[string]func(){
+			"ExchangeHandler without device tokens":      func() { personalOnly.issuer.ExchangeHandler(personalOnly.guard) },
+			"DeleteCurrentHandler without device tokens": func() { personalOnly.issuer.DeleteCurrentHandler() },
+			"CreateHandler without personal tokens":      func() { deviceOnly.issuer.CreateHandler(deviceOnly.guard) },
+		} {
+			if !panics(build) {
+				t.Errorf("%s did not panic", name)
+			}
+		}
+	})
+}
+
+// panics reports whether f panics.
+func panics(f func()) (panicked bool) {
+	defer func() {
+		panicked = recover() != nil
+	}()
+	f()
+
+	return false
+}

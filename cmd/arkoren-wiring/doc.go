@@ -8,8 +8,9 @@
 // satisfies access.Provider and access.NativeProvider. The end-to-end tests run
 // the facade over HTTP against in-memory SQLite and a fake OpenID Connect
 // provider: password with TOTP, the application's own users, social login then
-// connect, native login then a device token then GET /me, and a silent
-// re-login that is not fresh for a TOTP user.
+// connect, native login then a device token then GET /me, a silent
+// re-login that is not fresh for a TOTP user, and a provider login refused while
+// sign-up is off.
 package wiring
 
 import (

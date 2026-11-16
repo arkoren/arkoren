@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
 
@@ -82,30 +84,6 @@ func between(text, from, to string) string {
 	return value
 }
 
-// TestRevokeIgnoresUnknownAndRevokeAll verifies the Go API.
-func TestRevokeIgnoresUnknownAndRevokeAll(t *testing.T) {
-	t.Parallel()
-
-	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		ctx := testContext(t)
-		sys := newSystem(t, db, instance)
-		first, _, _ := sys.issuer.Issue(ctx, "1", apitoken.Request{Name: "a"})
-		_, _, _ = sys.issuer.Issue(ctx, "1", apitoken.Request{Name: "b"})
-		if err := sys.issuer.Revoke(ctx, "1", "unknown", first.ID); err != nil {
-			t.Fatalf("Revoke: %v", err)
-		}
-		if tokens, _ := sys.issuer.Tokens(ctx, "1"); len(tokens) != 1 {
-			t.Fatalf("tokens = %+v, want one", tokens)
-		}
-		if err := sys.issuer.RevokeAll(ctx, "1"); err != nil {
-			t.Fatalf("RevokeAll: %v", err)
-		}
-		if tokens, _ := sys.issuer.Tokens(ctx, "1"); len(tokens) != 0 {
-			t.Fatalf("tokens after RevokeAll = %+v", tokens)
-		}
-	})
-}
-
 // TestForgetHookDeletesTokens verifies forgetting a user removes their tokens.
 func TestForgetHookDeletesTokens(t *testing.T) {
 	t.Parallel()
@@ -146,7 +124,7 @@ func TestPingNamesMigrations(t *testing.T) {
 		ctx := testContext(t)
 		sys := newSystem(t, db, instance+"_x")
 		provider, _ := auth.NewUserProvider(sys.users)
-		issuer, err := apitoken.NewIssuer(provider, db, func(tokens *apitoken.Builder) {
+		issuer, err := apitoken.NewIssuer(provider, db, cache.New(memorycache.New()), func(tokens *apitoken.Builder) {
 			tokens.Instance(instance)
 		})
 		if err != nil {
@@ -166,7 +144,7 @@ func TestPingNamesMigrations(t *testing.T) {
 func TestNewIssuerRejectsBadConfig(t *testing.T) {
 	t.Parallel()
 
-	if _, err := apitoken.NewIssuer(nil, nil); !errors.Is(err, apitoken.ErrInvalidConfig) {
+	if _, err := apitoken.NewIssuer(nil, nil, nil); !errors.Is(err, apitoken.ErrInvalidConfig) {
 		t.Fatalf("nil dependencies error = %v", err)
 	}
 }

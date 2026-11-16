@@ -129,7 +129,7 @@ type Users struct {
 
 	// Create adds a user with identifier and returns the subject. It is used by
 	// registration and may be nil for an application that registers users
-	// elsewhere, in which case [Verifier.RegisterHandler] panics. Its errors
+	// elsewhere; [Builder.Registration] without it is [ErrInvalidConfig]. Its errors
 	// (a taken identifier, an invalid one) pass through to the client. It must
 	// fail on an existing identifier and never return the existing user.
 	Create func(ctx context.Context, identifier string) (subject string, err error)
@@ -157,22 +157,23 @@ type Users struct {
 //		return err
 //	}
 type Verifier struct {
-	provider   *auth.UserProvider
-	db         *database.Database
-	store      *cache.Cache
-	hasher     *hash.Hasher
-	users      Users
-	instance   string
-	hashes     string
-	resets     string
-	events     *event.Bus
-	deliver    func(context.Context, Message) error
-	resetTTL   time.Duration
-	policy     func(context.Context, string) error
-	clientIP   func(*http.Request) string
-	registered func(context.Context, string, string) error
-	changed    func(context.Context, string) error
-	jobs       background.Group
+	provider     *auth.UserProvider
+	db           *database.Database
+	store        *cache.Cache
+	hasher       *hash.Hasher
+	users        Users
+	instance     string
+	hashes       string
+	resets       string
+	events       *event.Bus
+	registration bool
+	deliver      func(context.Context, Message) error
+	resetTTL     time.Duration
+	policy       func(context.Context, string) error
+	clientIP     func(*http.Request) string
+	registered   func(context.Context, string, string) error
+	changed      func(context.Context, string) error
+	jobs         background.Group
 
 	dummyOnce sync.Once
 	dummy     []byte
@@ -209,25 +210,29 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 	for _, apply := range configure {
 		apply(&settings)
 	}
+	if settings.registration && users.Create == nil {
+		return nil, fmt.Errorf("%w: Registration needs Users.Create", ErrInvalidConfig)
+	}
 	if err := settings.validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	verifier := &Verifier{
-		provider:   provider,
-		db:         db,
-		store:      store,
-		hasher:     hasher,
-		users:      users,
-		instance:   settings.instance,
-		hashes:     storage.Table(settings.instance, "password_hashes"),
-		resets:     storage.Table(settings.instance, "password_resets"),
-		events:     settings.events,
-		deliver:    settings.deliver,
-		resetTTL:   cmp.Or(settings.resetTTL, DefaultResetTTL),
-		policy:     settings.policy,
-		clientIP:   clientIP,
-		registered: settings.registered,
-		changed:    settings.changed,
+		provider:     provider,
+		db:           db,
+		store:        store,
+		hasher:       hasher,
+		users:        users,
+		instance:     settings.instance,
+		hashes:       storage.Table(settings.instance, "password_hashes"),
+		resets:       storage.Table(settings.instance, "password_resets"),
+		events:       settings.events,
+		registration: settings.registration,
+		deliver:      settings.deliver,
+		resetTTL:     cmp.Or(settings.resetTTL, DefaultResetTTL),
+		policy:       settings.policy,
+		clientIP:     clientIP,
+		registered:   settings.registered,
+		changed:      settings.changed,
 	}
 	if verifier.policy == nil {
 		verifier.policy = defaultPolicy
@@ -235,6 +240,19 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 	provider.OnForget(verifier.forget)
 
 	return verifier, nil
+}
+
+// Registration reports whether self-service registration is enabled
+// ([Builder.Registration]), which the facade reads to decide whether to mount
+// POST /register.
+//
+// Example:
+//
+//	if verifier.Registration() {
+//		web.Post("/register", verifier.RegisterHandler())
+//	}
+func (verifier *Verifier) Registration() bool {
+	return verifier.registration
 }
 
 // defaultPolicy requires [MinLength] to [MaxLength] bytes.

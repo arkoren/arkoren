@@ -33,7 +33,7 @@ func TestRegisterVerifyAndRequireVerified(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 		})
 		register(t, sys.client, "ada@example.com")
 		if reply := sys.client.Do(http.MethodGet, "/me", ""); !strings.HasSuffix(reply.Body, "|1|true") {
@@ -79,7 +79,7 @@ func TestTwoFactorEnableChallengeAndRecovery(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.TwoFactor(totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
@@ -136,7 +136,7 @@ func TestPasswordChangeEndsOtherDevices(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
@@ -161,7 +161,7 @@ func TestForgotAndResetFlow(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		if reply := sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusAccepted {
@@ -190,9 +190,9 @@ func TestTokensExchangeAndBearer(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.Tokens(func(tokens *apitoken.Builder) {
-				tokens.Scopes("posts:read")
+				tokens.Grants(apitoken.AnyScope, "posts:read")
 			})
 		})
 		device := sys.client.NewDevice()
@@ -225,7 +225,7 @@ func TestResetEndsTokens(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.Tokens()
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
@@ -253,7 +253,7 @@ func TestSessionsListAndRevoke(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
@@ -286,7 +286,7 @@ func TestDeleteAccountRemovesEveryPackagesRows(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 		})
@@ -327,7 +327,7 @@ func TestConfirmWithPassword(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		stale := sys.client.NewDevice()
@@ -349,12 +349,12 @@ func TestTwoInstancesShareOneDatabase(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		first := newApp(t, db, instance+"_a", func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 		})
 		second := newApp(t, db, instance+"_b", func(iam *access.Builder) {
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 		})
@@ -389,7 +389,7 @@ func TestMustAcceptPanicsForUnregisteredMethod(t *testing.T) {
 	t.Parallel()
 
 	iam, err := newFacade(t, func(iam *access.Builder) {
-		iam.Password(hasher())
+		iam.Password(hasher(), registration)
 		iam.TwoFactor(totp.New("Example"), cipher(t))
 	})
 	if err != nil {
@@ -418,10 +418,10 @@ func TestMigrationsOnlyForEnabledFeatures(t *testing.T) {
 		return strings.Join(seen, ",")
 	}
 	all, err := newFacade(t, func(iam *access.Builder) {
-		iam.Password(hasher())
+		iam.Password(hasher(), registration)
 		iam.TwoFactor(totp.New("Example"), cipher(t))
 		iam.Tokens()
-		iam.Provider(fakeProvider{name: "fake"})
+		iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		iam.Instance("tenant_a")
 	})
 	if err != nil {
@@ -430,7 +430,7 @@ func TestMigrationsOnlyForEnabledFeatures(t *testing.T) {
 	if got, want := groups(all), "account:tenant_a,password:tenant_a,twofactor:tenant_a,apitoken:tenant_a,federation:tenant_a"; got != want {
 		t.Errorf("groups = %s, want %s", got, want)
 	}
-	passwordOnly, _ := newFacade(t, func(iam *access.Builder) { iam.Password(hasher()) })
+	passwordOnly, _ := newFacade(t, func(iam *access.Builder) { iam.Password(hasher(), registration) })
 	if got, want := groups(passwordOnly), "account,password"; got != want {
 		t.Errorf("groups = %s, want %s", got, want)
 	}
@@ -473,7 +473,7 @@ func TestRegisterTakenAddressNotifiesTheOwner(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher()) })
+		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher(), registration) })
 		fresh := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
 		taken := sys.client.NewDevice().Post("/register", `{"email":"Ada@example.com","password":"another horse"}`)
 		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {

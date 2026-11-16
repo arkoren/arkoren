@@ -1,5 +1,5 @@
 // Package access composes the authentication features of Arkoren into one
-// facade: registration and password login, email verification, password reset,
+// facade: password login and optional registration, email verification, password reset,
 // two-factor authentication, API and device tokens, sign-in with external
 // providers, connections and account deletion, as JSON routes on core's
 // [auth.Guard].
@@ -9,10 +9,10 @@
 // imports them:
 //
 //	account     the users table (email), email verification, the user provider
-//	password    register, login, confirm, change, forgot and reset
+//	password    login, confirm, change, forgot and reset; register when enabled
 //	twofactor   TOTP and recovery codes
-//	apitoken    personal and device tokens, the bearer authenticator, scopes
-//	federation  links external identities to users, create on first login
+//	apitoken    personal and device tokens, the bearer authenticator, scopes and their grant ceiling
+//	federation  links external identities to users, create on first login when enabled
 //
 // It never imports ark/oauth: a module boundary is a dependency boundary. The
 // [Provider] and [NativeProvider] interfaces are satisfied structurally by
@@ -25,7 +25,9 @@
 //	clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-//		iam.Password(hasher)
+//		iam.Password(hasher, func(passwords *password.Builder) {
+//			passwords.Registration(true) // off by default
+//		})
 //		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
 //		iam.Provider(google, github)
@@ -43,7 +45,11 @@
 //	api := routes.With(iam.Middleware(), auth.Require())
 //	api.Get("/me", me)
 //
-// Every feature is off until enabled. The application brings the database, the
+// Every feature is off until enabled, including the two ways users appear on
+// their own: self-service registration ([password.Builder.Registration]) and
+// creating a user on a first provider login ([federation.Builder.SignUp]). With
+// both off the application adds users itself, with [Access.Directory] ([account.Directory.Create],
+// [account.Directory.CreateVerified]) or its own users. The application brings the database, the
 // cache, a hasher for passwords and a cipher for two-factor secrets; the facade
 // does no I/O at construction, the application runs the migrations, and
 // [Access.Ping] is the readiness check.
@@ -53,12 +59,12 @@
 // [Access.Mount] registers these, and each has an Access.XHandler method for
 // custom paths. Bodies and responses are JSON.
 //
-//	Login       POST /register · POST /login · POST /login/challenge · GET /login/pending · POST /logout
+//	Login       POST /register (with Registration) · POST /login · POST /login/challenge · GET /login/pending · POST /logout
 //	Step-up     POST /confirm
 //	Email       POST /email/verify · POST /email/verify/resend
 //	Password    POST /password/forgot · POST /password/reset · PUT /password
 //	Two-factor  POST /two-factor/setup · POST /two-factor · DELETE /two-factor · POST /two-factor/recovery-codes
-//	Tokens      GET /tokens · POST /tokens · DELETE /tokens/{id} · POST /device-tokens · DELETE /device-tokens/current
+//	Tokens      GET /tokens · POST /tokens (personal) · DELETE /tokens/{id} · POST /device-tokens · DELETE /device-tokens/current (device)
 //	Sessions    GET /sessions · DELETE /sessions/{id} · DELETE /sessions
 //	Providers   GET /auth/<name> · GET|POST /auth/<name>/callback · GET /auth/<name>/nonce · POST /auth/<name>/native
 //	Connections GET /connections · POST /connections/{provider} · DELETE /connections/{id}
@@ -83,7 +89,7 @@
 //     (100) in 15 minutes, so someone failing from elsewhere cannot lock a user
 //     out; an unknown identifier costs a dummy hash. Forgot-password, register and
 //     resend are throttled per identifier and per address too.
-//   - Register answers an empty 202 and logs nobody in, whether or not the address
+//   - Register, when enabled, answers an empty 202 and logs nobody in, whether or not the address
 //     was taken; for a taken one it creates nothing and sends the owner a
 //     [KindRegistration] message with a reset link, within the registration
 //     throttle.
@@ -108,6 +114,11 @@
 //   - Enabling two-factor ends the user's other logins. Disabling it and
 //     regenerating recovery codes need a recent authenticator or recovery code;
 //     a fresh password alone is 403 with methods ["otp"].
+//   - A token's scopes are capped by what [apitoken.Builder.Grants] lets the user
+//     hold: at issue (403 scope-not-granted) and again on every request, or
+//     within [apitoken.Builder.GrantTTL] of a change.
+//   - A first login with an unknown provider identity creates no user unless
+//     [federation.Builder.SignUp] is on (403 no-account).
 //   - Federation never links by email. Connecting a provider is a POST that
 //     leaves a ten-minute, single-use intent in the session. A user cannot remove
 //     their last way to log in (409).
@@ -126,7 +137,11 @@
 // whether the provider verified the email and must fail on an existing
 // identifier, and the unverified-account rules above apply only when you give
 // [Users.Verified] and [Users.ProveEmail]; without them the application must
-// enforce the same rules itself.
+// enforce the same rules itself. Registration and sign-up with a provider stay
+// off until [password.Builder.Registration] and [federation.Builder.SignUp] are
+// enabled, and each needs [Users.Create]; [New] fails without it. The
+// application adds its own users in its own store, and [Builder.Directory],
+// which configures the built-in table, cannot be combined with Users.
 //
 // # Transactions and limits
 //

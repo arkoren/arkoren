@@ -11,6 +11,7 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/foundation/query"
@@ -69,7 +70,8 @@ const (
 	KindPersonal Kind = "personal"
 
 	// KindDevice marks a token issued to a first-party app when a login was
-	// exchanged; it carries every scope of the catalog.
+	// exchanged; it carries every catalog scope the user may hold when it is
+	// issued ([Builder.Grants]).
 	//
 	// Example:
 	//
@@ -124,7 +126,9 @@ type Request struct {
 	Name string `json:"name"`
 
 	// Scopes are the scopes to grant, a subset of the catalog from
-	// [Builder.Scopes]. Empty grants none.
+	// [Builder.Grants] that the user may hold. A scope outside the catalog is
+	// [ErrInvalidRequest]; one the user may not hold is [ErrScopeNotGranted].
+	// Empty grants none.
 	Scopes []string `json:"scopes"`
 
 	// ExpiresAt optionally ends the token; it must be in the future and within
@@ -141,10 +145,12 @@ type Request struct {
 // so anything that changes the version (a password reset, or the application's
 // own rotation) ends it. A token never carries factors and is never a browser
 // session, so it can neither pass [auth.RequireLevel] nor change a credential.
+// Its scopes never exceed what [Builder.Grants] lets the user hold; see
+// [Builder.GrantTTL] for when that is re-checked.
 //
 // Example:
 //
-//	issuer, err := apitoken.NewIssuer(provider, db)
+//	issuer, err := apitoken.NewIssuer(provider, db, store)
 //	if err != nil {
 //		return err
 //	}
@@ -154,10 +160,22 @@ type Issuer struct {
 	db       *database.Database
 	instance string
 	table    string
+	store    *cache.Cache
 	events   *event.Bus
-	catalog  []string
 	prefix   string
 	maxTTL   time.Duration
+
+	// catalog is the sorted scope catalog and grantable the user's ceiling in
+	// it; grantable is nil, and grants unused, without a catalog. grantTTL is
+	// [Builder.GrantTTL] and grants the namespace of the cached answers.
+	catalog   []string
+	grantable func(context.Context, string) ([]string, error)
+	grantTTL  time.Duration
+	grants    cache.Namespace[[]string]
+
+	// personal and device are the enabled token kinds.
+	personal bool
+	device   bool
 
 	// deviceIdle is how long a device token may stay unused; zero disables the
 	// limit.
@@ -166,22 +184,24 @@ type Issuer struct {
 }
 
 // NewIssuer returns a token issuer. provider finds users (to check that they
-// exist and to read the version) and db holds the table. It does no I/O: the
-// table comes from [Issuer.Migrations]. Errors wrap [ErrInvalidConfig].
+// exist and to read the version), db holds the table and store caches the
+// users' grants when [Builder.GrantTTL] is positive (it is required either way,
+// so enabling the cache later changes no signature). It does no I/O: the table
+// comes from [Issuer.Migrations]. Errors wrap [ErrInvalidConfig].
 //
 // It registers a forget hook on provider that deletes the user's tokens in the
 // caller's transaction.
 //
 // Example:
 //
-//	issuer, err := apitoken.NewIssuer(provider, db, func(tokens *apitoken.Builder) {
-//		tokens.Scopes("posts:read")
+//	issuer, err := apitoken.NewIssuer(provider, db, store, func(tokens *apitoken.Builder) {
+//		tokens.Grants(apitoken.AnyScope, "posts:read")
 //	})
-func NewIssuer(provider *auth.UserProvider, db *database.Database, configure ...BuilderFunc) (*Issuer, error) {
-	if provider == nil || db == nil {
-		return nil, fmt.Errorf("%w: provider and database are required", ErrInvalidConfig)
+func NewIssuer(provider *auth.UserProvider, db *database.Database, store *cache.Cache, configure ...BuilderFunc) (*Issuer, error) {
+	if provider == nil || db == nil || store == nil {
+		return nil, fmt.Errorf("%w: provider, database and store are required", ErrInvalidConfig)
 	}
-	settings := Builder{prefix: DefaultPrefix}
+	settings := Builder{prefix: DefaultPrefix, personal: true, device: true}
 	for _, apply := range configure {
 		apply(&settings)
 	}
@@ -193,15 +213,23 @@ func NewIssuer(provider *auth.UserProvider, db *database.Database, configure ...
 	issuer := &Issuer{
 		provider: provider,
 		db:       db,
+		store:    store,
 		instance: settings.instance,
 		table:    storage.Table(settings.instance, "api_tokens"),
 		events:   settings.events,
 		catalog:  catalog,
 		prefix:   settings.prefix,
 		maxTTL:   settings.maxTTL,
+		grantTTL: settings.grantTTL,
+		grants:   grantsNamespace(settings.instance, settings.grantTTL),
+		personal: settings.personal,
+		device:   settings.device,
 
 		deviceIdle: settings.deviceIdle(),
 		verified:   settings.verified,
+	}
+	if len(catalog) > 0 {
+		issuer.grantable = settings.grantable
 	}
 	provider.OnForget(issuer.RevokeAll)
 
@@ -238,6 +266,30 @@ func (issuer *Issuer) Migrations() []migrate.Definition {
 			migration.Down(migrate.Schema(schema.Drop(issuer.table)))
 		}),
 	)
+}
+
+// PersonalTokens reports whether personal tokens are enabled
+// ([Builder.PersonalTokens]), which the facade reads to decide what to mount.
+//
+// Example:
+//
+//	if issuer.PersonalTokens() {
+//		web.Post("/tokens", issuer.CreateHandler(guard))
+//	}
+func (issuer *Issuer) PersonalTokens() bool {
+	return issuer.personal
+}
+
+// DeviceTokens reports whether device tokens are enabled
+// ([Builder.DeviceTokens]), which the facade reads to decide what to mount.
+//
+// Example:
+//
+//	if issuer.DeviceTokens() {
+//		web.Post("/device-tokens", issuer.ExchangeHandler(guard))
+//	}
+func (issuer *Issuer) DeviceTokens() bool {
+	return issuer.device
 }
 
 // Ping verifies, read-only, that the table exists. A missing table returns an
@@ -285,8 +337,10 @@ func (row row) token() Token {
 }
 
 // Issue creates a personal token for subject and returns it with its secret
-// text, which is shown once and never stored. An invalid request is
-// [ErrInvalidRequest]; an unknown subject returns an error wrapping
+// text, which is shown once and never stored. An invalid request, including a
+// scope outside the catalog, is [ErrInvalidRequest]; a catalog scope the user
+// may not hold ([Builder.Grants]) is [ErrScopeNotGranted]; an unknown subject
+// returns an error wrapping
 // [auth.ErrUserNotFound]. It also removes the user's tokens that an earlier
 // version change already ended. It publishes [Issued].
 //
@@ -311,6 +365,9 @@ func (issuer *Issuer) Issue(ctx context.Context, subject string, request Request
 	}
 	expiresAt, err := issuer.expiry(request.ExpiresAt, time.Now())
 	if err != nil {
+		return Token{}, "", err
+	}
+	if err := issuer.checkGranted(ctx, subject, scopes); err != nil {
 		return Token{}, "", err
 	}
 
@@ -341,6 +398,27 @@ func (issuer *Issuer) scopes(requested []string) ([]string, error) {
 	return scopes, nil
 }
 
+// checkGranted returns [ErrScopeNotGranted] unless the user may hold every one
+// of scopes now. It asks the grant function directly, whatever
+// [Builder.GrantTTL] says: a token is rare and must not be minted from a stale
+// answer. It calls nothing for no scopes.
+func (issuer *Issuer) checkGranted(ctx context.Context, subject string, scopes []string) error {
+	if len(scopes) == 0 {
+		return nil
+	}
+	granted, err := issuer.granted(ctx, subject)
+	if err != nil {
+		return err
+	}
+	for _, scope := range scopes {
+		if !slices.Contains(granted, scope) {
+			return ErrScopeNotGranted
+		}
+	}
+
+	return nil
+}
+
 // expiry returns the expiry of a token requested to expire at requested (zero
 // for never): with a maximum lifetime a zero request gets the maximum and a
 // later one is refused, and an expiry not after now is refused.
@@ -361,8 +439,8 @@ func (issuer *Issuer) expiry(requested, now time.Time) (time.Time, error) {
 	return requested, nil
 }
 
-// IssueDevice creates a device token for subject: it carries every scope of the
-// catalog and expires after [Builder.MaxTTL] when one is set, and after going
+// IssueDevice creates a device token for subject: it carries every catalog scope
+// the user may hold now ([Builder.Grants]) and expires after [Builder.MaxTTL] when one is set, and after going
 // unused for [Builder.DeviceIdleTTL] (90 days by default); its holder is also
 // expected to revoke it at logout ([Issuer.DeleteCurrentHandler]). device names the device in the user's
 // list (for example "Pixel 9"). It returns the token with its secret text,
@@ -382,8 +460,12 @@ func (issuer *Issuer) IssueDevice(ctx context.Context, subject, device string) (
 	if err != nil {
 		return Token{}, "", err
 	}
+	scopes, err := issuer.granted(ctx, subject)
+	if err != nil {
+		return Token{}, "", err
+	}
 
-	return issuer.issue(ctx, subject, KindDevice, name, slices.Clone(issuer.catalog), expiresAt)
+	return issuer.issue(ctx, subject, KindDevice, name, scopes, expiresAt)
 }
 
 // issue writes the token row and returns the token with its text.
@@ -474,92 +556,4 @@ func (issuer *Issuer) Tokens(ctx context.Context, subject string) ([]Token, erro
 	}
 
 	return tokens, nil
-}
-
-// Revoke deletes the listed tokens of subject; ids that are unknown or belong
-// to another user are ignored. A revoked token fails to authenticate at once.
-// It publishes [Revoked] when at least one token was deleted.
-//
-// Example:
-//
-//	err := issuer.Revoke(ctx, subject, token.ID)
-func (issuer *Issuer) Revoke(ctx context.Context, subject string, ids ...string) error {
-	_, err := issuer.revoke(ctx, subject, ids)
-
-	return err
-}
-
-// revoke deletes the tokens and reports how many were deleted.
-func (issuer *Issuer) revoke(ctx context.Context, subject string, ids []string) (int64, error) {
-	if len(ids) == 0 {
-		return 0, nil
-	}
-	affected, err := issuer.db.Exec(ctx, query.Table(issuer.table, func(statement *query.Builder) {
-		statement.Where("subject", subject)
-		statement.WhereIn("id", ids...)
-		statement.Delete()
-	}))
-	if err != nil {
-		return 0, fmt.Errorf("apitoken: revoke: %w", err)
-	}
-	if affected > 0 {
-		issuer.emit(ctx, Revoked, subject)
-	}
-
-	return affected, nil
-}
-
-// RevokeAll deletes every token of subject ("sign out everywhere"). It is also
-// the forget hook of the user provider. It publishes [Revoked] when at least one
-// token was deleted.
-//
-// Example:
-//
-//	err := issuer.RevokeAll(ctx, subject)
-func (issuer *Issuer) RevokeAll(ctx context.Context, subject string) error {
-	affected, err := issuer.db.Exec(ctx, query.Table(issuer.table, func(statement *query.Builder) {
-		statement.Where("subject", subject).Delete()
-	}))
-	if err != nil {
-		return fmt.Errorf("apitoken: revoke all: %w", err)
-	}
-	if affected > 0 {
-		issuer.emit(ctx, Revoked, subject)
-	}
-
-	return nil
-}
-
-// RevokeDevices deletes the device tokens of subject and keeps their personal
-// access tokens. A device holds no session that a password change could end,
-// so the password handlers call it to make the change reach the devices; the
-// personal tokens are the user's own deliberate credentials and survive. It
-// publishes [Revoked] when at least one token was deleted.
-//
-// Example:
-//
-//	err := issuer.RevokeDevices(ctx, subject)
-func (issuer *Issuer) RevokeDevices(ctx context.Context, subject string) error {
-	affected, err := issuer.db.Exec(ctx, query.Table(issuer.table, func(statement *query.Builder) {
-		statement.Where("subject", subject).Where("kind", string(KindDevice)).Delete()
-	}))
-	if err != nil {
-		return fmt.Errorf("apitoken: revoke devices: %w", err)
-	}
-	if affected > 0 {
-		issuer.emit(ctx, Revoked, subject)
-	}
-
-	return nil
-}
-
-// emit publishes topic with the subject once the surrounding transaction, if
-// any, has committed.
-func (issuer *Issuer) emit(ctx context.Context, topic event.Topic[UserEvent], subject string) {
-	// A failing hook only loses a notification, never the committed change.
-	_ = issuer.db.AfterCommit(ctx, func(ctx context.Context) error {
-		issuer.events.Emit(ctx, topic, UserEvent{Subject: subject})
-
-		return nil
-	})
 }

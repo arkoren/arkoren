@@ -51,8 +51,9 @@ type Link struct {
 //
 //   - A known identity logs its user in (a deleted or disabled user is
 //     [auth.ErrUnauthenticated]).
-//   - An unknown identity creates a user through [Builder.Create], or is
-//     [ErrNotLinked] without it. The package never links by email.
+//   - An unknown identity creates a user through [Builder.Create] when
+//     [Builder.SignUp] is enabled, and otherwise is [ErrNoAccount]. The package
+//     never links by email.
 //   - A logged-in user who started a connection ([Links.ConnectHandler]) links
 //     the identity to their own account instead. The intent lives in their
 //     session for ten minutes, is single use, and exists so that a cross-site
@@ -72,6 +73,7 @@ type Links struct {
 	instance string
 	table    string
 	events   *event.Bus
+	signUp   bool
 	create   func(context.Context, auth.External) (string, error)
 	fallback func(context.Context, string) (bool, error)
 	verified func(context.Context, string) (bool, error)
@@ -106,6 +108,7 @@ func NewLinks(provider *auth.UserProvider, db *database.Database, configure ...B
 		instance: settings.instance,
 		table:    storage.Table(settings.instance, "federation_links"),
 		events:   settings.events,
+		signUp:   settings.signUp,
 		create:   settings.create,
 		fallback: settings.fallback,
 		verified: settings.verified,

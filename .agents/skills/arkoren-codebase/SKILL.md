@@ -364,7 +364,9 @@ these seams: access.New(db, store, clientIP, configure) builds the guard with th
 registries (second factor: otp then recovery; step up: pwd then otp; federated is
 no step-up method), Mount registers the JSON routes of the enabled features, and
 every credential handler requires Identity.Session and guard.Fresh (a user with
-no step-up method is fresh after any login). Packages account, password,
+no step-up method is fresh after any login). Registration and sign-up on a first provider login are off by default (password.Builder.Registration,
+federation.Builder.SignUp), and the token scope catalog takes its grant ceiling
+(apitoken.Builder.Grants, GrantTTL, AnyScope) with the shared cache given to NewIssuer. Packages account, password,
 twofactor, apitoken and federation never import each other; subjects are strings
 and cross-package writes join the context transaction of the one Database. A
 password reset calls Users.Rotate, which bumps UserRecord.Version and ends

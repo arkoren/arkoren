@@ -20,7 +20,7 @@ Only the routes of enabled features are mounted. `r` must already run
 | Area | Routes | Needs |
 | --- | --- | --- |
 | Login | `POST /login` | Passwords |
-| Login | `POST /register` | Passwords and users that can be created |
+| Login | `POST /register` | Passwords with `Registration(true)` |
 | Login | `POST /login/challenge`, `GET /login/pending` | A second factor |
 | Login | `POST /logout` | Always |
 | Step-up | `POST /confirm` | A step-up method |
@@ -28,11 +28,16 @@ Only the routes of enabled features are mounted. `r` must already run
 | Password | `POST /password/forgot`, `POST /password/reset` | Passwords and `iam.Deliver` |
 | Password | `PUT /password` | Passwords |
 | Two-factor | `POST /two-factor/setup`, `POST /two-factor`, `DELETE /two-factor`, `POST /two-factor/recovery-codes` | Two-factor |
-| Tokens | `GET /tokens`, `POST /tokens`, `DELETE /tokens/{id}`, `POST /device-tokens`, `DELETE /device-tokens/current` | Tokens |
+| Tokens | `GET /tokens`, `DELETE /tokens/{id}` | Tokens |
+| Tokens | `POST /tokens` | Tokens with personal tokens on (the default) |
+| Tokens | `POST /device-tokens`, `DELETE /device-tokens/current` | Tokens with device tokens on (the default) |
 | Sessions | `GET /sessions`, `DELETE /sessions/{id}`, `DELETE /sessions` | Always |
 | Providers | `GET /auth/{name}`, `GET` or `POST /auth/{name}/callback` | A provider |
 | Providers | `GET /auth/{name}/nonce`, `POST /auth/{name}/native` | A provider with native login |
 | Connections | `GET /connections`, `POST /connections/{provider}`, `DELETE /connections/{id}` | A provider |
+
+Providers mount their routes whether or not sign-up with providers is on; sign-up
+only decides whether an unknown identity creates a user (`403` otherwise).
 | Account | `DELETE /account` | Built-in users |
 
 A step-up method exists when passwords or two-factor are enabled, or when you add
@@ -95,8 +100,8 @@ are:
 | `account` | `email-taken`, `invalid-email`, `invalid-token`, `email-unverified`, `verify-wrong-account`, `throttled` |
 | `password` | `invalid-credentials`, `invalid-password`, `invalid-token`, `throttled` |
 | `twofactor` | `invalid-code`, `already-enabled`, `not-enabled`, `not-enrolling`, `throttled` |
-| `apitoken` | `invalid-request`, `not-found` |
-| `federation` | `not-linked`, `linked-elsewhere`, `already-linked`, `last-link`, `not-found`, `unknown-provider` |
+| `apitoken` | `invalid-request`, `scope-not-granted`, `not-found` |
+| `federation` | `not-linked`, `no-account`, `linked-elsewhere`, `already-linked`, `last-link`, `not-found`, `unknown-provider` |
 
 ## Custom Paths
 
@@ -140,7 +145,7 @@ web.Post("/connections/{provider}", iam.Links().ConnectHandler(iam.Guard(), map[
 
 `Mount` skips a route whose requirement is missing instead of panicking: no
 forgot or reset routes without `iam.Deliver`, because no user could receive a
-link, and no `POST /register` when your own users have no `Create`. It never
+link, and no `POST /register` unless registration is enabled. It never
 panics for a configuration `New` accepted, except for one mistake: mounting
 twice, or on a router that already has one of these patterns, panics like any
 duplicate route.

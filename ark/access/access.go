@@ -23,8 +23,11 @@ import (
 
 // ErrInvalidConfig is wrapped by the errors of [New] for an unusable
 // configuration: a missing dependency (database, store or client address
-// source), a duplicate provider name, an invalid instance or scheme, or a
-// failing package constructor.
+// source), a duplicate provider name, an invalid instance or scheme, a nil
+// two-factor cipher, [Builder.Directory] combined with [Builder.Users], or a
+// failing package constructor (registration or sign-up without users that can
+// be created, tokens with no kind enabled, a scope catalog without a grant
+// function).
 //
 // Example:
 //
@@ -69,7 +72,9 @@ var ErrNotMigrated = storage.ErrNotMigrated
 // Example:
 //
 //	iam, err := access.New(db, store, ratelimit.TrustedProxyKey(), func(iam *access.Builder) {
-//		iam.Password(hasher)
+//		iam.Password(hasher, func(passwords *password.Builder) {
+//			passwords.Registration(true)
+//		})
 //	})
 //	if err != nil {
 //		return err
@@ -105,10 +110,6 @@ type Access struct {
 	emailProven  func(context.Context, string) error
 	keepPersonal bool
 
-	// register reports whether the users can be created ([Users.Create] or the
-	// built-in directory), which /register needs.
-	register bool
-
 	// secondFactor and stepUp report whether the guard's registries are not
 	// empty, which the handlers that need one check.
 	secondFactor bool
@@ -139,7 +140,9 @@ type Access struct {
 //	clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-//		iam.Password(hasher)
+//		iam.Password(hasher, func(passwords *password.Builder) {
+//			passwords.Registration(true)
+//		})
 //		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
 //		iam.Provider(google, github)
@@ -200,7 +203,9 @@ func (iam *Access) UserProvider() *auth.UserProvider {
 }
 
 // Directory returns the built-in users table, or nil when the application
-// brought its own with [Builder.Users].
+// brought its own with [Builder.Users]. With registration and sign-up both off
+// this is how the application adds users: [account.Directory.Create] and
+// [account.Directory.CreateVerified].
 //
 // Example:
 //
