@@ -47,7 +47,7 @@ func TestVictimsVerifyClickDoesNotVerifyTheAttackersAccount(t *testing.T) {
 		}
 
 		// The victim opens the genuine link without being logged in as the account.
-		token := sys.box.last(t, access.KindVerify).Token
+		token := sys.box.lastVerify(t).Signed
 		victim := sys.client.NewDevice()
 		if reply := victim.Post("/email/verify", `{"token":"`+token+`"}`); reply.Status != http.StatusUnauthorized {
 			t.Fatalf("verify while logged out = %d %s, want 401", reply.Status, reply.Body)
@@ -64,8 +64,7 @@ func TestVictimsVerifyClickDoesNotVerifyTheAttackersAccount(t *testing.T) {
 		// Only the reset proves the mailbox, and it purges.
 		reset := sys.client.NewDevice()
 		reset.Post("/password/forgot", `{"email":"victim@example.com"}`)
-		sys.settle(t)
-		resetToken := sys.box.last(t, access.KindReset).Token
+		resetToken := sys.box.lastReset(t).Signed
 		if reply := reset.Post("/password/reset", `{"token":"`+resetToken+`","password":"victim horse ok"}`); reply.Status != http.StatusNoContent {
 			t.Fatalf("reset = %d %s", reply.Status, reply.Body)
 		}
@@ -123,7 +122,7 @@ func TestOwnUsersNeedTheVerifiedHooks(t *testing.T) {
 			"only Verified":        {Provider: provider, Lookup: users.lookup, Rotate: users.rotate, Verified: verified},
 			"only ProveEmail":      {Provider: provider, Lookup: users.lookup, Rotate: users.rotate, ProveEmail: prove},
 		} {
-			_, err := access.New(db, cache.New(memorycache.New()), testClientIP, func(iam *access.Builder) {
+			_, err := construct(newBox(t, wire{}), db, cache.New(memorycache.New()), func(iam *access.Builder) {
 				iam.Instance(instance)
 				iam.Users(own)
 				iam.Password(hasher(), registration)
@@ -155,8 +154,7 @@ func TestOnEmailProvenRunsInTheReset(t *testing.T) {
 		registerVerified(t, sys, sys.client.NewDevice(), "bob@example.com")
 		for _, email := range []string{"ada@example.com", "bob@example.com"} {
 			sys.client.NewDevice().Post("/password/forgot", `{"email":"`+email+`"}`)
-			sys.settle(t)
-			token := sys.box.last(t, access.KindReset).Token
+			token := sys.box.lastReset(t).Signed
 			sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		}
 		ada, _, _ := sys.iam.Directory().Lookup(testContext(t), "ada@example.com")

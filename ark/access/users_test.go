@@ -83,7 +83,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewUserProvider: %v", err)
 		}
-		sys := newApp(t, db, instance, func(iam *access.Builder) {
+		sys := newAppWith(t, db, instance, wire{reset: true}, func(iam *access.Builder) {
 			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
 				Verified:   func(context.Context, string) (bool, error) { return true, nil },
 				ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
@@ -109,8 +109,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 			t.Fatalf("/me = %q", reply.Body)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
-		sys.settle(t)
-		token := sys.box.last(t, access.KindReset).Token
+		token := sys.box.lastReset(t).Signed
 		sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		if users.versions["u1"] != 1 {
 			t.Fatalf("the reset rotated %d times, want once", users.versions["u1"])
@@ -132,17 +131,17 @@ func TestOwnUsersValidation(t *testing.T) {
 
 	users := newOwnUsers(t)
 	provider, _ := auth.NewUserProvider(users.driver)
-	if _, err := newFacade(t, func(iam *access.Builder) { iam.Users(access.Users{}) }); !errors.Is(err, access.ErrInvalidConfig) {
+	if _, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) { iam.Users(access.Users{}) }); !errors.Is(err, access.ErrInvalidConfig) {
 		t.Errorf("Users without a provider error = %v", err)
 	}
-	_, err := newFacade(t, func(iam *access.Builder) {
+	_, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
 		iam.Users(access.Users{Provider: provider})
 		iam.Password(hasher(), registration)
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
 		t.Errorf("Password without Lookup and Rotate error = %v", err)
 	}
-	iam, err := newFacade(t, func(iam *access.Builder) { iam.Users(access.Users{Provider: provider}) })
+	iam, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) { iam.Users(access.Users{Provider: provider}) })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

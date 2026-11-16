@@ -5,12 +5,14 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"testing"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/auth/memoryauth"
+	"arkoren.dev/core/http/link"
 	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/service/cache"
@@ -18,6 +20,7 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/hash"
 	"arkoren.dev/driver/bcrypt/bcrypthash"
+	"arkoren.dev/foundation/key"
 
 	"arkoren.dev/ark/access/internal/apptest"
 	"arkoren.dev/ark/access/password"
@@ -95,16 +98,30 @@ type system struct {
 	guard    *auth.Guard
 	store    *cache.Cache
 	client   *apptest.Client
-	sent     *[]password.Message
+	sent     *[]password.ResetMessage
+
+	// dispatched holds every request the forgot and register handlers handed to
+	// the dispatch function, in order.
+	dispatched *[]password.ResetRequest
 }
 
-// settle waits for the reset emails the forgot handler sends in the background.
-func (sys *system) settle(t *testing.T) {
+// newSigner returns a link signer over a fresh key: relative when origin is
+// empty, otherwise absolute under origin.
+func newSigner(t *testing.T, origin string) *link.Signer {
 	t.Helper()
 
-	if err := sys.verifier.Wait(testContext(t)); err != nil {
-		t.Fatalf("Wait: %v", err)
+	secret, err := key.GenerateShared()
+	if err != nil {
+		t.Fatalf("GenerateShared: %v", err)
 	}
+	signer, err := link.New(secret, func(signer *link.Builder) {
+		signer.Origin(origin)
+	})
+	if err != nil {
+		t.Fatalf("link.New: %v", err)
+	}
+
+	return signer
 }
 
 // secondFactor is a SecondFactor credential that accepts the code "ok" for the
@@ -138,6 +155,15 @@ func newSystem(t *testing.T, db *database.Database, instance string, second ...a
 func newConfiguredSystem(t *testing.T, db *database.Database, instance string, configure password.BuilderFunc, second ...auth.Credential) *system {
 	t.Helper()
 
+	return newSignedSystem(t, db, instance, newSigner(t, ""), configure, second...)
+}
+
+// newSignedSystem is [newConfiguredSystem] with the link signer chosen. Its
+// dispatch function runs [password.Verifier.SendReset] at once, as a queue
+// worker would later, so the tests stay synchronous.
+func newSignedSystem(t *testing.T, db *database.Database, instance string, signer *link.Signer, configure password.BuilderFunc, second ...auth.Credential) *system {
+	t.Helper()
+
 	users := newFakeUsers()
 	provider, err := auth.NewUserProvider(users.driver)
 	if err != nil {
@@ -147,16 +173,27 @@ func newConfiguredSystem(t *testing.T, db *database.Database, instance string, c
 	hasher := hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) {
 		driver.Cost(4)
 	}))
-	sent := &[]password.Message{}
+	sent := &[]password.ResetMessage{}
+	dispatched := &[]password.ResetRequest{}
 	var sentMu sync.Mutex
-	verifier, err := password.NewVerifier(provider, db, store, testClientIP, hasher, password.Users{
+	var verifier *password.Verifier
+	verifier, err = password.NewVerifier(provider, db, store, testClientIP, hasher, password.Users{
 		Lookup: users.Lookup,
 		Create: users.Create,
 		Rotate: users.Rotate,
 	}, func(passwords *password.Builder) {
 		passwords.Instance(instance)
 		passwords.Registration(true)
-		passwords.Deliver(func(_ context.Context, message password.Message) error {
+		passwords.Taken(func(ctx context.Context, identifier string) error {
+			return verifier.RequestReset(ctx, password.ResetRequest{Identifier: identifier, Notice: true})
+		})
+		passwords.Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
+			sentMu.Lock()
+			*dispatched = append(*dispatched, request)
+			sentMu.Unlock()
+
+			return verifier.SendReset(ctx, request)
+		}, func(_ context.Context, message password.ResetMessage) error {
 			sentMu.Lock()
 			defer sentMu.Unlock()
 
@@ -207,7 +244,7 @@ func newConfiguredSystem(t *testing.T, db *database.Database, instance string, c
 		})
 	})
 
-	return &system{users: users, provider: provider, hasher: hasher, verifier: verifier, guard: guard, store: store, client: client, sent: sent}
+	return &system{users: users, provider: provider, hasher: hasher, verifier: verifier, guard: guard, store: store, client: client, sent: sent, dispatched: dispatched}
 }
 
 // registerAda registers ada@example.com on the client, then logs in, and fails
@@ -227,4 +264,17 @@ func (sys *system) registerAda(t *testing.T, client *apptest.Client) {
 // loginAda logs ada in on client and returns the reply.
 func loginAda(client *apptest.Client, secret string) apptest.Reply {
 	return client.Post("/login", `{"email":"ada@example.com","password":"`+secret+`"}`)
+}
+
+// postedValue returns what a front end posts for a delivered link: the fragment
+// of href, decoded as location.hash is with decodeURIComponent.
+func postedValue(t *testing.T, href string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(href)
+	if err != nil || parsed.Fragment == "" {
+		t.Fatalf("link %q has no fragment: %v", href, err)
+	}
+
+	return parsed.Fragment
 }

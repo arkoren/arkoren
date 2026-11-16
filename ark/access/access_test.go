@@ -15,7 +15,9 @@ import (
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/account"
 	"arkoren.dev/ark/access/apitoken"
+	"arkoren.dev/ark/access/password"
 )
 
 // secretOf extracts the "secret" member of a setup reply.
@@ -39,15 +41,15 @@ func TestRegisterVerifyAndRequireVerified(t *testing.T) {
 		if reply := sys.client.Do(http.MethodGet, "/me", ""); !strings.HasSuffix(reply.Body, "|1|true") {
 			t.Fatalf("/me after register = %q", reply.Body)
 		}
-		message := sys.box.last(t, access.KindVerify)
-		if message.Identifier != "ada@example.com" {
-			t.Fatalf("verification sent to %q", message.Identifier)
+		message := sys.box.lastVerify(t)
+		if message.Address != "ada@example.com" {
+			t.Fatalf("verification sent to %q", message.Address)
 		}
 		record, _ := sys.iam.UserProvider().Find(testContext(t), mustSubject(t, sys))
 		if record.Claims["email_verified"] != false {
 			t.Fatalf("claims before verifying = %v", record.Claims)
 		}
-		if reply := sys.client.Post("/email/verify", `{"token":"`+message.Token+`"}`); reply.Status != http.StatusNoContent {
+		if reply := sys.client.Post("/email/verify", `{"token":"`+message.Signed+`"}`); reply.Status != http.StatusNoContent {
 			t.Fatalf("verify = %d %s", reply.Status, reply.Body)
 		}
 		record, _ = sys.iam.UserProvider().Find(testContext(t), mustSubject(t, sys))
@@ -167,8 +169,7 @@ func TestForgotAndResetFlow(t *testing.T) {
 		if reply := sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusAccepted {
 			t.Fatalf("forgot = %d", reply.Status)
 		}
-		sys.settle(t)
-		token := sys.box.last(t, access.KindReset).Token
+		token := sys.box.lastReset(t).Signed
 		reset := sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		if reset.Status != http.StatusNoContent {
 			t.Fatalf("reset = %d %s", reset.Status, reset.Body)
@@ -238,8 +239,7 @@ func TestResetEndsTokens(t *testing.T) {
 			t.Fatalf("token before reset = %d", reply.Status)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
-		sys.settle(t)
-		token := sys.box.last(t, access.KindReset).Token
+		token := sys.box.lastReset(t).Signed
 		sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
 		if reply := sys.client.NewDevice().Do(http.MethodGet, "/me", "", header); reply.Status != http.StatusUnauthorized {
 			t.Fatalf("token after reset = %d, want 401", reply.Status)
@@ -479,13 +479,47 @@ func TestRegisterTakenAddressNotifiesTheOwner(t *testing.T) {
 		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
 			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
 		}
-		sys.settle(t)
-		notice := sys.box.last(t, access.KindRegistration)
-		if notice.Identifier != "ada@example.com" || notice.Token == "" {
+		notice := sys.box.lastNotice(t)
+		if notice.Address != "ada@example.com" || notice.Signed == "" {
 			t.Fatalf("notice = %+v, want a token for the stored address", notice)
 		}
-		if reply := sys.client.NewDevice().Post("/password/reset", `{"token":"`+notice.Token+`","password":"reset horse ok"}`); reply.Status != http.StatusNoContent {
+		if reply := sys.client.NewDevice().Post("/password/reset", `{"token":"`+notice.Signed+`","password":"reset horse ok"}`); reply.Status != http.StatusNoContent {
 			t.Fatalf("reset with the notice's token = %d %s", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestSendWorkersForwardToThePackages verifies the facade's worker methods send
+// for a known user, send nothing and return nil for an unknown one, and report a
+// missing feature as a configuration error.
+func TestSendWorkersForwardToThePackages(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+		register(t, sys.client, "ada@example.com")
+		if err := sys.iam.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
+			t.Fatalf("SendReset: %v", err)
+		}
+		if err := sys.iam.SendReset(ctx, password.ResetRequest{Identifier: "nobody@example.com"}); err != nil {
+			t.Fatalf("SendReset for an unknown user = %v, want nil", err)
+		}
+		if resets, _ := sys.box.counts(); resets != 1 {
+			t.Fatalf("reset emails = %d, want 1", resets)
+		}
+		if err := sys.iam.SendVerification(ctx, account.VerifyRequest{Subject: "missing"}); err != nil {
+			t.Fatalf("SendVerification for an unknown subject = %v, want nil", err)
+		}
+		bare, err := newFacadeWith(t, wire{})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := bare.SendReset(ctx, password.ResetRequest{}); !errors.Is(err, access.ErrInvalidConfig) {
+			t.Fatalf("SendReset without Password = %v, want ErrInvalidConfig", err)
+		}
+		if err := bare.SendVerification(ctx, account.VerifyRequest{}); !errors.Is(err, account.ErrInvalidConfig) {
+			t.Fatalf("SendVerification without Verification = %v, want account.ErrInvalidConfig", err)
 		}
 	})
 }

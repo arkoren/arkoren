@@ -10,8 +10,8 @@ small `access.Provider` interface that `*oauthauth.Client` satisfies.
 | Package | Owns | Tables |
 | --- | --- | --- |
 | `access` | the facade: `New`, `Builder`, `Mount`, `Provider`, `Users` | none |
-| `account` | users by email, email verification, the user provider | `users`, `email_verifications` |
-| `password` | login, optional register, confirm, change, forgot and reset | `password_hashes`, `password_resets` |
+| `account` | users by email, signed email verification links, the user provider | `users` |
+| `password` | login, optional register, confirm, change, forgot and reset with signed links | `password_hashes` |
 | `twofactor` | TOTP and recovery codes | `totp_secrets`, `recovery_codes` |
 | `apitoken` | personal and device tokens, the bearer authenticator | `api_tokens` |
 | `federation` | links external identities to users | `federation_links` |
@@ -28,11 +28,14 @@ scheme := totp.New("Acme") // the name authenticator apps show for this account
 iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	iam.Password(hasher, func(passwords *password.Builder) {
 		passwords.Registration(true) // off by default: omit it when you add users yourself
+		passwords.Reset(signer, dispatchReset, deliverReset)
+	})
+	iam.Directory(func(accounts *account.Builder) {
+		accounts.Verification(signer, dispatchVerification, deliverVerification)
 	})
 	iam.TwoFactor(scheme, cipher)
 	iam.Tokens()
 	iam.Provider(google, github)
-	iam.Deliver(send)
 })
 if err != nil {
 	return err
@@ -43,6 +46,13 @@ if err := migrator.Add(iam.Migrations()...); err != nil {
 web := routes.With(iam.Middleware())
 iam.Mount(web)
 ```
+
+Reset and verification links are signed values from core's `link.Signer`, bound to
+the password hash or the email state, so the module keeps no token tables and
+starts no goroutine. `dispatch` stores the work in your queue or workflow, and a
+worker runs `iam.SendReset` or `iam.SendVerification`, which call your `deliver`
+function to send the email. Without them the forgot-password, reset and
+verification routes are not mounted.
 
 Read the [Access guide](../../cmd/arkoren/skills/arkoren/references/guides/access/overview.md)
 for the route table, the responses and the security rules, and the API on

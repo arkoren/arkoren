@@ -79,8 +79,12 @@ func ServeRouter(t *testing.T, r *router.Router) *Client {
 		t.Fatalf("cookie jar: %v", err)
 	}
 
+	// The server's own transport, not http.DefaultTransport: closing another
+	// parallel test's server closes the default one's idle connections and breaks
+	// requests in flight here.
 	return &Client{t: t, server: server, http: &http.Client{
 		Jar:           jar,
+		Transport:     server.Client().Transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}
 }
@@ -97,6 +101,7 @@ func (client *Client) NewDevice() *Client {
 
 	return &Client{t: client.t, server: client.server, http: &http.Client{
 		Jar:           jar,
+		Transport:     client.http.Transport,
 		CheckRedirect: client.http.CheckRedirect,
 	}}
 }

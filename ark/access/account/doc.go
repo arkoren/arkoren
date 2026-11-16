@@ -1,6 +1,6 @@
 // Package account is the built-in users table of arkoren.dev/ark/access: a
 // [Directory] of users identified by email, the [auth.UserProvider] that serves
-// them to the guard, and email verification.
+// them to the guard, and email verification with signed links.
 //
 // Use it when the application has no users table of its own. An application
 // that keeps its own users skips this package and hands the facade an
@@ -22,11 +22,26 @@
 // The package never runs DDL. [Directory.Migrations] describes the tables and
 // the application's migrator executes them, in the group
 // "arkoren.dev:ark/access:account", plus ":<instance>" for a named
-// [Builder.Instance]. Tables are "users" and "email_verifications", prefixed
-// "<instance>_" for a named instance. Subjects are bytewise string columns,
-// verification tokens are stored as SHA-256 hex, and every time is a bigint of
-// Unix seconds, so the tables behave identically on SQLite, PostgreSQL and
-// MySQL. [Directory.Ping] checks, read-only, that the tables exist.
+// [Builder.Instance]. The table is "users", prefixed "<instance>_" for a named
+// instance. Subjects are bytewise string columns and every time is a bigint of
+// Unix seconds, so the table behaves identically on SQLite, PostgreSQL and
+// MySQL. [Directory.Ping] checks, read-only, that the table exists.
+//
+// # Email verification
+//
+// Verification is off until [Builder.Verification] gives the directory a core
+// link.Signer, a dispatch function and a deliver function. A verification link is
+// a value signed for the path "/email/verify" and the subject, bound to the
+// user's current email and verified flag ([link.Bind]) and expiring after
+// [Builder.VerifyTTL]; nothing is stored. [Directory.RequestVerification] (what
+// the resend route and a registration call) hands a [VerifyRequest] to dispatch
+// inside the request; the worker later runs [Directory.SendVerification], which
+// signs the link and calls deliver with a [VerifyMessage]. deliver may run more
+// than once for one request. [Directory.Verify] verifies the link against the
+// user's current state and then runs a conditional update that matches only the
+// unverified user with that email, so a link works once: the second click, and a
+// click after the email changed, are [ErrInvalidToken], and [EmailVerified] is
+// published only when a row changed.
 //
 // Every package of the module assumes the same [database.Database]: writes that
 // span packages (registering a user and storing a password, deleting a user

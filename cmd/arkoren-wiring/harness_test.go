@@ -20,10 +20,12 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/account"
 	"arkoren.dev/ark/access/federation"
 	"arkoren.dev/ark/access/password"
 	"arkoren.dev/ark/oauth/oauthauth"
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/link"
 	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
@@ -232,16 +234,16 @@ type system struct {
 	iam      *access.Access
 	provider *fakeProvider
 	browser  *browser
-	sent     []access.Message
+	verified []account.VerifyMessage
 	mu       sync.Mutex
 }
 
-// deliver records the messages the facade sends.
-func (sys *system) deliver(_ context.Context, message access.Message) error {
+// deliverVerification records the verification emails the facade sends.
+func (sys *system) deliverVerification(_ context.Context, message account.VerifyMessage) error {
 	sys.mu.Lock()
 	defer sys.mu.Unlock()
 
-	sys.sent = append(sys.sent, message)
+	sys.verified = append(sys.verified, message)
 
 	return nil
 }
@@ -271,6 +273,15 @@ func newCipher(t *testing.T) *crypto.Encrypter {
 func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
 	t.Helper()
 
+	return newSystemWith(t, true, configure...)
+}
+
+// newSystemWith is [newSystem] with the built-in users table and its email
+// verification when builtIn is true, and without them for a test that brings its
+// own users.
+func newSystemWith(t *testing.T, builtIn bool, configure ...access.BuilderFunc) *system {
+	t.Helper()
+
 	driver, err := sqlite.New(":memory:")
 	if err != nil {
 		t.Fatalf("sqlite: %v", err)
@@ -295,12 +306,30 @@ func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
 	if err := google.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	secret, err := key.GenerateShared()
+	if err != nil {
+		t.Fatalf("GenerateShared: %v", err)
+	}
+	signer, err := link.New(secret)
+	if err != nil {
+		t.Fatalf("link.New: %v", err)
+	}
 	sys.iam, err = access.New(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), append([]access.BuilderFunc{func(iam *access.Builder) {
-		iam.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })), func(passwords *password.Builder) { passwords.Registration(true) })
+		iam.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })), func(passwords *password.Builder) {
+			passwords.Registration(true).Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
+				return sys.iam.SendReset(ctx, request)
+			}, func(context.Context, password.ResetMessage) error { return nil })
+		})
+		if builtIn {
+			iam.Directory(func(accounts *account.Builder) {
+				accounts.Verification(signer, func(ctx context.Context, request account.VerifyRequest) error {
+					return sys.iam.SendVerification(ctx, request)
+				}, sys.deliverVerification)
+			})
+		}
 		iam.TwoFactor(totp.New("Example"), newCipher(t))
 		iam.Tokens()
 		iam.Provider(google).Federation(func(links *federation.Builder) { links.SignUp(true) })
-		iam.Deliver(sys.deliver)
 		iam.Session(func(cookies *session.Builder) { cookies.AllowInsecure(true) })
 	}}, configure...)...)
 	if err != nil {

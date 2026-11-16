@@ -80,3 +80,34 @@ func TestClientAddressSourceIsRequired(t *testing.T) {
 		t.Fatalf("New without a client address source = %v, want ErrInvalidConfig", err)
 	}
 }
+
+// TestRegistrationWithTheBuiltInUsersNeedsResetOrVerification verifies a new
+// user could never prove their email without either, so New refuses it.
+func TestRegistrationWithTheBuiltInUsersNeedsResetOrVerification(t *testing.T) {
+	t.Parallel()
+
+	_, err := newFacadeWith(t, wire{}, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+	if !errors.Is(err, access.ErrInvalidConfig) {
+		t.Fatalf("registration without reset or verification = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// TestRegistrationWithResetOnlyIsValid verifies a reset link proves the mailbox,
+// so Reset alone is enough for the built-in users.
+func TestRegistrationWithResetOnlyIsValid(t *testing.T) {
+	t.Parallel()
+
+	if _, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) { iam.Password(hasher(), registration) }); err != nil {
+		t.Fatalf("registration with reset only: %v", err)
+	}
+}
+
+// TestRegistrationWithVerificationOnlyIsValid verifies Verification alone is
+// enough for the built-in users.
+func TestRegistrationWithVerificationOnlyIsValid(t *testing.T) {
+	t.Parallel()
+
+	if _, err := newFacadeWith(t, wire{verify: true}, func(iam *access.Builder) { iam.Password(hasher(), registration) }); err != nil {
+		t.Fatalf("registration with verification only: %v", err)
+	}
+}

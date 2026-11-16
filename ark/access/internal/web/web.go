@@ -7,6 +7,7 @@ import (
 	"context"
 	"mime"
 	"net/http"
+	"net/url"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/request"
@@ -23,6 +24,22 @@ var ErrEmailUnverified = problem.New(func(details *problem.Builder) {
 	details.Detail("Verify your email address to continue.")
 	details.Status(http.StatusForbidden)
 })
+
+// ParseSigned parses a signed link value posted by a client and returns it with
+// its "subject" query parameter. ok is false when the value is not a URL, its
+// path is not path, or it names no subject, which every caller answers with its
+// one invalid-link problem. Nothing returned is trusted until the caller's
+// signer verified the URL: the signature covers the path and the query, so
+// verification is also what makes the subject the signer's.
+func ParseSigned(signed, path string) (target *url.URL, subject string, ok bool) {
+	target, err := url.Parse(signed)
+	if err != nil || target.Path != path {
+		return nil, "", false
+	}
+	subject = target.Query().Get("subject")
+
+	return target, subject, subject != ""
+}
 
 // Verified returns [ErrEmailUnverified] when verified, the Verified setting of
 // a package, says subject's email is not verified, and passes its errors

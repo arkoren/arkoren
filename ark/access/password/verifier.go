@@ -15,6 +15,7 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
+	"arkoren.dev/core/http/link"
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
@@ -22,12 +23,11 @@ import (
 	"arkoren.dev/foundation/query"
 	"arkoren.dev/foundation/query/schema"
 
-	"arkoren.dev/ark/access/internal/background"
 	"arkoren.dev/ark/access/internal/storage"
 )
 
 const (
-	// DefaultResetTTL is how long a password reset token stays valid when
+	// DefaultResetTTL is how long a password reset link stays valid when
 	// [Builder.ResetTTL] is not set.
 	//
 	// Example:
@@ -83,12 +83,6 @@ const (
 	// maxClientRegistrations is how many registrations one client address may
 	// attempt within throttleWindow.
 	maxClientRegistrations = 30
-
-	// maxLiveResets is how many unexpired reset tokens a user can hold. A new
-	// request beyond it replaces the oldest, so a repeat request does not kill
-	// the link the user is about to click, and an attacker cannot make the
-	// table grow.
-	maxLiveResets = 3
 
 	// throttleWindow is the lifetime of an attempt counter.
 	throttleWindow = 15 * time.Minute
@@ -147,8 +141,8 @@ type Users struct {
 	ProveEmail func(ctx context.Context, subject string) error
 }
 
-// Verifier owns the password hashes and reset tokens. It is safe for
-// concurrent use. Create it with [NewVerifier].
+// Verifier owns the password hashes. Reset links are signed values, not rows
+// ([Builder.Reset]). It is safe for concurrent use. Create it with [NewVerifier].
 //
 // Example:
 //
@@ -164,16 +158,17 @@ type Verifier struct {
 	users        Users
 	instance     string
 	hashes       string
-	resets       string
 	events       *event.Bus
 	registration bool
-	deliver      func(context.Context, Message) error
+	signer       *link.Signer
+	dispatch     func(context.Context, ResetRequest) error
+	deliver      func(context.Context, ResetMessage) error
 	resetTTL     time.Duration
 	policy       func(context.Context, string) error
 	clientIP     func(*http.Request) string
 	registered   func(context.Context, string, string) error
+	taken        func(context.Context, string) error
 	changed      func(context.Context, string) error
-	jobs         background.Group
 
 	dummyOnce sync.Once
 	dummy     []byte
@@ -189,8 +184,8 @@ type Verifier struct {
 // proxy sits in front of the application. It does no I/O: the tables come from
 // [Verifier.Migrations]. Errors wrap [ErrInvalidConfig].
 //
-// It registers a forget hook on provider that deletes the user's hash and
-// reset token in the caller's transaction.
+// It registers a forget hook on provider that deletes the user's hash in the
+// caller's transaction.
 //
 // Example:
 //
@@ -224,14 +219,16 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		users:        users,
 		instance:     settings.instance,
 		hashes:       storage.Table(settings.instance, "password_hashes"),
-		resets:       storage.Table(settings.instance, "password_resets"),
 		events:       settings.events,
 		registration: settings.registration,
+		signer:       settings.signer,
+		dispatch:     settings.dispatch,
 		deliver:      settings.deliver,
 		resetTTL:     cmp.Or(settings.resetTTL, DefaultResetTTL),
 		policy:       settings.policy,
 		clientIP:     clientIP,
 		registered:   settings.registered,
+		taken:        settings.taken,
 		changed:      settings.changed,
 	}
 	if verifier.policy == nil {
@@ -264,10 +261,10 @@ func defaultPolicy(_ context.Context, password string) error {
 	return nil
 }
 
-// Migrations returns the migrations that create the "password_hashes" and
-// "password_resets" tables (prefixed "<instance>_" for a named instance) in the
-// group "arkoren.dev:ark/access:password", plus ":<instance>". Each creates one
-// table strictly and its down step drops it. The application adds them to its
+// Migrations returns the migration that creates the "password_hashes" table
+// (prefixed "<instance>_" for a named instance) in the group
+// "arkoren.dev:ark/access:password", plus ":<instance>". It creates the table
+// strictly and its down step drops it. The application adds them to its
 // migrator; constructing or reading them never runs DDL.
 //
 // Example:
@@ -285,21 +282,10 @@ func (verifier *Verifier) Migrations() []migrate.Definition {
 			})))
 			migration.Down(migrate.Schema(schema.Drop(verifier.hashes)))
 		}),
-		migrate.NewMigration("resets-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(verifier.resets, func(table *schema.Table) {
-				table.String("token_hash", 64).Bytewise().Primary()
-				table.String("subject", 255).Bytewise()
-				table.BigInteger("expires_at")
-				table.BigInteger("created_at")
-				table.String("address", 255).Bytewise()
-				table.Index("subject")
-			})))
-			migration.Down(migrate.Schema(schema.Drop(verifier.resets)))
-		}),
 	)
 }
 
-// Ping verifies, read-only, that both tables exist. A missing table returns an
+// Ping verifies, read-only, that the table exists. A missing table returns an
 // error wrapping [ErrNotMigrated]. Use it as a readiness check.
 //
 // Example:
@@ -308,18 +294,16 @@ func (verifier *Verifier) Migrations() []migrate.Definition {
 //		return err
 //	}
 func (verifier *Verifier) Ping(ctx context.Context) error {
-	return storage.Ping(ctx, verifier.db, verifier.hashes, verifier.resets)
+	return storage.Ping(ctx, verifier.db, verifier.hashes)
 }
 
-// forget deletes the rows of subject in the caller's transaction.
+// forget deletes the hash of subject in the caller's transaction.
 func (verifier *Verifier) forget(ctx context.Context, subject string) error {
-	for _, table := range []string{verifier.hashes, verifier.resets} {
-		_, err := verifier.db.Exec(ctx, query.Table(table, func(statement *query.Builder) {
-			statement.Where("subject", subject).Delete()
-		}))
-		if err != nil {
-			return fmt.Errorf("password: forget %s: %w", table, err)
-		}
+	_, err := verifier.db.Exec(ctx, query.Table(verifier.hashes, func(statement *query.Builder) {
+		statement.Where("subject", subject).Delete()
+	}))
+	if err != nil {
+		return fmt.Errorf("password: forget hash: %w", err)
 	}
 
 	return nil
@@ -503,15 +487,24 @@ func (verifier *Verifier) Set(ctx context.Context, subject, password string) err
 	return verifier.save(ctx, subject, password)
 }
 
+// encode hashes password and returns the base64 text stored in the table.
+func (verifier *Verifier) encode(password string) (string, error) {
+	hashed, err := verifier.hasher.Hash(password)
+	if err != nil {
+		return "", fmt.Errorf("password: hash: %w", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(hashed), nil
+}
+
 // save hashes password and upserts it. The update goes first because the row
 // usually exists; a missing row is inserted, and a concurrent insert that wins
 // the race is followed by one more update.
 func (verifier *Verifier) save(ctx context.Context, subject, password string) error {
-	hashed, err := verifier.hasher.Hash(password)
+	encoded, err := verifier.encode(password)
 	if err != nil {
-		return fmt.Errorf("password: hash: %w", err)
+		return err
 	}
-	encoded := base64.StdEncoding.EncodeToString(hashed)
 	now := time.Now().Unix()
 	update := func() (int64, error) {
 		return verifier.db.Exec(ctx, query.Table(verifier.hashes, func(statement *query.Builder) {
@@ -544,19 +537,4 @@ func (verifier *Verifier) emit(ctx context.Context, topic event.Topic[UserEvent]
 
 		return nil
 	})
-}
-
-// Wait blocks until the reset emails that [Verifier.ForgotHandler] sent in the
-// background have been handed to [Builder.Deliver], or returns the error of ctx
-// when it ends first. Call it during shutdown, after the server stopped
-// accepting requests, so no message is lost; tests call it before asserting on
-// what was delivered.
-//
-// Example:
-//
-//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-//	defer cancel()
-//	_ = verifier.Wait(ctx)
-func (verifier *Verifier) Wait(ctx context.Context) error {
-	return verifier.jobs.Wait(ctx)
 }
