@@ -102,12 +102,17 @@ func TestRegistrationWithResetOnlyIsValid(t *testing.T) {
 	}
 }
 
-// TestRegistrationWithVerificationOnlyIsValid verifies Verification alone is
-// enough for the built-in users.
-func TestRegistrationWithVerificationOnlyIsValid(t *testing.T) {
+// TestRegistrationWithoutResetIsInvalid verifies registration with the built-in
+// users needs Reset: Verification alone is not enough, because the reset notice
+// is how the owner of a taken address is told.
+func TestRegistrationWithoutResetIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	if _, err := newFacadeWith(t, wire{verify: true}, func(iam *access.Builder) { iam.Password(hasher(), registration) }); err != nil {
-		t.Fatalf("registration with verification only: %v", err)
+	for _, w := range []wire{{}, {verify: true}} {
+		_, err := newFacadeWith(t, w, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+
+		if !errors.Is(err, access.ErrInvalidConfig) {
+			t.Fatalf("registration without reset (%+v): error = %v, want ErrInvalidConfig", w, err)
+		}
 	}
 }

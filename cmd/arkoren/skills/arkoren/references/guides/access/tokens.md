@@ -33,8 +33,7 @@ secret has 130 random bits and only its hash is stored, so a database leak does
 not reveal usable tokens. Choose a prefix of 2 to 16 lowercase letters or digits
 with `tokens.Prefix("acme")` so secret scanners recognize your tokens; tokens
 issued under the old prefix stop being recognized when you change it. Without
-`Grants`, tokens carry no scopes. For the core token model, see
-[API Tokens](../authentication/api-tokens.md).
+`Grants`, tokens carry no scopes.
 
 Both kinds of token are on by default. `tokens.PersonalTokens(false)` removes
 `POST /tokens`, and `tokens.DeviceTokens(false)` removes `POST /device-tokens`
@@ -76,9 +75,10 @@ answers `204`, or `404` for another user's token. Both need a browser session.
 
 The function you pass to `Grants` receives the subject and returns the catalog
 scopes that user may hold now. Return what the user's role allows; names outside
-the catalog are ignored. The one reserved name is `"*"`, which stands for the
-whole catalog and is what `AnyScope` returns, so never pass a literal `"*"` from
-your own permission set through unfiltered:
+the catalog are ignored. Only `AnyScope` stands for the whole catalog, through a
+private marker that your grant function has no reason to return, so a literal `"*"` in your
+permission set is just a scope named `"*"`, which grants nothing unless your
+catalog lists it:
 
 ```go
 tokens.Grants(func(ctx context.Context, subject string) ([]string, error) {
@@ -175,12 +175,16 @@ for applications whose users depend on long-lived personal tokens. Tokens publis
 
 ## Pruning
 
-A token that can no longer authenticate still has a row. Expired tokens and
-device tokens that nobody uses would stay in the table forever, so delete them on
-a schedule. `iam.Prune` removes, for every user, tokens past `expires_at`, device
-tokens whose last use is older than the idle limit, and device tokens that were
-never used and were created before it. With `tokens.DeviceIdleTTL` negative, only
-the expired tokens go. Personal tokens are never pruned for idleness. It deletes
+A token that can no longer authenticate still has a row. Expired tokens, tokens
+that a version change of the user ended and device tokens that nobody uses would
+stay in the table forever, so delete them on a schedule. `iam.Prune` removes, for
+every user, tokens past `expires_at`, tokens issued before the user's current
+version (a password reset or your own rotation; all tokens of a user who no longer
+exists), device tokens whose last use is older than the idle limit, and device
+tokens that were never used and were created before it. A disabled user's tokens
+stay, because enabling the user brings them back. With `tokens.DeviceIdleTTL`
+negative, the idle device tokens stay. Finding the stale versions reads each user
+that holds a token once per run. Personal tokens are never pruned for idleness. It deletes
 only rows that already answer `401`, so it changes no behavior, and it is safe to
 run at any time and from several instances. Without tokens enabled it does nothing
 and returns `nil`.
@@ -197,7 +201,8 @@ err := scheduler.Add(schedule.NewEntry("access-prune", iam.Prune, func(entry *sc
 
 An error stops that run at the failing delete and the next run repeats the work.
 The listing at `GET /tokens` shows expired tokens until a new token is issued or
-`Prune` runs.
+`Prune` runs, but never a token that a version change ended: it can never
+authenticate again, so the list leaves it out.
 
 For every function and option, see
 [the `apitoken` API reference](https://pkg.go.dev/arkoren.dev/ark/access/apitoken).

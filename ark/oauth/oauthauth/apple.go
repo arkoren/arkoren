@@ -60,6 +60,7 @@ func Apple(teamID, keyID string, identity key.Signing) Provider {
 	definition.scopes = []string{"openid", "name", "email"}
 	definition.formPost = true
 	definition.noPKCE = true
+	definition.claims = provider.Apple
 	definition.formIdentity = provider.AppleName
 	definition.nativeNonce = func(nonce string) string {
 		digest := sha256.Sum256([]byte(nonce))

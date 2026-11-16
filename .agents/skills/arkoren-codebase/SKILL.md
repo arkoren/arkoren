@@ -366,7 +366,7 @@ no step-up method), Mount registers the JSON routes of the enabled features, and
 every credential handler requires Identity.Session and guard.Fresh (a user with
 no step-up method is fresh after any login). Registration and sign-up on a first provider login are off by default (password.Builder.Registration,
 federation.Builder.SignUp), and the token scope catalog takes its grant ceiling
-(apitoken.Builder.Grants, GrantTTL, AnyScope) with the shared cache given to NewIssuer. Handlers that read a body are wrapped in internal/web RequireJSON (core contenttype, application/json only, inside each handler constructor, never DELETE). A provider login whose email is verified takes over an unverified built-in user (federation.Builder.TakeOver, set only with the directory: delete password, purge, mark verified, rotate, link, in the login transaction), and Access.Prune (apitoken.Issuer.Prune) is the scheduled cleanup of idle device and expired tokens. Packages account, password,
+(apitoken.Builder.Grants, GrantTTL, AnyScope) with the shared cache given to NewIssuer. Handlers that read a body are wrapped in internal/web RequireJSON (core contenttype, application/json only, inside each handler constructor, never DELETE). A provider login whose email is verified takes over an unverified built-in user (federation.Builder.TakeOver, set only with the directory: delete password, purge, mark verified, rotate, link, in the login transaction), (it publishes federation.AccountClaimed and, after commit, calls guard.RevokeAll; a first sign-up needs a proven email, federation:email-unverified), and Access.Prune (apitoken.Issuer.Prune) is the scheduled cleanup of idle device, expired and version-dead tokens (GET /tokens hides the version-dead ones). Registration with the built-in users needs password.Builder.Reset. The package hooks the facade sets (password AfterChange/Registered/Taken, twofactor OnEnable/Verified, apitoken Verified, federation Verified/Fallback/TakeOver/Create) add up with the application's callbacks through internal/web (Then, Both, All, Any, First) instead of replacing them: keep new hook setters composing. AnyScope returns a private marker, so a literal "*" from a grant function is only a scope name; apitoken and the throttles use core ratelimit.AddressKey, not a local bucket. Packages account, password,
 twofactor, apitoken and federation never import each other; subjects are strings
 and cross-package writes join the context transaction of the one Database. A
 password reset calls Users.Rotate, which bumps UserRecord.Version and ends
@@ -376,7 +376,7 @@ NativeHandler(guard, auth.Resolver) for Google and Apple ID tokens) match the
 Provider and NativeProvider interfaces that ark/access declares, so Client
 satisfies them structurally. CallbackHandler passes the verified auth.External to
 the resolver and the returned subject to Guard.Begin with oauth.MethodFederated
-(the guard stamps the factor time; the provider's auth_time is ignored; federated
+(the guard stamps the factor time, keeping an earlier provider auth_time, which can only make the factor older; fresh=1 is recorded in the sealed login state; a generic OIDC provider trusts no email_verified unless OIDCBuilder.TrustEmail(true), and a multi-audience ID token needs azp equal to the client ID; federated
 is not a step-up method; ChallengeURL on a pending second factor), and
 guard.LogoutHandler() owns the logout route; Verify returns auth.External
 (scopes in Claims["scope"]), which the application maps for auth.Bearer. Session data uses

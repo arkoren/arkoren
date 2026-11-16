@@ -95,7 +95,7 @@ pkg.go.dev module pages by family; do not add a parallel local API corpus.
 | Operations | `testing` | 180 | Overview, HTTP tests, testing auth, fakes, time, integration tests, driver conformance. |
 | Documentation | `openapi` | 190 | HTTP contract overview, operation descriptions, JSON and Swagger serving, and built-in handler annotations. |
 | Documentation | `asyncapi` | 200 | Messaging contract overview, messages and schemas, queue operations, bindings and security, and JSON serving. |
-| Arks | `access` | 210 | `ark/access`: overview, routes, passwords, two-factor, API tokens, connections, sessions and accounts, your own users. |
+| Arks | `access` | 210 | `ark/access`: overview, routes, passwords, two-factor, API tokens, connections, organization sign-in, fresh logins, sessions and accounts, your own users. |
 | Arks | `oauth` | 220 | `ark/oauth`: overview, browser login, native login, providers with the compatibility matrix, OIDC bearer tokens. |
 | Arks | `mcp-server` | 230 | `ark/mcp`: first server, serving tools (registration, transport, telemetry, native extensions), securing the endpoint. |
 

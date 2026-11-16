@@ -65,6 +65,11 @@ type loginState struct {
 	// ReturnTo is the local path to redirect to after login.
 	ReturnTo string `json:"return_to"`
 
+	// Fresh records that the login was started with fresh=1: the authorization
+	// request asked the provider to authenticate the user again. It is a record
+	// of the request, not proof that the provider did.
+	Fresh bool `json:"fresh,omitempty"`
+
 	// Expires is when the login stops being accepted.
 	Expires time.Time `json:"expires"`
 
@@ -187,6 +192,7 @@ func (client *Client) handOff(writer http.ResponseWriter, saved loginState, iden
 		Cookie:   name,
 		State:    saved.State,
 		ReturnTo: saved.ReturnTo,
+		Fresh:    saved.Fresh,
 		Expires:  time.Now().Add(handoffTTL),
 		Identity: &identity,
 	})

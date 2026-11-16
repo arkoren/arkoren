@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/service/cache"
 
 	"arkoren.dev/ark/access/internal/storage"
@@ -107,16 +108,24 @@ func (verifier *Verifier) identifierKey(identifier string) cache.Key[int64] {
 	return cache.NewKey[int64]("access:" + verifier.instance + ":password:id:" + identifierHash(identifier))
 }
 
+// subjectKey is the counter key of the password attempts of one user in
+// [Verifier.checkCurrent]. It has a prefix of its own: sharing the identifier
+// counter's would let a login attempt that types "subject:<id>" as its
+// identifier spend, or clear, the change-password budget of that user.
+func (verifier *Verifier) subjectKey(subject string) cache.Key[int64] {
+	return cache.NewKey[int64]("access:" + verifier.instance + ":password:subject:" + storage.Hash(subject))
+}
+
 // clientKey is the counter key of the client address of r.
 func (verifier *Verifier) clientKey(r *http.Request) cache.Key[int64] {
-	return cache.NewKey[int64]("access:" + verifier.instance + ":password:ip:" + throttle.Bucket(verifier.clientIP(r)))
+	return cache.NewKey[int64]("access:" + verifier.instance + ":password:ip:" + ratelimit.AddressKey(verifier.clientIP(r)))
 }
 
 // pairKey is the counter key of one identifier from one client address, the
 // login lockout: an attacker's failures lock only the attacker's own address
 // out of the account.
 func (verifier *Verifier) pairKey(identifier string, r *http.Request) cache.Key[int64] {
-	return cache.NewKey[int64]("access:" + verifier.instance + ":password:pair:" + identifierHash(identifier) + ":" + throttle.Bucket(verifier.clientIP(r)))
+	return cache.NewKey[int64]("access:" + verifier.instance + ":password:pair:" + identifierHash(identifier) + ":" + ratelimit.AddressKey(verifier.clientIP(r)))
 }
 
 // throttleAction counts one request of action (such as "forgot") on the
@@ -127,7 +136,7 @@ func (verifier *Verifier) throttleAction(r *http.Request, action, identifier str
 
 	return verifier.reserve(r.Context(),
 		counter{cache.NewKey[int64](prefix + ":id:" + identifierHash(identifier)), perIdentifier},
-		counter{cache.NewKey[int64](prefix + ":ip:" + throttle.Bucket(verifier.clientIP(r))), perClient},
+		counter{cache.NewKey[int64](prefix + ":ip:" + ratelimit.AddressKey(verifier.clientIP(r))), perClient},
 	)
 }
 

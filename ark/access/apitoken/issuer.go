@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -538,14 +539,25 @@ func (issuer *Issuer) pruneSubject(ctx context.Context, subject, version string)
 }
 
 // Tokens lists the tokens of subject, newest first, including expired ones
-// until the next issue or [Issuer.Prune] removes them. The secrets are not recoverable.
+// until the next issue or [Issuer.Prune] removes them. It leaves out the tokens
+// a change of the user's version already ended (a password reset, or the
+// application's own rotation): they can never authenticate again, and listing
+// them would show the user tokens that look alive. A subject who is gone or
+// disabled has none. The secrets are not recoverable.
 //
 // Example:
 //
 //	tokens, err := issuer.Tokens(ctx, subject)
 func (issuer *Issuer) Tokens(ctx context.Context, subject string) ([]Token, error) {
+	record, err := issuer.provider.Find(ctx, subject)
+	if errors.Is(err, auth.ErrUserNotFound) || errors.Is(err, auth.ErrUserDisabled) {
+		return []Token{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("apitoken: list tokens: %w", err)
+	}
 	rows, err := issuer.db.Select[row](ctx, query.Table(issuer.table, func(statement *query.Builder) {
-		statement.Where("subject", subject).OrderByDesc("created_at").OrderByDesc("id")
+		statement.Where("subject", subject).Where("user_version", storage.Hash(record.Version)).OrderByDesc("created_at").OrderByDesc("id")
 	}))
 	if err != nil {
 		return nil, fmt.Errorf("apitoken: list tokens: %w", err)

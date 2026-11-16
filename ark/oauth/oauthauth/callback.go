@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -23,14 +25,19 @@ import (
 // federated factor ([MethodFederated], [auth.KindFederated]), which logs the
 // user in and regenerates the session ID.
 //
-// The factor time is this server's clock at the callback, stamped by the guard.
-// What the provider says about when the user authenticated (the auth_time claim)
-// is ignored, so a silent single sign-on approval and a fresh password prompt
-// both count as a login now. Whether that satisfies [auth.Guard.RequireFresh]
-// follows the core rule: federated is not a step-up method by default, so a
-// user with a step-up method such as a password or TOTP is not fresh after a
-// silent federated login. The fresh query parameter of [Client.LoginHandler]
-// is only a hint to the provider.
+// The factor time is this server's clock at the callback, unless the ID token
+// carries an auth_time claim (seconds since the epoch) that is earlier: the
+// guard keeps an earlier time, so a silent single sign-on approval that reports
+// an old auth_time makes an old factor. A provider can therefore only make the
+// factor older, never fresher; a missing or malformed auth_time is not an error
+// and leaves the factor at the guard's clock. Whether the factor satisfies
+// [auth.Guard.RequireFresh] follows the core rule: federated is not a step-up
+// method by default, so a user with a step-up method such as a password or TOTP
+// is not fresh after a federated login. The fresh query parameter of
+// [Client.LoginHandler] asks the provider to authenticate again and is recorded
+// in the login state; it is a hint, and the provider may ignore it. For
+// Microsoft Entra, auth_time is an optional claim that the app registration
+// has to add.
 //
 // The verified claims reach resolve in External.Claims. The granted scopes are
 // added to them as the space-delimited string claim "scope": the token response
@@ -176,7 +183,7 @@ func (client *Client) CallbackHandler(guard *auth.Guard, resolve auth.Resolver) 
 			return client.loginFailed(httpRequest, callbackMapperError(err))
 		}
 
-		outcome, err := guard.Begin(httpRequest, subject, federatedFactor)
+		outcome, err := guard.Begin(httpRequest, subject, federatedFactor(external))
 
 		if errors.Is(err, session.ErrNoSession) {
 			return auth.ErrUnauthenticated
@@ -216,9 +223,38 @@ func (client *Client) CallbackHandler(guard *auth.Guard, resolve auth.Resolver) 
 //	_ = factor
 const MethodFederated auth.Method = "federated"
 
-// federatedFactor is the factor every login of this package proves. The guard
-// stamps its time; see [Client.CallbackHandler].
-var federatedFactor = auth.Factor{Method: MethodFederated, Kind: auth.KindFederated}
+// federatedFactor returns the factor every login of this package proves. Its
+// time is the ID token's auth_time when the claim is a number, and the zero time
+// otherwise, which the guard replaces with its own clock; the guard also
+// replaces an auth_time that is later than that clock, so the claim can only
+// make the factor older. See [Client.CallbackHandler].
+func federatedFactor(external auth.External) auth.Factor {
+	factor := auth.Factor{Method: MethodFederated, Kind: auth.KindFederated}
+
+	if seconds, ok := external.Claims["auth_time"].(float64); ok && seconds > 0 {
+		factor.At = time.Unix(int64(seconds), 0)
+	}
+
+	return factor
+}
+
+// requireAuthorizedParty enforces OpenID Connect Core section 3.1.3.7 for an
+// ID token with several audiences: its azp claim must be one of accepted, which
+// is the client ID for a browser login. A token with at most one audience has
+// no such requirement.
+func requireAuthorizedParty(claims map[string]any, accepted []string) error {
+	audiences, _ := claims["aud"].([]any)
+
+	if len(audiences) < 2 {
+		return nil
+	}
+
+	if azp, _ := claims["azp"].(string); !slices.Contains(accepted, azp) {
+		return errors.New("OIDC token with several audiences lacks an accepted azp")
+	}
+
+	return nil
+}
 
 // callbackMapperError preserves the browser callback's credential rejection
 // contract, including wrapped causes. Other application failures keep their
@@ -330,7 +366,8 @@ func exchangeFailure(err error) error {
 }
 
 // idTokenIdentity verifies token's ID token signature, expiry, issuer and
-// positional client-ID audience before matching the saved, nonempty nonce.
+// positional client-ID audience before matching the saved, nonempty nonce. A
+// token with several audiences must name the client ID as its azp.
 // Configured API audiences do not apply to browser login. Missing ID tokens
 // and failed checks return ErrInvalidCallback before local identity mapping.
 func (client *Client) idTokenIdentity(ctx context.Context, token *oauth2.Token, nonce string) (auth.External, error) {
@@ -348,6 +385,10 @@ func (client *Client) idTokenIdentity(ctx context.Context, token *oauth2.Token, 
 
 	if got, _ := identity.Claims["nonce"].(string); nonce == "" || got != nonce {
 		return auth.External{}, invalidCallback(nil)
+	}
+
+	if err := requireAuthorizedParty(identity.Claims, []string{client.clientID}); err != nil {
+		return auth.External{}, invalidCallback(err)
 	}
 
 	return identity, nil

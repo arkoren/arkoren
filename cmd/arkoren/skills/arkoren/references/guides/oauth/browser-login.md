@@ -148,9 +148,14 @@ person in without the second factor.
 
 A federated login is one factor of kind `auth.KindFederated` and method
 `oauth.MethodFederated`, and never multi-factor on its own. The server's clock
-stamps it at the callback; what the provider says about when the user
-authenticated (`auth_time`) is ignored. It is not a step-up method unless you
-register one, so core's
+stamps it at the callback, unless the ID token carries an earlier `auth_time`
+claim: the factor then takes that time, so a provider can make the login older but
+never fresher, and a token without `auth_time` is not an error and keeps the
+callback time. Microsoft Entra sends `auth_time` only when you add it as an
+optional claim; do not count on one from Google, and GitHub has no ID token. `/auth/{name}?fresh=1` asks an OIDC
+provider to authenticate the user again (`prompt=login`, `max_age=0`) and records
+the request in the sealed login state; the provider may ignore it. The factor is
+not a step-up method unless you register one, so core's
 [recent-proof rule](../authentication/two-factor.md#require-recent-proof) applies:
 
 - A user with a registered step-up method (password, TOTP) who signs in again

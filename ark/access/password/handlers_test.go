@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -560,6 +561,33 @@ func TestRegistrationRequiresCreate(t *testing.T) {
 		})
 		if !errors.Is(err, password.ErrInvalidConfig) {
 			t.Fatalf("NewVerifier error = %v, want ErrInvalidConfig", err)
+		}
+	})
+}
+
+// TestChangePasswordCounterIsIndependentOfLoginCounter verifies the attempts
+// counted against a user when they change their password do not share a counter
+// with logins whose typed identifier happens to look like the subject: ten
+// failed logins for "subject:<id>" from ten addresses must not throttle the
+// owner's change.
+func TestChangePasswordCounterIsIndependentOfLoginCounter(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		sys.registerAda(t, sys.client)
+		subject := sys.client.Do(http.MethodGet, "/me", "").Body
+		other := sys.client.NewDevice()
+		for i := range 10 {
+			ip := "X-Test-IP: 198.51.100." + strconv.Itoa(i+1)
+			body := `{"email":"subject:` + subject + `","password":"wrong horse!"}`
+			if reply := other.Do(http.MethodPost, "/login", body, ip); reply.Status == http.StatusTooManyRequests {
+				t.Fatalf("login %d = 429 before the identifier limit", i)
+			}
+		}
+		change := sys.client.Do(http.MethodPut, "/password", `{"current_password":"correct horse","password":"brand new horse"}`)
+		if change.Status != http.StatusNoContent {
+			t.Fatalf("change after ten failed logins for subject:%s = %d %s, want 204", subject, change.Status, change.Body)
 		}
 	})
 }

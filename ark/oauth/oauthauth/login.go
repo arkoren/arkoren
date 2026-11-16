@@ -20,13 +20,13 @@ import (
 //
 // With the query parameter fresh=1 on an OIDC provider, the authorization
 // request also carries prompt=login and max_age=0, which asks the provider to
-// authenticate the user again instead of approving silently. It is a
-// best-effort hint with no security meaning: a provider may ignore it, and the
-// callback never reads what the provider answers. This server stamps the
-// federated factor with its own clock at the callback, and whether that
-// satisfies [auth.Guard.RequireFresh] depends on the user's step-up methods
-// (see [Client.CallbackHandler]). OAuth2 providers have no such request and
-// ignore the parameter.
+// authenticate the user again instead of approving silently, and the request is
+// recorded in the sealed login state. It is a best-effort hint: a provider may
+// ignore it. The callback reads the ID token's auth_time claim, which can only
+// make the federated factor older than this server's clock, never fresher (see
+// [Client.CallbackHandler]); whether the factor satisfies
+// [auth.Guard.RequireFresh] depends on the user's step-up methods. OAuth2
+// providers have no such request and ignore the parameter.
 //
 // Example:
 //
@@ -53,7 +53,9 @@ func (client *Client) LoginHandler() router.Handler {
 			return invalidLoginRequest(err)
 		}
 
-		state, err := client.newState(returnTo)
+		fresh := client.provider.isOIDC() && httpRequest.URL.Query().Get("fresh") == "1"
+
+		state, err := client.newState(returnTo, fresh)
 
 		if err != nil {
 			return err
@@ -67,7 +69,7 @@ func (client *Client) LoginHandler() router.Handler {
 
 		options := client.authOptions(state)
 
-		if client.provider.isOIDC() && httpRequest.URL.Query().Get("fresh") == "1" {
+		if fresh {
 			options = append(options, oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", "0"))
 		}
 
@@ -75,8 +77,9 @@ func (client *Client) LoginHandler() router.Handler {
 	}
 }
 
-// newState creates the random values of one login.
-func (client *Client) newState(returnTo string) (loginState, error) {
+// newState creates the random values of one login. fresh records that the
+// login asked the provider to authenticate the user again.
+func (client *Client) newState(returnTo string, fresh bool) (loginState, error) {
 	state, err := random()
 
 	if err != nil {
@@ -103,6 +106,7 @@ func (client *Client) newState(returnTo string) (loginState, error) {
 		Nonce:    nonce,
 		Verifier: verifier,
 		ReturnTo: returnTo,
+		Fresh:    fresh,
 		Expires:  time.Now().Add(loginTTL),
 	}, nil
 }

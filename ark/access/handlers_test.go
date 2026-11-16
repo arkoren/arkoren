@@ -170,28 +170,6 @@ func TestRegisterWithResetAndVerificationDispatchesOnBothPaths(t *testing.T) {
 	})
 }
 
-// TestRegisterWithVerificationOnlyAsksTheOwnerToVerify verifies without Reset a
-// taken address dispatches a verification for its owner's subject, as the new
-// address does for the new subject.
-func TestRegisterWithVerificationOnlyAsksTheOwnerToVerify(t *testing.T) {
-	t.Parallel()
-
-	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newAppWith(t, db, instance, wire{verify: true}, func(iam *access.Builder) { iam.Password(hasher(), registration) })
-		fresh, taken := registerBoth(sys)
-		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
-			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
-		}
-		subject := mustSubject(t, sys)
-		if got := sys.box.dispatchedVerifies; len(got) != 2 || got[0].Subject != subject || got[1].Subject != subject {
-			t.Fatalf("verifications dispatched = %+v, want two for %s", got, subject)
-		}
-		if len(sys.box.dispatchedResets) != 0 {
-			t.Fatalf("resets dispatched = %+v, want none", sys.box.dispatchedResets)
-		}
-	})
-}
-
 // TestRegisterWithResetOnlyDispatchesNothing verifies with Reset and no
 // Verification neither path dispatches anything, so they cost the same.
 func TestRegisterWithResetOnlyDispatchesNothing(t *testing.T) {
@@ -210,13 +188,13 @@ func TestRegisterWithResetOnlyDispatchesNothing(t *testing.T) {
 }
 
 // TestRegisterDispatchFailureStaysAccepted verifies a dispatch that fails, on
-// the new path and on the taken one (both dispatch a verification without
-// Reset), is logged and the answer is still 202.
+// the new path (the taken one dispatches a reset notice), is logged and the
+// answer is still 202.
 func TestRegisterDispatchFailureStaysAccepted(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newAppWith(t, db, instance, wire{verify: true}, func(iam *access.Builder) {
+		sys := newAppWith(t, db, instance, both, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
 			iam.Directory(func(accounts *account.Builder) {
 				accounts.Verification(newSigner(t, ""), func(context.Context, account.VerifyRequest) error { return errors.New("queue down") }, func(context.Context, account.VerifyMessage) error { return nil })

@@ -36,13 +36,13 @@ func TestGrantsRequireAGrantFunctionWithACatalog(t *testing.T) {
 	})
 }
 
-// TestGrantsRejectInvalidCatalog verifies empty, duplicate and wildcard names
-// are invalid.
+// TestGrantsRejectInvalidCatalog verifies empty and duplicate names are
+// invalid.
 func TestGrantsRejectInvalidCatalog(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		for _, catalog := range [][]string{{""}, {"a", "a"}, {"*"}} {
+		for _, catalog := range [][]string{{""}, {"a", "a"}} {
 			_, err := newIssuerWith(t, db, instance, func(tokens *apitoken.Builder) {
 				tokens.Instance(instance).Grants(apitoken.AnyScope, catalog...)
 			})

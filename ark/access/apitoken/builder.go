@@ -11,6 +11,7 @@ import (
 	"arkoren.dev/core/event"
 
 	"arkoren.dev/ark/access/internal/storage"
+	"arkoren.dev/ark/access/internal/web"
 )
 
 // prefixPattern accepts the token prefixes: 2 to 16 lowercase letters or digits.
@@ -82,13 +83,13 @@ func (tokens *Builder) Events(bus *event.Bus) *Builder {
 // the catalog scopes that user may hold now: a personal token may carry any
 // subset of catalog and grant, and a device token carries all of it. Names in
 // grantable's answer outside the catalog are ignored, so it may return the
-// user's whole permission set; the one exception is the wildcard "*", which
-// stands for the whole catalog (it is what [AnyScope] returns), so a
-// permission set that can contain a literal "*" must be filtered before it is
-// returned. Use [AnyScope] when every user may hold every scope. grantable is required with a catalog, which is why both are arguments
+// user's whole permission set; the one exception is the private marker that
+// [AnyScope] returns, which stands for the whole catalog, so a literal "*" in
+// the answer is only a scope named "*". Use [AnyScope] when every user may hold
+// every scope. grantable is required with a catalog, which is why both are arguments
 // of one method: a catalog with no ceiling would let a user mint a token that
 // can do more than they can. Without Grants, tokens carry no scopes. The names
-// are copied; an empty or duplicate name, or the wildcard "*", is
+// are copied; an empty or duplicate name is
 // [ErrInvalidConfig], as is a nil grantable with a catalog.
 //
 // The grant is a ceiling checked at issue (a scope outside it is
@@ -229,19 +230,22 @@ func (tokens *Builder) deviceIdle() time.Duration {
 	return tokens.deviceIdleTTL
 }
 
-// Verified sets the check that tells whether a user's email is verified.
+// Verified adds the check that tells whether a user's email is verified.
 // [Issuer.CreateHandler] and [Issuer.ExchangeHandler] then answer 403 (the
 // problem of account.ErrEmailUnverified) to an unverified user, so whoever
 // registered an address first cannot mint a credential before its owner proves
 // the address. Without it the handlers admit everyone, which is only right when
 // the application enforces the rule itself; the facade always sets it with the
-// built-in users. [Issuer.Issue] and [Issuer.IssueDevice] are not gated.
+// built-in users. [Issuer.Issue] and [Issuer.IssueDevice] are not gated. Checks
+// add up instead of replacing each other: a user is verified only when every
+// check says so, so an application check can add a rule but never lift the
+// facade's.
 //
 // Example:
 //
 //	tokens.Verified(directory.Verified)
 func (tokens *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
-	tokens.verified = check
+	tokens.verified = web.All(tokens.verified, check)
 
 	return tokens
 }
@@ -265,12 +269,11 @@ func (tokens *Builder) validate() error {
 }
 
 // validateGrants checks the scope catalog and its grant function: names are
-// unique, non-empty and not the wildcard, and a catalog comes with the function
-// that caps it.
+// unique and non-empty, and a catalog comes with the function that caps it.
 func (tokens *Builder) validateGrants() error {
 	catalog := slices.Sorted(slices.Values(tokens.scopes))
 	if slices.Contains(catalog, "") || slices.Contains(catalog, anyScope) || len(slices.Compact(catalog)) != len(tokens.scopes) {
-		return fmt.Errorf("scopes must be unique, non-empty and not %q", anyScope)
+		return errors.New("scopes must be unique and non-empty")
 	}
 	if tokens.grantable == nil && len(catalog) > 0 {
 		return errors.New("a scope catalog needs a grant function: pass AnyScope to grant every scope")

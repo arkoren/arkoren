@@ -79,9 +79,10 @@ func (links *Links) createUser(ctx context.Context, external auth.External) (str
 		return "", ErrNoAccount
 	}
 	var subject string
+	var claimed bool
 	err := links.db.WithTransaction(ctx, func(ctx context.Context) error {
 		var err error
-		subject, err = links.owner(ctx, external)
+		subject, claimed, err = links.owner(ctx, external)
 		if err != nil {
 			return err
 		}
@@ -102,38 +103,47 @@ func (links *Links) createUser(ctx context.Context, external auth.External) (str
 		return "", err
 	}
 	links.emit(ctx, LinkCreated, subject)
+	if claimed {
+		links.emit(ctx, AccountClaimed, subject)
+	}
 
 	return subject, nil
 }
 
 // owner returns the user that gets an unknown identity, inside the transaction
-// of [Links.createUser]: the user [Builder.TakeOver] hands over, or a new user.
-// A taken-over user must still be allowed in: a disabled one is
-// [auth.ErrUnauthenticated], which rolls the takeover back, so no login ever
-// re-enables or empties a disabled account.
-func (links *Links) owner(ctx context.Context, external auth.External) (string, error) {
+// of [Links.createUser]: the user [Builder.TakeOver] hands over (claimed is then
+// true), or a new user. A taken-over user must still be allowed in: a disabled
+// one is [auth.ErrUnauthenticated], which rolls the takeover back, so no login
+// ever re-enables or empties a disabled account. A new user needs
+// [Builder.SignUp] and an identity with a proven email ([ErrEmailUnverified]
+// otherwise).
+func (links *Links) owner(ctx context.Context, external auth.External) (subject string, claimed bool, err error) {
 	if links.takeOver != nil {
 		subject, err := links.takeOver(ctx, external)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		if subject != "" {
 			if _, err := links.provider.Find(ctx, subject); err != nil {
 				if errors.Is(err, auth.ErrUserNotFound) || errors.Is(err, auth.ErrUserDisabled) {
-					return "", auth.ErrUnauthenticated
+					return "", false, auth.ErrUnauthenticated
 				}
 
-				return "", err
+				return "", false, err
 			}
 
-			return subject, nil
+			return subject, true, nil
 		}
 	}
 	if !links.signUp {
-		return "", ErrNoAccount
+		return "", false, ErrNoAccount
 	}
+	if !external.EmailVerified || external.Email == "" {
+		return "", false, ErrEmailUnverified
+	}
+	subject, err = links.create(ctx, external)
 
-	return links.create(ctx, external)
+	return subject, false, err
 }
 
 // loginWinner logs in the user that a concurrent first login of external

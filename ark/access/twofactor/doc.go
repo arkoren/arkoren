@@ -37,7 +37,9 @@
 //     satisfies: [Factors.DisableHandler] and [Factors.RecoveryCodesHandler]
 //     require an authenticator or recovery code this session verified within
 //     [Builder.StepUpWindow] and answer [auth.ErrStepUpRequired] with methods
-//     ["otp"] otherwise.
+//     ["otp"] otherwise. A recovery code in that window also counts as the fresh
+//     login they ask for, so a user who lost the authenticator can log in with a
+//     code and turn two-factor off.
 //
 // # Storage
 //

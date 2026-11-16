@@ -118,14 +118,17 @@ a path.
 
 ## Freshness
 
-The federated factor is stamped with this server's clock at the callback; the
-provider's `auth_time` is ignored. Core's rule decides what that means for
-`guard.RequireFresh`: a recent factor from a step-up method counts, or any recent
+The federated factor is stamped with this server's clock at the callback, unless
+the ID token has an earlier `auth_time`: the provider can only make the factor
+older, never fresher, and a missing `auth_time` never fails the login. Microsoft
+Entra sends `auth_time` only as an optional claim you add to the app
+registration; do not count on one from Google, and GitHub has no ID token. Core's rule decides what the factor
+time means for `guard.RequireFresh`: a recent factor from a step-up method counts, or any recent
 factor when the user has no step-up method. `oauth.MethodFederated` is not a
 step-up method, so a user with a password or TOTP is not made fresh by a silent
 re-login, and a user with neither is fresh right after logging in.
 `/login?fresh=1` still adds `prompt=login&max_age=0` to an OIDC authorization
-request, but only as a hint to the provider with no security meaning. To require
+request and is recorded in the login state; the provider may ignore the hint. To require
 a genuinely new login, for example before exchanging a session for a device
 token, use `guard.RecentLogin`.
 
@@ -209,7 +212,7 @@ api.With(gate.Require(gate.HasScopes("posts:write"))).Post("/posts", createPost)
 ## API
 
 - `oauth.New(provider, cipher, clientID, configure...)`: pure constructor; `client.Start(ctx)` runs OIDC discovery (no-op for OAuth2).
-- `oauth.OIDC(issuerURL)`, `oauth.OAuth2(endpoint, userInfo)`: providers.
+- `oauth.OIDC(issuerURL, configure...)`, `oauth.OAuth2(endpoint, userInfo)`: providers. `OIDCBuilder.TrustEmail(enabled bool)` makes a generic OIDC provider report a boolean `email_verified` claim; off by default, the email is empty.
 - `client.Name()`: the login method name (`google`, `github`, `microsoft`, `apple`, else `oauth`).
 - `client.LoginHandler()`, `client.CallbackHandler(guard, resolve)`: browser flow handlers. `resolve` is an
   `auth.Resolver`: it maps the external `auth.External` identity to the app's user subject. Mapper errors matching `auth.ErrNoCredentials`
@@ -255,7 +258,9 @@ wrap `ErrProviderUnavailable`. Original native causes remain inspectable.
 
 The resolver receives an `auth.External`. Match local users on the pair `Issuer`
 + `Subject`, which the provider guarantees stable and unique. `Email` is set,
-with `EmailVerified` true, only on the provider's positive evidence; never link
+with `EmailVerified` true, only on the provider's positive evidence (a generic
+`oauth.OIDC` provider reports no email unless you opt in with `TrustEmail(true)`
+for an issuer you operate or have reviewed); never link
 accounts by email otherwise: providers differ in whether they verify it, so an
 attacker could register the victim's address at a lax provider and take over the
 account. `Claims["name"]` is the display name and, for browser logins,

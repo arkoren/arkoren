@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"arkoren.dev/ark/access/internal/storage"
+	"arkoren.dev/ark/access/internal/web"
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
 )
@@ -93,34 +94,38 @@ func (factors *Builder) StepUpWindow(window time.Duration) *Builder {
 	return factors
 }
 
-// Verified sets the check that tells whether a user's email is verified.
+// Verified adds the check that tells whether a user's email is verified.
 // [Factors.SetupHandler] and [Factors.EnableHandler] then answer 403 (the
 // problem of account.ErrEmailUnverified) to an unverified user, so whoever
 // registered an address first cannot enroll an authenticator before its owner
 // proves the address. Without it the handlers admit everyone, which is only
 // right when the application enforces the rule itself; the facade always sets
-// it with the built-in users.
+// it with the built-in users. Checks add up instead of replacing each other: a
+// user is verified only when every check says so, so an application check can
+// add a rule but never lift the facade's.
 //
 // Example:
 //
 //	factors.Verified(directory.Verified)
 func (factors *Builder) Verified(check func(ctx context.Context, subject string) (bool, error)) *Builder {
-	factors.verified = check
+	factors.verified = web.All(factors.verified, check)
 
 	return factors
 }
 
-// OnEnable sets a function that [Factors.EnableHandler] runs in the same
+// OnEnable adds a function that [Factors.EnableHandler] runs in the same
 // transaction as the activation, after ending the user's other logins, for what
 // must not outlive a new second factor (the facade revokes the user's device
 // tokens). If it fails the transaction rolls back: two-factor stays off and no
-// recovery code is shown.
+// recovery code is shown. Hooks add up instead of replacing each other, so the
+// facade's revocation survives an application hook: they run in the order
+// added, all of them even when one fails, and their errors are joined.
 //
 // Example:
 //
 //	factors.OnEnable(issuer.RevokeDevices)
 func (factors *Builder) OnEnable(hook func(ctx context.Context, subject string) error) *Builder {
-	factors.enabled = hook
+	factors.enabled = web.Then(factors.enabled, hook)
 
 	return factors
 }

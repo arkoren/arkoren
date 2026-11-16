@@ -29,7 +29,7 @@ type codesBody struct {
 // whoever has the password and an old session must not be able to weaken the
 // second factor. The user proves a code with POST /confirm and retries.
 func (factors *Factors) requireSecondFactor(ctx context.Context, identity auth.Identity) error {
-	if factors.hasRecentFactor(identity) {
+	if factors.hasRecent(identity, factors.secondFactorMethods()) {
 		return nil
 	}
 	methods, err := factors.enrolledMethods(ctx, identity.Subject())
@@ -42,14 +42,42 @@ func (factors *Factors) requireSecondFactor(ctx context.Context, identity auth.I
 	})
 }
 
-// hasRecentFactor reports whether identity proved a second factor (the
-// authenticator, a recovery code or a registered method) within the step-up
-// window.
-func (factors *Factors) hasRecentFactor(identity auth.Identity) bool {
+// secondFactorMethods lists the methods whose recent proof counts as a second
+// factor: the authenticator, a recovery code and the registered methods.
+func (factors *Factors) secondFactorMethods() []auth.Method {
 	accepted := []auth.Method{auth.MethodOTP, MethodRecovery}
 	for _, credential := range factors.extra {
 		accepted = append(accepted, credential.Method)
 	}
+
+	return accepted
+}
+
+// freshOrRecovered returns the session identity of r when it is fresh
+// ([auth.Guard.Fresh]) or proved a recovery code within the step-up window. The
+// handlers that weaken two-factor use it instead of [web.Fresh]: a user who lost
+// the authenticator logs in with a recovery code, which is no step-up method, so
+// core's freshness would call them stale although they just proved a second
+// factor, and they could not disable two-factor or replace their codes, the
+// two things a user without the device needs to do.
+func (factors *Factors) freshOrRecovered(guard *auth.Guard, r *http.Request) (auth.Identity, error) {
+	identity, err := web.Session(r)
+	if err != nil {
+		return auth.Identity{}, err
+	}
+	if factors.hasRecent(identity, []auth.Method{MethodRecovery}) {
+		return identity, nil
+	}
+	if err := guard.Fresh(r); err != nil {
+		return auth.Identity{}, err
+	}
+
+	return identity, nil
+}
+
+// hasRecent reports whether identity proved one of the methods within the
+// step-up window, by a factor this server stamped, never one from the future.
+func (factors *Factors) hasRecent(identity auth.Identity, accepted []auth.Method) bool {
 	now := time.Now()
 
 	return slices.ContainsFunc(identity.Factors(), func(factor auth.Factor) bool {
@@ -181,7 +209,9 @@ func (factors *Factors) enable(guard *auth.Guard, r *http.Request, subject, code
 // It needs a browser session and a fresh login, and in addition a recent
 // authenticator or recovery code (see [Builder.StepUpWindow]): a password alone,
 // however recent, answers [auth.ErrStepUpRequired] (403) with methods ["otp"],
-// and the user proves a code with POST /confirm and retries. A user without an
+// and the user proves a code with POST /confirm and retries. A recovery code
+// used within the window also counts as the fresh login, so a user who lost the
+// device can log in with a code and disable two-factor. A user without an
 // authenticator gets [ErrNotEnabled] (409).
 //
 // Example:
@@ -189,7 +219,7 @@ func (factors *Factors) enable(guard *auth.Guard, r *http.Request, subject, code
 //	web.Delete("/two-factor", factors.DisableHandler(guard))
 func (factors *Factors) DisableHandler(guard *auth.Guard) router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		identity, err := web.Fresh(guard, r)
+		identity, err := factors.freshOrRecovered(guard, r)
 		if err != nil {
 			return err
 		}
@@ -214,7 +244,8 @@ func (factors *Factors) DisableHandler(guard *auth.Guard) router.Handler {
 // RecoveryCodesHandler returns the handler of POST /two-factor/recovery-codes.
 // It replaces the recovery codes and answers 200 with {"recovery_codes": [...]};
 // the old codes stop working. It needs a browser session, a fresh login and a
-// recent authenticator or recovery code, like [Factors.DisableHandler]; a
+// recent authenticator or recovery code, like [Factors.DisableHandler] (a
+// recovery code used within the window also counts as the fresh login); a
 // password alone is [auth.ErrStepUpRequired] (403) with methods ["otp"]. A user
 // without an authenticator gets [ErrNotEnabled] (409).
 //
@@ -223,7 +254,7 @@ func (factors *Factors) DisableHandler(guard *auth.Guard) router.Handler {
 //	web.Post("/two-factor/recovery-codes", factors.RecoveryCodesHandler(guard))
 func (factors *Factors) RecoveryCodesHandler(guard *auth.Guard) router.Handler {
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
-		identity, err := web.Fresh(guard, r)
+		identity, err := factors.freshOrRecovered(guard, r)
 		if err != nil {
 			return err
 		}
