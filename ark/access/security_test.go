@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"arkoren.dev/foundation/totp"
+
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/event"
 	"arkoren.dev/core/service/cache"
@@ -33,7 +35,7 @@ func TestResetDefeatsPreRegistrationHijack(t *testing.T) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 			iam.Provider(fakeProvider{name: "fake"})
 		})
@@ -130,7 +132,7 @@ func TestResetOfVerifiedAccountKeepsItsFactors(t *testing.T) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		subject := mustSubject(t, sys)
@@ -185,7 +187,7 @@ func TestTwoFactorNeedsRecentCodeNotPassword(t *testing.T) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
 			// A one-nanosecond window makes every code "old" without sleeping.
-			iam.TwoFactor(cipher(t), "Example", func(factors *twofactor.Builder) {
+			iam.TwoFactor(totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
 				factors.StepUpWindow(time.Nanosecond)
 			})
 		})
@@ -222,7 +224,7 @@ func TestTwoFactorWithRecentCodeDisablesAndEnableEndsOtherLogins(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
@@ -274,7 +276,7 @@ func checkEnablingTwoFactorTokens(t *testing.T, keepPersonal bool, personalStatu
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 			if keepPersonal {
 				iam.KeepPersonalTokens()
@@ -371,7 +373,6 @@ func TestForgotRegisterResendAreThrottledAndUniform(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.ClientIP(func(r *http.Request) string { return r.Header.Get("X-Test-IP") })
 			iam.Deliver(func(context.Context, access.Message) error { return errors.New("smtp down") })
 		})
 		post := func(path, body, ip string) apptest.Reply {
@@ -439,7 +440,6 @@ func TestLoginLockoutNeedsTheSameAddressAndCountsOnlyFailures(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.ClientIP(func(r *http.Request) string { return r.Header.Get("X-Test-IP") })
 		})
 		register(t, sys.client, "ada@example.com")
 		login := func(password, ip string) int {
@@ -572,7 +572,7 @@ func TestSecondFactorLockoutCountsAgainstTheLoginThrottle(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 		})
 		lockSecondFactor(t, sys)
 		for i := range 12 {
@@ -605,7 +605,7 @@ func TestSecondFactorLockoutReachesTheApplicationBus(t *testing.T) {
 		}
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Events(bus)
 		})
 		lockSecondFactor(t, sys)

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"arkoren.dev/foundation/totp"
+
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/cache/memorycache"
@@ -28,7 +30,7 @@ func TestVictimsVerifyClickDoesNotVerifyTheAttackersAccount(t *testing.T) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Provider(fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "victim@example.com")
@@ -87,7 +89,7 @@ func TestEnablingTwoFactorFailsClosed(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example", func(factors *twofactor.Builder) {
+			iam.TwoFactor(totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
 				factors.OnEnable(func(context.Context, string) error { return errors.New("revocation down") })
 			})
 		})
@@ -121,9 +123,8 @@ func TestOwnUsersNeedTheVerifiedHooks(t *testing.T) {
 			"only Verified":        {Provider: provider, Lookup: users.lookup, Rotate: users.rotate, Verified: verified},
 			"only ProveEmail":      {Provider: provider, Lookup: users.lookup, Rotate: users.rotate, ProveEmail: prove},
 		} {
-			_, err := access.New(db, cache.New(memorycache.New()), func(iam *access.Builder) {
+			_, err := access.New(db, cache.New(memorycache.New()), testClientIP, func(iam *access.Builder) {
 				iam.Instance(instance)
-				iam.TrustRemoteAddr()
 				iam.Users(own)
 				iam.Password(hasher())
 			})

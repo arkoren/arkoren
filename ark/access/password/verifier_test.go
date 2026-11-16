@@ -143,7 +143,7 @@ func TestPingNamesMigrations(t *testing.T) {
 		ctx := testContext(t)
 		users := newFakeUsers()
 		provider, _ := auth.NewUserProvider(users.driver)
-		verifier, err := password.NewVerifier(provider, db, newSystem(t, db, instance+"_x").store, newSystem(t, db, instance+"_y").hasher, password.Users{
+		verifier, err := password.NewVerifier(provider, db, newSystem(t, db, instance+"_x").store, testClientIP, newSystem(t, db, instance+"_y").hasher, password.Users{
 			Lookup: users.Lookup,
 			Rotate: users.Rotate,
 		}, func(passwords *password.Builder) {
@@ -166,7 +166,7 @@ func TestPingNamesMigrations(t *testing.T) {
 func TestNewVerifierRejectsBadConfig(t *testing.T) {
 	t.Parallel()
 
-	if _, err := password.NewVerifier(nil, nil, nil, nil, password.Users{}); !errors.Is(err, password.ErrInvalidConfig) {
+	if _, err := password.NewVerifier(nil, nil, nil, nil, nil, password.Users{}); !errors.Is(err, password.ErrInvalidConfig) {
 		t.Fatalf("error = %v, want ErrInvalidConfig", err)
 	}
 }

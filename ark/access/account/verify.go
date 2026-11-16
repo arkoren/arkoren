@@ -266,17 +266,12 @@ func (directory *Directory) VerifyHandler() router.Handler {
 //
 // Requests are counted per user and per client address before anything is
 // sent: more than 5 per user or 20 per client address in 15 minutes is
-// [ErrThrottled] (429, with Retry-After). The handler panics at composition
-// unless [Builder.Throttle] was set.
+// [ErrThrottled] (429, with Retry-After).
 //
 // Example:
 //
 //	web.Post("/email/verify/resend", directory.ResendHandler())
 func (directory *Directory) ResendHandler() router.Handler {
-	if directory.store == nil {
-		panic("account: ResendHandler requires Builder.Throttle")
-	}
-
 	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
 		if err != nil {

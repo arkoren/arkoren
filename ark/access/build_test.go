@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"arkoren.dev/foundation/totp"
+
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -24,7 +26,7 @@ func TestDefaultRegistriesAreOrdered(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		setup := sys.client.Post("/two-factor/setup", "")
@@ -73,33 +75,8 @@ func TestApplicationCallbacksCannotOverrideTheSessionHandle(t *testing.T) {
 func TestClientAddressSourceIsRequired(t *testing.T) {
 	t.Parallel()
 
-	_, err := access.New(memoryDatabase(t), cache.New(memorycache.New()))
-	if !errors.Is(err, access.ErrInvalidConfig) || !strings.Contains(err.Error(), "ClientIP") {
-		t.Fatalf("New without a client address source = %v, want ErrInvalidConfig naming ClientIP", err)
-	}
-}
-
-// TestClientIPSatisfiesTheAddressSource verifies ClientIP alone is accepted.
-func TestClientIPSatisfiesTheAddressSource(t *testing.T) {
-	t.Parallel()
-
-	_, err := access.New(memoryDatabase(t), cache.New(memorycache.New()), func(iam *access.Builder) {
-		iam.ClientIP(func(*http.Request) string { return "203.0.113.9" })
-	})
-	if err != nil {
-		t.Fatalf("New with ClientIP: %v", err)
-	}
-}
-
-// TestTrustRemoteAddrSatisfiesTheAddressSource verifies the explicit opt-in is
-// accepted on its own.
-func TestTrustRemoteAddrSatisfiesTheAddressSource(t *testing.T) {
-	t.Parallel()
-
-	_, err := access.New(memoryDatabase(t), cache.New(memorycache.New()), func(iam *access.Builder) {
-		iam.TrustRemoteAddr()
-	})
-	if err != nil {
-		t.Fatalf("New with TrustRemoteAddr: %v", err)
+	_, err := access.New(memoryDatabase(t), cache.New(memorycache.New()), nil)
+	if !errors.Is(err, access.ErrInvalidConfig) {
+		t.Fatalf("New without a client address source = %v, want ErrInvalidConfig", err)
 	}
 }

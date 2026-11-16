@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"arkoren.dev/foundation/totp"
+
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/database"
 
@@ -78,7 +80,7 @@ func TestTwoFactorEnableChallengeAndRecovery(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		setup := sys.client.Post("/two-factor/setup", "")
@@ -285,7 +287,7 @@ func TestDeleteAccountRemovesEveryPackagesRows(t *testing.T) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
@@ -348,12 +350,12 @@ func TestTwoInstancesShareOneDatabase(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		first := newApp(t, db, instance+"_a", func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 		})
 		second := newApp(t, db, instance+"_b", func(iam *access.Builder) {
 			iam.Password(hasher())
-			iam.TwoFactor(cipher(t), "Example")
+			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
 		})
 		register(t, first.client, "ada@example.com")
@@ -368,7 +370,7 @@ func TestTwoInstancesShareOneDatabase(t *testing.T) {
 func TestNewRejectsBadConfig(t *testing.T) {
 	t.Parallel()
 
-	if _, err := access.New(nil, nil); !errors.Is(err, access.ErrInvalidConfig) {
+	if _, err := access.New(nil, nil, nil); !errors.Is(err, access.ErrInvalidConfig) {
 		t.Errorf("missing dependencies error = %v", err)
 	}
 	if _, err := newFacade(t, func(iam *access.Builder) { iam.Instance("Bad-Name") }); !errors.Is(err, access.ErrInvalidConfig) {
@@ -377,7 +379,7 @@ func TestNewRejectsBadConfig(t *testing.T) {
 	if _, err := newFacade(t, func(iam *access.Builder) { iam.SessionLifetime(-1) }); !errors.Is(err, access.ErrInvalidConfig) {
 		t.Errorf("negative lifetime error = %v", err)
 	}
-	if _, err := newFacade(t, func(iam *access.Builder) { iam.TwoFactor(cipher(t), "bad:issuer") }); !errors.Is(err, access.ErrInvalidConfig) {
+	if _, err := newFacade(t, func(iam *access.Builder) { iam.TwoFactor(totp.New("bad:issuer"), cipher(t)) }); !errors.Is(err, access.ErrInvalidConfig) {
 		t.Errorf("invalid issuer error = %v", err)
 	}
 }
@@ -388,7 +390,7 @@ func TestMustAcceptPanicsForUnregisteredMethod(t *testing.T) {
 
 	iam, err := newFacade(t, func(iam *access.Builder) {
 		iam.Password(hasher())
-		iam.TwoFactor(cipher(t), "Example")
+		iam.TwoFactor(totp.New("Example"), cipher(t))
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -417,7 +419,7 @@ func TestMigrationsOnlyForEnabledFeatures(t *testing.T) {
 	}
 	all, err := newFacade(t, func(iam *access.Builder) {
 		iam.Password(hasher())
-		iam.TwoFactor(cipher(t), "Example")
+		iam.TwoFactor(totp.New("Example"), cipher(t))
 		iam.Tokens()
 		iam.Provider(fakeProvider{name: "fake"})
 		iam.Instance("tenant_a")

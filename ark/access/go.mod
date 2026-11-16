@@ -3,7 +3,7 @@ module arkoren.dev/ark/access
 go 1.27
 
 require (
-	arkoren.dev/core v0.8.1-0.20261115223453-71b8e64b3621
+	arkoren.dev/core v0.9.0
 	arkoren.dev/driver/aes v0.1.0
 	arkoren.dev/driver/bcrypt v0.1.0
 	arkoren.dev/driver/mysql v0.1.0
@@ -12,7 +12,7 @@ require (
 	arkoren.dev/foundation/key v0.1.0
 	arkoren.dev/foundation/problem v0.1.0
 	arkoren.dev/foundation/query v0.2.0
-	arkoren.dev/foundation/totp v0.1.0
+	arkoren.dev/foundation/totp v0.2.0
 )
 
 require (

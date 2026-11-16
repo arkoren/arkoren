@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -114,9 +115,8 @@ func newAppOn(t *testing.T, db *database.Database, instance string, store *cache
 	t.Helper()
 
 	box := &outbox{}
-	iam, err := access.New(db, store, append([]access.BuilderFunc{func(iam *access.Builder) {
+	iam, err := access.New(db, store, testClientIP, append([]access.BuilderFunc{func(iam *access.Builder) {
 		iam.Instance(instance)
-		iam.TrustRemoteAddr()
 		iam.Deliver(box.send)
 		iam.Session(func(cookies *session.Builder) {
 			cookies.AllowInsecure(true)
@@ -155,7 +155,7 @@ func code(t *testing.T, encoded string, offset time.Duration) string {
 	if err != nil {
 		t.Fatalf("DecodeSecret: %v", err)
 	}
-	value, err := totp.New().Generate(secret, time.Now().Add(offset))
+	value, err := totp.New("Example").Generate(secret, time.Now().Add(offset))
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -200,9 +200,19 @@ func register(t *testing.T, client *apptest.Client, email string) apptest.Reply 
 	return reply
 }
 
+// testClientIP is the client address source of the tests: the X-Test-IP header
+// when a test sets one to play several clients, else the host of r.RemoteAddr.
+func testClientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Test-IP"); ip != "" {
+		return ip
+	}
+
+	return ratelimit.TrustedProxyKey()(r)
+}
+
 // newFacade composes a facade over an in-memory database without serving it.
 func newFacade(t *testing.T, configure ...access.BuilderFunc) (*access.Access, error) {
 	t.Helper()
 
-	return access.New(memoryDatabase(t), cache.New(memorycache.New()), append([]access.BuilderFunc{func(iam *access.Builder) { iam.TrustRemoteAddr() }}, configure...)...)
+	return access.New(memoryDatabase(t), cache.New(memorycache.New()), testClientIP, configure...)
 }

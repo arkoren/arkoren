@@ -87,7 +87,7 @@ func newSystem(t *testing.T, db *database.Database, instance string, cipher *cry
 	}); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	sys.factors, err = twofactor.NewFactors(provider, db, store, cipher, "Example", func(factors *twofactor.Builder) {
+	sys.factors, err = twofactor.NewFactors(provider, db, store, totp.New("Example"), cipher, func(factors *twofactor.Builder) {
 		factors.Instance(instance)
 		factors.Events(sys.events)
 		factors.RecoveryCodes(3)
@@ -148,7 +148,7 @@ func currentCode(t *testing.T, encoded string) string {
 	if err != nil {
 		t.Fatalf("DecodeSecret: %v", err)
 	}
-	code, err := totp.New().Generate(secret, time.Now())
+	code, err := totp.New("Example").Generate(secret, time.Now())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

@@ -5,6 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"arkoren.dev/core/http/middleware/ratelimit"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
+
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/database"
 	sqlite "arkoren.dev/driver/sqlite/sqlitedatabase"
@@ -17,7 +21,7 @@ import (
 func newDirectory(t *testing.T, db *database.Database, instance string, delivered *[]account.Message) *account.Directory {
 	t.Helper()
 
-	directory, err := account.NewDirectory(db, func(accounts *account.Builder) {
+	directory, err := account.NewDirectory(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 		accounts.Instance(instance)
 		accounts.Deliver(func(_ context.Context, message account.Message) error {
 			if delivered != nil {
@@ -305,7 +309,7 @@ func TestPingNamesMigrations(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		directory, err := account.NewDirectory(db, func(accounts *account.Builder) {
+		directory, err := account.NewDirectory(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 			accounts.Instance(instance)
 		})
 		if err != nil {
@@ -327,7 +331,7 @@ func TestPingNamesMigrations(t *testing.T) {
 func TestNewDirectoryRejectsBadConfig(t *testing.T) {
 	t.Parallel()
 
-	if _, err := account.NewDirectory(nil); !errors.Is(err, account.ErrInvalidConfig) {
+	if _, err := account.NewDirectory(nil, nil, nil); !errors.Is(err, account.ErrInvalidConfig) {
 		t.Errorf("nil database error = %v", err)
 	}
 	driver, err := sqlite.New(":memory:")
@@ -335,8 +339,14 @@ func TestNewDirectoryRejectsBadConfig(t *testing.T) {
 		t.Fatalf("sqlite: %v", err)
 	}
 	db := database.New(driver)
+	if _, err := account.NewDirectory(db, nil, ratelimit.TrustedProxyKey()); !errors.Is(err, account.ErrInvalidConfig) {
+		t.Errorf("nil store error = %v", err)
+	}
+	if _, err := account.NewDirectory(db, cache.New(memorycache.New()), nil); !errors.Is(err, account.ErrInvalidConfig) {
+		t.Errorf("nil client address source error = %v", err)
+	}
 	for _, instance := range []string{"Upper", "1digit", "has-dash", "a23456789012345678901"} {
-		_, err := account.NewDirectory(db, func(accounts *account.Builder) {
+		_, err := account.NewDirectory(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 			accounts.Instance(instance)
 		})
 		if !errors.Is(err, account.ErrInvalidConfig) {

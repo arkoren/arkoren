@@ -53,9 +53,7 @@ func TestResetClearsTheIdentifierLockout(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
-			passwords.ClientIP(func(r *http.Request) string { return r.Header.Get("X-Test-IP") })
-		})
+		sys := newSystem(t, db, instance)
 		sys.registerAda(t, sys.client)
 		login := func(secret, ip string) int {
 			return sys.client.NewDevice().Do(http.MethodPost, "/login", `{"email":"ada@example.com","password":"`+secret+`"}`, "X-Test-IP: "+ip).Status

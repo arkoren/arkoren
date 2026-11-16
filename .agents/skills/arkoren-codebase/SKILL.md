@@ -360,7 +360,7 @@ the Identity.Session marker with RequireSession, and the auth.External and
 auth.Resolver types. Core names only RFC 8176 methods; modules (twofactor,
 oauth) declare their own and publish auth.CredentialEnrolled. There is no
 provider interface in core. ark/access (v0.1.0; owner bootstrap) is the facade over
-these seams: access.New(db, store, configure) builds the guard with the default
+these seams: access.New(db, store, clientIP, configure) builds the guard with the default
 registries (second factor: otp then recovery; step up: pwd then otp; federated is
 no step-up method), Mount registers the JSON routes of the enabled features, and
 every credential handler requires Identity.Session and guard.Fresh (a user with

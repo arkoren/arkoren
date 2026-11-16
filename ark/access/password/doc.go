@@ -52,7 +52,8 @@
 //
 // Example:
 //
-//	verifier, err := password.NewVerifier(provider, db, store, hasher, password.Users{
+//	clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
+//	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, password.Users{
 //		Lookup: directory.Lookup,
 //		Create: directory.Create,
 //		Rotate: directory.Rotate,

@@ -28,7 +28,7 @@ func (iam *Access) build(settings *Builder) error {
 	if err != nil {
 		return err
 	}
-	iam.provider, iam.verified = users.Provider, users.Verified
+	iam.provider, iam.verified, iam.register = users.Provider, users.Verified, users.Create != nil
 	if err := iam.buildPassword(settings, users); err != nil {
 		return err
 	}
@@ -57,8 +57,8 @@ func (iam *Access) buildUsers(settings *Builder) (Users, error) {
 	if settings.users != nil {
 		return *settings.users, nil
 	}
-	directory, err := account.NewDirectory(iam.db, func(accounts *account.Builder) {
-		accounts.Instance(settings.instance).Events(settings.events).Throttle(iam.store, settings.clientIP)
+	directory, err := account.NewDirectory(iam.db, iam.store, iam.clientIP, func(accounts *account.Builder) {
+		accounts.Instance(settings.instance).Events(settings.events)
 		if iam.deliver != nil {
 			accounts.Deliver(iam.deliverVerification)
 		}
@@ -78,7 +78,7 @@ func (iam *Access) buildPassword(settings *Builder, users Users) error {
 		return nil
 	}
 	configure := append([]password.BuilderFunc{iam.passwordPolicy(settings)}, settings.password...)
-	verifier, err := password.NewVerifier(iam.provider, iam.db, iam.store, settings.hasher, iam.passwordUsers(users), configure...)
+	verifier, err := password.NewVerifier(iam.provider, iam.db, iam.store, iam.clientIP, settings.hasher, iam.passwordUsers(users), configure...)
 	if err != nil {
 		return err
 	}
@@ -112,9 +112,6 @@ func (iam *Access) passwordUsers(users Users) password.Users {
 func (iam *Access) passwordPolicy(settings *Builder) password.BuilderFunc {
 	return func(passwords *password.Builder) {
 		passwords.Instance(settings.instance).Events(settings.events).AfterChange(iam.revokeTokens)
-		if settings.clientIP != nil {
-			passwords.ClientIP(settings.clientIP)
-		}
 		if iam.deliver == nil {
 			return
 		}
@@ -134,7 +131,7 @@ func (iam *Access) buildTwoFactor(settings *Builder) error {
 		factors.Instance(settings.instance).Events(settings.events)
 		factors.Verified(iam.verified).Methods(settings.secondFactor...).OnEnable(iam.revokeTokens)
 	}}, settings.twofactor...)
-	factors, err := twofactor.NewFactors(iam.provider, iam.db, iam.store, settings.cipher, settings.issuer, configure...)
+	factors, err := twofactor.NewFactors(iam.provider, iam.db, iam.store, settings.scheme, settings.cipher, configure...)
 	if err != nil {
 		return err
 	}
@@ -199,10 +196,7 @@ func (iam *Access) buildGuard(settings *Builder) error {
 	lifetime := cmp.Or(settings.sessionLifetime, session.DefaultMaxLifetime)
 	configure := append(slices.Clone(settings.guard), func(policy *auth.GuardBuilder) {
 		policy.Handle(session.Handle{}).SessionLifetime(lifetime)
-		policy.SecondFactor(secondFactor...).StepUp(stepUp...)
-		if settings.clientIP != nil {
-			policy.ClientIP(settings.clientIP)
-		}
+		policy.SecondFactor(secondFactor...).StepUp(stepUp...).ClientIP(iam.clientIP)
 	})
 	// The bus goes first: nothing in the facade depends on it, so an application's
 	// Guard callback may replace it.

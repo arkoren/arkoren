@@ -34,7 +34,7 @@
 //
 // Example:
 //
-//	directory, err := account.NewDirectory(db, func(accounts *account.Builder) {
+//	directory, err := account.NewDirectory(db, store, ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 //		accounts.Events(events)
 //	})
 //	if err != nil {

@@ -38,9 +38,13 @@ func (verifier *Verifier) reserve(ctx context.Context, counters ...counter) erro
 }
 
 // refund gives back one attempt reserved on key, for a login that succeeded:
-// only failures count against the limits.
+// only failures count against the limits. It adds -1 with [throttleWindow] as
+// the expiry for a counter that no longer exists (it expired between the
+// reservation and the refund, or the cache lost it), because a plain Decrement
+// would create it with no expiry and leave a stale counter forever. An existing
+// counter keeps its own expiry. A failed refund only keeps the attempt counted.
 func (verifier *Verifier) refund(ctx context.Context, key cache.Key[int64]) {
-	_, _ = verifier.store.Decrement(ctx, key, 1)
+	_, _, _ = verifier.store.IncrementWithTTL(ctx, key, -1, throttleWindow)
 }
 
 // clear forgets the attempts counted on key after a success. Counters expire on

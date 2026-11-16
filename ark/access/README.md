@@ -21,13 +21,16 @@ The packages never import each other; only the root does. Table names take a
 migrations: the module never runs DDL.
 
 ```go
-iam, err := access.New(db, store, func(iam *access.Builder) {
+// The client address keys the throttles: behind a proxy list its prefixes, and
+// with no proxy in front pass ratelimit.TrustedProxyKey() with none.
+clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
+scheme := totp.New("Acme") // the name authenticator apps show for this account
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	iam.Password(hasher)
-	iam.TwoFactor(cipher, "Example")
+	iam.TwoFactor(scheme, cipher)
 	iam.Tokens()
 	iam.Provider(google, github)
 	iam.Deliver(send)
-	iam.ClientIP(ratelimit.TrustedProxyKey(proxies...))
 })
 if err != nil {
 	return err

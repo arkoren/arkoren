@@ -297,3 +297,16 @@ func TestNewRejectsDuplicateProviderNames(t *testing.T) {
 		t.Fatalf("error = %v, want a duplicate-name rejection", err)
 	}
 }
+
+// TestProviderNamesMustBeOnePathSegment verifies New refuses a provider name
+// that is not one path segment, because the name is mounted as "/auth/<name>".
+func TestProviderNamesMustBeOnePathSegment(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"a/b", "{x}", "..", "a b", "a?b"} {
+		_, err := newFacade(t, func(iam *access.Builder) { iam.Provider(fakeProvider{name: name}) })
+		if !errors.Is(err, access.ErrInvalidConfig) {
+			t.Errorf("provider name %q: New error = %v, want ErrInvalidConfig", name, err)
+		}
+	}
+}

@@ -24,7 +24,6 @@ import (
 
 	"arkoren.dev/ark/access/internal/background"
 	"arkoren.dev/ark/access/internal/storage"
-	"arkoren.dev/ark/access/internal/throttle"
 )
 
 const (
@@ -153,7 +152,7 @@ type Users struct {
 //
 // Example:
 //
-//	verifier, err := password.NewVerifier(provider, db, store, hasher, users)
+//	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, users)
 //	if err != nil {
 //		return err
 //	}
@@ -181,22 +180,28 @@ type Verifier struct {
 
 // NewVerifier returns a verifier. provider finds users (to refuse disabled ones
 // and to read the version), db holds the tables, store counts login attempts,
-// hasher hashes passwords and users connects the user store. It does no I/O:
-// the tables come from [Verifier.Migrations]. Errors wrap [ErrInvalidConfig].
+// clientIP finds the client address those counters are keyed on, hasher hashes
+// passwords and users connects the user store. clientIP is required because
+// the right source depends on the deployment: behind a reverse proxy
+// r.RemoteAddr is the proxy, so every user would share one counter. Pass
+// ratelimit.TrustedProxyKey with your proxies' prefixes, or with none when no
+// proxy sits in front of the application. It does no I/O: the tables come from
+// [Verifier.Migrations]. Errors wrap [ErrInvalidConfig].
 //
 // It registers a forget hook on provider that deletes the user's hash and
 // reset token in the caller's transaction.
 //
 // Example:
 //
-//	verifier, err := password.NewVerifier(provider, db, store, hasher, password.Users{
+//	clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
+//	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, password.Users{
 //		Lookup: directory.Lookup,
 //		Rotate: directory.Rotate,
 //	})
-func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cache.Cache, hasher *hash.Hasher, users Users, configure ...BuilderFunc) (*Verifier, error) {
+func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cache.Cache, clientIP func(*http.Request) string, hasher *hash.Hasher, users Users, configure ...BuilderFunc) (*Verifier, error) {
 	switch {
-	case provider == nil, db == nil, store == nil, hasher == nil:
-		return nil, fmt.Errorf("%w: provider, database, store and hasher are required", ErrInvalidConfig)
+	case provider == nil, db == nil, store == nil, clientIP == nil, hasher == nil:
+		return nil, fmt.Errorf("%w: provider, database, store, client address source and hasher are required", ErrInvalidConfig)
 	case users.Lookup == nil, users.Rotate == nil:
 		return nil, fmt.Errorf("%w: Users.Lookup and Users.Rotate are required", ErrInvalidConfig)
 	}
@@ -220,15 +225,12 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		deliver:    settings.deliver,
 		resetTTL:   cmp.Or(settings.resetTTL, DefaultResetTTL),
 		policy:     settings.policy,
-		clientIP:   settings.clientIP,
+		clientIP:   clientIP,
 		registered: settings.registered,
 		changed:    settings.changed,
 	}
 	if verifier.policy == nil {
 		verifier.policy = defaultPolicy
-	}
-	if verifier.clientIP == nil {
-		verifier.clientIP = throttle.RemoteHost
 	}
 	provider.OnForget(verifier.forget)
 
