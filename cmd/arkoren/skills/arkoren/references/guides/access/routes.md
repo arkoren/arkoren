@@ -100,8 +100,8 @@ are:
 | `account` | `email-taken`, `invalid-email`, `invalid-token`, `email-unverified`, `verify-wrong-account`, `throttled` |
 | `password` | `invalid-credentials`, `invalid-password`, `invalid-token`, `throttled` |
 | `twofactor` | `invalid-code`, `already-enabled`, `not-enabled`, `not-enrolling`, `throttled` |
-| `apitoken` | `invalid-request`, `not-found` |
-| `federation` | `not-linked`, `linked-elsewhere`, `already-linked`, `last-link`, `not-found`, `unknown-provider` |
+| `apitoken` | `invalid-request`, `scope-not-granted`, `not-found` |
+| `federation` | `not-linked`, `no-account`, `linked-elsewhere`, `already-linked`, `last-link`, `not-found`, `unknown-provider` |
 
 ## Custom Paths
 

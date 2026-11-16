@@ -76,7 +76,9 @@ answers `204`, or `404` for another user's token. Both need a browser session.
 
 The function you pass to `Grants` receives the subject and returns the catalog
 scopes that user may hold now. Return what the user's role allows; names outside
-the catalog are ignored:
+the catalog are ignored. The one reserved name is `"*"`, which stands for the
+whole catalog and is what `AnyScope` returns, so never pass a literal `"*"` from
+your own permission set through unfiltered:
 
 ```go
 tokens.Grants(func(ctx context.Context, subject string) ([]string, error) {
