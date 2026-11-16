@@ -139,7 +139,7 @@
 //   - Every POST, PUT and PATCH route requires the media type application/json
 //     (415 otherwise, even without a body), which stops cross-site HTML forms.
 //     It is core's contenttype middleware, applied inside each handler so it also
-//     holds on custom paths; a DELETE without a body needs no Content-Type. It is
+//     holds on custom paths; DELETE routes are not checked. It is
 //     not CSRF protection: mount core's csrf.Middleware next to
 //     [Access.Middleware].
 //   - Forgot-password and resend answer an empty 202 once their work is

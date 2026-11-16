@@ -55,11 +55,10 @@ with or without a `charset`, even routes that read no body such as `/logout`;
 a form or a missing `Content-Type` answers `415` with the problem of core's
 [content type middleware](../http-fundamentals/content-type.md)
 (`tag:arkoren.dev,2026-09:core:http/middleware/contenttype:unsupported-media-type`).
-A `DELETE` or
-`QUERY` request without a body passes without a `Content-Type`, but one that
-declares another media type is `415`. The check is built into each handler, not
-into `Mount`, so it also holds when you [serve a route on your own
-path](#custom-paths). The provider routes under `/auth/{name}` are exempt,
+`DELETE` routes
+are not checked, because a form cannot send `DELETE`. The check is built into
+each handler, not into `Mount`, so it also holds when you [serve a route on your
+own path](#custom-paths). The provider routes under `/auth/{name}` are exempt,
 because identity providers redirect with a query or post a form (`form_post`).
 The check is not a replacement for
 [CSRF protection](../browser-security/csrf-protection.md), which you add next to

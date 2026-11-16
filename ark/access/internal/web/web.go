@@ -68,8 +68,8 @@ func Verified(ctx context.Context, verified func(context.Context, string) (bool,
 // (logout, a password reset's confirmation): a cross-site HTML form can only
 // send a form media type, so it cannot reach any state-changing route of this
 // module. Parameters such as charset are allowed; the match is on the exact
-// media type, never a prefix. A DELETE without a Content-Type passes, because
-// a form cannot send DELETE.
+// media type, never a prefix. Only POST, PUT and PATCH handlers are wrapped:
+// a form cannot send DELETE, so those routes are not checked.
 //
 // It is only a guard against cross-site forms. It does not authenticate a
 // request and is no replacement for CSRF protection.

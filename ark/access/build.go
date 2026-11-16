@@ -171,7 +171,7 @@ func (iam *Access) buildLinks(settings *Builder, users Users) error {
 		if iam.verifier != nil {
 			links.Fallback(iam.verifier.Has)
 		}
-		if users.Lookup != nil && users.ProveEmail != nil && users.Rotate != nil {
+		if iam.directory != nil {
 			links.TakeOver(iam.takeOver(users))
 		}
 	}}, settings.federation...)

@@ -168,25 +168,27 @@ func (iam *Access) purgers() []func(context.Context, string) error {
 	return removals
 }
 
-// takeOver returns the [federation.Builder.TakeOver] function of the facade: the
-// owner of an email a provider verified takes over the user who registered that
-// address and never verified it. It exists because registration with a
-// password creates an unverified user: without it whoever typed an address
-// first would keep the real owner out of the one login they can prove, and
-// could have attached a password, a provider, an authenticator or tokens that
-// stay valid after the owner arrives.
+// takeOver returns the [federation.Builder.TakeOver] function of the facade,
+// built only with the built-in users (the application's own [Users.Lookup]
+// takes whatever it logs in with, which need not be an email): the owner of an
+// email a provider verified takes over the user who registered that address and
+// never verified it. It exists because registration with a password creates an
+// unverified user: without it whoever typed an address first would keep the real
+// owner out of the one login they can prove, and could have attached a password,
+// a provider, an authenticator or tokens that stay valid after the owner arrives.
 //
 // Only positive evidence counts: the identity must have EmailVerified set (the
 // ark/oauth presets set it only for a provider-verified address: Google's
 // email_verified, GitHub's primary verified address, Microsoft's xms_edov, never
 // Microsoft's mutable email claim alone), and the user must be unverified. The
 // work is the one a password reset that proves the mailbox does, plus removing
-// the password: [Users.ProveEmail] marks the email verified and reports whether
-// it was unverified (atomically, so a concurrently verified user is left alone
-// and nothing is removed), the password and everything [Access.purge] lists
-// are deleted, and [Users.Rotate] ends every session and token of the
-// squatter. It runs in the transaction of the login, so it is all or nothing.
-// An unknown or verified address returns "" and the login proceeds as usual.
+// the password and rotating the user. It runs in the transaction of the login,
+// so it is all or nothing and the order of its steps is not observable; it
+// differs from "delete the password, purge, mark verified" only in marking the
+// email first, because [Users.ProveEmail] is the atomic test of "was
+// unverified": a user verified a moment earlier reports false and nothing is
+// removed. An unknown or verified address returns "" and the login proceeds as
+// usual.
 func (iam *Access) takeOver(users Users) func(context.Context, auth.External) (string, error) {
 	return func(ctx context.Context, external auth.External) (string, error) {
 		if !external.EmailVerified || external.Email == "" {
@@ -199,19 +201,23 @@ func (iam *Access) takeOver(users Users) func(context.Context, auth.External) (s
 		if err != nil {
 			return "", err
 		}
+		// Mark the email verified; only a user that was unverified is taken over.
 		wasUnverified, err := users.ProveEmail(ctx, subject)
 		if err != nil || !wasUnverified {
 			return "", err
 		}
+		// The password is the registrant's: delete it so it cannot log in again.
 		if iam.verifier != nil {
 			if err := iam.verifier.Remove(ctx, subject); err != nil {
 				return "", err
 			}
 		}
+		// Connections, authenticator, recovery codes, tokens and the application's
+		// OnEmailProven hook: whatever the registrant attached.
 		if err := iam.purge(ctx, subject); err != nil {
 			return "", err
 		}
-
+		// Bump the version: every session and pending login of the registrant ends.
 		if err := users.Rotate(ctx, subject); err != nil {
 			return "", err
 		}

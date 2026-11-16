@@ -366,7 +366,7 @@ no step-up method), Mount registers the JSON routes of the enabled features, and
 every credential handler requires Identity.Session and guard.Fresh (a user with
 no step-up method is fresh after any login). Registration and sign-up on a first provider login are off by default (password.Builder.Registration,
 federation.Builder.SignUp), and the token scope catalog takes its grant ceiling
-(apitoken.Builder.Grants, GrantTTL, AnyScope) with the shared cache given to NewIssuer. Packages account, password,
+(apitoken.Builder.Grants, GrantTTL, AnyScope) with the shared cache given to NewIssuer. Handlers that read a body are wrapped in internal/web RequireJSON (core contenttype, application/json only, inside each handler constructor, never DELETE). A provider login whose email is verified takes over an unverified built-in user (federation.Builder.TakeOver, set only with the directory: delete password, purge, mark verified, rotate, link, in the login transaction), and Access.Prune (apitoken.Issuer.Prune) is the scheduled cleanup of idle device and expired tokens. Packages account, password,
 twofactor, apitoken and federation never import each other; subjects are strings
 and cross-package writes join the context transaction of the one Database. A
 password reset calls Users.Rotate, which bumps UserRecord.Version and ends

@@ -166,8 +166,9 @@ If other modules registered credentials through `iam.SecondFactor` or `iam.StepU
 iam.OnEmailProven(passkeys.RemoveAll)
 ```
 
-The hook receives the subject and runs inside the reset, after the built-in purge.
-An error rolls the reset back. It does not run when the email was already verified.
+The hook receives the subject and runs inside the reset, or inside a provider login
+that [takes the account over](connections.md#unverified-accounts), after the
+built-in purge. An error rolls that reset or login back. It does not run when the email was already verified.
 With your own users, the purge needs `Users.Verified` and `Users.ProveEmail`; see
 [Your Own Users](own-users.md#verified-emails).
 

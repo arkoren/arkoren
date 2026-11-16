@@ -99,11 +99,10 @@ deletes the user's connections, authenticator, recovery codes and tokens, and an
 error from it rolls the reset back. Both are required when you set `Create`,
 because users it makes start unverified.
 
-With `Lookup`, `ProveEmail` and `Rotate` set, a provider login whose email the
-provider verified also takes over an unverified user with that email, as
-[Connections](connections.md#unverified-accounts) describes: `ProveEmail` must
-report whether the email was unverified atomically, so a user verified a moment
-earlier is never taken over.
+The takeover of an unverified account by a provider login that verified its
+email, described under [Connections](connections.md#unverified-accounts), is only
+for the built-in users: your `Lookup` takes whatever you log in with, which need
+not be an email.
 
 Without them, for users created elsewhere, the facade can neither gate those routes
 nor purge on reset, so enforce the same rules in your application. See
