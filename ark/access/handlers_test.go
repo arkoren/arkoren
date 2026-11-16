@@ -210,12 +210,13 @@ func TestRegisterWithResetOnlyDispatchesNothing(t *testing.T) {
 }
 
 // TestRegisterDispatchFailureStaysAccepted verifies a dispatch that fails, on
-// the new path and on the taken one, is logged and the answer is still 202.
+// the new path and on the taken one (both dispatch a verification without
+// Reset), is logged and the answer is still 202.
 func TestRegisterDispatchFailureStaysAccepted(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newAppWith(t, db, instance, both, func(iam *access.Builder) {
+		sys := newAppWith(t, db, instance, wire{verify: true}, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
 			iam.Directory(func(accounts *account.Builder) {
 				accounts.Verification(newSigner(t, ""), func(context.Context, account.VerifyRequest) error { return errors.New("queue down") }, func(context.Context, account.VerifyMessage) error { return nil })
@@ -272,41 +273,6 @@ func TestVerifyLinkSecondClickIsInvalid(t *testing.T) {
 		}
 		if reply := sys.client.Post("/email/verify", body); reply.Status != http.StatusUnprocessableEntity {
 			t.Fatalf("second click = %d %s, want 422", reply.Status, reply.Body)
-		}
-	})
-}
-
-// TestSendWorkersForwardToThePackages verifies the facade's worker methods send
-// for a known user, send nothing and return nil for an unknown one, and report a
-// missing feature as a configuration error.
-func TestSendWorkersForwardToThePackages(t *testing.T) {
-	t.Parallel()
-
-	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		ctx := testContext(t)
-		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher(), registration) })
-		register(t, sys.client, "ada@example.com")
-		if err := sys.iam.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
-			t.Fatalf("SendReset: %v", err)
-		}
-		if err := sys.iam.SendReset(ctx, password.ResetRequest{Identifier: "nobody@example.com"}); err != nil {
-			t.Fatalf("SendReset for an unknown user = %v, want nil", err)
-		}
-		if resets, _ := sys.box.counts(); resets != 1 {
-			t.Fatalf("reset emails = %d, want 1", resets)
-		}
-		if err := sys.iam.SendVerification(ctx, account.VerifyRequest{Subject: "missing"}); err != nil {
-			t.Fatalf("SendVerification for an unknown subject = %v, want nil", err)
-		}
-		bare, err := newFacadeWith(t, wire{})
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		if err := bare.SendReset(ctx, password.ResetRequest{}); !errors.Is(err, access.ErrInvalidConfig) {
-			t.Fatalf("SendReset without Password = %v, want ErrInvalidConfig", err)
-		}
-		if err := bare.SendVerification(ctx, account.VerifyRequest{}); !errors.Is(err, account.ErrInvalidConfig) {
-			t.Fatalf("SendVerification without Verification = %v, want account.ErrInvalidConfig", err)
 		}
 	})
 }

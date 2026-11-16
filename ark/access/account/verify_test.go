@@ -107,7 +107,8 @@ func TestVerifyLinkRoundTripsUnderAnOrigin(t *testing.T) {
 		if !strings.HasPrefix(signed, "https://app.example.com/email/verify?") {
 			t.Fatalf("signed = %q, want an absolute link", signed)
 		}
-		if got, err := directory.Verify(testContext(t), signed); err != nil || got != subject {
+		posted := postedValue(t, box.sent()[0].Link("https://app.example.com/verify-email"))
+		if got, err := directory.Verify(testContext(t), posted); err != nil || got != subject {
 			t.Fatalf("Verify = %q, %v", got, err)
 		}
 	})
@@ -125,7 +126,8 @@ func TestVerifyLinkRoundTripsWithoutAnOrigin(t *testing.T) {
 		if !strings.HasPrefix(signed, "/email/verify?") {
 			t.Fatalf("signed = %q, want a relative link", signed)
 		}
-		if got, err := directory.Verify(testContext(t), signed); err != nil || got != subject {
+		posted := postedValue(t, box.sent()[0].Link("https://app.example.com/verify-email"))
+		if got, err := directory.Verify(testContext(t), posted); err != nil || got != subject {
 			t.Fatalf("Verify = %q, %v", got, err)
 		}
 	})
@@ -184,6 +186,15 @@ func TestVerifyRejectsAnExpiredLink(t *testing.T) {
 		})
 		if _, err := directory.Verify(ctx, expired); !errors.Is(err, account.ErrInvalidToken) {
 			t.Fatalf("expired link error = %v, want ErrInvalidToken", err)
+		}
+		// The control: the same construction, signed by the real clock, works, so
+		// the refusal above is the expiry and not a wrong binding.
+		current, err := signer.Temporary("/email/verify?subject="+subject, time.Hour, link.Bind([]byte("ada@example.com\x00false")))
+		if err != nil {
+			t.Fatalf("Temporary: %v", err)
+		}
+		if got, err := directory.Verify(ctx, current); err != nil || got != subject {
+			t.Fatalf("the control link was refused: %q, %v", got, err)
 		}
 	})
 }

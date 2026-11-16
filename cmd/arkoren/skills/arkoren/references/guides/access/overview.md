@@ -291,11 +291,25 @@ deliverReset := func(ctx context.Context, message password.ResetMessage) error {
 ```
 
 `message.Notice` is true for the notice that goes to the owner of an address when
-someone tries to register with it. Verification is the same with an
-`account.VerifyMessage`, which has no `Notice`. The signed value is a credential
-until it is used or expires, so never log it.
+someone tries to register with it. The signed value is a credential until it is
+used or expires, so never log it.
 
-### Read the Link in the Page
+Verification delivers an `account.VerifyMessage`, which has the same `Address`,
+`Signed` and `ExpiresAt` and no `Notice`:
+
+```go
+deliverVerification := func(ctx context.Context, message account.VerifyMessage) error {
+	text := "Confirm your email address: " + message.Link("https://app.example.com/verify-email")
+	email := mail.NewMessage(mail.Recipients{To: []mail.Address{{Email: message.Address}}}, mail.Body{Text: text}, func(letter *mail.MessageBuilder) {
+		letter.Subject("Confirm your email")
+	})
+	_, err := mailer.Send(ctx, email)
+
+	return err
+}
+```
+
+### Read the Link
 
 A browser never sends the fragment to a server, so the link stays out of access
 logs, proxies and the `Referer` header of the page it opens. Your page reads it
@@ -311,12 +325,25 @@ await fetch("/password/reset", {
 });
 ```
 
-The verification page posts the same `token` to `/email/verify`. A reset answers
+The verification page reads the fragment the same way and posts it, with the user's
+session cookie, to `/email/verify`:
+
+```js
+const token = decodeURIComponent(location.hash.slice(1));
+history.replaceState(null, "", location.pathname + location.search);
+await fetch("/email/verify", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ token }),
+});
+```
+
+A reset answers
 `422` with the invalid-token problem for a link that is malformed, forged, expired
 or already used, and the same for a verification link, so a client learns nothing
 about which.
 
-### What Mount Does Without Them
+### Skipped Routes
 
 Without `passwords.Reset`, `Mount` skips `POST /password/forgot` and
 `POST /password/reset`. Without `accounts.Verification`, or with your own users,

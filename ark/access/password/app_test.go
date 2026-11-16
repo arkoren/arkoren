@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"testing"
@@ -263,4 +264,17 @@ func (sys *system) registerAda(t *testing.T, client *apptest.Client) {
 // loginAda logs ada in on client and returns the reply.
 func loginAda(client *apptest.Client, secret string) apptest.Reply {
 	return client.Post("/login", `{"email":"ada@example.com","password":"`+secret+`"}`)
+}
+
+// postedValue returns what a front end posts for a delivered link: the fragment
+// of href, decoded as location.hash is with decodeURIComponent.
+func postedValue(t *testing.T, href string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(href)
+	if err != nil || parsed.Fragment == "" {
+		t.Fatalf("link %q has no fragment: %v", href, err)
+	}
+
+	return parsed.Fragment
 }

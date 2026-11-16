@@ -3,6 +3,7 @@ package account_test
 import (
 	"context"
 	"errors"
+	"net/url"
 	"slices"
 	"sync"
 	"testing"
@@ -414,4 +415,17 @@ func TestNewDirectoryRejectsBadConfig(t *testing.T) {
 			t.Errorf("instance %q error = %v", instance, err)
 		}
 	}
+}
+
+// postedValue returns what a front end posts for a delivered link: the fragment
+// of href, decoded as location.hash is with decodeURIComponent.
+func postedValue(t *testing.T, href string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(href)
+	if err != nil || parsed.Fragment == "" {
+		t.Fatalf("link %q has no fragment: %v", href, err)
+	}
+
+	return parsed.Fragment
 }

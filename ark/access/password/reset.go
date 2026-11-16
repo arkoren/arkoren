@@ -43,7 +43,7 @@ type ResetRequest struct {
 
 	// Notice marks the notice to the owner of an identifier that someone tried to
 	// register ([Builder.Taken]): the same link, with an email that says so.
-	Notice bool `json:"notice,omitempty"`
+	Notice bool `json:"notice,omitzero"`
 }
 
 // ResetMessage is what [Builder.Reset]'s deliver function receives to write one

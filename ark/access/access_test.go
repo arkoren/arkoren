@@ -15,7 +15,9 @@ import (
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/account"
 	"arkoren.dev/ark/access/apitoken"
+	"arkoren.dev/ark/access/password"
 )
 
 // secretOf extracts the "secret" member of a setup reply.
@@ -483,6 +485,41 @@ func TestRegisterTakenAddressNotifiesTheOwner(t *testing.T) {
 		}
 		if reply := sys.client.NewDevice().Post("/password/reset", `{"token":"`+notice.Signed+`","password":"reset horse ok"}`); reply.Status != http.StatusNoContent {
 			t.Fatalf("reset with the notice's token = %d %s", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestSendWorkersForwardToThePackages verifies the facade's worker methods send
+// for a known user, send nothing and return nil for an unknown one, and report a
+// missing feature as a configuration error.
+func TestSendWorkersForwardToThePackages(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newApp(t, db, instance, func(iam *access.Builder) { iam.Password(hasher(), registration) })
+		register(t, sys.client, "ada@example.com")
+		if err := sys.iam.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
+			t.Fatalf("SendReset: %v", err)
+		}
+		if err := sys.iam.SendReset(ctx, password.ResetRequest{Identifier: "nobody@example.com"}); err != nil {
+			t.Fatalf("SendReset for an unknown user = %v, want nil", err)
+		}
+		if resets, _ := sys.box.counts(); resets != 1 {
+			t.Fatalf("reset emails = %d, want 1", resets)
+		}
+		if err := sys.iam.SendVerification(ctx, account.VerifyRequest{Subject: "missing"}); err != nil {
+			t.Fatalf("SendVerification for an unknown subject = %v, want nil", err)
+		}
+		bare, err := newFacadeWith(t, wire{})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := bare.SendReset(ctx, password.ResetRequest{}); !errors.Is(err, access.ErrInvalidConfig) {
+			t.Fatalf("SendReset without Password = %v, want ErrInvalidConfig", err)
+		}
+		if err := bare.SendVerification(ctx, account.VerifyRequest{}); !errors.Is(err, account.ErrInvalidConfig) {
+			t.Fatalf("SendVerification without Verification = %v, want account.ErrInvalidConfig", err)
 		}
 	})
 }

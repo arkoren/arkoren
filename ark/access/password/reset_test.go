@@ -132,6 +132,15 @@ func TestResetLinkExpired(t *testing.T) {
 		if _, err := sys.verifier.Reset(ctx, expired, "reset horse ok"); !errors.Is(err, password.ErrInvalidToken) {
 			t.Fatalf("expired link error = %v, want ErrInvalidToken", err)
 		}
+		// The control: the same construction, signed by the real clock, works, so
+		// the refusal above is the expiry and not a wrong binding.
+		current, err := signer.Temporary("/password/reset?subject=1&address=ada%40example.com", time.Hour, link.Bind(stored))
+		if err != nil {
+			t.Fatalf("Temporary: %v", err)
+		}
+		if _, err := sys.verifier.Reset(ctx, current, "reset horse ok"); err != nil {
+			t.Fatalf("the control link was refused: %v", err)
+		}
 	})
 }
 
@@ -174,11 +183,12 @@ func TestResetLinkRoundTripsUnderAnOrigin(t *testing.T) {
 		sys := newSignedSystem(t, db, instance, newSigner(t, "https://app.example.com"), nil)
 		sys.registerAda(t, sys.client)
 		_ = sys.verifier.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"})
-		signed := (*sys.sent)[0].Signed
-		if !strings.HasPrefix(signed, "https://app.example.com/password/reset?") {
-			t.Fatalf("signed = %q, want an absolute link", signed)
+		message := (*sys.sent)[0]
+		if !strings.HasPrefix(message.Signed, "https://app.example.com/password/reset?") {
+			t.Fatalf("signed = %q, want an absolute link", message.Signed)
 		}
-		if _, err := sys.verifier.Reset(ctx, signed, "reset horse ok"); err != nil {
+		posted := postedValue(t, message.Link("https://app.example.com/reset-password"))
+		if _, err := sys.verifier.Reset(ctx, posted, "reset horse ok"); err != nil {
 			t.Fatalf("Reset: %v", err)
 		}
 	})
@@ -194,11 +204,12 @@ func TestResetLinkRoundTripsWithoutAnOrigin(t *testing.T) {
 		sys := newSystem(t, db, instance)
 		sys.registerAda(t, sys.client)
 		_ = sys.verifier.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"})
-		signed := (*sys.sent)[0].Signed
-		if !strings.HasPrefix(signed, "/password/reset?") {
-			t.Fatalf("signed = %q, want a relative link", signed)
+		message := (*sys.sent)[0]
+		if !strings.HasPrefix(message.Signed, "/password/reset?") {
+			t.Fatalf("signed = %q, want a relative link", message.Signed)
 		}
-		if _, err := sys.verifier.Reset(ctx, signed, "reset horse ok"); err != nil {
+		posted := postedValue(t, message.Link("https://app.example.com/reset-password"))
+		if _, err := sys.verifier.Reset(ctx, posted, "reset horse ok"); err != nil {
 			t.Fatalf("Reset: %v", err)
 		}
 	})

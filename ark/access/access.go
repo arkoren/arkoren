@@ -24,7 +24,9 @@ import (
 // ErrInvalidConfig is wrapped by the errors of [New] for an unusable
 // configuration: a missing dependency (database, store or client address
 // source), a duplicate provider name, an invalid instance or scheme, a nil
-// two-factor cipher, [Builder.Directory] combined with [Builder.Users], or a
+// two-factor cipher, [Builder.Directory] combined with [Builder.Users],
+// registration with the built-in users when neither [password.Builder.Reset] nor
+// [account.Builder.Verification] is configured, or a
 // failing package constructor (registration or sign-up without users that can
 // be created, tokens with no kind enabled, a scope catalog without a grant
 // function).
