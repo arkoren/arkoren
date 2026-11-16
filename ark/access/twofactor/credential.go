@@ -56,8 +56,10 @@ func (factors *Factors) Credential() auth.Credential {
 // method [MethodRecovery], kind possession, request body
 // {"method": "recovery", "code": "abcd-efgh-ijkl-mnop"}. It is enrolled while the
 // user has an authenticator and an unspent code. Register it with the SecondFactor
-// registry after [Factors.Credential]; it is not a step-up method, so a spent
-// recovery code never counts as the user's fresh proof.
+// registry after [Factors.Credential]; it is not a step-up method, so core's
+// freshness never counts a spent recovery code. [Factors.DisableHandler] and
+// [Factors.RecoveryCodesHandler] do accept one used within [Builder.StepUpWindow]
+// as the fresh login they need.
 //
 // Example:
 //

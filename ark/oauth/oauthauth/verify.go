@@ -136,7 +136,13 @@ func (client *Client) verify(ctx context.Context, raw string, audiences []string
 		return auth.External{}, fmt.Errorf("decode OIDC claims: %w", err)
 	}
 
-	identity := provider.FromClaims(claims)
+	parse := provider.FromClaims
+
+	if client.provider.claims != nil {
+		parse = client.provider.claims
+	}
+
+	identity := parse(claims)
 
 	if check := client.provider.identity; check != nil {
 		identity, err = check(identity)

@@ -17,9 +17,9 @@ only through a few functions, and never creates or deletes users on its own.
 
 ## Providing Users
 
-Pass an `access.Users` value with the user provider your application built for
-[core authentication](../authentication/overview.md) and the functions the
-enabled features need:
+Pass an `access.Users` value with the user provider your application built (an
+`*auth.UserProvider` over your users store, whose records carry a version that
+changes when credentials do) and the functions the enabled features need:
 
 ```go
 iam.Users(access.Users{

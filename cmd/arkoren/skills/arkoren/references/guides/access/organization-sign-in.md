@@ -26,13 +26,33 @@ provider's callback at `/auth/{name}/callback`, and the Microsoft preset is name
 `microsoft`. Create a client secret, and note the application (client) ID and the
 directory (tenant) ID.
 
-Then add the optional claim `xms_edov` to the ID token under Token configuration.
-It says that the owner of the email's domain verified the address. Microsoft's
-plain `email` claim can be unverified and can change, so the preset exposes an
-address only when `xms_edov` is true. Without the claim the application receives
-no email at all: sign-in by an existing connection still works, but a first
-sign-in cannot find the invited user and a new user has no address to be created
-with.
+Then add the optional claims `xms_edov` and `auth_time` to the ID token. `xms_edov`
+says that the owner of the email's domain verified the address. Microsoft's plain
+`email` claim can be unverified and can change, so the preset exposes an address
+only when `xms_edov` is true. Without the claim the application receives no email
+at all: sign-in by an existing connection still works, but a first sign-in cannot
+find the invited user and a new user has no address to be created with.
+`auth_time` says when the user last authenticated at Entra, so a silent approval
+by an old Entra session is not treated as a fresh sign-in; see
+[Fresh Logins](freshness.md#provider-logins).
+
+Add both in the application manifest, which works for every registration the same
+way. Open Manifest for the app, and set `optionalClaims` to:
+
+```json
+{
+  "optionalClaims": {
+    "idToken": [
+      { "name": "xms_edov", "source": null, "essential": false, "additionalProperties": [] },
+      { "name": "auth_time", "source": null, "essential": false, "additionalProperties": [] }
+    ]
+  }
+}
+```
+
+Save the manifest and sign in again: a token issued before the change does not
+carry the claims. Check a token's claims once, for example in a development
+tenant, before relying on them.
 
 ## Create the Client
 
@@ -138,10 +158,14 @@ same version your `Users.Rotate` bumps, so nothing issued earlier survives a lat
 re-enable.
 
 A person who signs in only through Microsoft has no password and no authenticator,
-so they have no step-up method and are fresh right after any sign-in. When Entra
-approves a sign-in silently, because the browser already has an Entra session,
-that counts as a login. Ask for `guard.RecentLogin` before an action that must
-follow a deliberate sign-in, such as
+so they have no step-up method and are fresh right after a sign-in. When Entra
+approves a sign-in silently, because the browser already has an Entra session, the
+`auth_time` claim carries the older time of the original sign-in, and the login is
+as old as that, so a person who signed in to Entra hours ago is not fresh for a
+credential change. Without the optional claim, the silent approval counts as a
+login now. Add `?fresh=1` to `/auth/microsoft` to make Entra ask for credentials
+again, and the device-token exchange asks for `guard.RecentLogin`; see
+[Fresh Logins](freshness.md#provider-logins) and
 [exchanging a login for a device token](tokens.md#mobile-login).
 
 For the provider's registration and claims, see

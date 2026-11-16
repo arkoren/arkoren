@@ -3,7 +3,8 @@ title: Passwords
 description: Log in, confirm, change and reset passwords, optionally let users register, and verify emails, with the access facade.
 order: 30
 summary:
-  - Enable passwords with a hasher, switch registration on when you want it, and read the login, confirm and change requests and their statuses.
+  - Enable passwords with a hasher, switch registration on together with reset, and read the login, confirm and change requests and their statuses.
+  - Know the register-then-login limitation, since registration never logs in and does not tell a new address from a taken one.
   - Understand login throttling, the single invalid-credentials answer and what a change or reset ends.
   - Reset forgotten passwords with signed links, verify emails and require a verified email on selected routes.
 ---
@@ -38,9 +39,16 @@ iam.Password(hasher, func(passwords *password.Builder) {
 
 With your own users, `Registration(true)` needs `Users.Create`, and `New` fails
 with `access.ErrInvalidConfig` without it. With the built-in users it needs
-`Reset` or [email verification](#verify-emails), because without either a new user
-could never prove their address; `New` fails with `access.ErrInvalidConfig`
-otherwise.
+`Reset` as well: when someone registers an address that already belongs to a
+user, the owner is sent a reset notice whose link also proves their mailbox, and
+without `Reset` that owner would have no way to take the account back from
+whoever registered it first. `New` fails with `access.ErrInvalidConfig` without it:
+
+```go
+iam.Password(hasher, func(passwords *password.Builder) {
+	passwords.Registration(true).Reset(signer, dispatchReset, deliverReset)
+})
+```
 
 With the built-in users, the email address is the identifier, and the requests
 below take `email`. Applications that use [their own users](own-users.md) may
@@ -57,8 +65,9 @@ client calls `POST /login` next.
 ```
 
 The answer is the same `202` when the email already belongs to a user, so the
-route cannot be used to find out who has an account. In that case nothing is
-created or changed, and the owner is told instead. The facade never links
+response alone does not say whether the address was free; see
+[Register Then Log In](#register-then-log-in) for what a following login still
+reveals. In that case nothing is created or changed, and the owner is told instead. The facade never links
 accounts by email. Registrations are throttled per email and per client address,
 and what they dispatch counts against the same limits, so the route cannot flood a
 mailbox. A malformed email is `422`, and
@@ -79,18 +88,46 @@ iam.Password(hasher, func(passwords *password.Builder) {
 ```
 
 A new user starts with an unverified email. What registration dispatches depends
-on which email features you configured, and it is the same work on both paths so
-the answer and its timing do not tell a new address from a taken one:
+on whether you also configured [email verification](#verify-emails), and it is the
+same work on both paths so the answer and its timing do not tell a new address
+from a taken one:
 
 | Configured | New address | Taken address |
 | --- | --- | --- |
 | Reset and verification | Dispatches a verification for the new user | Dispatches a reset notice to the owner (`Notice` set) |
-| Verification only | Dispatches a verification for the new user | Dispatches a verification for the owner, who is sent nothing if already verified |
 | Reset only | Dispatches nothing | Dispatches nothing |
 
 A failing dispatch on registration is logged and the answer stays `202`. With your
 own users the application proves emails itself, so the facade dispatches nothing
 on registration.
+
+### Register Then Log In
+
+Registration never logs the user in, and the uniform `202` has a limit you should
+know about. The answer does not say whether the address was free, but the next
+call does: after `POST /register` with a password you chose, `POST /login` with
+that password succeeds for a new address and fails for a taken one, because the
+registrant's password is not the owner's. So registering and then logging in is an
+oracle for whether an address has an account, and anyone can use it.
+
+What bounds it: registration is throttled to 5 attempts per address as typed and
+30 per client address in 15 minutes, and the login throttles apply to the probe
+too. A probe of a taken address sends its owner a reset notice, so it is visible to
+the person it is aimed at. A probe of a free address is not harmless: it creates an
+unverified account that holds the address until its owner arrives. That account
+can attach nothing until the address is verified, and a password reset or a
+provider login that proves the mailbox takes it over (see
+[Unverified Accounts](accounts.md#unverified-accounts)). The design hides the
+answer from someone who only sees the `202`, not from someone willing to log in.
+If hiding which addresses have accounts matters more than self-service sign-up,
+leave registration off and add users yourself, or put a
+[rate limit](../abuse-prevention/rate-limiting.md) and a
+[CAPTCHA](../abuse-prevention/captcha.md) in front of the route.
+
+For the same reason a sign-up form should not say "account created" on the `202`:
+tell the user to check their email, log them in, and show a login failure as a
+login failure. A user who mistypes their address, or registers one that is already
+theirs, sees that failure. There is no option to log in on registration.
 
 `POST /login` takes the same body and answers `204`, or `202` when the user has a
 second factor to answer. Every failure is one `422` problem: an unknown email, a
@@ -156,9 +193,11 @@ The current password is required unless the user has none yet, such as someone
 created by a provider login, who sets their first one without it. The current
 password is checked with a per-user failure limit. A change stores the new
 password, ends the user's other logins and keeps the caller's session, which also records the password as a fresh proof.
-It revokes the user's device tokens, because a device has no session to end, but
-it does not rotate the user, so personal access tokens survive. See
-[Credential Changes](accounts.md#credential-changes) to revoke those too.
+The facade also revokes the user's tokens, device and personal ones, because a
+device has no session to end and a stolen password could have minted a personal
+token; `iam.KeepPersonalTokens()` limits it to device tokens. A change does not rotate
+the user. See [Credential Changes](accounts.md#credential-changes) for what each
+change ends.
 
 If a step after the change fails, the answer is `500` although the password is
 already changed and the other logins ended. Repeat the change so the remaining
@@ -258,9 +297,9 @@ posts := web.With(auth.Require(), iam.RequireVerified())
 ```
 
 `RequireVerified` answers `403` to a user whose email is not verified. With the
-built-in users it reads the claim recorded at login, so a user who verified since
-their last login passes only after logging in again. A user created by a provider
-whose email the provider verified starts verified. Until an email is verified,
+built-in users it reads the claim of the user the guard loads for each request, so
+a user who just verified passes on their next request, without logging in again.
+A user created by a provider whose email the provider verified starts verified. Until an email is verified,
 the account cannot connect a provider, enroll two-factor or create tokens (`403`
 `email-unverified`). With [your own users](own-users.md), it asks your
 `Users.Verified` function on every request instead, so the answer is as current as

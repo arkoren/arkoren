@@ -161,7 +161,7 @@ func TestResolveCreateErrorPassesThrough(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newSystem(t, db, instance, true, false)
-		reply := sys.client.Post("/callback", `{"issuer":"`+google+`","subject":"g1","email":"taken@example.com"}`)
+		reply := sys.client.Post("/callback", `{"issuer":"`+google+`","subject":"g1","email":"taken@example.com","email_verified":true}`)
 		if reply.Status != http.StatusConflict {
 			t.Fatalf("callback = %d %s", reply.Status, reply.Body)
 		}
@@ -201,7 +201,7 @@ func TestConcurrentFirstLoginOneLink(t *testing.T) {
 		subjects := make([]string, 4)
 		for i := range subjects {
 			wg.Go(func() {
-				subject, err := sys.links.Resolve(ctx, auth.External{Issuer: google, Subject: "race"})
+				subject, err := sys.links.Resolve(ctx, auth.External{Issuer: google, Subject: "race", Email: "race@example.com", EmailVerified: true})
 				if err != nil {
 					t.Errorf("Resolve: %v", err)
 				}
@@ -216,6 +216,34 @@ func TestConcurrentFirstLoginOneLink(t *testing.T) {
 		}
 		if listed, _ := sys.links.List(ctx, subjects[0]); len(listed) != 1 {
 			t.Fatalf("links = %+v, want one", listed)
+		}
+	})
+}
+
+// TestResolveRefusesSignUpWithoutProvenEmail verifies a first login whose
+// identity has no verified email, or no email at all, creates nothing and
+// answers 403 with the stable email-unverified problem.
+func TestResolveRefusesSignUpWithoutProvenEmail(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newSystem(t, db, instance, true, false)
+
+		for _, body := range []string{
+			`{"issuer":"` + google + `","subject":"g1","email":"ada@example.com","email_verified":false}`,
+			`{"issuer":"` + google + `","subject":"g1","email_verified":true}`,
+			`{"issuer":"` + google + `","subject":"g1"}`,
+		} {
+			reply := sys.client.NewDevice().Post("/callback", body)
+
+			if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "ark/access:federation:email-unverified") {
+				t.Fatalf("callback %s = %d %s, want 403 email-unverified", body, reply.Status, reply.Body)
+			}
+		}
+
+		if _, err := sys.links.Lookup(ctx, google, "g1"); !errors.Is(err, federation.ErrNotLinked) {
+			t.Fatalf("Lookup after refused sign-ups = %v, want ErrNotLinked", err)
 		}
 	})
 }

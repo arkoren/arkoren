@@ -466,6 +466,7 @@ opaque to inference.
 - [API Tokens](references/guides/access/tokens.md): Issue personal access tokens and device tokens, authenticate API requests with them and revoke them, with the access facade.
 - [Connections](references/guides/access/connections.md): Sign in with external providers, connect them to existing accounts and handle native mobile login, with the access facade.
 - [Organization Sign-In](references/guides/access/organization-sign-in.md): Let the people of one organization sign in with Microsoft Entra ID, keep sign-up invite-only and end a leaver's access, with the access facade.
+- [Fresh Logins](references/guides/access/freshness.md): Know which routes need a fresh login and which need a brand-new one, how a provider's auth_time can only make a login older, and why provider-only users sign in again through the provider.
 - [Sessions and Accounts](references/guides/access/accounts.md): List and end logins, delete an account, and see how the facade protects credential changes with fresh logins and verified emails.
 - [Your Own Users](references/guides/access/own-users.md): Replace the built-in users table with your own users and keep the access facade's email rules.
 

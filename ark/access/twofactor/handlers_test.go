@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"arkoren.dev/core/service/database"
+
+	"arkoren.dev/ark/access/internal/apptest"
 )
 
 // TestHandlersSetupEnableChallengeFlow verifies the whole HTTP flow: setup,
@@ -116,6 +118,55 @@ func TestHandlersDisableAndRegenerate(t *testing.T) {
 		}
 		if reply := sys.client.NewDevice().Post("/dev-login/1", ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("login after disabling = %d, want 204", reply.Status)
+		}
+	})
+}
+
+// loggedInWithRecoveryCode enables two-factor for user "1" and returns a new
+// device that logged in with the first recovery code, so its only second factor
+// is a recovery code, which is no step-up method.
+func loggedInWithRecoveryCode(t *testing.T, sys *system) *apptest.Client {
+	t.Helper()
+
+	_, codes := sys.enable(t, sys.client, "1")
+	device := sys.client.NewDevice()
+	device.Post("/dev-login/1", "")
+
+	if reply := device.Post("/login/challenge", `{"method":"recovery","code":"`+codes[0]+`"}`); reply.Status != http.StatusNoContent {
+		t.Fatalf("recovery challenge = %d %s", reply.Status, reply.Body)
+	}
+
+	return device
+}
+
+// TestHandlersDisableAfterRecoveryLogin verifies a user who logged in with a
+// recovery code, having lost the authenticator, can disable two-factor: the
+// recent recovery code counts as the fresh login that core's freshness, which
+// knows only the authenticator as a step-up method, would refuse.
+func TestHandlersDisableAfterRecoveryLogin(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance, nil)
+		device := loggedInWithRecoveryCode(t, sys)
+
+		if reply := device.Do(http.MethodDelete, "/two-factor", ""); reply.Status != http.StatusNoContent {
+			t.Fatalf("disable after a recovery login = %d %s, want 204", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestHandlersRegenerateAfterRecoveryLogin verifies a recent recovery code also
+// lets the user replace their recovery codes.
+func TestHandlersRegenerateAfterRecoveryLogin(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance, nil)
+		device := loggedInWithRecoveryCode(t, sys)
+
+		if reply := device.Post("/two-factor/recovery-codes", ""); reply.Status != http.StatusOK {
+			t.Fatalf("regenerate after a recovery login = %d %s, want 200", reply.Status, reply.Body)
 		}
 	})
 }

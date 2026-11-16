@@ -25,6 +25,21 @@ type UserEvent struct {
 //	})
 var LinkCreated = event.NewTopic[UserEvent]("federation.link.created")
 
+// AccountClaimed is published after a provider login whose verified email
+// matched an unverified user took the account over ([Builder.TakeOver]): the
+// registrant's password, connections, authenticator and tokens were deleted and
+// the identity was connected. It is published after the transaction committed,
+// together with [LinkCreated], and is the signal to look at what the new owner
+// may still have around (see the guide on reviewing connections). The payload is
+// the subject only.
+//
+// Example:
+//
+//	unsubscribe, err := events.Listen(federation.AccountClaimed, func(ctx context.Context, claimed federation.UserEvent) error {
+//		return audit.Record(ctx, claimed.Subject, "account claimed through a provider login")
+//	})
+var AccountClaimed = event.NewTopic[UserEvent]("federation.account.claimed")
+
 // LinkDeleted is published after a connection was removed.
 //
 // Example:

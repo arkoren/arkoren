@@ -131,11 +131,12 @@
 //     out; an unknown identifier costs a dummy hash. Forgot-password, register and
 //     resend are throttled per identifier and per address too.
 //   - Register, when enabled, answers an empty 202 and logs nobody in, whether or not the address
-//     was taken; for a taken one it creates nothing. With the built-in users it
-//     dispatches the same work on both paths: a verification for a new address,
-//     and for a taken one a reset notice to the owner (or a verification when only
-//     Verification is configured); with only Reset it dispatches nothing. A failed
-//     dispatch is logged. It runs within the registration throttle.
+//     was taken; for a taken one it creates nothing. With the built-in users
+//     (which need [password.Builder.Reset] for registration) and Verification it
+//     dispatches the same work on both paths: a verification for a new address and
+//     a reset notice to the owner of a taken one; with only Reset it dispatches
+//     nothing. A failed dispatch is logged. It runs within the registration
+//     throttle.
 //   - Every POST, PUT and PATCH route requires the media type application/json
 //     (415 otherwise, even without a body), which stops cross-site HTML forms.
 //     It is core's contenttype middleware, applied inside each handler so it also
@@ -159,25 +160,38 @@
 //     provider, enroll two-factor or create tokens (403 email-unverified).
 //   - Enabling two-factor ends the user's other logins. Disabling it and
 //     regenerating recovery codes need a recent authenticator or recovery code;
-//     a fresh password alone is 403 with methods ["otp"].
+//     a fresh password alone is 403 with methods ["otp"], and a recovery code used
+//     within the step-up window also counts as the fresh login.
 //   - A token's scopes are capped by what [apitoken.Builder.Grants] lets the user
 //     hold: at issue (403 scope-not-granted) and again on every request, or
 //     within [apitoken.Builder.GrantTTL] of a change.
 //   - A first login with an unknown provider identity creates no user unless
-//     [federation.Builder.SignUp] is on (403 no-account).
+//     [federation.Builder.SignUp] is on (403 no-account), and then only when the
+//     provider proved an email (403 email-unverified).
 //   - Federation never links by email, with one exception: an identity whose
 //     email the provider verified takes over the user who holds that email and
 //     never verified it, with or without sign-up. In one transaction the
 //     password, connections, authenticator, recovery codes and tokens are
 //     deleted, the email is marked verified, the user is rotated (ending the
-//     registrant's sessions), the identity is linked and the owner is logged in.
+//     registrant's sessions and, after the commit, their login records), the
+//     identity is linked, [federation.AccountClaimed] is published and the owner is
+//     logged in.
 //     A verified or disabled user is never taken over. Connecting a provider is a
 //     POST that leaves a ten-minute, single-use intent in the session. A user
 //     cannot remove their last way to log in (409).
 //   - Email verification never blocks login; protect routes with
 //     [Access.RequireVerified], which also works with [Users.Verified].
-//   - Device tokens unused past their idle limit and expired tokens are deleted
-//     by [Access.Prune], which you schedule (it is func(context.Context) error).
+//   - Device tokens unused past their idle limit, expired tokens and tokens a
+//     version change of the user ended are deleted by [Access.Prune], which you
+//     schedule (it is func(context.Context) error); the token list already hides
+//     the ended ones.
+//   - A password reset of a user whose email was already verified does not delete
+//     their provider connections: only the reset of an unverified account purges
+//     (see above). Someone who held the old password could have connected a
+//     provider of their own, so review the connections after a reset, for
+//     example from a listener of [password.WasReset] that
+//     lists or removes them with [Access.Links], and
+//     from one of [federation.AccountClaimed].
 //   - Events carry subjects only (see each package) on [Builder.Events].
 //
 // # Your own users

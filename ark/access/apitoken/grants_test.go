@@ -385,3 +385,42 @@ func TestAnyScopeGrantsTheWholeCatalog(t *testing.T) {
 		}
 	})
 }
+
+// TestStarFromAGrantFunctionIsNotTheWildcard verifies a grant function that
+// returns "*" grants no catalog scope: only AnyScope's private marker means the
+// whole catalog, so a permission set that contains "*" cannot widen the
+// ceiling.
+func TestStarFromAGrantFunctionIsNotTheWildcard(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		star := func(context.Context, string) ([]string, error) { return []string{"*"}, nil }
+		sys := newSystem(t, db, instance, func(tokens *apitoken.Builder) {
+			tokens.Grants(star, "posts:read", "posts:write")
+		})
+		token, _, err := sys.issuer.IssueDevice(testContext(t), "1", "Pixel 9")
+		if err != nil || len(token.Scopes) != 0 {
+			t.Fatalf("IssueDevice = %+v, %v; want no scopes", token, err)
+		}
+		if reply := sys.login(t, "1").Post("/tokens", `{"name":"CI","scopes":["posts:read"]}`); reply.Status != http.StatusForbidden {
+			t.Fatalf("a scope granted only by \"*\" = %d %s, want 403", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestStarIsAScopeNameInTheCatalog verifies "*" can be a catalog scope, granted
+// only when the grant function names it.
+func TestStarIsAScopeNameInTheCatalog(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		star := func(context.Context, string) ([]string, error) { return []string{"*"}, nil }
+		sys := newSystem(t, db, instance, func(tokens *apitoken.Builder) {
+			tokens.Grants(star, "*", "posts:write")
+		})
+		token, _, err := sys.issuer.IssueDevice(testContext(t), "1", "Pixel 9")
+		if err != nil || strings.Join(token.Scopes, ",") != "*" {
+			t.Fatalf("IssueDevice = %+v, %v; want only the scope \"*\"", token, err)
+		}
+	})
+}

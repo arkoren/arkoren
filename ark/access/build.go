@@ -80,8 +80,8 @@ func (iam *Access) buildPassword(settings *Builder, users Users) error {
 	if err != nil {
 		return err
 	}
-	if iam.directory != nil && verifier.Registration() && !verifier.ResetEnabled() && !iam.directory.VerificationEnabled() {
-		return errors.New("registration with the built-in users needs password.Builder.Reset or account.Builder.Verification, or a new user could never prove their email")
+	if iam.directory != nil && verifier.Registration() && !verifier.ResetEnabled() {
+		return errors.New("registration with the built-in users needs password.Builder.Reset: it is how the owner of an address that someone else registered learns of it and takes the account back")
 	}
 	iam.verifier = verifier
 	iam.add(verifier.Migrations(), verifier.Ping)
@@ -109,7 +109,7 @@ func (iam *Access) passwordUsers(users Users) password.Users {
 }
 
 // passwordPolicy is the facade's own password settings, applied before the
-// application's. With the built-in users, registration asks for an email
+// application's, whose hooks add to them instead of replacing them. With the built-in users, registration asks for an email
 // through two hooks that read the directory and the verifier when they run: a
 // new user gets a verification, and the owner of a taken address a notice
 // ([Access.tellOwner]).
@@ -160,14 +160,17 @@ func (iam *Access) buildTokens(settings *Builder) error {
 }
 
 // buildLinks builds the connection store when [Builder.Provider] added any
-// provider.
+// provider. The hooks of the packages add up (see [federation.Builder.TakeOver]
+// and the other setters), so the facade's settings run first and an application
+// callback can only add to them; user creation is the one chain where the
+// facade goes last, so that an application function can refuse or handle an
+// identity before the facade's verified-email creation.
 func (iam *Access) buildLinks(settings *Builder, users Users) error {
 	if len(iam.providers) == 0 {
 		return nil
 	}
 	configure := append([]federation.BuilderFunc{func(links *federation.Builder) {
 		links.Instance(settings.instance).Events(settings.events).Verified(iam.verified)
-		links.Create(createExternal(users.Create))
 		if iam.verifier != nil {
 			links.Fallback(iam.verifier.Has)
 		}
@@ -175,6 +178,9 @@ func (iam *Access) buildLinks(settings *Builder, users Users) error {
 			links.TakeOver(iam.takeOver(users))
 		}
 	}}, settings.federation...)
+	configure = append(configure, func(links *federation.Builder) {
+		links.Create(createExternal(users.Create))
+	})
 	links, err := federation.NewLinks(iam.provider, iam.db, configure...)
 	if err != nil {
 		return err
@@ -251,8 +257,10 @@ func (iam *Access) chain(settings *Builder, lifetime time.Duration) router.Middl
 }
 
 // createExternal returns the function that makes a user for an unknown external
-// identity with the provider's email, verified according to
-// [auth.External.EmailVerified]. It is nil without [Users.Create], which makes
+// identity with the provider's email. Sign-up refuses an identity without a
+// proven email before it gets here, so the user is created verified; the flag
+// still follows [auth.External.EmailVerified], because the application's own
+// [Users.Create] receives it. It is nil without [Users.Create], which makes
 // [federation.Builder.SignUp] fail construction. Whether it is used at all is
 // SignUp's decision.
 func createExternal(create func(context.Context, string, bool) (string, error)) func(context.Context, auth.External) (string, error) {
@@ -295,23 +303,13 @@ func (iam *Access) verifyNew(ctx context.Context, subject, _ string) error {
 // tellOwner is the work of a registration that meets a taken address, chosen so
 // that it costs what the work for a new address costs ([Access.verifyNew]):
 // without [account.Builder.Verification] nothing is dispatched on either path.
-// With it, the owner gets a reset notice ([password.Builder.Reset]), whose link
-// also proves the mailbox, or else a verification email. An unknown identifier
-// is no owner.
+// With it, the owner gets a reset notice ([password.Builder.Reset], which
+// registration with the built-in users requires), whose link also proves the
+// mailbox. An unknown identifier is no owner.
 func (iam *Access) tellOwner(ctx context.Context, identifier string) error {
 	if !iam.directory.VerificationEnabled() {
 		return nil
 	}
-	if iam.verifier.ResetEnabled() {
-		return iam.verifier.RequestReset(ctx, password.ResetRequest{Identifier: identifier, Notice: true})
-	}
-	subject, _, err := iam.directory.Lookup(ctx, identifier)
-	if errors.Is(err, auth.ErrUserNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
 
-	return iam.directory.RequestVerification(ctx, subject)
+	return iam.verifier.RequestReset(ctx, password.ResetRequest{Identifier: identifier, Notice: true})
 }

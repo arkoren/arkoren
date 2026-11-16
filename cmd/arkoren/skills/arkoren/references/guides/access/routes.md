@@ -107,7 +107,7 @@ are:
 | `password` | `invalid-credentials`, `invalid-password`, `invalid-token`, `throttled` |
 | `twofactor` | `invalid-code`, `already-enabled`, `not-enabled`, `not-enrolling`, `throttled` |
 | `apitoken` | `invalid-request`, `scope-not-granted`, `not-found` |
-| `federation` | `not-linked`, `no-account`, `linked-elsewhere`, `already-linked`, `last-link`, `not-found`, `unknown-provider` |
+| `federation` | `not-linked`, `no-account`, `email-unverified`, `linked-elsewhere`, `already-linked`, `last-link`, `not-found`, `unknown-provider` |
 
 ## Custom Paths
 

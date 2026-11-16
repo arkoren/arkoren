@@ -503,9 +503,8 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
 		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "a@example.com", true), "")
-		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g2", "b@example.com", false), "")
-		if len(created) != 2 || !created[0] || created[1] {
-			t.Fatalf("Create verified flags = %v, want [true false]", created)
+		if len(created) != 1 || !created[0] {
+			t.Fatalf("Create verified flags = %v, want [true]", created)
 		}
 		if err := sys.iam.Verifier().Set(ctx, "u1", "correct horse"); err != nil {
 			t.Fatalf("Set: %v", err)

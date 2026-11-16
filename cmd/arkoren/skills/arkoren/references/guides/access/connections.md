@@ -4,8 +4,8 @@ description: Sign in with external providers, connect them to existing accounts 
 order: 60
 summary:
   - Add providers that satisfy the facade's interface, such as the OAuth module's clients.
-  - Decide whether an unknown identity may create a user, why accounts are never linked by email and how connecting works.
-  - Handle native ID-token login, disconnecting and how a provider login interacts with step-up.
+  - Decide whether an unknown identity may create a user, why sign-up needs a proven email, why accounts are never linked by email and how connecting works.
+  - Handle native ID-token login, disconnecting, Apple's form post and how a provider login interacts with step-up.
 ---
 
 # Connections
@@ -46,12 +46,15 @@ iam.Federation(func(links *federation.Builder) {
 })
 ```
 
-With the built-in users, the new user is identified by the provider's email and
-starts verified only when the provider vouches for the email. A provider that
-sends no email cannot create a built-in user. With
-[your own users](own-users.md), `Users.Create` receives the provider's email and
-whether it was verified, and `SignUp(true)` without `Users.Create` makes `New`
-fail with `access.ErrInvalidConfig`.
+Sign-up needs an email the provider proved. A first login whose identity has no
+verified email, or no email at all, creates nothing and is refused with `403` and
+the problem `federation:email-unverified`: an account made from an unproven
+address would be an unverified one that the address's real owner could not tell
+from their own. A person in that position verifies the email with the provider or
+signs in another way. The new user is identified by the provider's email and
+starts verified. With [your own users](own-users.md), `Users.Create` receives the
+provider's email and `SignUp(true)` without `Users.Create` makes `New` fail with
+`access.ErrInvalidConfig`.
 
 Sign-up does not affect the other two cases: an identity that is already
 connected always logs its user in, and a logged-in user can always connect a
@@ -85,7 +88,11 @@ turned away. In one transaction the facade:
 4. rotates the user, which ends every session of the person who registered it;
 5. connects the new identity and logs the owner in.
 
-If any step fails, nothing changes. This is the same removal a
+If any step fails, nothing changes. After the commit the facade also deletes the
+login records of that user, so the registrant's logins disappear from the session
+list as well as stopping to work, and it publishes `federation.AccountClaimed`
+with the subject, next to `LinkCreated`. Listen for it to notify the owner or
+audit the takeover. This is the same removal a
 [password reset](passwords.md#verify-emails) performs when it proves the
 mailbox, plus the password. It needs no sign-up, because no user is created, so
 it also applies when sign-up is off. A disabled user is never taken over: the
@@ -96,7 +103,11 @@ be true and the existing user must be unverified; an unverified or empty email
 goes through the usual rules and a verified user is never touched. The OAuth
 presets set it from the provider's own evidence: Google's `email_verified`,
 GitHub's primary verified address, Apple's `email_verified` and Microsoft's
-`xms_edov` claim (the email domain is verified by its owner). Microsoft's plain
+`xms_edov` claim (the email domain is verified by its owner). A generic
+`oauth.OIDC` client reports no email at all unless you opt in with
+`TrustEmail(true)`, as [Providers](../oauth/providers.md#generic-oidc) explains, so
+with it off such a provider can sign people in but can neither create a user nor
+take an account over. Microsoft's plain
 `email` claim is mutable and unverified, so the preset withholds the address
 without `xms_edov`: add that optional claim in the app registration, or Microsoft
 logins never carry an email. If you write your own provider, set `EmailVerified`
@@ -136,17 +147,39 @@ The app keeps its cookie jar for these two calls, then exchanges the login for a
 [device token](tokens.md#mobile-login). The OAuth client must list the app's client
 IDs with `NativeAudiences`; see [Native Login](../oauth/native-login.md).
 
+## Apple Callback
+
+Sign in with Apple answers with a cross-site `POST` form to
+`/auth/apple/callback`. A browser sends that request with an `Origin` of
+`appleid.apple.com`, which core's CSRF middleware refuses unless you allow this one
+route. The sealed login cookie and the `state` value are the defense for this
+route, so exempt only its pattern, on a protection you give the middleware:
+
+```go
+engine := http.NewCrossOriginProtection()
+engine.AddInsecureBypassPattern("POST /auth/apple/callback")
+
+web := routes.With(csrf.Middleware(func(protection *csrf.Builder) {
+	protection.Protection(engine)
+}), iam.Middleware())
+iam.Mount(web)
+```
+
+Use the name of your Apple client in the pattern; the facade mounts it at
+`/auth/{name}/callback`, and the Apple preset is named `apple`. Without the
+exemption the callback is blocked and no Apple login completes. The same
+route-level `POST` needs `SameSite=Lax` session cookies, which are the default;
+see [Browser Login](../oauth/browser-login.md).
+
 ## Step-Up
 
 A provider login proves who the user is, but it is not a step-up method. A user who
 has a password or an authenticator is not made fresh by signing in again through a
 provider, so changing a credential still needs `POST /confirm` with one of their
 methods. A user who signs in only through providers has no step-up method and is
-fresh right after logging in. The server's clock stamps the proof at the callback;
-whatever the provider says about when the user authenticated is ignored. A provider
-that approves silently, because the browser already has a session there, still
-counts as a login now, so ask for `guard.RecentLogin` where a deliberate sign-in
-matters.
+fresh right after logging in. The provider's `auth_time` claim can only make the
+login older than the callback, never fresher; [Fresh Logins](freshness.md#provider-logins)
+explains what that means for each provider.
 
 Connections publish `federation.LinkCreated` and `federation.LinkDeleted` events.
 

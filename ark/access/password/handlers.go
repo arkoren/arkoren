@@ -104,7 +104,10 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 // facade dispatches a reset notice or a verification there). The hook runs at
 // most as often as the throttle lets registrations through, so the route cannot
 // be used to flood a mailbox. Any other error of [Users.Create] (an invalid
-// identifier, say) passes through. A failing [Builder.Registered] or
+// identifier, say) passes through. The answer does not say whether the identifier
+// was free, but a login with the password just registered does (it succeeds only
+// for a new identifier), which the throttles above and the notice to the owner
+// bound but do not remove. A failing [Builder.Registered] or
 // [Builder.Taken] hook is logged and does not change the answer. A new user is unverified, and with the facade cannot connect a
 // provider, enroll two-factor or create tokens until the email is verified. It
 // panics at composition unless [Builder.Registration] is enabled (it is off by
@@ -251,7 +254,7 @@ func (verifier *Verifier) checkCurrent(ctx context.Context, subject, current str
 	if err != nil || !has {
 		return err
 	}
-	subjectKey := verifier.identifierKey("subject:" + subject)
+	subjectKey := verifier.subjectKey(subject)
 	if err := verifier.attempt(ctx, subjectKey, maxFailures); err != nil {
 		return err
 	}

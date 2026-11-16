@@ -8,6 +8,7 @@ summary:
   - Add users through the built-in directory when registration and provider sign-up are off.
   - Delete an account together with every feature's rows in one transaction.
   - Know which routes need a browser session, a fresh login or a verified email, and what a changed credential ends.
+  - Review a user's connections after a reset, and know what a takeover ends.
 ---
 
 # Sessions and Accounts
@@ -116,15 +117,17 @@ special. Otherwise the handler answers `403` with the methods the user can confi
 with, and the client posts to `POST /confirm`, for example
 `{"method": "pwd", "password": "..."}`, then retries. A provider login is not a
 step-up method: it never makes a user who has a password or an authenticator fresh
-again.
+again. [Fresh Logins](freshness.md) explains the rule, what a provider's
+`auth_time` changes and why Google and GitHub users sign in again through the
+provider.
 
 | Route | Browser session | Fresh login | Verified email |
 | --- | --- | --- | --- |
 | `PUT /password` | Yes | Yes | No |
 | `POST /two-factor/setup`, `POST /two-factor` | Yes | Yes | Yes |
-| `DELETE /two-factor`, `POST /two-factor/recovery-codes` | Yes | Yes, and a recent second factor | No |
+| `DELETE /two-factor`, `POST /two-factor/recovery-codes` | Yes | Yes (or a recovery code used within the window), and a recent second factor | No |
 | `POST /tokens` | Yes | Yes | Yes |
-| `POST /device-tokens` | Yes | A login at most five minutes old | Yes |
+| `POST /device-tokens` | Yes | A login at most five minutes old (`RecentLogin`, not `Fresh`) | Yes |
 | `POST /connections/{provider}` | Yes | Yes | Yes |
 | `DELETE /connections/{id}`, `DELETE /account` | Yes | Yes | No |
 | `GET /tokens`, `DELETE /tokens/{id}`, `GET /connections` | Yes | No | No |
@@ -146,7 +149,12 @@ What a change ends:
   same way, for the same reason, and `iam.KeepPersonalTokens()` limits it to
   device tokens too.
 - A password reset rotates the user, which ends every session, pending login and
-  token.
+  token. It does not delete the provider connections of a user whose email was
+  already verified: listen for `password.WasReset` and review them, as
+  [Access Overview](overview.md#events) describes.
+- A provider login that takes over an unverified account rotates the user the same
+  way, and also deletes the login records of the person who registered it. It
+  publishes `federation.AccountClaimed`.
 
 ## Unverified Accounts
 
