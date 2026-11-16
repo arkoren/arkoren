@@ -38,6 +38,14 @@ var unsafeMethods = []string{
 	http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, "QUERY",
 }
 
+// typedWriteMethods are the unsafe methods that must declare an allowed
+// Content-Type even when the request has no body, because they normally carry
+// a representation. DELETE and QUERY are exempt: a bodyless request is their
+// ordinary form.
+var typedWriteMethods = []string{
+	http.MethodPost, http.MethodPut, http.MethodPatch,
+}
+
 // settings configures Content-Type enforcement.
 type settings struct {
 	// Allowed lists the accepted media types. An entry such as
@@ -161,11 +169,18 @@ func (settings settings) withDefaults() settings {
 // publishes [Rejected], independently of the configured response status.
 //
 // A request carrying a body must have an allowed media type; a missing or
-// malformed Content-Type is rejected. A request without a body passes, unless
-// it uses an unsafe method (POST, PUT, PATCH, DELETE, QUERY) and sets a
-// Content-Type that is not allowed: an empty cross-site form post still
-// announces text/plain. Bodyless requests with safe methods and bodyless
-// unsafe requests without a Content-Type always pass.
+// malformed Content-Type is rejected. A request without a body is judged by its
+// method:
+//
+//   - Safe methods (GET, HEAD, OPTIONS and the like) always pass.
+//   - POST, PUT and PATCH must send an allowed Content-Type even without a
+//     body. A missing one is rejected, so an empty cross-site form post cannot
+//     slip through by omitting or faking the header.
+//   - DELETE and QUERY pass without a Content-Type, but a Content-Type they do
+//     send must be allowed.
+//
+// Clients that send a bodyless POST, PUT or PATCH must now set a Content-Type
+// such as application/json; earlier versions let that request through.
 //
 //	r.Use(contenttype.Middleware())
 //	r.Use(contenttype.Middleware(func(content *contenttype.Builder) {
@@ -194,14 +209,18 @@ func Middleware(configure ...BuilderFunc) router.Middleware {
 	}
 }
 
-// acceptable reports whether request satisfies the allowed media types.
+// acceptable reports whether request satisfies the allowed media types. A
+// bodyless request is exempt only when its method is safe, or when it is a
+// DELETE or QUERY with no Content-Type; see [Middleware].
 func acceptable(request *http.Request, allowed []string) bool {
 	contentType := request.Header.Get("Content-Type")
 
 	if request.ContentLength == 0 {
-		unsafe := slices.Contains(unsafeMethods, request.Method)
+		if !slices.Contains(unsafeMethods, request.Method) {
+			return true
+		}
 
-		if !unsafe || contentType == "" {
+		if contentType == "" && !slices.Contains(typedWriteMethods, request.Method) {
 			return true
 		}
 	}

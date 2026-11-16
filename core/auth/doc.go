@@ -287,8 +287,8 @@
 //
 // The arkoren.dev/ark/oauth/oauthauth package logs users in through
 // [Guard.Begin] with a federated factor and verifies OIDC bearer tokens; auth
-// does not import it. arkoren.dev/ark/federation maps its external identities
-// to local subjects.
+// does not import it. The federation package of arkoren.dev/ark/access maps
+// external identities to local subjects.
 //
 // # Subjects
 //

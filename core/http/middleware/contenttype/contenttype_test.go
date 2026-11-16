@@ -196,11 +196,54 @@ func TestMiddlewareGetWithBodyRejected(t *testing.T) {
 	checkStatus(t, http.MethodGet, "{}", "text/plain", http.StatusUnsupportedMediaType)
 }
 
-// TestMiddlewareBodylessPostWithoutTypePasses verifies a bodyless POST without a type passes.
-func TestMiddlewareBodylessPostWithoutTypePasses(t *testing.T) {
+// TestMiddlewareBodylessWritesWithoutTypeRejected verifies a bodyless POST, PUT
+// or PATCH without a Content-Type is rejected.
+func TestMiddlewareBodylessWritesWithoutTypeRejected(t *testing.T) {
 	t.Parallel()
 
-	checkStatus(t, http.MethodPost, "", "", http.StatusNoContent)
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
+		checkStatus(t, method, "", "", http.StatusUnsupportedMediaType)
+	}
+}
+
+// TestMiddlewareBodylessWritesWithJSONPass verifies a bodyless POST, PUT or
+// PATCH with an allowed Content-Type passes.
+func TestMiddlewareBodylessWritesWithJSONPass(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
+		checkStatus(t, method, "", "application/json", http.StatusNoContent)
+	}
+}
+
+// TestMiddlewareBodylessDeleteAndQueryWithoutTypePass verifies a bodyless
+// DELETE or QUERY without a Content-Type passes.
+func TestMiddlewareBodylessDeleteAndQueryWithoutTypePass(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{http.MethodDelete, "QUERY"} {
+		checkStatus(t, method, "", "", http.StatusNoContent)
+	}
+}
+
+// TestMiddlewareBodylessSafeMethodsWithoutTypePass verifies bodyless safe
+// methods pass without a Content-Type.
+func TestMiddlewareBodylessSafeMethodsWithoutTypePass(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		checkStatus(t, method, "", "", http.StatusNoContent)
+	}
+}
+
+// TestMiddlewareBodyWithoutTypeRejected verifies a request with a body still
+// needs an allowed type, for every method that carries one.
+func TestMiddlewareBodyWithoutTypeRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, "QUERY"} {
+		checkStatus(t, method, "{}", "", http.StatusUnsupportedMediaType)
+	}
 }
 
 // TestMiddlewareBodylessPostWithTextPlainRejected verifies a bodyless POST with text/plain is rejected.

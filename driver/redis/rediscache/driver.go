@@ -268,6 +268,8 @@ func (driver *Driver) Has(ctx context.Context, key string) (bool, error) {
 
 // Add stores raw bytes only if the key is absent or expired. False leaves an
 // existing entry unchanged. TTL follows Put; cancellation precedes validation.
+// It is one Redis SET NX, so concurrent callers in any process sharing the
+// server see exactly one winner.
 //
 // Example:
 //
