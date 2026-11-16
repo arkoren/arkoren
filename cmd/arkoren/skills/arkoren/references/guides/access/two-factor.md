@@ -34,9 +34,9 @@ scheme := totp.New("Acme", func(scheme *totp.Builder) {
 ```
 
 Use a key reserved for these secrets. Each user has one authenticator. The guard
-lists the enrolled methods in registration order: `otp`, then `recovery`. The core
-[two-factor page](../authentication/two-factor.md) explains the guard's side of a
-second factor.
+lists the enrolled methods in registration order: `otp`, then `recovery`. A login
+with a second factor enrolled is parked until the user answers one of them at
+`POST /login/challenge`.
 
 ## Enroll an Authenticator
 
@@ -108,7 +108,10 @@ by default. A recent password alone is `403` with the enrolled second-factor
 methods in the problem (`"methods": ["otp"]`). The client posts
 `{"method": "otp", ...}` to `/confirm` and retries, so someone holding a password
 and an old session cannot turn two-factor off. A recovery code spent at login
-counts as a recent proof.
+counts as a recent proof, and it also counts as the fresh login these two routes
+need, even though a recovery code is not a step-up method. A user who lost their
+authenticator can therefore log in with a recovery code and turn two-factor off,
+or replace their codes, within the window without an authenticator code.
 
 To change the window, configure the package, and set the same value as the guard's
 `FreshFor` if you changed that too:

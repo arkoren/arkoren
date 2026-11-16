@@ -58,6 +58,28 @@ var ErrNoAccount = problem.New(func(details *problem.Builder) {
 	details.Status(http.StatusForbidden)
 })
 
+// ErrEmailUnverified is returned when a logged-out login would create a user
+// ([Builder.SignUp]) but the provider did not prove an email for the identity
+// ([auth.External.EmailVerified] false, or no email). It is a problem with
+// status 403 and creates nothing. An account made from an unproven address
+// would be an unverified one that the address's real owner could never tell
+// apart from their own, and an identity without an email cannot be told to
+// verify one. It does not apply to a login by an identity that is already
+// connected, to a provider connected by a logged-in user, or to
+// [Builder.TakeOver], which has its own proof.
+//
+// Example:
+//
+//	if errors.Is(err, federation.ErrEmailUnverified) {
+//		// ask the person to use a provider account with a verified email
+//	}
+var ErrEmailUnverified = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:federation:email-unverified")
+	details.Title("Provider email not verified")
+	details.Detail("The provider did not verify an email address for this identity, so no account can be created from it. Verify the email with the provider or sign in another way.")
+	details.Status(http.StatusForbidden)
+})
+
 // ErrLinkedElsewhere is returned when an external identity is already connected
 // to another user. It is a problem with status 409.
 //

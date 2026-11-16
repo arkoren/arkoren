@@ -4,27 +4,26 @@ nav: Overview
 description: Compose login, two-factor, tokens and provider sign-in, with optional registration, into one facade, then install its middleware and mount its routes.
 order: 10
 summary:
-  - Decide when the access facade fits better than the hand-built login of core authentication.
-  - Install the module, enable the features you need and install its middleware and routes.
-  - Run its migrations, check readiness, send signed reset and verification links through your own queue or workflow and listen to its events.
+  - Decide when the access facade fits and install it.
+  - Enable each feature with its builder method, from registration and reset to tokens and provider sign-up, and install the middleware and routes.
+  - Run its migrations, schedule the cleanup, send signed reset and verification links through your own queue or workflow and listen to its events.
 ---
 
 # Access Overview
 
-The [core authentication pages](../authentication/overview.md) show how to build
-login from pieces: an authenticator, `auth.Guard` and your own routes. The
-`access` module is the same pieces, composed. One facade builds the guard, the
+The `access` module gives an application login without writing each handler.
+One facade builds the session and the guard that tracks who is logged in, the
 stores for passwords, authenticators, tokens and connections, and the JSON routes
-that use them, so you enable the features you want instead of writing each
-handler.
+that use them. Every feature is off until you switch it on in one builder
+callback, so you pay for, and expose, only what you enable.
 
 Use it when you want login, two-factor, API tokens, provider sign-in and,
-if you choose, registration working and tested. Keep the hand-built approach of
-[Session Login](../authentication/session-login.md) when your login is unusual
-enough that you would replace most of the handlers anyway. The module depends
-only on core, Arkoren's foundation libraries and the standard library, and it
-never imports the OAuth module: a provider joins through a small interface that
-the [OAuth](../oauth/overview.md) clients satisfy.
+if you choose, registration working and tested. Write your own handlers on the
+guard instead when your login is unusual enough that you would replace most of
+the routes anyway. The module depends only on core, Arkoren's foundation
+libraries and the standard library, and it never imports the OAuth module: a
+provider joins through a small interface that the [OAuth](../oauth/overview.md)
+clients satisfy.
 
 ## Installation
 
@@ -81,24 +80,93 @@ dependency is missing (the database, the cache or the client address function), 
 provider name is used twice or contains anything but letters, digits, hyphens and underscores, or a package
 rejects its settings, such as an invalid TOTP scheme, a nil cipher for
 two-factor, registration or sign-up over users that cannot be created, registration with the
-built-in users when neither reset nor verification is configured (a new user could
-never prove their email), a scope catalog without a grant function, or tokens with
+built-in users without `Reset` (the notice to the owner of a taken address needs
+it), a scope catalog without a grant function, or tokens with
 neither kind enabled. `New` never guesses the
 client address, because the right source depends on the deployment (see
 [Shared Settings](#shared-settings)).
 
 | Feature | Builder method | Guide |
 | --- | --- | --- |
-| Login, change, and registration when enabled | `iam.Password(hasher)` | [Passwords](passwords.md) |
+| Login, confirm and change | `iam.Password(hasher)` | [Passwords](passwords.md) |
+| Registration | `passwords.Registration(true)` | [Passwords](passwords.md#register-and-log-in) |
 | Forgotten-password reset | `passwords.Reset(signer, dispatch, deliver)` | [Sending Email Links](#sending-email-links) |
 | Email verification | `accounts.Verification(signer, dispatch, deliver)` | [Sending Email Links](#sending-email-links) |
 | Authenticator app and recovery codes | `iam.TwoFactor(scheme, cipher)` | [Two-Factor](two-factor.md) |
-| Personal and device tokens | `iam.Tokens()` | [API Tokens](tokens.md) |
-| Sign-in with external providers, and sign-up when enabled | `iam.Provider(clients...)` | [Connections](connections.md) |
+| Personal and device tokens | `iam.Tokens(configure...)` | [API Tokens](tokens.md) |
+| Scope catalog and its ceiling | `tokens.Grants(grantable, scopes...)`, `GrantTTL`, `AnyScope` | [API Tokens](tokens.md#scope-ceiling) |
+| Sign-in with external providers | `iam.Provider(clients...)` | [Connections](connections.md) |
+| Sign-up on a first provider login | `links.SignUp(true)` | [Connections](connections.md#signing-in) |
+| Taking over an unverified account | automatic with the built-in users and providers | [Connections](connections.md#unverified-accounts) |
+| The built-in users | `iam.Directory(configure...)` | [Sessions and Accounts](accounts.md#adding-users) |
+| Your own users table | `iam.Users(users)` | [Your Own Users](own-users.md) |
 
 The facade also owns the built-in `users` table, which identifies users by
 email; `iam.Directory(...)` configures it and `iam.Directory()` on the built
 facade adds users. To keep your own users instead, see [Your Own Users](own-users.md).
+
+## Enabling Features
+
+Each feature below is one call in the same callback. Give the facade nothing for a
+feature you do not want: its routes are not mounted and its tables are not
+migrated. The pages in the table above explain each feature's requests and
+behavior; this section shows how to switch it on.
+
+**Registration and passwords.** `iam.Password(hasher)` enables login, confirm and
+change. Registration is a separate switch because an open route is an abuse
+surface. With the built-in users it also needs `Reset`, because the notice to the
+owner of an address someone else registered first is a reset link, and `New` fails
+with `access.ErrInvalidConfig` without it:
+
+```go
+iam.Password(hasher, func(passwords *password.Builder) {
+	passwords.Registration(true).Reset(signer, dispatchReset, deliverReset)
+})
+```
+
+**Email verification.** `accounts.Verification` belongs to the built-in users, so
+it goes through `iam.Directory`. Without it, registration still works but a user's
+address is never marked verified except by a password reset or a provider that
+verified it, and the routes that need a verified email stay closed to them:
+
+```go
+iam.Directory(func(accounts *account.Builder) {
+	accounts.Verification(signer, dispatchVerification, deliverVerification)
+})
+```
+
+**Two-factor.** `iam.TwoFactor(scheme, cipher)` enables the authenticator app and
+recovery codes. The scheme names your service in authenticator apps and the cipher
+encrypts the secrets, so give it a key reserved for them.
+
+**Tokens.** `iam.Tokens()` enables personal and device tokens. Pick the kinds and
+the scope ceiling in its callback; `AnyScope` lets every user hold every scope of
+the catalog, and any other grant function is a ceiling per user:
+
+```go
+iam.Tokens(func(tokens *apitoken.Builder) {
+	tokens.PersonalTokens(true).DeviceTokens(true)
+	tokens.Grants(apitoken.AnyScope, "posts:read", "posts:write").GrantTTL(time.Minute)
+})
+```
+
+**Providers and sign-up.** `iam.Provider(clients...)` mounts the sign-in routes of
+the OAuth clients you built. A first login with an unknown identity is refused
+until you open sign-up, and a sign-up needs an email the provider proved. Taking
+over an unverified account that someone registered with the same address needs no
+switch: it applies whenever the built-in users and a provider are enabled.
+
+```go
+iam.Provider(google, github)
+iam.Federation(func(links *federation.Builder) {
+	links.SignUp(true)
+})
+```
+
+**Workers, cleanup and migrations.** The reset and verification emails are sent by
+your worker through `iam.SendReset` and `iam.SendVerification`, the cleanup of
+tokens is a scheduled `iam.Prune`, and the tables come from `iam.Migrations()`;
+the sections below show each.
 
 ## Protecting Routes
 
@@ -139,9 +207,21 @@ iam.Mount(web)
 
 ## Scheduled Cleanup
 
-The facade starts no goroutines, so deleting idle device tokens and expired
-tokens is a task you schedule. Give `iam.Prune` to your scheduler as an entry
-that runs daily; see [Pruning](tokens.md#pruning).
+The facade starts no goroutines, so deleting tokens that can no longer
+authenticate is a task you schedule: tokens past their expiry, tokens that a
+password reset or another version change of the user ended, and device tokens
+nobody uses. `iam.Prune` has the shape `func(context.Context) error`, so it is a
+[scheduled task](../scheduled-tasks/calendar-schedules.md) as it stands. Run it
+daily; it deletes only rows that already answer `401`, is safe to run
+concurrently and does nothing without `iam.Tokens()`:
+
+```go
+err := scheduler.Add(schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {
+	entry.When(schedule.UTC().Hour(3))
+}))
+```
+
+[Pruning](tokens.md#pruning) lists exactly what goes.
 
 ## Migrations and Readiness
 
@@ -373,10 +453,22 @@ such as "your password changed" or "two-factor was turned off".
 | `password` | `Changed`, `WasReset` |
 | `twofactor` | `Enabled`, `Disabled`, `Regenerated`, `RecoveryUsed` |
 | `apitoken` | `Issued`, `Revoked` |
-| `federation` | `LinkCreated`, `LinkDeleted` |
+| `federation` | `LinkCreated`, `LinkDeleted`, `AccountClaimed` |
 
-Core's `auth.CredentialEnrolled` is published when two-factor is enabled, and
-core's `auth.UserForgotten` when the built-in users are removed with their rows.
+`federation.AccountClaimed` is published when a provider login whose verified email
+matched an unverified user [took the account over](connections.md#unverified-accounts),
+together with `LinkCreated`. Core's `auth.CredentialEnrolled` is published when
+two-factor is enabled, and core's `auth.UserForgotten` when the built-in users are
+removed with their rows.
+
+A reset does not purge the provider connections of a user whose email was already
+verified, because the owner of a verified account may have connected them
+deliberately. Someone who held the old password could also have connected a
+provider of their own, so listen for `password.WasReset` and `federation.AccountClaimed`
+and review the account's connections, for example by listing them with
+`iam.Links().List(ctx, subject)` and asking the user, or removing them with
+`iam.Links().UnlinkAll(ctx, subject)` when your policy says a reset ends every
+connection.
 
 ## Storage and Instances
 
@@ -413,7 +505,8 @@ client address function is the third argument of `New`:
 - `iam.Guard(configure)` customizes the guard, such as the step-up window with
   `FreshFor`. The facade applies its own settings after your callback, so the
   session lifetime, the session handle and the client address function you passed
-  to `New` always win. Register credentials with `iam.SecondFactor`
+  to `New` always win; the event bus of `iam.Events` is set before your callback,
+  so a callback may replace it. Register credentials with `iam.SecondFactor`
   and `iam.StepUp`, not there: the registries only append.
 - `iam.Session(configure)` customizes the session cookie, such as its name. The
   facade applies the maximum lifetime and the default handle after your callback,

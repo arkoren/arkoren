@@ -958,3 +958,124 @@ func TestChallengeURLWhenNotComplete(t *testing.T) {
 		}
 	}
 }
+
+// idToken verifies a signed ID token with the given extra claims through the
+// browser callback's ID-token check, using the saved nonce "n".
+func idToken(t *testing.T, provider Provider, issuer *testProvider, extra map[string]any) (auth.External, error) {
+	t.Helper()
+
+	client := newClient(t, provider)
+	claims := map[string]any{"nonce": "n"}
+
+	for key, value := range extra {
+		claims[key] = value
+	}
+
+	token := (&oauth2.Token{}).WithExtra(map[string]any{"id_token": issuer.sign(claims)})
+
+	return client.idTokenIdentity(t.Context(), token, "n")
+}
+
+// TestCallbackRequiresAZPForSeveralAudiences verifies an ID token with several
+// audiences and no azp claim is rejected.
+func TestCallbackRequiresAZPForSeveralAudiences(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestProvider(t)
+
+	_, err := idToken(t, OIDC(issuer.server.URL), issuer, map[string]any{"aud": []string{"cid", "api"}})
+
+	if !errors.Is(err, ErrInvalidCallback) {
+		t.Fatalf("error = %v, want ErrInvalidCallback", err)
+	}
+}
+
+// TestCallbackRejectsForeignAZP verifies an azp other than the client ID is
+// rejected for an ID token with several audiences.
+func TestCallbackRejectsForeignAZP(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestProvider(t)
+
+	_, err := idToken(t, OIDC(issuer.server.URL), issuer, map[string]any{"aud": []string{"cid", "api"}, "azp": "api"})
+
+	if !errors.Is(err, ErrInvalidCallback) {
+		t.Fatalf("error = %v, want ErrInvalidCallback", err)
+	}
+}
+
+// TestCallbackAcceptsClientIDAZP verifies several audiences pass when azp is
+// the client ID.
+func TestCallbackAcceptsClientIDAZP(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestProvider(t)
+
+	_, err := idToken(t, OIDC(issuer.server.URL), issuer, map[string]any{"aud": []string{"cid", "api"}, "azp": "cid"})
+
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// TestOIDCDoesNotTrustEmailByDefault verifies a verified email claim is not
+// reported without TrustEmail: the flag is false and the email is blank.
+func TestOIDCDoesNotTrustEmailByDefault(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestProvider(t)
+
+	identity, err := idToken(t, OIDC(issuer.server.URL), issuer, map[string]any{"email": "ada@example.com", "email_verified": true})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if identity.EmailVerified || identity.Email != "" {
+		t.Fatalf("identity = %+v, want no email and EmailVerified false", identity)
+	}
+}
+
+// TestOIDCTrustEmailReportsVerifiedEmail verifies TrustEmail reports an email
+// whose email_verified claim is the boolean true.
+func TestOIDCTrustEmailReportsVerifiedEmail(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestProvider(t)
+	provider := OIDC(issuer.server.URL, func(provider *OIDCBuilder) {
+		provider.TrustEmail(true)
+	})
+
+	identity, err := idToken(t, provider, issuer, map[string]any{"email": "ada@example.com", "email_verified": true})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !identity.EmailVerified || identity.Email != "ada@example.com" {
+		t.Fatalf("identity = %+v, want the verified email", identity)
+	}
+}
+
+// TestOIDCTrustEmailBlanksUnverifiedEmail verifies TrustEmail still withholds
+// an email that is unverified, or verified only as a string.
+func TestOIDCTrustEmailBlanksUnverifiedEmail(t *testing.T) {
+	t.Parallel()
+
+	issuer := newTestProvider(t)
+	provider := OIDC(issuer.server.URL, func(provider *OIDCBuilder) {
+		provider.TrustEmail(true)
+	})
+
+	for _, verified := range []any{false, "true", nil} {
+		identity, err := idToken(t, provider, issuer, map[string]any{"email": "ada@example.com", "email_verified": verified})
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if identity.EmailVerified || identity.Email != "" {
+			t.Errorf("email_verified %v: identity = %+v, want no email", verified, identity)
+		}
+	}
+}

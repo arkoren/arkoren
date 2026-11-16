@@ -11,6 +11,7 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/link"
+	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/http/request"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
@@ -327,7 +328,7 @@ func (directory *Directory) ResendHandler() router.Handler {
 		if err := throttle.Attempt(ctx, directory.store, subjectKey, maxResends, resendWindow, ErrThrottled); err != nil {
 			return err
 		}
-		clientKey := cache.NewKey[int64](prefix + "ip:" + throttle.Bucket(directory.clientIP(r)))
+		clientKey := cache.NewKey[int64](prefix + "ip:" + ratelimit.AddressKey(directory.clientIP(r)))
 		if err := throttle.Attempt(ctx, directory.store, clientKey, maxClientResends, resendWindow, ErrThrottled); err != nil {
 			return err
 		}
@@ -346,10 +347,10 @@ func (directory *Directory) ResendHandler() router.Handler {
 // claim the directory sets, so it fits only applications that use the
 // directory; with their own users, applications check their own state.
 //
-// The claim is the one the session recorded at login, so a user who verified
-// the email since their last login passes only after logging in again. The
-// handlers of the other packages that gate on verification (connect, tokens,
-// two-factor setup) read the table at request time and are not affected.
+// The guard reads the user from the directory on every request, so the claim is
+// current: a user who verifies the email passes on their next request, without
+// logging in again. The handlers of the other packages that gate on
+// verification (connect, tokens, two-factor setup) read the table themselves.
 //
 // Example:
 //

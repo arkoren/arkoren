@@ -252,10 +252,13 @@ func (iam *Builder) Provider(providers ...Provider) *Builder {
 // Federation configures the connection store that [Builder.Provider] enables,
 // most importantly [federation.Builder.SignUp], which lets a first login with an
 // unknown identity create a user (off by default). The callbacks run after the
-// facade's own settings (the instance, the events, the user creation, the
-// fallback check), which they should leave alone. SignUp(true) needs users that
-// can be created ([Users.Create], always true for the built-in users); without
-// them [New] fails with [ErrInvalidConfig]. It has no effect without providers.
+// facade's own settings (the instance, the events, the verified-email gate, the
+// fallback check, the takeover), which they should leave alone. The setters that
+// take a function add to the facade's instead of replacing them, so a callback
+// cannot drop its checks; see [federation.Builder.Create] for the one chain where
+// the application's function goes first. SignUp(true) needs users that can be
+// created ([Users.Create], always true for the built-in users); without them
+// [New] fails with [ErrInvalidConfig]. It has no effect without providers.
 //
 // Example:
 //
@@ -309,8 +312,11 @@ func (iam *Builder) Authenticator(authenticators ...auth.Authenticator) *Builder
 // attempt limit, the login limit). The callbacks run first and the facade's own
 // settings after them, so the facade wins: the session lifetime
 // ([Builder.SessionLifetime]), the session handle (always the default one,
-// which the provider handlers of ark/oauth use), the event bus and the
-// client address source given to [New] replace whatever the callbacks chose.
+// which the provider handlers of ark/oauth use) and the client address source
+// given to [New] replace whatever the callbacks chose. The event bus of
+// [Builder.Events] is set before the callbacks and not asserted again, because
+// nothing in the facade depends on it: a callback may replace it, for example to
+// send the guard's events elsewhere.
 // The credential registries only append: register second-factor and step-up
 // credentials with [Builder.SecondFactor] and [Builder.StepUp], not here. A
 // credential registered here would be listed to users before the built-in ones,

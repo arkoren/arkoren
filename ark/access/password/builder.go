@@ -9,6 +9,7 @@ import (
 	"arkoren.dev/core/http/link"
 
 	"arkoren.dev/ark/access/internal/storage"
+	"arkoren.dev/ark/access/internal/web"
 )
 
 // Builder configures [NewVerifier] before publication. Callbacks run directly
@@ -74,11 +75,14 @@ func (passwords *Builder) Events(bus *event.Bus) *Builder {
 // an admin, a social sign-up) and an open registration route is an abuse
 // surface they never asked for. With false the handler panics at composition.
 // [NewVerifier] fails with [ErrInvalidConfig] when it is true and [Users.Create]
-// is nil.
+// is nil. Through the facade with the built-in users, registration also needs
+// [Builder.Reset]: [access.New] fails with [access.ErrInvalidConfig] without it,
+// because the reset notice is how the owner of an address that someone else
+// registered first learns of it and recovers the account.
 //
 // Example:
 //
-//	passwords.Registration(true)
+//	passwords.Registration(true).Reset(signer, dispatch, deliver)
 func (passwords *Builder) Registration(enabled bool) *Builder {
 	passwords.registration = enabled
 
@@ -158,11 +162,15 @@ func (passwords *Builder) Policy(check func(ctx context.Context, password string
 	return passwords
 }
 
-// Registered sets a function that runs after [Verifier.RegisterHandler]
-// committed a new user and before it logs them in, for work that must follow a
-// registration such as sending an email verification. An error is logged and
+// Registered adds a function that runs after [Verifier.RegisterHandler]
+// committed a new user, for work that must follow a registration such as
+// sending an email verification. The handler never logs the user in; it answers
+// 202 and the user logs in afterwards. An error is logged and
 // does not fail the request: the user is registered either way, and a mail
-// outage must not turn into a failed signup.
+// outage must not turn into a failed signup. Hooks add up instead of replacing
+// each other, so the verification the facade requests survives an application
+// hook: they run in the order added, all of them, and their errors are logged
+// together.
 //
 // Example:
 //
@@ -170,18 +178,19 @@ func (passwords *Builder) Policy(check func(ctx context.Context, password string
 //		return directory.RequestVerification(ctx, subject)
 //	})
 func (passwords *Builder) Registered(hook func(ctx context.Context, subject, identifier string) error) *Builder {
-	passwords.registered = hook
+	passwords.registered = web.Both(passwords.registered, hook)
 
 	return passwords
 }
 
-// Taken sets a function that runs when [Verifier.RegisterHandler] meets an
+// Taken adds a function that runs when [Verifier.RegisterHandler] meets an
 // identifier that already belongs to a user, with the identifier as typed. It is
 // where the owner is told that someone tried to register: dispatch the same kind
 // of work as [Builder.Registered] does for a new user, so the two paths cost the
 // same and the answer, 202 for both, reveals nothing. [Verifier.RequestReset]
 // with [ResetRequest.Notice] set is the reset notice. An error is logged and
-// does not change the answer.
+// does not change the answer. Hooks add up instead of replacing each other: they
+// run in the order added, all of them, and their errors are logged together.
 //
 // Example:
 //
@@ -189,21 +198,24 @@ func (passwords *Builder) Registered(hook func(ctx context.Context, subject, ide
 //		return verifier.RequestReset(ctx, password.ResetRequest{Identifier: identifier, Notice: true})
 //	})
 func (passwords *Builder) Taken(hook func(ctx context.Context, identifier string) error) *Builder {
-	passwords.taken = hook
+	passwords.taken = web.Then(passwords.taken, hook)
 
 	return passwords
 }
 
-// AfterChange sets a function that runs in [Verifier.ChangeHandler] after the new
+// AfterChange adds a function that runs in [Verifier.ChangeHandler] after the new
 // password is stored and before the caller's other logins end, for what must
 // not survive a password change, such as the user's device tokens. An error
 // fails the request; the password has changed by then, so the client may retry.
+// Hooks add up instead of replacing each other, so the token revocation the
+// facade registers survives an application hook: they run in the order added,
+// all of them even when one fails, and their errors are joined.
 //
 // Example:
 //
 //	passwords.AfterChange(issuer.RevokeDevices)
 func (passwords *Builder) AfterChange(hook func(ctx context.Context, subject string) error) *Builder {
-	passwords.changed = hook
+	passwords.changed = web.Then(passwords.changed, hook)
 
 	return passwords
 }

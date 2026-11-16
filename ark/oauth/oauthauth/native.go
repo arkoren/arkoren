@@ -138,7 +138,8 @@ func (client *Client) NonceHandler() router.Handler {
 // any iOS or Android client ID your apps request tokens for. For Apple the audience of
 // a native token is the app's bundle ID, not the Services ID. The nonce claim
 // must be present and equal the issued nonce (Google), or the lowercase
-// hexadecimal SHA-256 of it (Apple); see [Client.NonceHandler]. The Google
+// hexadecimal SHA-256 of it (Apple); see [Client.NonceHandler]. A token with
+// several audiences must also carry an azp claim that is one of them. The Google
 // email is verified by email_verified, and Apple's email, which may be a
 // private relay address, by email_verified (a boolean or the string "true").
 // Apple tokens carry no name: the SDK gives it to the app on the first
@@ -225,13 +226,17 @@ func (client *Client) NativeHandler(guard *auth.Guard, resolve auth.Resolver) ro
 			return client.loginFailed(httpRequest, invalidCallback(nil))
 		}
 
+		if err := requireAuthorizedParty(external.Claims, client.config.NativeAudiences); err != nil {
+			return client.loginFailed(httpRequest, invalidCallback(err))
+		}
+
 		subject, err := resolve(httpRequest.Context(), external)
 
 		if err != nil {
 			return client.loginFailed(httpRequest, callbackMapperError(err))
 		}
 
-		outcome, err := guard.Begin(httpRequest, subject, federatedFactor)
+		outcome, err := guard.Begin(httpRequest, subject, federatedFactor(external))
 
 		if err != nil {
 			return client.loginFailed(httpRequest, err)

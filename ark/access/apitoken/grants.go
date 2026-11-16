@@ -9,13 +9,16 @@ import (
 	"arkoren.dev/core/service/cache"
 )
 
-// anyScope is the wildcard a grant function returns to say "every scope of the
-// catalog". [AnyScope] returns it; the catalog may not contain it.
-const anyScope = "*"
+// anyScope is the private marker [AnyScope] returns to say "every scope of the
+// catalog". It is not a scope name anyone would write: it starts with a NUL
+// byte, which no scope in a header or a JSON body is expected to carry, and the
+// catalog may not contain it. A grant function that returns the literal "*"
+// therefore grants only a scope named "*", not the whole catalog.
+const anyScope = "\x00arkoren:any-scope"
 
 // AnyScope is a grant function for [Builder.Grants] that lets every user hold
-// every scope of the catalog: it answers the wildcard, which the [Issuer]
-// expands to the whole catalog. Use it only when the scopes never grant more
+// every scope of the catalog: it answers a private marker, which the [Issuer]
+// expands to the whole catalog. No other answer, "*" included, has that effect. Use it only when the scopes never grant more
 // than the user has anyway, for example scopes that merely narrow what the
 // user's own permissions allow; otherwise a token holds powers its owner
 // lacks, and a demoted user keeps them. The grant is then not a ceiling but
@@ -37,7 +40,7 @@ func grantsNamespace(instance string, ttl time.Duration) cache.Namespace[[]strin
 }
 
 // within returns the scopes of limit that allowed also lists, in limit's order;
-// the wildcard in allowed lists every scope of limit. It returns a new slice
+// the [AnyScope] marker in allowed lists every scope of limit. It returns a new slice
 // and mutates neither argument.
 func within(limit, allowed []string) []string {
 	if slices.Contains(allowed, anyScope) {

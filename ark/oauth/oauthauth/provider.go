@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"arkoren.dev/ark/oauth/oauthauth/internal/provider"
 	"arkoren.dev/core/auth"
 )
 
@@ -135,6 +136,12 @@ type Provider struct {
 	// OIDC only.
 	identity func(auth.External) (auth.External, error)
 
+	// claims maps the verified ID-token claims to an identity, applying the
+	// provider's email policy. Nil uses [provider.FromClaims], which reports no
+	// verified email; the presets that rely on that, Google and Microsoft, set
+	// the flag in their identity check. OIDC only.
+	claims func(map[string]any) auth.External
+
 	// formIdentity completes the identity from the form_post callback
 	// request, for data the provider sends only there. It never sees the
 	// request of a GET callback.
@@ -155,15 +162,86 @@ type Provider struct {
 	clientSecret func(clientID, secret string) (string, error)
 }
 
+// OIDCBuilderFunc edits one fresh [OIDC] provider draft synchronously, once in
+// order. Nil entries panic; expanded nil or empty slices omit edits. OIDC
+// detaches the completed settings before returning its provider value.
+//
+// Example:
+//
+//	configure := func(provider *oauth.OIDCBuilder) {
+//		provider.TrustEmail(true)
+//	}
+//	policies := []oauth.OIDCBuilderFunc{configure}
+//	provider := oauth.OIDC("https://id.example.com", policies...)
+//	_ = provider
+type OIDCBuilderFunc = func(*OIDCBuilder)
+
+// OIDCBuilder holds the optional settings of the generic [OIDC] provider.
+// Callbacks run directly once in order on one fresh draft; nil entries panic
+// and expanded nil or empty slices omit edits. Published providers detach this
+// root so a retained draft cannot change the email policy.
+//
+// Example:
+//
+//	provider := oauth.OIDC("https://id.example.com", func(provider *oauth.OIDCBuilder) {
+//		provider.TrustEmail(true)
+//	})
+//	_ = provider
+type OIDCBuilder struct {
+	// trustEmail accepts the email_verified claim of the issuer.
+	trustEmail bool
+}
+
+// TrustEmail makes the provider report the email, with EmailVerified true, when
+// the ID token carries email_verified as the boolean true. It replaces the
+// setting and returns the same draft. Off is the default: the claim is an
+// assertion by the issuer, and many issuers let users set their own address or
+// never verify it, so trusting it for every OIDC server would let a user of a
+// permissive one take over a local account that has the same email. Turn it on
+// only for an issuer you operate or whose email verification you have reviewed.
+// With it off, External.EmailVerified is false and External.Email is empty,
+// and the application matches users on Issuer and Subject alone.
+//
+// Example:
+//
+//	provider := oauth.OIDC("https://id.example.com", func(provider *oauth.OIDCBuilder) {
+//		provider.TrustEmail(true)
+//	})
+//	_ = provider
+func (definition *OIDCBuilder) TrustEmail(enabled bool) *OIDCBuilder {
+	definition.trustEmail = enabled
+
+	return definition
+}
+
 // OIDC returns a provider that discovers its endpoints from issuerURL, and
 // verifies ID tokens and bearer access tokens.
+//
+// The issuer's email_verified claim is not trusted by default: External.Email is
+// empty and EmailVerified false, whatever the token says, so that an issuer
+// that lets users choose an unproven address cannot take over a local account
+// by email. Opt in with [OIDCBuilder.TrustEmail] when you operate the issuer or
+// have reviewed how it verifies addresses. The named presets decide their own
+// email policy: [Google] and [Microsoft] by their verified claims, [Apple] by
+// its string-or-boolean claim.
 //
 // Example:
 //
 //	client, err := oauth.New(oauth.OIDC("https://accounts.example.com"), cipher, "web")
-func OIDC(issuerURL string) Provider {
+func OIDC(issuerURL string, configure ...OIDCBuilderFunc) Provider {
+	definition := &OIDCBuilder{}
+
+	for _, configure := range configure {
+		configure(definition)
+	}
+
+	config := *definition
+
 	return Provider{
 		issuer: issuerURL,
+		claims: func(claims map[string]any) auth.External {
+			return provider.OIDC(claims, config.trustEmail)
+		},
 	}
 }
 

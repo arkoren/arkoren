@@ -25,8 +25,7 @@ import (
 // configuration: a missing dependency (database, store or client address
 // source), a duplicate provider name, an invalid instance or scheme, a nil
 // two-factor cipher, [Builder.Directory] combined with [Builder.Users],
-// registration with the built-in users when neither [password.Builder.Reset] nor
-// [account.Builder.Verification] is configured, or a
+// registration with the built-in users without [password.Builder.Reset], or a
 // failing package constructor (registration or sign-up without users that can
 // be created, tokens with no kind enabled, a scope catalog without a grant
 // function).
@@ -368,7 +367,7 @@ func (iam *Access) Ping(ctx context.Context) error {
 }
 
 // Prune deletes the tokens that can no longer authenticate: expired tokens,
-// device tokens unused for longer than [apitoken.Builder.DeviceIdleTTL] and
+// tokens a version change of their user ended, device tokens unused for longer than [apitoken.Builder.DeviceIdleTTL] and
 // device tokens that were never used and are older than that; see
 // [apitoken.Issuer.Prune]. Without [Builder.Tokens] there is nothing to prune
 // and it returns nil, so one scheduled entry works for every composition. It

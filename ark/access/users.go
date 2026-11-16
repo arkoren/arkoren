@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"arkoren.dev/core/auth"
 
@@ -221,6 +222,20 @@ func (iam *Access) takeOver(users Users) func(context.Context, auth.External) (s
 		if err := users.Rotate(ctx, subject); err != nil {
 			return "", err
 		}
+		// The new version already makes their sessions stale; this also deletes the
+		// login records, so none of them is listed or revived. After the commit,
+		// because it works on the cache, and best effort: an error from an
+		// after-commit hook would surface from the login's transaction as a failure
+		// of a takeover that is already committed, and the rotation has ended the
+		// sessions either way. The guard is built after the links, so it is read
+		// when the hook runs.
+		_ = iam.db.AfterCommit(ctx, func(ctx context.Context) error {
+			if err := iam.guard.RevokeAll(ctx, subject); err != nil {
+				slog.ErrorContext(ctx, "access: delete login records after a takeover", "subject", subject, "error", err)
+			}
+
+			return nil
+		})
 
 		return subject, nil
 	}

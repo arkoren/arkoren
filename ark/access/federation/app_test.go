@@ -148,7 +148,7 @@ func newSystem(t *testing.T, db *database.Database, instance string, withCreate,
 
 // callback posts a verified Google identity to the callback route of client.
 func callback(client *apptest.Client, subject string) apptest.Reply {
-	return client.Post("/callback", `{"issuer":"`+google+`","subject":"`+subject+`"}`)
+	return client.Post("/callback", `{"issuer":"`+google+`","subject":"`+subject+`","email":"`+subject+`@example.com","email_verified":true}`)
 }
 
 // login logs subject in on a fresh device and returns it.

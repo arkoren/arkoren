@@ -1,10 +1,13 @@
 package apitoken_test
 
 import (
+	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
 
@@ -108,6 +111,61 @@ func TestPruneKeepsIdleDeviceTokensWithoutALimit(t *testing.T) {
 		want := []string{"idle", "never-used"}
 		if got := remaining(t, sys); !slices.Equal(got, want) {
 			t.Fatalf("tokens after Prune = %v, want %v", got, want)
+		}
+	})
+}
+
+// TestTokensHideTokensOfAnOlderUserVersion verifies the listing leaves out a
+// token that a version change of the user ended, while the user's tokens of the
+// current version stay.
+func TestTokensHideTokensOfAnOlderUserVersion(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		if _, _, err := sys.issuer.Issue(testContext(t), "1", apitoken.Request{Name: "before"}); err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		if err := sys.users.Put(auth.UserRecord{Subject: "1", Version: "1"}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		if got := remaining(t, sys); len(got) != 0 {
+			t.Fatalf("tokens after a version change = %v, want none", got)
+		}
+		if reply := sys.login(t, "1").Do(http.MethodGet, "/tokens", ""); strings.Contains(reply.Body, "before") {
+			t.Fatalf("GET /tokens lists an ended token: %s", reply.Body)
+		}
+	})
+}
+
+// TestPruneDeletesTokensOfAnOlderUserVersion verifies Prune deletes the tokens
+// a version change ended, for every user, and keeps the others. The version is
+// put back afterwards so a token that survived Prune would show again.
+func TestPruneDeletesTokensOfAnOlderUserVersion(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+		ctx := testContext(t)
+		for _, subject := range []string{"1", "2"} {
+			if _, _, err := sys.issuer.Issue(ctx, subject, apitoken.Request{Name: "token-" + subject}); err != nil {
+				t.Fatalf("Issue: %v", err)
+			}
+		}
+		if err := sys.users.Put(auth.UserRecord{Subject: "1", Version: "1"}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		if err := sys.issuer.Prune(ctx); err != nil {
+			t.Fatalf("Prune: %v", err)
+		}
+		if err := sys.users.Put(auth.UserRecord{Subject: "1", Version: "0"}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		if got := remaining(t, sys); len(got) != 0 {
+			t.Fatalf("tokens of the user whose version changed = %v, want none after Prune", got)
+		}
+		if other, err := sys.issuer.Tokens(ctx, "2"); err != nil || len(other) != 1 {
+			t.Fatalf("tokens of the other user = %v, %v; want one", other, err)
 		}
 	})
 }

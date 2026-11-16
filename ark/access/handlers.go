@@ -462,11 +462,11 @@ func (iam *Access) DeleteAccountHandler() router.Handler {
 // middleware.
 //
 // With the built-in users it is [account.RequireVerified]: it judges by the
-// "email_verified" claim the session recorded at login, so a user who verified
-// since then passes after logging in again. With [Builder.Users] it asks
-// [Users.Verified] for the user's current state on every request, so a user who
-// just verified passes at once, and the answer is as fresh as the application's
-// own lookup; an error of that function passes through. It panics at
+// "email_verified" claim of the user the guard read from the directory for this
+// request, so a user who just verified passes at once. With [Builder.Users] it
+// asks [Users.Verified] for the user's current state on every request, so the
+// answer is as fresh as the application's own lookup; an error of that function
+// passes through. It panics at
 // composition only when there is neither the built-in directory nor
 // [Users.Verified].
 //

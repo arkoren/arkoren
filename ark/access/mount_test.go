@@ -83,8 +83,6 @@ func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 			[]string{"POST /register"}},
 		{"password with registration and reset only", wire{reset: true}, func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration) },
 			emailRoutes},
-		{"password with registration and verification only", wire{verify: true}, func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration) },
-			resetRoutes},
 		{"password with registration, reset and verification", both, func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration) }, nil},
 		{"twofactor", both, func(t *testing.T, iam *access.Builder) { iam.TwoFactor(totp.New("Example"), cipher(t)) }, resetRoutes},
 		{"tokens", both, func(_ *testing.T, iam *access.Builder) { iam.Tokens() }, resetRoutes},

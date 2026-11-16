@@ -55,16 +55,15 @@ func federatedCallback(t *testing.T, guard *auth.Guard, current *session.Session
 	return httpRequest
 }
 
-// TestFederatedFactorUsesCallbackTime verifies the federated factor carries
-// this server's clock at the callback and ignores the provider's auth_time,
-// which is three hours old here.
-func TestFederatedFactorUsesCallbackTime(t *testing.T) {
+// TestFederatedFactorUsesEarlierAuthTime verifies an ID token's auth_time that
+// is earlier than the callback becomes the factor time.
+func TestFederatedFactorUsesEarlierAuthTime(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		guard := newGuard(t)
-		old := float64(time.Now().Add(-3 * time.Hour).Unix())
-		httpRequest := federatedCallback(t, guard, newSession(), map[string]any{"auth_time": old})
+		old := time.Now().Add(-3 * time.Hour).Truncate(time.Second)
+		httpRequest := federatedCallback(t, guard, newSession(), map[string]any{"auth_time": float64(old.Unix())})
 
 		identity, err := guard.Authenticator()(httpRequest)
 
@@ -74,15 +73,76 @@ func TestFederatedFactorUsesCallbackTime(t *testing.T) {
 
 		factors := identity.Factors()
 
-		if len(factors) != 1 || factors[0].Method != MethodFederated || !factors[0].At.Equal(time.Now()) {
-			t.Fatalf("factors = %+v, want one federated factor stamped %v", factors, time.Now())
+		if len(factors) != 1 || factors[0].Method != MethodFederated || !factors[0].At.Equal(old) {
+			t.Fatalf("factors = %+v, want one federated factor stamped %v", factors, old)
+		}
+	})
+}
+
+// TestFederatedFactorIgnoresLaterAuthTime verifies an auth_time in the future
+// cannot make the factor fresher than the callback.
+func TestFederatedFactorIgnoresLaterAuthTime(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		guard := newGuard(t)
+		later := float64(time.Now().Add(time.Hour).Unix())
+		httpRequest := federatedCallback(t, guard, newSession(), map[string]any{"auth_time": later})
+
+		identity, err := guard.Authenticator()(httpRequest)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if factors := identity.Factors(); len(factors) != 1 || !factors[0].At.Equal(time.Now()) {
+			t.Fatalf("factors = %+v, want one stamped %v", factors, time.Now())
+		}
+	})
+}
+
+// TestFederatedLoginWithoutAuthTime verifies a token with no auth_time still
+// logs in, with the factor stamped at the callback.
+func TestFederatedLoginWithoutAuthTime(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		guard := newGuard(t)
+		httpRequest := federatedCallback(t, guard, newSession(), nil)
+
+		identity, err := guard.Authenticator()(httpRequest)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if factors := identity.Factors(); len(factors) != 1 || !factors[0].At.Equal(time.Now()) {
+			t.Fatalf("factors = %+v, want one stamped %v", factors, time.Now())
 		}
 	})
 }
 
 // TestFederatedOnlyUserIsFreshAfterCallback verifies a user without a step-up
-// method is fresh right after a federated login, whatever auth_time says.
+// method is fresh right after a federated login whose auth_time is recent.
 func TestFederatedOnlyUserIsFreshAfterCallback(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		guard := newGuard(t, func(policy *auth.GuardBuilder) {
+			policy.StepUp(testCredential(auth.MethodPassword, auth.KindKnowledge, false))
+		})
+		recent := float64(time.Now().Add(-time.Minute).Unix())
+		httpRequest := federatedCallback(t, guard, newSession(), map[string]any{"auth_time": recent})
+
+		if err := freshness(guard, httpRequest); err != nil {
+			t.Fatalf("Fresh after a federated login = %v", err)
+		}
+	})
+}
+
+// TestFederatedOnlyUserIsStaleAfterOldAuthTime verifies a silent single sign-on
+// approval that reports an old auth_time does not count as a fresh login.
+func TestFederatedOnlyUserIsStaleAfterOldAuthTime(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -92,8 +152,8 @@ func TestFederatedOnlyUserIsFreshAfterCallback(t *testing.T) {
 		old := float64(time.Now().Add(-3 * time.Hour).Unix())
 		httpRequest := federatedCallback(t, guard, newSession(), map[string]any{"auth_time": old})
 
-		if err := freshness(guard, httpRequest); err != nil {
-			t.Fatalf("Fresh after a federated login = %v", err)
+		if err := freshness(guard, httpRequest); !errors.Is(err, auth.ErrNoStepUpMethod) {
+			t.Fatalf("Fresh after an old auth_time = %v, want ErrNoStepUpMethod", err)
 		}
 	})
 }
@@ -147,6 +207,33 @@ func TestLoginFreshRequestsReauthentication(t *testing.T) {
 
 		if got := query.Get("prompt") == "login" && query.Get("max_age") == "0"; got != want {
 			t.Errorf("%s: prompt=%q max_age=%q", target, query.Get("prompt"), query.Get("max_age"))
+		}
+	}
+}
+
+// TestLoginFreshRecordedInState verifies fresh=1 is sealed into the login
+// state of an OIDC login and a plain login records nothing.
+func TestLoginFreshRecordedInState(t *testing.T) {
+	t.Parallel()
+
+	client := newClient(t, OIDC(newTestProvider(t).server.URL))
+
+	for target, want := range map[string]bool{"/login?fresh=1": true, "/login": false} {
+		response := client.LoginHandler().Record(httptest.NewRequest(http.MethodGet, target, nil))
+		cookies := response.Cookies()
+
+		if len(cookies) != 1 {
+			t.Fatalf("%s set %d cookies, want 1", target, len(cookies))
+		}
+
+		state, err := client.open(cookies[0])
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if state.Fresh != want {
+			t.Errorf("%s: Fresh = %v, want %v", target, state.Fresh, want)
 		}
 	}
 }

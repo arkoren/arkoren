@@ -121,16 +121,21 @@
 //
 // # Freshness
 //
-// The federated factor is stamped with this server's clock at the callback.
-// The provider's auth_time claim is ignored, so a silent single sign-on
-// approval looks exactly like a fresh login. Core decides what that means for
+// The federated factor is stamped with this server's clock at the callback,
+// unless the ID token carries an auth_time claim that is earlier: the guard keeps
+// an earlier time, so a provider can only make the factor older, never fresher.
+// A missing or malformed auth_time never fails a login. Microsoft Entra only
+// sends auth_time when the optional claim is added to the app registration; the
+// do not count on one from Google, and GitHub has no ID token, so their factor is
+// stamped at the callback unless the token says otherwise. Core decides what the factor time means for
 // auth.Guard.RequireFresh: a recent factor from a step-up method counts, or any
 // recent factor when the user has no step-up method. [MethodFederated] is not a
 // step-up method unless the application registers one, so a user with a
 // password or TOTP is not made fresh by a silent re-login, and a user with
 // neither is fresh right after logging in. The fresh=1 query parameter of
-// [Client.LoginHandler] only asks the provider to authenticate again
-// (prompt=login, max_age=0); it is a hint with no security meaning. Exchanging a
+// [Client.LoginHandler] asks the provider to authenticate again
+// (prompt=login, max_age=0) and is recorded in the login state; it is a hint the
+// provider may ignore. Exchanging a
 // session for a device token should use auth.Guard.RecentLogin, which a native
 // or browser login satisfies and a silent re-login of an open session does not.
 //
@@ -169,7 +174,8 @@
 //
 // The resolver receives an [auth.External]: Issuer and Subject name the external
 // account; Email and EmailVerified are set only on the provider's positive
-// evidence; Claims holds the verified token claims, with the display name in
+// evidence (the generic [OIDC] provider gives no email at all unless
+// [OIDCBuilder.TrustEmail] is on); Claims holds the verified token claims, with the display name in
 // Claims["name"] and the granted scopes as the string claim "scope" (browser
 // logins; Verify keeps the token's own claims). Match local users on the pair
 // Issuer + Subject, which the provider guarantees stable and unique. Never link

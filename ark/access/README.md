@@ -28,7 +28,7 @@ scheme := totp.New("Acme") // the name authenticator apps show for this account
 iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	iam.Password(hasher, func(passwords *password.Builder) {
 		passwords.Registration(true) // off by default: omit it when you add users yourself
-		passwords.Reset(signer, dispatchReset, deliverReset)
+		passwords.Reset(signer, dispatchReset, deliverReset) // required with registration and the built-in users
 	})
 	iam.Directory(func(accounts *account.Builder) {
 		accounts.Verification(signer, dispatchVerification, deliverVerification)
@@ -54,8 +54,8 @@ worker runs `iam.SendReset` or `iam.SendVerification`, which call your `deliver`
 function to send the email. Without them the forgot-password, reset and
 verification routes are not mounted.
 
-Device tokens that nobody uses and expired tokens stay in the table until you
-prune them. `iam.Prune` has the shape of a scheduled function; run it daily:
+Device tokens that nobody uses, expired tokens and tokens that a password reset
+ended stay in the table until you prune them. `iam.Prune` has the shape of a scheduled function; run it daily:
 
 ```go
 schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {
@@ -63,7 +63,13 @@ schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) 
 })
 ```
 
-Read the [Access guide](../../cmd/arkoren/skills/arkoren/references/guides/access/overview.md)
+The hooks the facade sets on its packages (token revocation after a password
+change, the verified-email gates, the takeover, user creation, the registration
+notices) add up with the callbacks you give, so an application callback cannot
+drop them. A provider login whose email the provider verified takes over an
+unverified account and publishes `federation.AccountClaimed`; a first provider
+sign-up needs a proven email. A reset does not purge the connections of a verified
+user, so review them after one. Read the [Access guide](../../cmd/arkoren/skills/arkoren/references/guides/access/overview.md)
 for the route table, the responses and the security rules, and the API on
 [pkg.go.dev](https://pkg.go.dev/arkoren.dev/ark/access).
 

@@ -21,8 +21,10 @@ it includes identity checks that a generic adapter does not infer.
 The matrix describes the behavior Arkoren ships, not every feature a provider
 offers. PKCE is the authorization-code challenge the client sends by default,
 not a claim about provider-side enforcement. A Yes under verified-email filter
-means the preset leaves the email empty unless the provider vouches for it;
-generic OIDC and Apple pass the email through with the `email_verified` claim.
+means the provider leaves the email empty unless it vouches for it. The presets
+use the provider's own evidence, Apple accepts `email_verified` as the boolean or
+the string `"true"`, and generic OIDC leaves the email empty unless you turn on
+`TrustEmail`.
 
 | Provider | Name | Browser login | Native ID token | OIDC discovery | PKCE default | Verified-email filter | JWT verification |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -30,7 +32,7 @@ generic OIDC and Apple pass the email through with the `email_verified` claim.
 | [Microsoft](#microsoft) | `microsoft` | Yes — Enforces the selected tenant policy. | No | Yes | Yes | Yes — Requires boolean xms_edov. | Yes — Enforces the selected tenant policy. |
 | [GitHub](#github) | `github` | Yes | No | No | Yes | Yes — Selects the primary verified address. | No |
 | [Apple](#apple) | `apple` | Yes — Requires HTTPS, a callback mounted for POST and GET, and a key.Signing. | Yes — See Native Login. | Yes | No | No | Yes — Requires explicit API audiences. |
-| [Generic OIDC](#generic-oidc) | `oauth` | Yes | No | Yes | Yes | No | Yes — Requires explicit API audiences. |
+| [Generic OIDC](#generic-oidc) | `oauth` | Yes | No | Yes | Yes | Yes — Reports no email unless TrustEmail is on. | Yes — Requires explicit API audiences. |
 | [Generic OAuth2](#generic-oauth2) | `oauth` | Yes | No | No | Yes | Partial — The application owns user-info validation. | No |
 
 [Native Login](native-login.md) describes the native ID-token flow. All clients
@@ -187,8 +189,28 @@ Pass the provider and registered credentials to the shared constructor, and keep
 discovery startup and the GET callback. The default scopes contain only `openid`;
 if the service supports them and you need them, use
 `ClientBuilder.Scopes("openid", "profile", "email")`. PKCE is enabled by
-default. No provider-specific tenant or email policy is inferred, so implement
-those checks before linking a local account.
+default. No provider-specific tenant policy is inferred, so implement those
+checks before linking a local account.
+
+The service's `email_verified` claim is not trusted by default. With the default,
+`External.Email` is empty and `EmailVerified` false whatever the token says,
+because many OIDC services let users set an address they never proved, and
+trusting it would let such a user take over a local account with the same email
+(the [access facade](../access/connections.md#unverified-accounts) does exactly
+that for a verified email). Turn trust on only for a service you operate or whose
+address verification you have reviewed:
+
+```go
+provider := oauth.OIDC("https://id.example.com/realms/invoices", func(provider *oauth.OIDCBuilder) {
+	provider.TrustEmail(true)
+})
+```
+
+With trust on, the email is reported, and `EmailVerified` is true, only when the
+token carries `email_verified` as the boolean `true`; a string, `false` or a
+missing claim still leaves the email empty. Match users on the issuer and subject
+either way. A browser login also requires the ID token's `azp` claim to equal your
+client ID when the token names more than one audience.
 
 See the [`OIDC` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#OIDC).
 

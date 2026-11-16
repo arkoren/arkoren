@@ -7,7 +7,6 @@ package throttle
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"strconv"
 	"time"
 
@@ -45,23 +44,6 @@ func Attempt(ctx context.Context, store *cache.Cache, key cache.Key[int64], limi
 	}
 
 	return nil
-}
-
-// Bucket returns the key part for a client address: an IPv6 address becomes its
-// /64 prefix, because one subscriber commonly controls a whole /64 and could
-// otherwise take a fresh address for every attempt; an IPv4 address, or text
-// that is not an address, is returned as is.
-func Bucket(client string) string {
-	address, err := netip.ParseAddr(client)
-	if err != nil || address.Is4() || address.Is4In6() {
-		return client
-	}
-	prefix, err := address.Prefix(64)
-	if err != nil {
-		return client
-	}
-
-	return prefix.String()
 }
 
 // Reject returns base with a Retry-After header of wait, rounded up to whole

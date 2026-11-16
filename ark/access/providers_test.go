@@ -8,11 +8,13 @@ import (
 	"testing"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/event"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/federation"
 )
 
 // federatedMethod is the method protocol modules record for an external login.
@@ -158,21 +160,22 @@ func TestConnectWithoutSignUpStillWorks(t *testing.T) {
 	})
 }
 
-// TestProviderUnverifiedEmailCreatesUnverifiedUser verifies EmailVerified
-// decides whether the new user's email counts as verified.
-func TestProviderUnverifiedEmailCreatesUnverifiedUser(t *testing.T) {
+// TestProviderUnverifiedEmailCreatesNoUser verifies a first login whose
+// provider did not verify the email creates no user and is refused with the
+// stable email-unverified problem.
+func TestProviderUnverifiedEmailCreatesNoUser(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
 		})
-		device := sys.client.NewDevice()
-		device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), "")
-		subject := strings.SplitN(device.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
-		record, _ := sys.iam.UserProvider().Find(testContext(t), subject)
-		if record.Claims["email_verified"] != false {
-			t.Fatalf("claims = %v, want an unverified email", record.Claims)
+		reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), "")
+		if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "ark/access:federation:email-unverified") {
+			t.Fatalf("callback = %d %s, want 403 email-unverified", reply.Status, reply.Body)
+		}
+		if _, _, err := sys.iam.Directory().Lookup(testContext(t), "ada@example.com"); !errors.Is(err, auth.ErrUserNotFound) {
+			t.Fatalf("Lookup after the refused sign-up = %v, want ErrUserNotFound", err)
 		}
 	})
 }
@@ -418,34 +421,58 @@ func TestUnverifiedProviderEmailDoesNotTakeOver(t *testing.T) {
 	})
 }
 
-// TestTakeOverRemovesWhatTheSquatterConnected verifies the takeover purges the
-// connections of the user: an account a provider created with an unverified
-// email, taken over by the verified owner through another provider, no longer
-// admits the first provider's identity.
-func TestTakeOverRemovesWhatTheSquatterConnected(t *testing.T) {
+// TestTakeOverEndsTheRegistrantsLogins verifies the takeover deletes the login
+// records of the user, not only their sessions' validity: after the owner logs
+// in, the user has exactly one login, the owner's.
+func TestTakeOverEndsTheRegistrantsLogins(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Provider(fakeProvider{name: "squatter"}, fakeProvider{name: "owner"}).Federation(signUp)
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"})
 		})
-		squatter := sys.client.NewDevice()
-		squatter.Do(http.MethodGet, callbackPath("squatter", "s1", "ada@example.com", false), "")
-		subject := strings.SplitN(squatter.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
-
+		register(t, sys.client, "ada@example.com")
 		owner := sys.client.NewDevice()
-		if reply := owner.Do(http.MethodGet, callbackPath("owner", "o1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
+		if reply := owner.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("owner callback = %d %s", reply.Status, reply.Body)
 		}
-		if me := owner.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, subject+"|") {
-			t.Fatalf("owner /me = %q, want user %s", me.Body, subject)
+		if got := strings.Count(owner.Do(http.MethodGet, "/sessions", "").Body, `"id"`); got != 1 {
+			t.Fatalf("logins of the user after the takeover = %d, want only the owner's", got)
 		}
-		if me := squatter.Do(http.MethodGet, "/me", ""); me.Body != "anonymous" {
-			t.Fatalf("the squatter's session survived: %q", me.Body)
+	})
+}
+
+// TestTakeOverPublishesAccountClaimed verifies the takeover publishes
+// federation.AccountClaimed with the claimed subject, once, and that a plain
+// first login does not.
+func TestTakeOverPublishesAccountClaimed(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		var claimed []string
+		bus := event.New()
+		if _, err := bus.Listen(federation.AccountClaimed, func(_ context.Context, claim federation.UserEvent) error {
+			claimed = append(claimed, claim.Subject)
+
+			return nil
+		}); err != nil {
+			t.Fatalf("Listen: %v", err)
 		}
-		again := sys.client.NewDevice()
-		if reply := again.Do(http.MethodGet, callbackPath("squatter", "s1", "ada@example.com", false), ""); reply.Status != http.StatusConflict {
-			t.Fatalf("the squatter's identity after the takeover = %d %s, want 409", reply.Status, reply.Body)
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Events(bus)
+			iam.Password(hasher(), registration)
+			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+		})
+		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "fresh", "new@example.com", true), "")
+		if len(claimed) != 0 {
+			t.Fatalf("AccountClaimed after a first login = %v, want none", claimed)
+		}
+		register(t, sys.client, "ada@example.com")
+		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
+		if len(claimed) != 1 || claimed[0] != squatted {
+			t.Fatalf("AccountClaimed = %v, want [%s]", claimed, squatted)
 		}
 	})
 }
