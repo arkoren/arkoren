@@ -4,12 +4,14 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/apitoken"
 )
 
 // TestMountOnlyMountsEnabledFeatures verifies the route table per feature set.
@@ -26,7 +28,7 @@ func TestMountOnlyMountsEnabledFeatures(t *testing.T) {
 		"always":    {{"POST", "/logout"}, {"GET", "/sessions"}, {"DELETE", "/sessions"}, {"DELETE", "/sessions/abc"}, {"DELETE", "/account"}, {"POST", "/email/verify"}, {"POST", "/email/verify/resend"}},
 	}
 	features := map[string]access.BuilderFunc{
-		"password":  func(iam *access.Builder) { iam.Password(hasher()) },
+		"password":  func(iam *access.Builder) { iam.Password(hasher(), registration) },
 		"twofactor": func(iam *access.Builder) { iam.TwoFactor(totp.New("Example"), cipher(t)) },
 		"tokens":    func(iam *access.Builder) { iam.Tokens() },
 		"providers": func(iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}) },
@@ -47,7 +49,8 @@ func TestMountOnlyMountsEnabledFeatures(t *testing.T) {
 
 // TestMountNeverPanicsOnAcceptedConfiguration verifies Mount succeeds for every
 // feature combination New accepts, and mounts a route only when its requirement
-// holds: forgot and reset need Deliver, register needs users that can be created.
+// holds: forgot and reset need Deliver, register needs Registration, and each
+// token kind's routes need that kind.
 func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 	t.Parallel()
 
@@ -71,14 +74,26 @@ func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 		absent []string
 	}{
 		{"nothing", func(*testing.T, *access.Builder) {}, nil},
-		{"password without deliver", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher()) },
+		{"password without registration", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher()); deliver(iam) },
+			[]string{"POST /register"}},
+		{"password with registration, without deliver", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration) },
 			[]string{"POST /password/forgot", "POST /password/reset", "POST /email/verify"}},
-		{"password with deliver", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher()); deliver(iam) }, nil},
+		{"password with registration and deliver", func(_ *testing.T, iam *access.Builder) { iam.Password(hasher(), registration); deliver(iam) }, nil},
 		{"twofactor", func(t *testing.T, iam *access.Builder) { iam.TwoFactor(totp.New("Example"), cipher(t)) }, nil},
 		{"tokens", func(_ *testing.T, iam *access.Builder) { iam.Tokens() }, nil},
+		{"personal tokens only", func(_ *testing.T, iam *access.Builder) {
+			iam.Tokens(func(tokens *apitoken.Builder) { tokens.DeviceTokens(false) })
+		}, []string{"POST /device-tokens", "DELETE /device-tokens/current"}},
+		{"device tokens only", func(_ *testing.T, iam *access.Builder) {
+			iam.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
+		}, []string{"POST /tokens"}},
+		{"token catalog with a grant function", func(_ *testing.T, iam *access.Builder) {
+			iam.Tokens(func(tokens *apitoken.Builder) { tokens.Grants(apitoken.AnyScope, "posts:read").GrantTTL(time.Minute) })
+		}, nil},
 		{"providers", func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}) }, nil},
+		{"providers with sign-up", func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}).Federation(signUp) }, nil},
 		{"everything", func(t *testing.T, iam *access.Builder) {
-			iam.Password(hasher()).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"})
+			iam.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}).Federation(signUp)
 			deliver(iam)
 		}, nil},
 		{"own users without create", func(t *testing.T, iam *access.Builder) {
@@ -92,8 +107,12 @@ func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 		}, []string{"POST /register", "DELETE /account", "POST /email/verify"}},
 		{"own users with create", func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
-			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher())
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher(), registration)
 		}, []string{"POST /password/forgot", "POST /password/reset", "DELETE /account"}},
+		{"own users with create, without registration", func(t *testing.T, iam *access.Builder) {
+			provider, users := ownProvider(t)
+			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher())
+		}, []string{"POST /register", "DELETE /account"}},
 		{"own users with verification hooks but no create", func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
 			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher())
@@ -102,7 +121,7 @@ func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 		{"own users with everything", func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
 			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved})
-			iam.Password(hasher()).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"})
+			iam.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}).Federation(signUp)
 			deliver(iam)
 		}, []string{"DELETE /account", "POST /email/verify"}},
 	}

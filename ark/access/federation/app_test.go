@@ -77,7 +77,7 @@ func newSystem(t *testing.T, db *database.Database, instance string, withCreate,
 	sys.links, err = federation.NewLinks(sys.provider, db, func(links *federation.Builder) {
 		links.Instance(instance)
 		if withCreate {
-			links.Create(sys.create)
+			links.SignUp(true).Create(sys.create)
 		}
 		links.Fallback(func(context.Context, string) (bool, error) { return hasFallback, nil })
 	})

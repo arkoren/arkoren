@@ -18,13 +18,14 @@ import (
 //		passwords.Deliver(send).ResetTTL(30 * time.Minute)
 //	})
 type Builder struct {
-	instance   string
-	events     *event.Bus
-	deliver    func(context.Context, Message) error
-	resetTTL   time.Duration
-	policy     func(context.Context, string) error
-	registered func(context.Context, string, string) error
-	changed    func(context.Context, string) error
+	instance     string
+	events       *event.Bus
+	registration bool
+	deliver      func(context.Context, Message) error
+	resetTTL     time.Duration
+	policy       func(context.Context, string) error
+	registered   func(context.Context, string, string) error
+	changed      func(context.Context, string) error
 }
 
 // BuilderFunc is the callback form of [Builder].
@@ -57,6 +58,23 @@ func (passwords *Builder) Instance(name string) *Builder {
 //	passwords.Events(events)
 func (passwords *Builder) Events(bus *event.Bus) *Builder {
 	passwords.events = bus
+
+	return passwords
+}
+
+// Registration enables self-service registration: [Verifier.RegisterHandler]
+// creates users with [Users.Create] and the facade mounts POST /register. The
+// default is false, because most applications add users themselves (an invite,
+// an admin, a social sign-up) and an open registration route is an abuse
+// surface they never asked for. With false the handler panics at composition.
+// [NewVerifier] fails with [ErrInvalidConfig] when it is true and [Users.Create]
+// is nil.
+//
+// Example:
+//
+//	passwords.Registration(true)
+func (passwords *Builder) Registration(enabled bool) *Builder {
+	passwords.registration = enabled
 
 	return passwords
 }

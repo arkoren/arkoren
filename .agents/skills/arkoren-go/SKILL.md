@@ -495,7 +495,11 @@ delivery, and lifecycle protocols explicit.
   ErrNoChallengeURL.
   ark/access composes the guard, the packages and the routes: `access.New(db, store, clientIP,
   func(iam *access.Builder) { ... })` (variable `iam`, builder `iam`), `iam.Mount(web)`
-  and `iam.XHandler()` for custom paths. Its packages (account, password, twofactor,
+  and `iam.XHandler()` for custom paths. Registration (`password.Builder.Registration`) and
+  sign-up on a first provider login (`federation.Builder.SignUp`) are off by default; the
+  token scope catalog comes with its grant ceiling (`apitoken.Builder.Grants(grantable,
+  scopes...)`, `GrantTTL`, `AnyScope`) and `apitoken.NewIssuer(provider, db, store, ...)`
+  takes the shared cache. Its packages (account, password, twofactor,
   apitoken, federation) take a `*auth.UserProvider` and never import each other;
   their handlers take `*auth.Guard`, require `Identity.Session()` and call
   `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`.

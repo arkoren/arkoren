@@ -20,7 +20,7 @@ import (
 var ErrNotMigrated = storage.ErrNotMigrated
 
 // ErrInvalidRequest is returned when a token request is invalid: an empty or
-// overlong name, a scope outside the catalog set with [Builder.Scopes], or an
+// overlong name, a scope outside the catalog set with [Builder.Grants], or an
 // expiry in the past or beyond [Builder.MaxTTL]. It is a problem with status
 // 422.
 //
@@ -33,6 +33,23 @@ var ErrInvalidRequest = problem.New(func(details *problem.Builder) {
 	details.Title("Invalid token request")
 	details.Detail("The token name, scopes or expiry are not valid.")
 	details.Status(http.StatusUnprocessableEntity)
+})
+
+// ErrScopeNotGranted is returned when a token request names a scope of the
+// catalog that the user may not hold: the grant function of [Builder.Grants]
+// does not list it. It is a problem with status 403, distinct from
+// [ErrInvalidRequest] (422), which is a scope the catalog does not know. The
+// detail does not name the scope.
+//
+// Example:
+//
+//	_, _, err := issuer.Issue(ctx, subject, apitoken.Request{Name: "CI", Scopes: []string{"users:write"}})
+//	fmt.Println(errors.Is(err, apitoken.ErrScopeNotGranted)) // true for a user who may not write users
+var ErrScopeNotGranted = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:ark/access:apitoken:scope-not-granted")
+	details.Title("Scope not granted")
+	details.Detail("You may not grant a token a scope you do not hold.")
+	details.Status(http.StatusForbidden)
 })
 
 // ErrNotFound is returned when a token to revoke does not exist or belongs to
@@ -55,6 +72,6 @@ var ErrNotFound = problem.New(func(details *problem.Builder) {
 //
 // Example:
 //
-//	_, err := apitoken.NewIssuer(nil, nil)
+//	_, err := apitoken.NewIssuer(nil, nil, nil)
 //	fmt.Println(errors.Is(err, apitoken.ErrInvalidConfig)) // true
 var ErrInvalidConfig = errors.New("apitoken: invalid configuration")

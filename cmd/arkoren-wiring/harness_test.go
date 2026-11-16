@@ -20,6 +20,8 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/federation"
+	"arkoren.dev/ark/access/password"
 	"arkoren.dev/ark/oauth/oauthauth"
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/middleware/ratelimit"
@@ -294,10 +296,10 @@ func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
 		t.Fatalf("Start: %v", err)
 	}
 	sys.iam, err = access.New(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), append([]access.BuilderFunc{func(iam *access.Builder) {
-		iam.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })))
+		iam.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })), func(passwords *password.Builder) { passwords.Registration(true) })
 		iam.TwoFactor(totp.New("Example"), newCipher(t))
 		iam.Tokens()
-		iam.Provider(google)
+		iam.Provider(google).Federation(func(links *federation.Builder) { links.SignUp(true) })
 		iam.Deliver(sys.deliver)
 		iam.Session(func(cookies *session.Builder) { cookies.AllowInsecure(true) })
 	}}, configure...)...)

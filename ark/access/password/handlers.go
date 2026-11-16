@@ -107,14 +107,15 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 // through. A failing [Builder.Registered] hook is logged and does not fail the
 // request. A new user is unverified, and with the facade cannot connect a
 // provider, enroll two-factor or create tokens until the email is verified. It
-// panics at composition when [Users.Create] is nil.
+// panics at composition unless [Builder.Registration] is enabled (it is off by
+// default, and [NewVerifier] already refuses it without [Users.Create]).
 //
 // Example:
 //
 //	web.Post("/register", verifier.RegisterHandler())
 func (verifier *Verifier) RegisterHandler() router.Handler {
-	if verifier.users.Create == nil {
-		panic("password: RegisterHandler requires Users.Create")
+	if !verifier.registration {
+		panic("password: RegisterHandler requires Builder.Registration")
 	}
 
 	return web.JSON(func(w http.ResponseWriter, r *http.Request) error {

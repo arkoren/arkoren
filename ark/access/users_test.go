@@ -88,7 +88,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 				Verified:   func(context.Context, string) (bool, error) { return true, nil },
 				ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
 			})
-			iam.Password(hasher())
+			iam.Password(hasher(), registration)
 		})
 		if sys.iam.Directory() != nil {
 			t.Fatal("the built-in directory was built next to Users")
@@ -137,7 +137,7 @@ func TestOwnUsersValidation(t *testing.T) {
 	}
 	_, err := newFacade(t, func(iam *access.Builder) {
 		iam.Users(access.Users{Provider: provider})
-		iam.Password(hasher())
+		iam.Password(hasher(), registration)
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
 		t.Errorf("Password without Lookup and Rotate error = %v", err)

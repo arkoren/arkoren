@@ -25,6 +25,20 @@
 // the guard's authenticator and the API routes on one with [Issuer.Authenticator],
 // or on one router with both; the handlers enforce the boundary either way.
 //
+// # Scopes and the grant ceiling
+//
+// [Builder.Grants] takes the scope catalog and a function that says which of
+// them a user may hold. A personal token may carry any subset of that ceiling
+// ([ErrScopeNotGranted] otherwise, [ErrInvalidRequest] for a scope outside the
+// catalog) and a device token carries all of it. When a token authenticates, its
+// stored scopes are narrowed again to what the user may hold then, so a demoted
+// user loses the scope on the next request ([Builder.GrantTTL] zero), within a
+// cache lifetime (positive) or never (negative: the scopes are fixed at
+// creation). An error from the grant function or the cache fails the request.
+// [AnyScope] grants the whole catalog and is right only when scopes never
+// confer more than the user has. Without Grants tokens carry no scopes.
+// [Builder.PersonalTokens] and [Builder.DeviceTokens] switch the two kinds off.
+//
 // # Mobile login
 //
 // A device keeps a cookie jar for the login only: POST /login (and the second
@@ -43,8 +57,8 @@
 //
 // Example:
 //
-//	issuer, err := apitoken.NewIssuer(provider, db, func(tokens *apitoken.Builder) {
-//		tokens.Scopes("posts:read", "posts:write")
+//	issuer, err := apitoken.NewIssuer(provider, db, store, func(tokens *apitoken.Builder) {
+//		tokens.Grants(apitoken.AnyScope, "posts:read", "posts:write")
 //	})
 //	if err != nil {
 //		return err

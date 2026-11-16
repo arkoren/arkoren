@@ -1,6 +1,7 @@
 package federation_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -79,15 +80,75 @@ func TestResolveUnknownCreatesUser(t *testing.T) {
 	})
 }
 
-// TestResolveUnknownWithoutCreateIs401 verifies the not-linked problem.
-func TestResolveUnknownWithoutCreateIs401(t *testing.T) {
+// TestResolveUnknownWithoutSignUpIs403 verifies the no-account problem.
+func TestResolveUnknownWithoutSignUpIs403(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newSystem(t, db, instance, false, false)
 		reply := callback(sys.client, "nobody")
-		if reply.Status != http.StatusUnauthorized || !strings.Contains(reply.Body, "not-linked") {
+		if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "federation:no-account") {
 			t.Fatalf("callback = %d %s", reply.Status, reply.Body)
+		}
+	})
+}
+
+// TestResolveUnknownWithCreateButNoSignUpCreatesNothing verifies a Create
+// function alone does not open sign-up: the login is refused and no user is
+// created.
+func TestResolveUnknownWithCreateButNoSignUpCreatesNothing(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance+"_x", false, false)
+		created := false
+		links, err := federation.NewLinks(sys.provider, db, func(links *federation.Builder) {
+			links.Instance(instance + "_x").Create(func(context.Context, auth.External) (string, error) {
+				created = true
+
+				return "new", nil
+			})
+		})
+		if err != nil {
+			t.Fatalf("NewLinks: %v", err)
+		}
+		_, err = links.Resolve(testContext(t), auth.External{Issuer: google, Subject: "g1"})
+		if !errors.Is(err, federation.ErrNoAccount) || created {
+			t.Fatalf("Resolve = %v, created %v; want ErrNoAccount and no user", err, created)
+		}
+	})
+}
+
+// TestSignUpRequiresCreate verifies SignUp(true) without a Create function is
+// an invalid configuration.
+func TestSignUpRequiresCreate(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance+"_x", false, false)
+		_, err := federation.NewLinks(sys.provider, db, func(links *federation.Builder) {
+			links.Instance(instance).SignUp(true)
+		})
+		if !errors.Is(err, federation.ErrInvalidConfig) {
+			t.Fatalf("NewLinks error = %v, want ErrInvalidConfig", err)
+		}
+	})
+}
+
+// TestResolveKnownIdentityLogsInWithoutSignUp verifies sign-up off does not
+// affect an identity that is already connected.
+func TestResolveKnownIdentityLogsInWithoutSignUp(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		ctx := testContext(t)
+		sys := newSystem(t, db, instance, false, false)
+		if err := sys.links.Link(ctx, "1", auth.External{Issuer: google, Subject: "g1"}); err != nil {
+			t.Fatalf("Link: %v", err)
+		}
+		subject, err := sys.links.Resolve(ctx, auth.External{Issuer: google, Subject: "g1"})
+		if err != nil || subject != "1" {
+			t.Fatalf("Resolve = %q, %v; want user 1", subject, err)
 		}
 	})
 }

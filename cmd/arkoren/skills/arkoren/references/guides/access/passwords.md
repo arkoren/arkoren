@@ -1,19 +1,18 @@
 ---
 title: Passwords
-description: Register, log in, confirm, change and reset passwords, and verify emails, with the access facade.
+description: Log in, confirm, change and reset passwords, optionally let users register, and verify emails, with the access facade.
 order: 30
 summary:
-  - Enable passwords with a hasher and read the register, login, confirm and change requests and their statuses.
+  - Enable passwords with a hasher, switch registration on when you want it, and read the login, confirm and change requests and their statuses.
   - Understand login throttling, the single invalid-credentials answer and what a change or reset ends.
   - Send reset links, verify emails and require a verified email on selected routes.
 ---
 
 # Passwords
 
-Passwords give users a way to register and log in with an email and a secret
-only they know. Enable them by giving the facade a [hasher](../hashing/overview.md)
-and a way to [deliver](overview.md#delivering-messages) reset and verification
-links:
+Passwords give users a way to log in with an email and a secret only they know.
+Enable them by giving the facade a [hasher](../hashing/overview.md) and a way to
+[deliver](overview.md#delivering-messages) reset and verification links:
 
 ```go
 clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
@@ -23,15 +22,30 @@ iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 })
 ```
 
+Self-service registration is off by default: an open `POST /register` route is
+an abuse surface that applications with invitations, an admin console or
+provider sign-up never asked for. With it off, the route is not mounted, and you
+add users yourself; see [Adding Users](accounts.md#adding-users). Switch it on
+in the password settings:
+
+```go
+iam.Password(hasher, func(passwords *password.Builder) {
+	passwords.Registration(true)
+})
+```
+
+With your own users, `Registration(true)` needs `Users.Create`, and `New` fails
+with `access.ErrInvalidConfig` without it.
+
 With the built-in users, the email address is the identifier, and the requests
 below take `email`. Applications that use [their own users](own-users.md) may
 send `identifier` instead.
 
 ## Register and Log In
 
-`POST /register` creates the user and their password in one transaction and
-answers `202` with no body. It does not log the user in: the client calls
-`POST /login` next.
+With registration on, `POST /register` creates the user and their password in one
+transaction and answers `202` with no body. It does not log the user in: the
+client calls `POST /login` next.
 
 ```json
 { "email": "ada@example.com", "password": "correct horse battery" }

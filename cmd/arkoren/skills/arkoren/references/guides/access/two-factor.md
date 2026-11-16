@@ -21,8 +21,8 @@ scheme := totp.New("Acme") // the name authenticator apps show for this account
 iam.TwoFactor(scheme, cipher)
 ```
 
-The issuer must be non-empty and contain no colon; an invalid scheme makes `New`
-fail with `access.ErrInvalidConfig`. The scheme also sets the hash, the digit
+The issuer must be non-empty and contain no colon; an invalid scheme, or a nil
+cipher, makes `New` fail with `access.ErrInvalidConfig`. The scheme also sets the hash, the digit
 count, the period and the accepted drift. The defaults (SHA-1, 6 digits, 30
 seconds, one step of drift) work with every authenticator app, so change them only
 for a reason:

@@ -4,7 +4,7 @@ description: Sign in with external providers, connect them to existing accounts 
 order: 60
 summary:
   - Add providers that satisfy the facade's interface, such as the OAuth module's clients.
-  - Understand how an unknown identity creates a user, why accounts are never linked by email and how connecting works.
+  - Decide whether an unknown identity may create a user, why accounts are never linked by email and how connecting works.
   - Handle native ID-token login, disconnecting and how a provider login interacts with step-up.
 ---
 
@@ -29,17 +29,39 @@ facade uses its connection store.
 
 ## Signing In
 
-A known identity logs its user in, unless the user was deleted or disabled. An
-unknown identity creates a user. With the built-in users, the user is identified
-by the provider's email and starts verified only when the provider vouches for the
-email. A provider that sends no email cannot create a built-in user. With
+A known identity logs its user in, unless the user was deleted or disabled. What
+happens to an unknown identity is your decision, and by default it is refused:
+the callback answers `403` with the problem `federation:no-account` and creates
+nothing. The identity is verified, but the application has not opened sign-up
+with providers, so `403` fits better than `401`, which would invite retrying with
+other credentials. Nothing differs between identities, so the answer does not
+reveal who has an account.
+
+To let a first provider login create a user, enable sign-up:
+
+```go
+iam.Provider(google, github)
+iam.Federation(func(links *federation.Builder) {
+	links.SignUp(true)
+})
+```
+
+With the built-in users, the new user is identified by the provider's email and
+starts verified only when the provider vouches for the email. A provider that
+sends no email cannot create a built-in user. With
 [your own users](own-users.md), `Users.Create` receives the provider's email and
-whether it was verified. Without `Users.Create`, an unknown identity is refused
-with `401` (`federation:not-linked`).
+whether it was verified, and `SignUp(true)` without `Users.Create` makes `New`
+fail with `access.ErrInvalidConfig`.
+
+Sign-up does not affect the other two cases: an identity that is already
+connected always logs its user in, and a logged-in user can always connect a
+provider. With registration and sign-up both off, add users yourself; see
+[Adding Users](accounts.md#adding-users).
 
 Accounts are never linked by email. If the email belongs to an existing user, the
 callback answers `409`: that user logs in and connects the provider from their
-settings. Concurrent first logins of one identity create one user.
+settings. Concurrent first logins of one identity create one user when sign-up
+is on.
 
 A login with a second factor enrolled is held pending like any other. The callback
 redirects to the OAuth client's challenge URL, where the page posts to
@@ -56,7 +78,7 @@ verified email (`403` `email-unverified` otherwise), so whoever registered an
 address first cannot attach a provider before its owner proves it. It stores a
 single-use intent in the session for ten minutes and answers `303` to
 `/auth/{provider}`. When that callback completes in the same session, the identity
-is linked to the logged-in user instead of creating one. An unknown provider name
+is linked to the logged-in user, whether or not sign-up is on. An unknown provider name
 is `404`.
 
 Because connecting is a POST, a cross-site request to the provider's login route

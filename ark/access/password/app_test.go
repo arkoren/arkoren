@@ -155,6 +155,7 @@ func newConfiguredSystem(t *testing.T, db *database.Database, instance string, c
 		Rotate: users.Rotate,
 	}, func(passwords *password.Builder) {
 		passwords.Instance(instance)
+		passwords.Registration(true)
 		passwords.Deliver(func(_ context.Context, message password.Message) error {
 			sentMu.Lock()
 			defer sentMu.Unlock()

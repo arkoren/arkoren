@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/federation"
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/auth/memoryauth"
 )
@@ -179,6 +180,23 @@ func socialLogin(t *testing.T, sys *system, b *browser, subject, email string) r
 	state, nonce := authorize(t, b, "/auth/google")
 
 	return b.get("/auth/google/callback?state=" + state + "&code=" + nonce)
+}
+
+// TestSocialLoginWithoutSignUpIsRefused runs the provider login with sign-up
+// left at its default: an unknown identity is refused with 403 and no user.
+func TestSocialLoginWithoutSignUpIsRefused(t *testing.T) {
+	t.Parallel()
+
+	sys := newSystem(t, func(iam *access.Builder) {
+		iam.Federation(func(links *federation.Builder) { links.SignUp(false) })
+	})
+	social := sys.browser.device()
+	if r := socialLogin(t, sys, social, "g1", "grace@example.com"); r.status != http.StatusForbidden {
+		t.Fatalf("social login = %d %s, want 403", r.status, r.body)
+	}
+	if me := social.get("/me"); me.body != "anonymous" {
+		t.Fatalf("/me after the refused login = %q", me.body)
+	}
 }
 
 // TestSocialLoginThenConnect logs in with the provider (creating a verified

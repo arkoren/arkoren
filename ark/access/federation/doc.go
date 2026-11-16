@@ -6,6 +6,11 @@
 //
 // # Rules
 //
+//   - A first login with an unknown identity creates a user only when
+//     [Builder.SignUp] is on (it is off by default) and then through
+//     [Builder.Create]; otherwise it fails with [ErrNoAccount] (403) and
+//     creates nothing. Logging in with a connected identity and connecting a
+//     provider while logged in never depend on it.
 //   - It never links by email. An address that belongs to an existing user makes
 //     [Builder.Create] fail (a 409 with the directory); the user logs in and
 //     connects the provider from their settings.
@@ -35,7 +40,7 @@
 // Example:
 //
 //	links, err := federation.NewLinks(provider, db, func(links *federation.Builder) {
-//		links.Create(createUser).Fallback(passwords.Has)
+//		links.SignUp(true).Create(createUser).Fallback(passwords.Has)
 //	})
 //	if err != nil {
 //		return err
