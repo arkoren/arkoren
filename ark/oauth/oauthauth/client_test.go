@@ -167,7 +167,7 @@ func (body cancelingBody) Close() error {
 }
 
 // accessProvider and accessNativeProvider copy the provider interfaces that
-// ark/access declares (package access, plan doc 07), using only core types, so
+// ark/iam declares, using only core types, so
 // that this module fails to compile if a handler signature drifts from them.
 type accessProvider interface {
 	Name() string

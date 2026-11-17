@@ -63,7 +63,7 @@ jq -e '(keys - ["retired"]) == ["development","public","schema"] and .schema == 
   (.public | type == "array" and length > 0) and
   (.development | type == "array") and
   all(.public[]; type == "string" and test("^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$")) and
-  all(.development[]; . == "ark/access" or . == "cmd/arkoren-ci" or . == "cmd/arkoren-wiring") and
+  all(.development[]; . == "ark/iam" or . == "cmd/arkoren-ci" or . == "cmd/arkoren-wiring") and
   ((.retired // []) | all(.[]; type == "string" and test("^(driver|foundation|ark)/[a-z0-9][a-z0-9-]*$"))) and
   ((.public + .development + (.retired // [])) | length == (unique | length))' \
   .github/release-modules.json >/dev/null || fail 'invalid module policy'

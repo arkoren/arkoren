@@ -28,10 +28,10 @@ type Policy struct {
 
 // developmentRoots are the reviewed development-only module roots: the
 // maintenance command, the wiring module that tests the public modules
-// together, and ark/access, held back from release until its API settles
+// together, and ark/iam, held back from release until its API settles
 // (move it to public for its first release). Anything else needs a boundary
 // review first.
-var developmentRoots = []string{"ark/access", "cmd/arkoren-ci", "cmd/arkoren-wiring"}
+var developmentRoots = []string{"ark/iam", "cmd/arkoren-ci", "cmd/arkoren-wiring"}
 
 // canonical matches public module roots, never arbitrary command directories.
 var canonical = regexp.MustCompile(`^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$`)

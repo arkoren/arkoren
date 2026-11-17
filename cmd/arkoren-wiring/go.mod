@@ -3,7 +3,7 @@ module arkoren.dev/cmd/arkoren-wiring
 go 1.27
 
 require (
-	arkoren.dev/ark/access v0.0.0
+	arkoren.dev/ark/iam v0.0.0
 	arkoren.dev/ark/oauth v0.3.0
 	arkoren.dev/core v0.11.0
 	arkoren.dev/driver/aes v0.1.0
@@ -34,7 +34,7 @@ require (
 	modernc.org/sqlite v1.61.0 // indirect
 )
 
-// ark/access has no release until its owner bootstrap tags v0.1.0, so the
+// ark/iam has no release until its owner bootstrap tags v0.1.0, so the
 // development-only wiring module builds against the checkout. Replace this line
 // with a real requirement on v0.1.0 once the tag exists.
-replace arkoren.dev/ark/access => ../../ark/access
+replace arkoren.dev/ark/iam => ../../ark/iam
