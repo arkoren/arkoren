@@ -39,6 +39,12 @@ var canonical = regexp.MustCompile(`^(core|cmd/arkoren|(driver|foundation|ark)/[
 // ParsePolicy rejects unknown fields, duplicates and overlapping classifications,
 // including a directory that is both public (or development) and retired.
 func ParsePolicy(data []byte) (Policy, error) {
+	return parsePolicy(data, false)
+}
+
+// parsePolicy applies the current boundary, with one explicit historical root
+// for replaying signed plans created before ark/access became ark/iam.
+func parsePolicy(data []byte, historical bool) (Policy, error) {
 	policy := Policy{}
 	err := json.Unmarshal(data, &policy, json.RejectUnknownMembers(true))
 
@@ -56,7 +62,7 @@ func ParsePolicy(data []byte) (Policy, error) {
 		seen[directory] = true
 	}
 	for _, directory := range policy.Development {
-		if seen[directory] || !slices.Contains(developmentRoots, directory) {
+		if seen[directory] || (!slices.Contains(developmentRoots, directory) && (!historical || directory != "ark/access")) {
 			return Policy{}, fmt.Errorf("unreviewed or duplicate development module: %s", directory)
 		}
 		seen[directory] = true
