@@ -1,7 +1,7 @@
 ---
 title: API Tokens
 description: Issue restricted personal tokens, authenticate API requests, and exchange a recent mobile login for a revocable device token.
-order: 70
+order: 90
 summary:
   - Limit token scopes to both an application catalog and the owner's current permissions.
   - Create, use, list, and revoke personal tokens without giving them credential-management access.
@@ -12,7 +12,7 @@ summary:
 
 A script needs a credential it can send without keeping an interactive login
 session. A mobile app can also log in once, then retain a revocable credential
-instead of a cookie. Access supports both through opaque API tokens:
+instead of a cookie. IAM supports both through opaque API tokens:
 **personal tokens** are named and scoped by the user; **device tokens** are
 issued by exchanging a recent login.
 
@@ -27,12 +27,12 @@ declares a catalog of names and a grant function that returns which catalog
 scopes a subject may hold now. Assume your authorization layer provides
 `grantable`, a `func(context.Context, string) ([]string, error)`.
 
-Import `apitoken` from `arkoren.dev/ark/access/apitoken` and enable tokens
+Import `apitoken` from `arkoren.dev/ark/iam/apitoken` and enable tokens
 in your existing constructor:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Tokens(func(tokens *apitoken.Builder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Tokens(func(tokens *apitoken.Builder) {
 		tokens.Grants(grantable, "posts:read", "posts:write")
 	})
 })
@@ -83,7 +83,7 @@ The response is `201`, with metadata in `token` and the usable text in
 }
 ```
 
-Display the secret once for Ada to copy to her script. Access stores only
+Display the secret once for Ada to copy to her script. IAM stores only
 its hash and cannot show it again. The default format is
 `ark_<public id>_<secret>`, with 130 random bits in the secret.
 Keep it out of logs and source control.
@@ -96,8 +96,8 @@ An omitted `expires_at` has **no date expiry by default**. To enforce a maximum,
 configure it alongside the catalog:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Tokens(func(tokens *apitoken.Builder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Tokens(func(tokens *apitoken.Builder) {
 		tokens.Grants(grantable, "posts:read", "posts:write")
 		tokens.MaxTTL(30 * 24 * time.Hour)
 	})
@@ -116,14 +116,14 @@ The script sends the secret as an HTTP header:
 Authorization: Bearer ark_<id>_<secret>
 ```
 
-`iam.Middleware()` tries the session first, then Access tokens, then any
+`identity.Middleware()` tries the session first, then IAM tokens, then any
 additional authenticators. For a token-only endpoint, reject cookie-only
 callers by installing the issuer's authenticator instead of the combined
 facade middleware. Import `auth` and `gate` from `arkoren.dev/core/auth`
 and its `gate` subpackage:
 
 ```go
-api := routes.With(auth.Middleware(iam.Issuer().Authenticator()), auth.Require())
+api := routes.With(auth.Middleware(identity.Issuer().Authenticator()), auth.Require())
 posts := api.With(gate.Require(gate.HasScopes("posts:read")))
 posts.Get("/api/posts", listPosts)
 ```
@@ -132,11 +132,11 @@ posts.Get("/api/posts", listPosts)
 posts the owner can read. On a mixed session/token endpoint, use the facade's
 middleware, but do not assume a session identity carries token scopes.
 
-Malformed, unknown, expired, revoked, or version-outdated Access tokens receive
+Malformed, unknown, expired, revoked, or version-outdated IAM tokens receive
 `401` with a Bearer challenge. A different prefix falls through to another
 authenticator, such as an [OIDC verifier](../oauth/bearer-tokens.md).
 A deleted or disabled user cannot authenticate with a token.
-Access tokens cannot pass a positive factor-level or freshness requirement.
+IAM tokens cannot pass a positive factor-level or freshness requirement.
 
 If secret scanners need an application-specific prefix, set
 `tokens.Prefix("acme")` in the token callback. It must be 2–16 lowercase
@@ -145,7 +145,7 @@ tokens issued with the old prefix.
 
 ## Recheck Permissions
 
-At authentication, Access intersects a token's originally issued scopes
+At authentication, IAM intersects a token's originally issued scopes
 with its owner's grant ceiling. Losing `posts:write` therefore removes that
 effective scope from existing tokens; gaining a permission does not add it
 to a token that never held it.
@@ -162,7 +162,7 @@ in the same token callback as `Grants`:
 Keep the default if your lookup is inexpensive. A short positive cache lifetime
 trades lookup cost for delayed permission changes. A negative value lets
 demoted users retain the scopes originally issued to their tokens.
-Grant-function or cache errors fail authentication with `401`; Access does
+Grant-function or cache errors fail authentication with `401`; IAM does
 not fall back to a wider saved grant. Credential-version changes invalidate
 every token regardless of this setting.
 
@@ -171,7 +171,7 @@ every token regardless of this setting.
 A first-party app uses a cookie jar temporarily:
 
 1. Complete password login and any challenge, or the provider's
-   [native login](connections.md#native-login).
+   [native login](federated-sign-in.md#native-login).
 2. While that login is at most five minutes old, exchange it for a device token.
 3. Store the token in the platform's secure credential storage and use Bearer
    authentication thereafter.
@@ -205,7 +205,7 @@ Any `MaxTTL` date cap still applies. Personal tokens have no idle limit.
 
 To log the device out, send `DELETE /device-tokens/current` with its Bearer
 token. `204` means that presented token was revoked; this route does not accept
-a session as a substitute. It can revoke either kind of Access token.
+a session as a substitute. It can revoke either kind of IAM token.
 
 ## Manage and Prune
 
@@ -221,7 +221,7 @@ Password changes and enabling two-factor revoke all tokens by default.
 for those two changes; a password reset or version rotation always ends all
 tokens. Issuing and revoking publish `apitoken.Issued` and `apitoken.Revoked`.
 
-Access starts no cleanup goroutine. Schedule `iam.Prune` daily to delete
+IAM starts no cleanup goroutine. Schedule `identity.Prune` daily to delete
 expired tokens, tokens from outdated or deleted users, and device tokens past
 their idle limit. It removes only unusable rows, is safe to repeat or run
 concurrently, and returns nil when tokens are not enabled.
@@ -229,7 +229,7 @@ concurrently, and returns nil when tokens are not enabled.
 With `schedule` from `arkoren.dev/core/service/schedule`, define the task:
 
 ```go
-prune := schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {
+prune := schedule.NewEntry("access-prune", identity.Prune, func(entry *schedule.EntryBuilder) {
 	entry.When(schedule.UTC().Hour(3))
 })
 ```
@@ -245,8 +245,8 @@ Personal tokens are not pruned for idleness, and disabled-user status alone
 does not cause version cleanup because re-enabling can restore those tokens.
 Finding outdated versions reads each remaining token owner's current record.
 
-Next, add [Connections](connections.md) if users should sign in through
+Next, add [Federated Sign-In](federated-sign-in.md) if users should sign in through
 external accounts.
 
 For issuance, grants, and cleanup, see the
-[`apitoken` API reference](https://pkg.go.dev/arkoren.dev/ark/access/apitoken).
+[`apitoken` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/apitoken).

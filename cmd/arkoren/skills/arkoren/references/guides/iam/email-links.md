@@ -11,7 +11,7 @@ summary:
 # Email Links
 
 A forgotten password needs a recovery path, and an email address needs proof
-before it can be trusted. Access supplies signed links for both, but your
+before it can be trusted. IAM supplies signed links for both, but your
 application owns the email delivery. Neither feature runs until you provide a
 signer and two functions: **dispatch** stores work during the HTTP request;
 **deliver** sends the resulting message later.
@@ -41,7 +41,7 @@ signer, err := link.New(secret)
 
 The default signed value is a relative path and query. An
 [origin-configured signer](../http-capabilities/secure-links.md) can produce
-an absolute value instead; Access accepts either. The signature binds each
+an absolute value instead; IAM accepts either. The signature binds each
 purpose's path, so a verification link cannot be used as a password-reset link.
 
 ## Deliver Messages
@@ -52,7 +52,7 @@ and exception reports.
 
 Suppose `sendEmail(ctx, address, subject, text)` is your application's mail
 adapter and returns an error. Import `password` from
-`arkoren.dev/ark/access/password` and define the reset delivery:
+`arkoren.dev/ark/iam/password` and define the reset delivery:
 
 ```go
 deliverReset := func(
@@ -76,7 +76,7 @@ if the recipient did not create it. `message.Link(base)` puts the signed value
 in the URL fragment; `base` must not already have a fragment.
 
 Verification uses `account.VerifyMessage` from
-`arkoren.dev/ark/access/account`, with no `Notice` field:
+`arkoren.dev/ark/iam/account`, with no `Notice` field:
 
 ```go
 deliverVerification := func(
@@ -89,7 +89,7 @@ deliverVerification := func(
 }
 ```
 
-These page URLs belong to your front end, not to Access. Delivery always uses
+These page URLs belong to your front end, not to IAM. Delivery always uses
 the address stored with the user, never an address copied from an incoming
 reset request. For a concrete mail adapter, see
 [composing mail](../mail/composing-messages.md).
@@ -139,7 +139,7 @@ dispatchVerification := func(
 Both dispatch callbacks must store work durably before returning success.
 The queue's durability depends on your
 [driver and delivery setup](../queues/drivers.md); launching a goroutine is not
-a durable handoff. Stored request values remain decodable across Access
+a durable handoff. Stored request values remain decodable across IAM
 upgrades: new fields are additive, with zero values for older payloads.
 
 ## Enable the Flows
@@ -148,17 +148,17 @@ With the signer and four callbacks defined, enable recovery on passwords and
 verification on the built-in directory:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher, func(passwords *password.Builder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher, func(passwords *password.Builder) {
 		passwords.Reset(signer, dispatchReset, deliverReset)
 	})
-	iam.Directory(func(accounts *account.Builder) {
+	identity.Directory(func(accounts *account.Builder) {
 		accounts.Verification(signer, dispatchVerification, deliverVerification)
 	})
 })
 ```
 
-This leaves registration closed. Without `Reset`, Access mounts neither
+This leaves registration closed. Without `Reset`, IAM mounts neither
 `/password/forgot` nor `/password/reset`. Without `Verification`, it mounts
 neither email route. A partially configured flow makes construction fail;
 requesting one of its unavailable handlers directly panics during composition.
@@ -166,13 +166,13 @@ requesting one of its unavailable handlers directly panics during composition.
 Once `iam` exists, register the worker's reset handler:
 
 ```go
-err = consumer.Handle(resetJob, iam.SendReset)
+err = consumer.Handle(resetJob, identity.SendReset)
 ```
 
 Register verification separately:
 
 ```go
-err = consumer.Handle(verifyJob, iam.SendVerification)
+err = consumer.Handle(verifyJob, identity.SendVerification)
 ```
 
 Construction does not invoke dispatch. Requests enqueue work; the running
@@ -250,7 +250,7 @@ it does not establish a new login.
 To send Ada a verification email from your invitation flow, use:
 
 ```go
-err := iam.Directory().RequestVerification(ctx, subject)
+err := identity.Directory().RequestVerification(ctx, subject)
 ```
 
 The mounted `POST /email/verify/resend` requests the same work for the logged-in
@@ -286,7 +286,7 @@ not verification, to claim it safely.
 For your own application routes, require a verified email after authentication:
 
 ```go
-verified := web.With(auth.Require(), iam.RequireVerified())
+verified := web.With(auth.Require(), identity.RequireVerified())
 verified.Post("/posts", createPost)
 ```
 
@@ -298,5 +298,5 @@ you provide the corresponding verification functions and UI yourself.
 Next, decide whether to open [Registration](registration.md).
 
 For the link contracts, see the
-[`password` API](https://pkg.go.dev/arkoren.dev/ark/access/password) and
-[`account` API](https://pkg.go.dev/arkoren.dev/ark/access/account).
+[`password` API](https://pkg.go.dev/arkoren.dev/ark/iam/password) and
+[`account` API](https://pkg.go.dev/arkoren.dev/ark/iam/account).

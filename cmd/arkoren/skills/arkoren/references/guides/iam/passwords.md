@@ -1,6 +1,6 @@
 ---
 title: Passwords
-description: Sign in with a password, handle a pending second factor, and confirm or change credentials through the Access routes.
+description: Sign in with a password, handle a pending second factor, and confirm or change credentials through the IAM routes.
 order: 20
 summary:
   - Log in an existing user and distinguish a completed login from a pending second-factor challenge.
@@ -10,7 +10,7 @@ summary:
 
 # Passwords
 
-Once [Access is mounted](overview.md#mount-routes) with `iam.Password(hasher)`,
+Once [IAM is mounted](overview.md#mount-routes) with `identity.Password(hasher)`,
 an existing user can sign in with their email and password. This page assumes
 that the user already has a password, either provisioned by your application or
 created through [registration](registration.md).
@@ -89,7 +89,7 @@ with a fresh login:
 ```
 
 Success is `204`. The caller stays logged in with a fresh password proof;
-the user's other logins end. By default Access also revokes every personal
+the user's other logins end. By default IAM also revokes every personal
 and device token. A password change invalidates previously sent reset links,
 but does not rotate the user's credential version.
 
@@ -114,7 +114,7 @@ upper bound accommodates bcrypt's input limit. The policy applies when a
 password is registered, changed, reset, or set through the verifier.
 
 To require longer passphrases, supply a policy in the constructor. Import
-`password` from `arkoren.dev/ark/access/password`; this example also uses
+`password` from `arkoren.dev/ark/iam/password`; this example also uses
 `context` from the standard library:
 
 ```go
@@ -134,8 +134,8 @@ another error represents an infrastructure failure.
 Attach the policy while enabling passwords:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher, func(passwords *password.Builder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher, func(passwords *password.Builder) {
 		passwords.Policy(checkPassword)
 	})
 })
@@ -178,4 +178,4 @@ Next, configure [Email Links](email-links.md) so users can recover forgotten
 passwords and prove their email before enrolling additional credentials.
 
 For the password operations and settings, see the
-[`password` API reference](https://pkg.go.dev/arkoren.dev/ark/access/password).
+[`password` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/password).

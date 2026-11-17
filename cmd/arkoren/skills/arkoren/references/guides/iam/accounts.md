@@ -2,7 +2,7 @@
 title: Sessions and Accounts
 nav: Sessions & Accounts
 description: Manage active logins, suspend or remove users, and choose how credential changes and recovery affect existing access.
-order: 90
+order: 100
 summary:
   - List and revoke session logins without mistaking them for device tokens.
   - Set shared session policy and distinguish reversible suspension from credential-version rotation.
@@ -13,7 +13,7 @@ summary:
 
 After login works, users need to recognize their active sessions and end
 access they no longer trust. Your application also needs administrative ways
-to suspend or delete a user. Access separates **login records** in the cache
+to suspend or delete a user. IAM separates **login records** in the cache
 from the user and credentials in the database; deleting one session is not
 the same as revoking every credential.
 
@@ -56,23 +56,23 @@ The facade gives its guard and session middleware the same absolute lifetime:
 24 hours by default. Configure that once, not on each component independently:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher)
-	iam.SessionLifetime(7 * 24 * time.Hour)
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher)
+	identity.SessionLifetime(7 * 24 * time.Hour)
 })
 ```
 
 This changes the maximum login age; it does not promise seven days without an
 idle expiry, cache eviction, revocation, or credential change.
 For idle lifetime and renewal, configure the session policy through
-`iam.Session` and follow the [session guide](../http-capabilities/sessions.md).
+`identity.Session` and follow the [session guide](../http-capabilities/sessions.md).
 
 For example, to use an application-specific cookie name, import `session`
 from `arkoren.dev/core/http/session`:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Session(func(cookies *session.Builder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Session(func(cookies *session.Builder) {
 		cookies.Name("__Host-acme.session")
 	})
 })
@@ -87,7 +87,7 @@ handle, or client-address function.
 ## Credential Changes
 
 A change intended to protect an account must not leave an attacker's earlier
-login working. Access applies these defaults:
+login working. IAM applies these defaults:
 
 | Change | Session effect | Token effect |
 | --- | --- | --- |
@@ -102,10 +102,10 @@ attacker may have created using the old password. Accept that risk explicitly
 before configuring:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher)
-	iam.Tokens()
-	iam.KeepPersonalTokens()
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher)
+	identity.Tokens()
+	identity.KeepPersonalTokens()
 })
 ```
 
@@ -128,11 +128,11 @@ transaction:
 
 ```go
 err := db.WithTransaction(ctx, func(ctx context.Context) error {
-	if err := iam.Directory().Disable(ctx, subject); err != nil {
+	if err := identity.Directory().Disable(ctx, subject); err != nil {
 		return err
 	}
 
-	return iam.Directory().Rotate(ctx, subject)
+	return identity.Directory().Rotate(ctx, subject)
 })
 ```
 
@@ -142,7 +142,7 @@ authenticators. Keep the user disabled while they must not sign in.
 
 The [provisioning example](overview.md#add-a-user) covers adding directory users.
 For provider-only invitations, use the different
-[unverified invitation path](organization-sign-in.md#invite-users), rather
+[unverified invitation path](sso.md#admit-users), rather
 than assuming `CreateVerified` connects an unknown provider identity.
 
 ## Delete an Account
@@ -158,7 +158,7 @@ deleting the user. Each hook receives the subject and the transaction context.
 To include application-owned posts, register a hook on that provider:
 
 ```go
-iam.UserProvider().OnForget(func(ctx context.Context, subject string) error {
+identity.UserProvider().OnForget(func(ctx context.Context, subject string) error {
 	return posts.DeleteBySubject(ctx, subject)
 })
 ```
@@ -169,7 +169,7 @@ from committing. Cache changes or external side effects do not gain SQL
 rollback merely because their hook runs in that context.
 The guard's hook also removes cached login records.
 
-For administrative deletion, `iam.Directory().Delete(ctx, subject)` follows
+For administrative deletion, `identity.Directory().Delete(ctx, subject)` follows
 the same forget path. Deletion emits `account.UserDeleted` and core's
 `auth.UserForgotten`; an unknown subject returns `auth.ErrUserNotFound`.
 With [custom users](own-users.md#delete-your-users), the built-in account
@@ -181,9 +181,9 @@ Events let you notify a user or record an audit observation. Pass your existing
 event bus when constructing the facade:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher)
-	iam.Events(bus)
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher)
+	identity.Events(bus)
 })
 ```
 
@@ -209,10 +209,10 @@ connections: they may be legitimate ways the owner signs in.
 After `password.WasReset`, review them under your recovery policy:
 
 ```go
-connections, err := iam.Links().List(ctx, subject)
+connections, err := identity.Links().List(ctx, subject)
 ```
 
-Only call this when providers are enabled; `iam.Links()` is nil otherwise.
+Only call this when providers are enabled; `identity.Links()` is nil otherwise.
 Ask the owner to review the list, or use `UnlinkAll(ctx, subject)` if your
 application's explicit policy revokes every connection on recovery.
 A provider takeover of an unverified account already purges connections and
@@ -224,8 +224,8 @@ provide an application-owned transactional recovery flow.
 every reset.
 
 For an organization-specific application, continue with
-[Organization Sign-In](organization-sign-in.md).
+[Organization Sign-In](sso.md).
 
 For directory administration and facade hooks, see the
-[`account` API](https://pkg.go.dev/arkoren.dev/ark/access/account) and
-[`access` API](https://pkg.go.dev/arkoren.dev/ark/access).
+[`account` API](https://pkg.go.dev/arkoren.dev/ark/iam/account) and
+[`iam` API](https://pkg.go.dev/arkoren.dev/ark/iam).

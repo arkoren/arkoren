@@ -12,7 +12,7 @@ summary:
 
 > [!NOTE]
 > To get registration, login, password reset and the rest as ready-made routes,
-> use the [Access](../access/overview.md) ark. This page builds them by hand.
+> use the [IAM](../iam/overview.md) ark. This page builds them by hand.
 
 A browser login checks credentials once, then stores the account's subject in
 the session. On later requests, `auth.Guard` asks your **user provider** whether
@@ -99,7 +99,7 @@ web.Use(csrf.Middleware())
 web.Use(auth.Middleware(guard.Authenticator()))
 ```
 
-Session middleware must run first. With the `ark/access` facade, mount
+Session middleware must run first. With the `ark/iam` facade, mount
 `csrf.Middleware()` beside `iam.Middleware()` yourself: the facade does not add
 it. Keep [CSRF protection](../browser-security/csrf-protection.md)
 on login, logout, and other state-changing browser routes: browsers send session

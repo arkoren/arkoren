@@ -1,23 +1,23 @@
 ---
-title: Connections
+title: Federated Sign-In
 description: Add external sign-in, control first-login sign-up per provider, and let signed-in users connect or disconnect their own identities.
-order: 80
+order: 50
 summary:
   - Mount configured OAuth clients and decide what an unknown external identity may do.
   - Connect a provider only through an explicit session-bound intent, never by matching a verified account's email.
   - Understand unverified-account takeover, native mobile login, and Apple's callback requirements.
 ---
 
-# Connections
+# Federated Sign-In
 
 Users can sign in with an external account instead of another password.
-Access stores a **connection** from the provider's verified issuer and subject
+IAM stores a **connection** from the provider's verified issuer and subject
 to a local user subject. Later sign-ins use that connection, not the user's
 email or mutable profile.
 
 Set up and start your clients using [OAuth](../oauth/overview.md) first.
 That module owns provider credentials, discovery, callback verification,
-and redirects; Access owns local users, connections, and login policy.
+and redirects; IAM owns local users, connections, and login policy.
 The [provider comparison](../oauth/providers.md#compatibility-matrix)
 explains differences between Google, Microsoft, GitHub, Apple, and generic
 adapters.
@@ -27,13 +27,13 @@ adapters.
 Give each configured client its own call in the constructor:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Provider(google)
-	iam.Provider(github)
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Provider(google)
+	identity.Provider(github)
 })
 ```
 
-The clients satisfy `access.Provider`: Access asks them for their name,
+The clients satisfy `iam.Provider`: IAM asks them for their name,
 login handler, and callback handler. You do not write a resolver for mounted
 providers. Apply the connection migrations before serving.
 
@@ -62,9 +62,9 @@ in your application.
 To let one provider create new users, enable sign-up for that provider:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Provider(google)
-	iam.Provider(github, func(login *access.ProviderBuilder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Provider(google)
+	identity.Provider(github, func(login *iam.ProviderBuilder) {
 		login.SignUp(true)
 	})
 })
@@ -75,7 +75,7 @@ identities or connect a provider from an existing user's settings.
 
 Sign-up requires a nonempty email that the provider reports as verified;
 otherwise it returns `403` `federation:email-unverified` and creates nothing.
-New users start verified. With [your own users](own-users.md), Access calls
+New users start verified. With [your own users](own-users.md), IAM calls
 `Users.Create` with that email and verified flag; enabling sign-up without
 `Users.Create` is a construction error.
 
@@ -102,11 +102,11 @@ address without proving it, a provider identity with a verified matching email
 can claim that **unverified built-in account**. Without this rule, the earlier
 registrant could block the owner.
 
-In one database transaction, Access marks the address verified, deletes the old
+In one database transaction, IAM marks the address verified, deletes the old
 password and attached connections, authenticator, recovery codes, and tokens,
 rotates the credential version, and connects the owner's identity.
 Database failure rolls back that takeover. Rotation invalidates the earlier
-holder's sessions and pending logins; after commit, Access also attempts
+holder's sessions and pending logins; after commit, IAM also attempts
 best-effort removal of their cached login records.
 
 The takeover emits `federation.AccountClaimed` alongside `LinkCreated`.
@@ -124,7 +124,7 @@ or using pre-created unverified accounts.
 
 For application-owned credentials, register
 [`OnEmailProven`](own-users.md#additional-credentials) so a takeover or recovery
-also removes credentials Access does not know about. Automatic provider
+also removes credentials IAM does not know about. Automatic provider
 takeover is unavailable with a custom user store; it cannot assume that your
 login identifier is an email.
 
@@ -171,7 +171,7 @@ connection per issuer.
 ## List and Disconnect
 
 `GET /connections` needs a session and returns connection metadata:
-`id`, `issuer`, `created_at`, and `last_used_at`. Access stores no provider
+`id`, `issuer`, `created_at`, and `last_used_at`. IAM stores no provider
 email or profile data in the connection.
 
 `DELETE /connections/{id}` also needs a fresh proof and returns `204`.
@@ -187,8 +187,8 @@ Provider login does not replace a local step-up proof; see
 ## Native Login
 
 Google and Apple also support native ID-token login through their mobile SDKs.
-Access mounts nonce and native-login routes for clients implementing
-`access.NativeProvider`. The shared OAuth client has those methods for every
+IAM mounts nonce and native-login routes for clients implementing
+`iam.NativeProvider`. The shared OAuth client has those methods for every
 preset, but presets without native support return `oauthauth.ErrUnsupported`;
 route presence is not proof of support.
 
@@ -225,13 +225,13 @@ engine.AddInsecureBypassPattern("POST /auth/apple/callback")
 ```
 
 Pass that protection to `csrf` from
-`arkoren.dev/core/http/middleware/csrf` when mounting Access:
+`arkoren.dev/core/http/middleware/csrf` when mounting IAM:
 
 ```go
 web := routes.With(csrf.Middleware(func(protection *csrf.Builder) {
 	protection.Protection(engine)
-}), iam.Middleware())
-iam.Mount(web)
+}), identity.Middleware())
+identity.Mount(web)
 ```
 
 Use your client's actual name if it is not `apple`.
@@ -243,7 +243,7 @@ for the whole authentication area.
 
 Next, use [Sessions and Accounts](accounts.md) to manage the local access
 these login methods create, or apply this flow to
-[organization sign-in](organization-sign-in.md).
+[SSO](sso.md).
 
 For connections and resolver hooks, see the
-[`federation` API reference](https://pkg.go.dev/arkoren.dev/ark/access/federation).
+[`federation` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/federation).

@@ -1,7 +1,7 @@
 ---
 title: Fresh Logins
 description: Distinguish a session, a verified email, a fresh credential proof, and a new login before allowing sensitive actions.
-order: 50
+order: 70
 summary:
   - Understand the independent checks that protect credential changes.
   - Confirm a stale session with an enrolled method, or start a new login when confirmation cannot help.
@@ -12,7 +12,7 @@ summary:
 
 An authenticated session says who logged in, not whether the person holding
 the cookie can still prove that identity. Before issuing or changing
-credentials, Access therefore checks more than ordinary login. Understanding
+credentials, IAM therefore checks more than ordinary login. Understanding
 these checks lets your front end recover from a `403` without discarding a
 session unnecessarily.
 
@@ -36,7 +36,7 @@ needs permission to perform the requested business action.
 ## Renew a Proof
 
 A **step-up method** is a credential the user can present again without
-starting a new login. Access registers passwords (`pwd`), then authenticator
+starting a new login. IAM registers passwords (`pwd`), then authenticator
 codes (`otp`), when those features are enabled. Only methods the user has
 actually enrolled count.
 
@@ -61,9 +61,9 @@ To change the default freshness window, configure the guard during construction.
 This uses `auth` from `arkoren.dev/core/auth` and standard-library `time`:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher)
-	iam.Guard(func(policy *auth.GuardBuilder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher)
+	identity.Guard(func(policy *auth.GuardBuilder) {
 		policy.FreshFor(5 * time.Minute)
 	})
 })
@@ -126,7 +126,7 @@ start from the authenticated `web` router in
 [Overview](overview.md#mount-routes):
 
 ```go
-billing := web.With(auth.RequireSession(), iam.Guard().RequireFresh(5*time.Minute))
+billing := web.With(auth.RequireSession(), identity.Guard().RequireFresh(5*time.Minute))
 billing.Post("/billing", updateBilling)
 ```
 
@@ -138,7 +138,7 @@ If your operation requires a new login instead, check its age inside an
 authenticated session handler, before the sensitive work:
 
 ```go
-if err := iam.Guard().RecentLogin(r, 5*time.Minute); err != nil {
+if err := identity.Guard().RecentLogin(r, 5*time.Minute); err != nil {
 	return err
 }
 ```
@@ -160,7 +160,7 @@ claim cannot make it newer than the callback.
 
 This matters when an existing provider session approves sign-in silently.
 Microsoft can supply `auth_time` through an
-[optional ID-token claim](organization-sign-in.md#register-the-app).
+[optional ID-token claim](../oauth/providers.md#microsoft).
 Do not rely on Google always supplying it; GitHub's OAuth2 flow has no ID
 token. Review other OIDC providers' behavior before relying on their claims.
 
@@ -180,4 +180,4 @@ recovery codes.
 
 For freshness and session checks, see the
 [`auth` API](https://pkg.go.dev/arkoren.dev/core/auth) and the composed
-[`access` API](https://pkg.go.dev/arkoren.dev/ark/access).
+[`iam` API](https://pkg.go.dev/arkoren.dev/ark/iam).

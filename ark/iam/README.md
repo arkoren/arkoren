@@ -1,15 +1,17 @@
-# arkoren.dev/ark/access
+# arkoren.dev/ark/iam
+
+This module is not released; installation is pending.
 
 Login, optional registration, two-factor authentication, API tokens and social sign-in
 for an Arkoren application, as JSON routes on core's `auth.Guard`.
 
 The module has no third-party dependencies (core, foundation and the standard
 library) and never imports `arkoren.dev/ark/oauth`: a provider joins through the
-small `access.Provider` interface that `*oauthauth.Client` satisfies.
+small `iam.Provider` interface that `*oauthauth.Client` satisfies.
 
 | Package | Owns | Tables |
 | --- | --- | --- |
-| `access` | the facade: `New`, `Builder`, `Mount`, `Provider`, `Users` | none |
+| `iam` | the facade: `New`, `Builder`, `Mount`, `Provider`, `Users` | none |
 | `account` | users by email, signed email verification links, the user provider | `users` |
 | `password` | login, optional register, confirm, change, forgot and reset with signed links | `password_hashes` |
 | `twofactor` | TOTP and recovery codes | `totp_secrets`, `recovery_codes` |
@@ -21,47 +23,48 @@ The packages never import each other; only the root does. Table names take a
 migrations: the module never runs DDL.
 
 ```go
-// The client address keys the throttles: behind a proxy list its prefixes, and
-// with no proxy in front pass ratelimit.TrustedProxyKey() with none.
-clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
 scheme := totp.New("Acme") // the name authenticator apps show for this account
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher, func(passwords *password.Builder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher, func(passwords *password.Builder) {
 		passwords.Registration(true) // off by default: omit it when you add users yourself
 		passwords.Reset(signer, dispatchReset, deliverReset) // required with registration and the built-in users
 	})
-	iam.Directory(func(accounts *account.Builder) {
+	identity.Directory(func(accounts *account.Builder) {
 		accounts.Verification(signer, dispatchVerification, deliverVerification)
 	})
-	iam.TwoFactor(scheme, cipher)
-	iam.Tokens()
-	iam.Provider(google)
-	iam.Provider(github, func(login *access.ProviderBuilder) {
+	identity.TwoFactor(scheme, cipher)
+	identity.Tokens()
+	identity.Provider(google)
+	identity.Provider(github, func(login *iam.ProviderBuilder) {
 		login.SignUp(true) // off by default, set per provider
 	})
 })
 if err != nil {
 	return err
 }
-if err := migrator.Add(iam.Migrations()...); err != nil {
+if err := migrator.Add(identity.Migrations()...); err != nil {
 	return err
 }
-web := routes.With(iam.Middleware())
-iam.Mount(web)
+web := routes.With(csrf.Middleware(), identity.Middleware())
+identity.Mount(web)
 ```
+
+IAM uses the direct request peer by default. Behind a trusted proxy, configure
+`Builder.ClientIP` using the [Client Addresses guide](../../cmd/arkoren/skills/arkoren/references/guides/http-networking/client-addresses.md).
+The routes above require CSRF protection; the example uses core `csrf.Middleware`.
 
 Reset and verification links are signed values from core's `link.Signer`, bound to
 the password hash or the email state, so the module keeps no token tables and
 starts no goroutine. `dispatch` stores the work in your queue or workflow, and a
-worker runs `iam.SendReset` or `iam.SendVerification`, which call your `deliver`
+worker runs `identity.SendReset` or `identity.SendVerification`, which call your `deliver`
 function to send the email. Without them the forgot-password, reset and
 verification routes are not mounted.
 
 Device tokens that nobody uses, expired tokens and tokens that a password reset
-ended stay in the table until you prune them. `iam.Prune` has the shape of a scheduled function; run it daily:
+ended stay in the table until you prune them. `identity.Prune` has the shape of a scheduled function; run it daily:
 
 ```go
-schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {
+schedule.NewEntry("access-prune", identity.Prune, func(entry *schedule.EntryBuilder) {
 	entry.When(schedule.UTC().Hour(3))
 })
 ```
@@ -74,12 +77,12 @@ sign-up and creation settings; `Password`, `TwoFactor` and `Tokens` replace thei
 earlier call. A provider login whose email the provider verified takes over an
 unverified account and publishes `federation.AccountClaimed`; a first provider
 sign-up needs a proven email. A reset does not purge the connections of a verified
-user, so review them after one. Read the [Access guide](../../cmd/arkoren/skills/arkoren/references/guides/access/overview.md)
+user, so review them after one. Read the [IAM guide](../../cmd/arkoren/skills/arkoren/references/guides/iam/overview.md)
 for the route table, the responses and the security rules, and the API on
-[pkg.go.dev](https://pkg.go.dev/arkoren.dev/ark/access).
+[pkg.go.dev](https://pkg.go.dev/arkoren.dev/ark/iam).
 
 ## Tests
 
-`go test -short ./...` runs on in-memory SQLite. `make integration MODULE=ark/access`
+`go test -short ./...` runs on in-memory SQLite. `make integration MODULE=ark/iam`
 starts PostgreSQL and MySQL with Compose and runs every test on all three
 databases, including two instances sharing one database.

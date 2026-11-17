@@ -11,8 +11,8 @@ summary:
 # API Tokens
 
 > [!NOTE]
-> The [Access](../access/overview.md) ark issues, stores, scopes and revokes these tokens
-> for you: see [Access Tokens](../access/tokens.md). This page shows the bearer
+> The [IAM](../iam/overview.md) ark issues, stores, scopes and revokes these tokens
+> for you: see [IAM Tokens](../iam/tokens.md). This page shows the bearer
 > seam you use for credentials of your own.
 
 A program authenticates by sending a secret token with each request, rather

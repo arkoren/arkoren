@@ -494,16 +494,17 @@ delivery, and lifecycle protocols explicit.
   ID token after NonceHandler, and guard.LogoutHandler() owns the logout route;
   a second factor redirects to ClientBuilder.ChallengeURL or fails with
   ErrNoChallengeURL.
-  ark/access composes the guard, the packages and the routes: `access.New(db, store, clientIP,
-  func(iam *access.Builder) { ... })` (variable `iam`, builder `iam`), `iam.Mount(web)`
-  and `iam.XHandler()` for custom paths. Registration (`password.Builder.Registration`) and
-  sign-up on a first provider login (`access.ProviderBuilder.SignUp`, set per `iam.Provider(provider, configure...)` call) are off by default; the
+  ark/iam composes the guard, the packages and the routes: `iam.New(db, store,
+  func(identity *iam.Builder) { ... })` (variable `identity`, builder `identity`), `identity.Mount(web)`
+  and `identity.XHandler()` for custom paths. `Builder.ClientIP` optionally
+  overrides the direct-peer address for trusted proxy deployments. Registration (`password.Builder.Registration`) and
+  sign-up on a first provider login (`iam.ProviderBuilder.SignUp`, set per `identity.Provider(provider, configure...)` call) are off by default; the
   token scope catalog comes with its grant ceiling (`apitoken.Builder.Grants(grantable,
   scopes...)`, `GrantTTL`, `AnyScope`) and `apitoken.NewIssuer(provider, db, store, ...)`
   takes the shared cache. Its packages (account, password, twofactor,
   apitoken, federation) take a `*auth.UserProvider` and never import each other;
   their handlers take `*auth.Guard`, require `Identity.Session()` and call
-  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `iam.SendReset` or `iam.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use.
+  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
   preserve the first definition error; nil conversion is a domain error, not

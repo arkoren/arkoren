@@ -17,23 +17,23 @@ after the [email-link flow](email-links.md) can recover an address registered
 by someone who does not own it.
 
 Provider sign-up is a separate, per-provider choice on
-[Connections](connections.md#first-time-sign-in); enabling one does not enable
+[Federated Sign-In](federated-sign-in.md#first-time-sign-in); enabling one does not enable
 the other.
 
 ## Open Sign-Up
 
 With the built-in users, `Registration(true)` requires password `Reset`;
-otherwise `access.New` returns `access.ErrInvalidConfig`. Configure email
+otherwise `iam.New` returns `iam.ErrInvalidConfig`. Configure email
 verification too so new users can prove their addresses and existing owners
 receive a recovery notice. Reuse the signer and callbacks from Email Links:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher, func(passwords *password.Builder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher, func(passwords *password.Builder) {
 		passwords.Reset(signer, dispatchReset, deliverReset)
 		passwords.Registration(true)
 	})
-	iam.Directory(func(accounts *account.Builder) {
+	identity.Directory(func(accounts *account.Builder) {
 		accounts.Verification(signer, dispatchVerification, deliverVerification)
 	})
 })
@@ -53,7 +53,7 @@ To request an account, send `POST /register` as JSON:
 }
 ```
 
-For a new address, Access creates an unverified user and stores the password in
+For a new address, IAM creates an unverified user and stores the password in
 one database transaction. Success is an empty `202`, **not** a session:
 the client still calls [password login](passwords.md#log-in).
 
@@ -87,7 +87,7 @@ stays `202`. Unlike an explicit forgot-password request, this response must not
 distinguish the new-address branch from the taken-address branch.
 Provide a resend-verification or forgot-password action if mail does not arrive.
 
-With [your own users](own-users.md), `Users.Create` is required and Access does
+With [your own users](own-users.md), `Users.Create` is required and IAM does
 not dispatch these registration emails automatically. Your application owns
 verification and equivalent owner notices.
 
@@ -119,4 +119,4 @@ Before adding more credentials, read [Fresh Logins](freshness.md) to understand
 why an authenticated session alone cannot change them.
 
 For registration settings and hooks, see the
-[`password` API reference](https://pkg.go.dev/arkoren.dev/ark/access/password).
+[`password` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/password).

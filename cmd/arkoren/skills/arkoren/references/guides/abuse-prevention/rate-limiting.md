@@ -79,6 +79,8 @@ headers. People behind one public address share a budget, so choose limits with
 that grouping in mind.
 
 Behind a reverse proxy, configure only networks belonging to trusted proxies.
+See [Client Addresses](../http-networking/client-addresses.md) for the
+deployment trust boundary and the distinction between an address and a bucket.
 With `net/netip` imported, this alternative policy uses the example proxy subnet;
 replace it with your actual deployment's trust boundary:
 

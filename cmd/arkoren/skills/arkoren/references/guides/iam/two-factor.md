@@ -1,7 +1,7 @@
 ---
 title: Two-Factor
 description: Enroll an authenticator, finish a pending login, and recover from a lost device without weakening the account through an old session.
-order: 60
+order: 80
 summary:
   - Enable TOTP with an encryption key and activate enrollment with the first code.
   - Complete login challenges with an authenticator or a single-use recovery code.
@@ -11,11 +11,11 @@ summary:
 # Two-Factor
 
 An authenticator adds a possession proof when a password is stolen.
-Access supports time-based one-time passwords (**TOTP**) and recovery codes
+IAM supports time-based one-time passwords (**TOTP**) and recovery codes
 for a lost device. A user enrolls once, then completes a second-factor
 challenge during later logins.
 
-This page assumes [mounted Access routes](overview.md#mount-routes).
+This page assumes [mounted IAM routes](overview.md#mount-routes).
 Enrollment requires a verified email, a session, and a
 [fresh login](freshness.md); a bearer token cannot enroll credentials.
 
@@ -36,13 +36,13 @@ different parameters.
 Enable the feature alongside your existing login method:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Password(hasher)
-	iam.TwoFactor(scheme, cipher)
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Password(hasher)
+	identity.TwoFactor(scheme, cipher)
 })
 ```
 
-An invalid scheme or nil cipher returns `access.ErrInvalidConfig`.
+An invalid scheme or nil cipher returns `iam.ErrInvalidConfig`.
 Apply the newly enabled feature's migrations before serving its routes.
 Each user can enroll one authenticator.
 
@@ -153,11 +153,11 @@ confirm, normally `["otp"]`.
 
 If you shorten the guard's freshness window, consider the separate
 second-factor management window too. Import `twofactor` from
-`arkoren.dev/ark/access/twofactor` and configure it during construction:
+`arkoren.dev/ark/iam/twofactor` and configure it during construction:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.TwoFactor(scheme, cipher, func(factors *twofactor.Builder) {
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.TwoFactor(scheme, cipher, func(factors *twofactor.Builder) {
 		factors.StepUpWindow(5 * time.Minute)
 	})
 })
@@ -165,12 +165,12 @@ iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 
 This fragment shows that setting only; retain your login features in the
 application's actual constructor. Read account-page state through
-`iam.Factors().Status(ctx, subject)`.
+`identity.Factors().Status(ctx, subject)`.
 
 ## Keep Secrets Usable
 
 When rotating encryption keys, retain previous decryption keys in the
-[encrypter configuration](../encryption/keys.md). Access decrypts old secrets
+[encrypter configuration](../encryption/keys.md). IAM decrypts old secrets
 with those keys and re-encrypts them with the current key on their next use.
 Removing an old key before its secrets have moved makes those authenticators
 unusable.
@@ -183,4 +183,4 @@ Next, use [API Tokens](tokens.md) for scripts or first-party mobile clients
 without giving them account-management powers.
 
 For enrollment, recovery, and configuration, see the
-[`twofactor` API reference](https://pkg.go.dev/arkoren.dev/ark/access/twofactor).
+[`twofactor` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/twofactor).

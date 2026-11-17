@@ -1,6 +1,6 @@
 ---
 title: Your Own Users
-description: Connect an existing user store to Access while preserving credential versioning, email ownership checks, and transactional cleanup.
+description: Connect an existing user store to IAM while preserving credential versioning, email ownership checks, and transactional cleanup.
 order: 110
 summary:
   - Replace the built-in directory with a provider and only the adapters your enabled features need.
@@ -10,7 +10,7 @@ summary:
 
 # Your Own Users
 
-If your application already has users, Access does not need a second users
+If your application already has users, IAM does not need a second users
 table. Give it your provider and the operations it needs to use those users.
 Passwords, authenticators, tokens, and connections still store their data
 under the same stable subject strings.
@@ -27,7 +27,7 @@ For password login with users created elsewhere, provide the provider,
 identifier lookup, and version-rotation function:
 
 ```go
-users := access.Users{
+users := iam.Users{
 	Provider: provider,
 	Lookup:   lookup,
 	Rotate:   rotate,
@@ -50,16 +50,16 @@ transaction.
 Pass this value while enabling passwords:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.Users(users)
-	iam.Password(hasher)
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Users(users)
+	identity.Password(hasher)
 })
 ```
 
 With the usual `Mount`, this enables password login and change without
 registration or email recovery.
 You can configure `passwords.Reset` using the same
-[email-link handoff](email-links.md); Access then mails the address returned by
+[email-link handoff](email-links.md); IAM then mails the address returned by
 your lookup. Requests can use `identifier` instead of `email`.
 
 The minimal adapter above supplies no email-verification checks.
@@ -68,7 +68,7 @@ otherwise add the pair below before enabling credential enrollment.
 
 ## Verified Emails
 
-To preserve Access's built-in email protections, supply `Verified` and
+To preserve IAM's built-in email protections, supply `Verified` and
 `ProveEmail` together. `Verified` reads the current state:
 
 ```go
@@ -77,7 +77,7 @@ verified := func(ctx context.Context, subject string) (bool, error) {
 }
 ```
 
-Here `directory` is your application repository, not Access's built-in
+Here `directory` is your application repository, not IAM's built-in
 directory. A false result prevents provider connection, two-factor enrollment,
 and token creation with `403` `account:email-unverified`.
 
@@ -92,14 +92,14 @@ prove := func(ctx context.Context, subject string) (bool, error) {
 
 Implement that test-and-update atomically using the supplied transaction
 context. A completed password reset calls it because the mailbox has just
-been proved. If it returns true, Access purges connected identities,
+been proved. If it returns true, IAM purges connected identities,
 authenticator enrollment, recovery codes, and tokens that an earlier
 registrant might have attached. A failure rolls the reset's SQL writes back.
 
 Include the pair in the adapter:
 
 ```go
-users := access.Users{
+users := iam.Users{
 	Provider:   provider,
 	Lookup:     lookup,
 	Rotate:     rotate,
@@ -109,20 +109,20 @@ users := access.Users{
 ```
 
 Setting just one function is invalid.
-`iam.RequireVerified()` calls `Verified` on every request; without it, that
-middleware constructor panics. Without the pair, Access cannot gate enrollment
+`identity.RequireVerified()` calls `Verified` on every request; without it, that
+middleware constructor panics. Without the pair, IAM cannot gate enrollment
 or purge unverified credentials on reset; your application owns both rules.
 
 Your application also owns ordinary email-verification messages and UI.
-Access's `/email/verify` and `/email/verify/resend` routes are not mounted
+IAM's `/email/verify` and `/email/verify/resend` routes are not mounted
 with custom users, and requesting their handlers directly panics.
 
 ## Let Users Join
 
-If Access may request user creation, add `Create` to the adapter:
+If IAM may request user creation, add `Create` to the adapter:
 
 ```go
-users := access.Users{
+users := iam.Users{
 	Provider:   provider,
 	Lookup:     lookup,
 	Rotate:     rotate,
@@ -140,7 +140,7 @@ the resolver rejects unproved emails before creation.
 
 Creation must fail for an existing identifier, never return its subject.
 Otherwise an external identity could attach itself to another person's user.
-For a taken identifier, wrap `access.ErrIdentifierTaken` so registration can
+For a taken identifier, wrap `iam.ErrIdentifierTaken` so registration can
 return the same `202` as for a new account.
 Other errors reach the client; use safe problem values for public refusals.
 Creation and credential writes must use the same database transaction context.
@@ -150,20 +150,20 @@ created elsewhere. It does not open sign-up by itself:
 enable password `Registration(true)` or a provider's `login.SignUp(true)`
 explicitly. Either feature without `Create` makes `New` fail.
 
-With custom users, Access does not automatically send registration verification
+With custom users, IAM does not automatically send registration verification
 or taken-address notices. Supply your own `Registered` and `Taken` password
 hooks with comparable work on both branches. Hook failures are logged without
 changing the accepted registration response.
 
 Automatic provider takeover by matching an unverified email is built-in-directory
-behavior only. Your lookup may accept usernames or other identifiers, so Access
+behavior only. Your lookup may accept usernames or other identifiers, so IAM
 does not assume it can use the provider's email to find an existing account.
 
 ## Delete Your Users
 
 No built-in users table or `DELETE /account` route is supplied.
-`iam.Directory()` returns nil, `DeleteAccountHandler()` panics, and combining
-`iam.Users` with `iam.Directory` configuration makes construction fail.
+`identity.Directory()` returns nil, `DeleteAccountHandler()` panics, and combining
+`identity.Users` with `identity.Directory` configuration makes construction fail.
 The enabled credential stores and their migrations remain available.
 
 Inside your application's authorized deletion flow, forget credentials and
@@ -171,7 +171,7 @@ delete the user in one transaction:
 
 ```go
 err := db.WithTransaction(ctx, func(ctx context.Context) error {
-	if err := iam.UserProvider().Forget(ctx, subject); err != nil {
+	if err := identity.UserProvider().Forget(ctx, subject); err != nil {
 		return err
 	}
 
@@ -191,29 +191,29 @@ tables as bytewise text columns, not under a case-insensitive default collation.
 ## Additional Credentials
 
 If your application or another module supplies a credential, register it through
-Access's `SecondFactor` or `StepUp` builder methods. They append after the
+IAM's `SecondFactor` or `StepUp` builder methods. They append after the
 built-in methods. `Authenticator` similarly appends request authenticators
-after sessions and Access tokens.
+after sessions and IAM tokens.
 
 For example, with an application-provided `auth.Credential` named `credential`
 and a transactional removal function named `removeCredentials`:
 
 ```go
-iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
-	iam.SecondFactor(credential)
-	iam.StepUp(credential)
-	iam.OnEmailProven(removeCredentials)
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.SecondFactor(credential)
+	identity.StepUp(credential)
+	identity.OnEmailProven(removeCredentials)
 })
 ```
 
 This illustrates the extension points, not a shipped passkey implementation.
 Retain your user adapter and login features in the real constructor.
 Use the facade registration methods rather than putting credentials directly
-in `iam.Guard`: duplicate method names make construction fail.
-After construction, `iam.MustAccept(method)` can assert a required method
+in `identity.Guard`: duplicate method names make construction fail.
+After construction, `identity.MustAccept(method)` can assert a required method
 at startup; it panics if that method was not registered.
 
-`OnEmailProven` runs after Access's own purge inside a reset or provider takeover
+`OnEmailProven` runs after IAM's own purge inside a reset or provider takeover
 that proves an **unverified** mailbox. It does not run for an already verified
 account. Multiple hooks run in order, all are attempted, and their errors are
 joined; a failure rolls back the SQL transaction.
@@ -225,4 +225,4 @@ For exact route availability and custom mounting, use the [Routes](routes.md)
 reference.
 
 For adapter fields and extension hooks, see the
-[`access` API reference](https://pkg.go.dev/arkoren.dev/ark/access).
+[`iam` API reference](https://pkg.go.dev/arkoren.dev/ark/iam).
