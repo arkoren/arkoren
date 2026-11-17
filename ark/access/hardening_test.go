@@ -31,7 +31,7 @@ func TestVictimsVerifyClickDoesNotVerifyTheAttackersAccount(t *testing.T) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
 			iam.TwoFactor(totp.New("Example"), cipher(t))
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		register(t, sys.client, "victim@example.com")
 		subject, _, err := sys.iam.Directory().Lookup(ctx, "victim@example.com")
@@ -130,6 +130,37 @@ func TestOwnUsersNeedTheVerifiedHooks(t *testing.T) {
 			if !errors.Is(err, access.ErrInvalidConfig) {
 				t.Errorf("%s: New error = %v, want ErrInvalidConfig", name, err)
 			}
+		}
+	})
+}
+
+// TestOnEmailProvenCallsAddUp verifies two OnEmailProven calls both run, in the
+// order added, and that a nil hook clears nothing.
+func TestOnEmailProvenCallsAddUp(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		var calls []string
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher(), registration)
+			iam.OnEmailProven(func(context.Context, string) error {
+				calls = append(calls, "first")
+
+				return nil
+			})
+			iam.OnEmailProven(func(context.Context, string) error {
+				calls = append(calls, "second")
+
+				return nil
+			})
+			iam.OnEmailProven(nil)
+		})
+		register(t, sys.client, "ada@example.com")
+		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
+		token := sys.box.lastReset(t).Signed
+		sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
+		if strings.Join(calls, ",") != "first,second" {
+			t.Fatalf("OnEmailProven calls = %v, want first then second", calls)
 		}
 	})
 }

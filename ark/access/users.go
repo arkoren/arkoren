@@ -49,7 +49,7 @@ type Users struct {
 	// identifier is then the provider's email, possibly empty, and verified is
 	// [auth.External.EmailVerified]); its errors pass through to the client.
 	// Both are off by default: [password.Builder.Registration] and
-	// [federation.Builder.SignUp] must be enabled, and each makes [New] fail
+	// [ProviderBuilder.SignUp] must be enabled, and each makes [New] fail
 	// with [ErrInvalidConfig] when Create is nil.
 	// It must fail on an existing identifier and never return the existing
 	// user: connecting an identity to someone by email is how accounts get

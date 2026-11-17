@@ -497,7 +497,7 @@ delivery, and lifecycle protocols explicit.
   ark/access composes the guard, the packages and the routes: `access.New(db, store, clientIP,
   func(iam *access.Builder) { ... })` (variable `iam`, builder `iam`), `iam.Mount(web)`
   and `iam.XHandler()` for custom paths. Registration (`password.Builder.Registration`) and
-  sign-up on a first provider login (`federation.Builder.SignUp`) are off by default; the
+  sign-up on a first provider login (`access.ProviderBuilder.SignUp`, set per `iam.Provider(provider, configure...)` call) are off by default; the
   token scope catalog comes with its grant ceiling (`apitoken.Builder.Grants(grantable,
   scopes...)`, `GrantTTL`, `AnyScope`) and `apitoken.NewIssuer(provider, db, store, ...)`
   takes the shared cache. Its packages (account, password, twofactor,

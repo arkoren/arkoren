@@ -118,16 +118,22 @@ How much of this you get depends on the provider:
   all. Without it a silent approval counts as a login now. A user who signs in
   only with Google or GitHub has no password or authenticator on your side to
   confirm with, so the only way to be fresh again once the window passes is to
-  sign in again through the provider: send them to `GET /auth/google?fresh=1`. The `fresh=1` parameter asks an OIDC provider to
-  authenticate again instead of approving silently, and the request is recorded in
-  the login state; the provider is free to ignore it, and GitHub's OAuth2 flow has
+  sign in again through the provider: send them to `GET /auth/google?fresh=1`. The `fresh=1` parameter is only a hint:
+  it adds `prompt=login&max_age=0` to the request, which asks an OIDC provider to
+  authenticate again instead of approving silently, and it is recorded in the
+  login state. The provider is free to ignore it, and GitHub's OAuth2 flow has
   nothing to ask.
 - **Generic OIDC** providers are as good as their ID tokens. Check whether yours
   sends `auth_time`.
 
 Where a deliberate sign-in matters, such as handing out a device token, ask for a
-recent login rather than a fresh one: a silent re-login of an open session does
-not satisfy `RecentLogin`.
+recent login rather than a fresh one. `RecentLogin` checks when your application's
+own login was created, not when the user last authenticated at the provider: a
+silent re-login inside an already open session keeps the original login and does
+not extend the window, but a new login of your application that the provider
+approves silently creates a new one and passes. `RecentLogin` therefore proves
+that the user started a login on your side recently, not that they typed
+credentials.
 
 For every function and option, see
 [the `access` API reference](https://pkg.go.dev/arkoren.dev/ark/access).

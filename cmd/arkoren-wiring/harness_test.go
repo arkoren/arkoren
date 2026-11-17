@@ -21,7 +21,6 @@ import (
 
 	"arkoren.dev/ark/access"
 	"arkoren.dev/ark/access/account"
-	"arkoren.dev/ark/access/federation"
 	"arkoren.dev/ark/access/password"
 	"arkoren.dev/ark/oauth/oauthauth"
 	"arkoren.dev/core/auth"
@@ -273,13 +272,13 @@ func newCipher(t *testing.T) *crypto.Encrypter {
 func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
 	t.Helper()
 
-	return newSystemWith(t, true, configure...)
+	return newSystemWith(t, true, true, configure...)
 }
 
 // newSystemWith is [newSystem] with the built-in users table and its email
 // verification when builtIn is true, and without them for a test that brings its
-// own users.
-func newSystemWith(t *testing.T, builtIn bool, configure ...access.BuilderFunc) *system {
+// own users. signUp is the Google provider's ProviderBuilder.SignUp setting.
+func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...access.BuilderFunc) *system {
 	t.Helper()
 
 	driver, err := sqlite.New(":memory:")
@@ -329,7 +328,7 @@ func newSystemWith(t *testing.T, builtIn bool, configure ...access.BuilderFunc) 
 		}
 		iam.TwoFactor(totp.New("Example"), newCipher(t))
 		iam.Tokens()
-		iam.Provider(google).Federation(func(links *federation.Builder) { links.SignUp(true) })
+		iam.Provider(google, func(login *access.ProviderBuilder) { login.SignUp(signUp) })
 		iam.Session(func(cookies *session.Builder) { cookies.AllowInsecure(true) })
 	}}, configure...)...)
 	if err != nil {

@@ -75,8 +75,7 @@ type Links struct {
 	instance string
 	table    string
 	events   *event.Bus
-	signUp   bool
-	create   func(context.Context, auth.External) (string, error)
+	onboard  onboarding
 	fallback func(context.Context, string) (bool, error)
 	verified func(context.Context, string) (bool, error)
 	takeOver func(context.Context, auth.External) (string, error)
@@ -111,8 +110,7 @@ func NewLinks(provider *auth.UserProvider, db *database.Database, configure ...B
 		instance: settings.instance,
 		table:    storage.Table(settings.instance, "federation_links"),
 		events:   settings.events,
-		signUp:   settings.signUp,
-		create:   settings.create,
+		onboard:  onboarding{signUp: settings.signUp, create: settings.create},
 		fallback: settings.fallback,
 		verified: settings.verified,
 		takeOver: settings.takeOver,

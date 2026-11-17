@@ -93,7 +93,7 @@ type Access struct {
 	factors    *twofactor.Factors
 	issuer     *apitoken.Issuer
 	links      *federation.Links
-	providers  []Provider
+	providers  []mountedProvider
 	middleware router.Middleware
 	migrations []migrate.Definition
 	pingers    []func(context.Context) error
@@ -145,7 +145,8 @@ type Access struct {
 //		})
 //		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
-//		iam.Provider(google, github)
+//		iam.Provider(google)
+//		iam.Provider(github)
 //	})
 //	if err != nil {
 //		return err
@@ -168,7 +169,6 @@ func New(db *database.Database, store *cache.Cache, clientIP func(*http.Request)
 		db:           db,
 		store:        store,
 		clientIP:     clientIP,
-		providers:    slices.Clone(settings.providers),
 		emailProven:  settings.emailProven,
 		keepPersonal: settings.keepPersonal,
 	}
@@ -264,7 +264,13 @@ func (iam *Access) Links() *federation.Links {
 // Resolve is the [auth.Resolver] the facade gives to its providers: it maps a
 // verified external identity to a local subject through the connection store.
 // It is nil-safe to call only with [Builder.Provider]; without providers it
-// returns [federation.ErrNotLinked]. Use it to mount a provider by hand.
+// returns [federation.ErrNotLinked]. Use it to mount a provider by hand. It
+// never signs users up, because sign-up is a setting of each provider given to
+// [Builder.Provider]: a first login with an unknown identity is
+// [federation.ErrNoAccount] (the takeover of an unverified user still works).
+// For a hand-mounted provider that signs up, make its resolver with
+// [federation.Links.Resolver] on [Access.Links], which creates users with the
+// facade's own creation.
 //
 // Example:
 //

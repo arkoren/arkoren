@@ -37,8 +37,15 @@ Only the routes of enabled features are mounted. `r` must already run
 | Connections | `GET /connections`, `POST /connections/{provider}`, `DELETE /connections/{id}` | A provider |
 | Account | `DELETE /account` | Built-in users |
 
-Providers mount their routes whether or not sign-up with providers is on; sign-up
-only decides whether an unknown identity creates a user (`403` otherwise).
+Providers mount their routes whether or not sign-up is on for them; sign-up, which
+you set for each provider, only decides whether an unknown identity creates a user
+(`403` otherwise).
+
+`POST /connections/{provider}` is wrapped in the `application/json` check like the
+other `POST` routes and answers `303` to the provider's login route. A browser
+therefore connects a provider with `fetch` and the JSON content type, then
+navigates to `/auth/{provider}` itself; a plain HTML form gets `415`. See
+[Connections](connections.md#connecting-a-provider).
 
 A step-up method exists when passwords or two-factor are enabled, or when you add
 one with `iam.StepUp`. A second factor exists when two-factor is enabled or you
@@ -90,10 +97,10 @@ groups are:
 
 | Status | Meaning |
 | --- | --- |
-| 401 | No login, no pending login, or a credential route reached with a bearer token. |
-| 403 | Step-up needed (the problem lists the methods the user can confirm with), an unverified email, or a wrong account. |
+| 401 | No login, no pending login, or a credential route reached with a bearer token; also `federation:not-linked`. |
+| 403 | Step-up needed (the problem lists the methods the user can confirm with), `account:email-unverified`, a wrong account, `federation:no-account` (an unknown provider identity with sign-up off), `federation:email-unverified` (a sign-up without a proven email) or `apitoken:scope-not-granted`. |
 | 404 | An unknown token, connection or provider. |
-| 409 | A conflict: two-factor already on, the last way to log in. |
+| 409 | A conflict: two-factor already on, the last way to log in, `account:email-taken`, `federation:linked-elsewhere` or `federation:already-linked`. |
 | 422 | A wrong secret or invalid input, such as a wrong password or a weak one. |
 | 429 | Throttled, with `Retry-After` in seconds. |
 
@@ -147,6 +154,20 @@ web.Get("/sso/google/callback", google.CallbackHandler(iam.Guard(), iam.Resolve)
 web.Post("/connections/{provider}", iam.Links().ConnectHandler(iam.Guard(), map[string]string{
 	"google": "/sso/google",
 }))
+```
+
+`iam.Resolve` maps identities through the connection store without ever signing a
+user up. For a hand-mounted provider that should, make its resolver with
+`iam.Links().Resolver`; `federation` is `arkoren.dev/ark/access/federation`:
+
+```go
+resolve, err := iam.Links().Resolver(func(resolver *federation.ResolverBuilder) {
+	resolver.SignUp(true)
+})
+if err != nil {
+	return err
+}
+web.Get("/sso/google/callback", google.CallbackHandler(iam.Guard(), resolve))
 ```
 
 `Mount` skips a route whose requirement is missing instead of panicking: no

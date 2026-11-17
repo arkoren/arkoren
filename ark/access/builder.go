@@ -15,7 +15,7 @@ import (
 
 	"arkoren.dev/ark/access/account"
 	"arkoren.dev/ark/access/apitoken"
-	"arkoren.dev/ark/access/federation"
+	"arkoren.dev/ark/access/internal/web"
 	"arkoren.dev/ark/access/password"
 	"arkoren.dev/ark/access/twofactor"
 )
@@ -23,10 +23,18 @@ import (
 // Builder configures [New] before publication. Each feature is off until its
 // method is called, and so are the two ways new users appear on their own:
 // self-service registration ([password.Builder.Registration]) and sign-up with a
-// provider ([federation.Builder.SignUp]). Until one is enabled the application
-// adds users itself, through [Access.Directory] or its own users. Callbacks run directly once, in order, on one fresh draft;
-// methods return the same draft, and retaining it cannot change a published
-// [Access].
+// provider ([ProviderBuilder.SignUp]). Until one is enabled the application
+// adds users itself, through [Access.Directory] or its own users. Callbacks run
+// directly once, in order, on one fresh draft; methods return the same draft,
+// and retaining it cannot change a published [Access].
+//
+// Settings that hold hooks and lists add up across calls ([Builder.OnEmailProven],
+// [Builder.Directory], [Builder.Provider], [Builder.SecondFactor],
+// [Builder.StepUp], [Builder.Authenticator], [Builder.Guard] and
+// [Builder.Session]); a nil hook never clears an earlier one. [Builder.Password],
+// [Builder.TwoFactor] and [Builder.Tokens] replace their earlier call
+// as a whole instead, so the last call is the complete configuration of that
+// feature.
 //
 // Example:
 //
@@ -37,7 +45,10 @@ import (
 //		})
 //		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
-//		iam.Provider(google, github)
+//		iam.Provider(google)
+//		iam.Provider(github, func(login *access.ProviderBuilder) {
+//			login.SignUp(true)
+//		})
 //	})
 type Builder struct {
 	instance        string
@@ -53,8 +64,7 @@ type Builder struct {
 	twofactor       []twofactor.BuilderFunc
 	tokens          bool
 	apitoken        []apitoken.BuilderFunc
-	providers       []Provider
-	federation      []federation.BuilderFunc
+	providers       []providerSetup
 	secondFactor    []auth.Credential
 	stepUp          []auth.Credential
 	authenticators  []auth.Authenticator
@@ -141,7 +151,9 @@ func (iam *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 // hasher. Registration and forgotten-password recovery are not part of it:
 // enable them with [password.Builder.Registration] and [password.Builder.Reset]
 // in configure (the facade then mounts the forgot and reset routes), or add
-// users some other way (see [Access.Directory]). configure customizes the
+// users some other way (see [Access.Directory]). Later calls replace the earlier
+// one: the last hasher and the last configure callbacks are all that count, so
+// compose the settings into one call. configure customizes the
 // password package (the policy, the reset lifetime, registration); the facade has already set the
 // instance, the events and the client address. While a user is in a second-factor lockout
 // ([auth.Guard.LockedOut]), a correct password of that user is not refunded by
@@ -165,7 +177,8 @@ func (iam *Builder) Password(hasher *hash.Hasher, configure ...password.BuilderF
 // TOTP parameters and the issuer, the service name authenticator apps show (see
 // [totp.New]); an invalid scheme, or a nil cipher, makes [New] fail with
 // [ErrInvalidConfig]. cipher encrypts the secrets (use a key reserved for them).
-// configure customizes the twofactor package.
+// configure customizes the twofactor package. Later calls replace the earlier
+// one: the last scheme, cipher and configure callbacks are all that count.
 //
 // Example:
 //
@@ -184,7 +197,8 @@ func (iam *Builder) TwoFactor(scheme totp.Scheme, cipher *crypto.Encrypter, conf
 // scope catalog and the grant ceiling ([apitoken.Builder.Grants]), the kinds
 // ([apitoken.Builder.PersonalTokens], [apitoken.Builder.DeviceTokens]), the
 // prefix and the lifetime cap of the apitoken package. Without a catalog tokens
-// carry no scopes.
+// carry no scopes. Later calls replace the earlier one: only the configure
+// callbacks of the last call count.
 //
 // Example:
 //
@@ -217,7 +231,7 @@ func (iam *Builder) KeepPersonalTokens() *Builder {
 	return iam
 }
 
-// OnEmailProven sets a function that runs when a completed password reset, or a
+// OnEmailProven adds a function that runs when a completed password reset, or a
 // provider login that verified the email of an unverified user and took the
 // account over, proved the mailbox of a user whose email was not verified. It
 // runs in that transaction and after the built-in purge of connections,
@@ -225,48 +239,39 @@ func (iam *Builder) KeepPersonalTokens() *Builder {
 // registered through [Builder.SecondFactor] or [Builder.StepUp] (passkeys, say)
 // may have attached in the meantime; the facade cannot know of them. An error
 // rolls the reset or the login back. It does not run when the email was already verified.
+// Calls add up: the functions run in the order added, all of them even when one
+// fails (the errors are joined), and a nil hook changes nothing.
 //
 // Example:
 //
 //	iam.OnEmailProven(passkeys.RemoveAll)
 func (iam *Builder) OnEmailProven(hook func(ctx context.Context, subject string) error) *Builder {
-	iam.emailProven = hook
+	iam.emailProven = web.Then(iam.emailProven, hook)
 
 	return iam
 }
 
-// Provider adds external identity providers. Each is mounted under its
-// [Provider.Name], and the facade maps their verified identities to users with
-// the connection store ([federation.Links.Resolve]), so the application writes
-// no resolve function. Names must be unique; [New] rejects duplicates.
+// Provider adds an external identity provider and its settings. It is mounted
+// under its [Provider.Name], and the facade maps its verified identities to
+// users with the one connection store the providers share
+// (`federation.Links`), so the application writes no resolve function. Configure
+// each provider in its own call, with callbacks that run directly once, in order,
+// on one fresh [ProviderBuilder]; a name used by two calls makes [New] fail with
+// [ErrInvalidConfig]. By default a provider only logs in people the application
+// already has: see [ProviderBuilder.SignUp].
 //
 // Example:
 //
-//	iam.Provider(google, github)
-func (iam *Builder) Provider(providers ...Provider) *Builder {
-	iam.providers = append(iam.providers, providers...)
-
-	return iam
-}
-
-// Federation configures the connection store that [Builder.Provider] enables,
-// most importantly [federation.Builder.SignUp], which lets a first login with an
-// unknown identity create a user (off by default). The callbacks run after the
-// facade's own settings (the instance, the events, the verified-email gate, the
-// fallback check, the takeover), which they should leave alone. The setters that
-// take a function add to the facade's instead of replacing them, so a callback
-// cannot drop its checks; see [federation.Builder.Create] for the one chain where
-// the application's function goes first. SignUp(true) needs users that can be
-// created ([Users.Create], always true for the built-in users); without them
-// [New] fails with [ErrInvalidConfig]. It has no effect without providers.
-//
-// Example:
-//
-//	iam.Federation(func(links *federation.Builder) {
-//		links.SignUp(true)
+//	iam.Provider(google)
+//	iam.Provider(entra, func(login *access.ProviderBuilder) {
+//		login.SignUp(true)
 //	})
-func (iam *Builder) Federation(configure ...federation.BuilderFunc) *Builder {
-	iam.federation = append(iam.federation, configure...)
+func (iam *Builder) Provider(provider Provider, configure ...ProviderBuilderFunc) *Builder {
+	settings := ProviderBuilder{}
+	for _, apply := range configure {
+		apply(&settings)
+	}
+	iam.providers = append(iam.providers, providerSetup{provider: provider, settings: settings})
 
 	return iam
 }
@@ -368,7 +373,7 @@ func (iam *Builder) SessionLifetime(lifetime time.Duration) *Builder {
 // order: the providers, the application's users and directory settings, the
 // two-factor cipher, the session lifetime.
 func (iam *Builder) validate() error {
-	if err := validateProviders(iam.providers); err != nil {
+	if err := validateProviders(iam.providers, iam.users == nil || iam.users.Create != nil); err != nil {
 		return err
 	}
 	if iam.users != nil {

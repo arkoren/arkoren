@@ -64,13 +64,12 @@ get taken over. For an identifier in use, return an error wrapping
 instead of revealing the account. The application proves emails itself with your own
 users, so the facade dispatches no email on registration; add a
 `passwords.Taken` hook to tell the owner. Leave it nil when users are created elsewhere. Then registration
-and creating users from a provider login are unavailable: `Registration(true)` and
-`SignUp(true)` make `New` fail with `access.ErrInvalidConfig`.
+and creating users from a provider login are unavailable: X`SignUp(true)` make `New` fail with `access.ErrInvalidConfig`.
 
 > [!NOTE]
 > Registration and provider sign-up are off by default, so `Create` serves them
-> only when you enable them with `passwords.Registration(true)` and
-> `links.SignUp(true)`. Without `Create` the other password routes still mount, an
+> only when you enable them with `passwords.Registration(true)` and a provider's
+> `login.SignUp(true)`. Without `Create` the other password routes still mount, an
 > unknown provider identity is refused with `403`, and users are created
 > elsewhere.
 
@@ -92,7 +91,7 @@ prove := func(ctx context.Context, subject string) (bool, error) {
 ```
 
 `Verified` gates the connect, two-factor setup and token routes with `403`
-`email-unverified`, and it is what `iam.RequireVerified()` asks on every request:
+`account:email-unverified`, and it is what `iam.RequireVerified()` asks on every request:
 without `Users.Verified` that method panics at composition. `ProveEmail` runs inside a completed password reset because the
 link reached the mailbox. If it reports that the email was unverified, the facade
 deletes the user's connections, authenticator, recovery codes and tokens, and an

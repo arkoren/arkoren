@@ -73,7 +73,9 @@ func (links *Builder) Events(bus *event.Bus) *Builder {
 // connecting a provider, never need it. With true, a first login must carry an
 // email the provider proved ([auth.External.EmailVerified] and a nonempty email),
 // or it fails with [ErrEmailUnverified] (403) and creates nothing. [NewLinks] fails with
-// [ErrInvalidConfig] when it is true and no [Builder.Create] is set.
+// [ErrInvalidConfig] when it is true and no [Builder.Create] is set. It is the
+// default of [Links.Resolve] and of every [Links.Resolver], which can override it
+// per provider with [ResolverBuilder.SignUp].
 //
 // Example:
 //
