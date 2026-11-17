@@ -16,6 +16,9 @@ that peer may be the proxy rather than the user. The `clientip` package from
 `func(*http.Request) string` so request-handling code can resolve an address
 without trusting arbitrary headers.
 
+Use a core release that includes `http/clientip`. IAM does not require that
+release itself; applications choose their own resolver and core version.
+
 These functions return addresses, not rate-limit buckets. In particular they
 do not group IPv6 addresses by `/64`. Use the
 [rate-limiting guide](../abuse-prevention/rate-limiting.md) for bucket policy.
