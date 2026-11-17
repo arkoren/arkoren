@@ -400,7 +400,8 @@ func (verifier *Verifier) Has(ctx context.Context, subject string) (bool, error)
 // Check verifies password against the stored hash of subject and returns
 // [ErrInvalidCredentials] for a wrong password or a user without one, doing the
 // same work for both. A successful check upgrades the stored hash when the
-// hasher says it is outdated.
+// hasher says it is outdated and it has not since changed or been removed.
+// Rehashing is best effort and never overwrites a concurrent credential change.
 //
 // Example:
 //
@@ -426,11 +427,24 @@ func (verifier *Verifier) Check(ctx context.Context, subject, password string) e
 	}
 	if verifier.hasher.NeedsRehash(stored) {
 		// Upgrading is an optimization: the login already succeeded and the
-		// next one retries it.
-		_ = verifier.save(ctx, subject, password)
+		// next one retries it. Match the verified hash so a reset, replacement
+		// or removal that committed meanwhile always wins.
+		_ = verifier.rehash(ctx, subject, password, stored)
 	}
 
 	return nil
+}
+
+// rehash upgrades only the hash that Check verified. An obsolete check must
+// neither overwrite a replacement password nor recreate a removed credential.
+func (verifier *Verifier) rehash(ctx context.Context, subject, password string, stored []byte) error {
+	encoded, err := verifier.encode(password)
+	if err != nil {
+		return err
+	}
+	_, err = verifier.swapHash(ctx, subject, stored, true, encoded)
+
+	return err
 }
 
 // burn spends the time of one hash comparison so an unknown user or a user
