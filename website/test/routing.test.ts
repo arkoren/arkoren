@@ -126,6 +126,35 @@ test("retired API exports lead to discovery and testing concepts lead to guides"
   assert.match(testing, /content="0;url=\/docs\/guides\/testing\/overview"/);
 });
 
+test("former access guides redirect directly to IAM HTML and Markdown guides", () => {
+  const moved = {
+    overview: "overview",
+    passwords: "passwords",
+    "email-links": "email-links",
+    registration: "registration",
+    connections: "federated-sign-in",
+    "organization-sign-in": "sso",
+    freshness: "freshness",
+    "two-factor": "two-factor",
+    tokens: "tokens",
+    accounts: "accounts",
+    "own-users": "own-users",
+    routes: "routes",
+  };
+  for (const [oldName, newName] of Object.entries(moved)) {
+    for (const extension of ["", ".md"]) {
+      const html = readFileSync(
+        new URL(`../dist/docs/guides/access/${oldName}${extension}.html`, import.meta.url),
+        "utf8",
+      );
+      assert.ok(
+        html.includes(`content="0;url=/docs/guides/iam/${newName}${extension}"`),
+        `${oldName}${extension}`,
+      );
+    }
+  }
+});
+
 test("former HTTP fundamentals routes retain HTML and Markdown redirects", () => {
   const html = readFileSync(
     new URL("../dist/docs/guides/http/routing.html", import.meta.url),

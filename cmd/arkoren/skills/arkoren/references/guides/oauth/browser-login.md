@@ -57,11 +57,11 @@ old session ID was retired.
 ## Link Local Accounts
 
 > [!NOTE]
-> With the [Access](../access/overview.md) ark you write no mapper:
+> With the [IAM](../iam/overview.md) ark you write no mapper:
 > `iam.Provider(client)` mounts these routes and maps identities through its
 > connection store, with connect and disconnect, never linking by email. It also
 > sets whether a first login may create a user, for each provider separately. See
-> [Access Connections](../access/connections.md). The rest of this section shows
+> [Federated Sign-In](../iam/federated-sign-in.md). The rest of this section shows
 > how to write the mapper yourself.
 
 Identify an external account by the pair `Issuer` and `Subject`, not by email

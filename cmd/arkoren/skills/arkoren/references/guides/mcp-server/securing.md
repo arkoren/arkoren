@@ -46,7 +46,7 @@ that proxy. A private proxy address alone does not make client headers trusted.
 
 ## Typed Authentication
 
-Use your existing [bearer verifier](../access/tokens.md) to resolve
+Use your existing [bearer verifier](../iam/tokens.md) to resolve
 the application's user, not merely decode claims. Assume `User` is your user
 type and `verifyAccessToken` has signature
 `func(context.Context, string) (auth.Identity, error)`. It attaches the `User`

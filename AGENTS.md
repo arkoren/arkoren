@@ -7,15 +7,15 @@ and no root module. `core/` is `arkoren.dev/core`: application lifecycle,
 implement a `core/service` contract and run its conformance suite; `ark/<name>`
 holds every other opt-in module on core that ships behaviour: protocol modules
 and features, with extra duties for those that own tables (currently
-`ark/access`, `ark/mcp` and `ark/oauth`);
+`ark/iam`, `ark/mcp` and `ark/oauth`);
 `foundation/<name>` holds stdlib-only libraries. `cmd/arkoren` is the consumer
 CLI; `cmd/arkoren-ci` is a separate stdlib-only development command, never a
 release or consumer dependency. `cmd/arkoren-wiring` is a development-only
-module that requires `ark/access` and `ark/oauth` and tests them together
+module that requires `ark/iam` and `ark/oauth` and tests them together
 (they never import each other); it is never released. `scripts/` holds workflow fixtures. The committed
 `go.work` joins imported and explicit development modules. Module
 manifests declare real dependency versions, with no local `replace` directives
-(the one exception is `cmd/arkoren-wiring`, which replaces `ark/access` with the
+(the one exception is `cmd/arkoren-wiring`, which replaces `ark/iam` with the
 checkout until its first tag exists); `GOWORK=off` checks remain the
 independent-module authority.
 
@@ -103,7 +103,7 @@ directories (once published, never again: they must be absent from disk and from
 both creation rulesets, and keep only their bootstrap `v0.1.0` tag). CI discovers all canonical
 filesystem modules, including ignored local ones (currently 48 modules and 16
 integrations); release preparation validates only the exact committed public set
-(45; `ark/access` stays development-only until its first release). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
+(45; `ark/iam` stays development-only until its first release). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
 The Go command owns inventory, release plans, exact-SHA evidence, publication,
 notes-PR ownership and administrative policy checks. Native gh owns auto-merge
 and prerelease creation; website TypeScript owns Markdown import/validation.

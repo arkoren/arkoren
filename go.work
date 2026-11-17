@@ -1,7 +1,7 @@
 go 1.27
 
 use (
-	./ark/access
+	./ark/iam
 	./ark/mcp
 	./ark/oauth
 	./cmd/arkoren

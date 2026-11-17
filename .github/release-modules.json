@@ -47,6 +47,6 @@
     "foundation/totp",
     "foundation/validate"
   ],
-  "development": ["ark/access", "cmd/arkoren-ci", "cmd/arkoren-wiring"],
+  "development": ["ark/iam", "cmd/arkoren-ci", "cmd/arkoren-wiring"],
   "retired": ["driver/mcp", "driver/oauth"]
 }

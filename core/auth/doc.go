@@ -108,7 +108,7 @@
 // under the limit; a successful challenge or [Guard.Unlock] resets it. A lockout
 // also blocks step-up and can be chained by anyone who knows the password.
 // [SecondFactorLocked] reports each lockout; the application must subscribe and
-// count it as a failure in its login throttle (ark/access does not yet). A logged-in user proves themselves again
+// count it as a failure in its login throttle (ark/iam does not yet). A logged-in user proves themselves again
 // with [Guard.ConfirmHandler], the same route shape over the methods registered
 // with [GuardBuilder.StepUp]; it requires a browser session ([Identity.Session]).
 // Modules that need their method accepted call [Guard.MustAccept] at composition.
@@ -288,7 +288,7 @@
 //
 // The arkoren.dev/ark/oauth/oauthauth package logs users in through
 // [Guard.Begin] with a federated factor and verifies OIDC bearer tokens; auth
-// does not import it. The federation package of arkoren.dev/ark/access maps
+// does not import it. The federation package of arkoren.dev/ark/iam maps
 // external identities to local subjects.
 //
 // # Subjects

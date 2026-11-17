@@ -11,8 +11,8 @@ summary:
 # Two-Factor Login
 
 > [!NOTE]
-> The [Access](../access/overview.md) ark ships this flow, with TOTP, recovery codes and
-> their routes: see [Access Two-Factor](../access/two-factor.md). This page explains
+> The [IAM](../iam/overview.md) ark ships this flow, with TOTP, recovery codes and
+> their routes: see [IAM Two-Factor](../iam/two-factor.md). This page explains
 > the guard seams it is built on, which you use directly for other factors.
 
 A password alone may not be enough to sign someone in, or to let them delete an

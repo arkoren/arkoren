@@ -183,12 +183,12 @@ grep -Fxq 'modules=["cmd/arkoren","cmd/arkoren-ci","cmd/arkoren-wiring","core","
   || fail 'the wiring module was not included'
 
 fixture 'held-back ark is a development module and stays in CI'
-jq '.development += ["ark/access"]' .github/release-modules.json > "$scratch/policy"
+jq '.development += ["ark/iam"]' .github/release-modules.json > "$scratch/policy"
 mv "$scratch/policy" .github/release-modules.json
-mkdir -p ark/access
-printf 'module fixture\n' > ark/access/go.mod
+mkdir -p ark/iam
+printf 'module fixture\n' > ark/iam/go.mod
 run_inventory
-grep -Fxq 'modules=["ark/access","cmd/arkoren","cmd/arkoren-ci","core","driver/z","foundation/a"]' "$scratch/output" \
+grep -Fxq 'modules=["ark/iam","cmd/arkoren","cmd/arkoren-ci","core","driver/z","foundation/a"]' "$scratch/output" \
   || fail 'the held-back ark was not included once'
 
 fixture 'unknown command needs explicit policy review'

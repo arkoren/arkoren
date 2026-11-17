@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/iam"
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/auth/memoryauth"
 )
@@ -145,18 +145,18 @@ func TestOwnUsersThroughAccessUsers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
-	sys := newSystemWith(t, false, true, func(iam *access.Builder) {
-		iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
+	sys := newSystemWith(t, false, true, func(identity *iam.Builder) {
+		identity.Users(iam.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
 			Verified:   func(context.Context, string) (bool, error) { return true, nil },
 			ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
 		})
 	})
-	for _, definition := range sys.iam.Migrations() {
+	for _, definition := range sys.identity.Migrations() {
 		if strings.HasSuffix(definition.Group(), ":account") {
 			t.Fatalf("a users table is migrated: %s", definition.ID())
 		}
 	}
-	if err := sys.iam.Verifier().Set(t.Context(), "u1", "correct horse"); err != nil {
+	if err := sys.identity.Verifier().Set(t.Context(), "u1", "correct horse"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if r := sys.browser.post("/login", `{"email":"ada@example.com","password":"correct horse"}`); r.status != http.StatusNoContent {
@@ -211,7 +211,7 @@ func TestSocialLoginThenConnect(t *testing.T) {
 		t.Fatalf("/me after the social login = %q", me.body)
 	}
 	subject, _, _ := strings.Cut(me.body, "|")
-	record, err := sys.iam.UserProvider().Find(t.Context(), subject)
+	record, err := sys.identity.UserProvider().Find(t.Context(), subject)
 	if err != nil || record.Claims["email_verified"] != true || record.Claims["email"] != "grace@example.com" {
 		t.Fatalf("record = %+v, %v", record, err)
 	}
@@ -274,8 +274,8 @@ func TestNativeLoginThenDeviceTokenThenMe(t *testing.T) {
 func TestSilentReloginNotFreshForTOTPUser(t *testing.T) {
 	t.Parallel()
 
-	sys := newSystem(t, func(iam *access.Builder) {
-		iam.Guard(func(policy *auth.GuardBuilder) {
+	sys := newSystem(t, func(identity *iam.Builder) {
+		identity.Guard(func(policy *auth.GuardBuilder) {
 			policy.FreshFor(time.Second)
 		})
 	})

@@ -6,7 +6,7 @@ order: 10
 summary:
   - Understand what the OAuth ark owns and what your application still owns.
   - Install the ark, build a provider client from registered credentials, and start OIDC discovery.
-  - Pick a provider and see how the ark relates to the core guard and the Access ark.
+  - Pick a provider and see how the ark relates to the core guard and the IAM ark.
 ---
 
 # OAuth Overview
@@ -36,9 +36,9 @@ applies. An API call ends in `auth.Bearer`, as in
 account mapping yourself.
 
 If you want registration, login, two-factor, tokens and provider sign-in as
-ready-made routes, use the [Access](../access/overview.md) ark: it mounts these
+ready-made routes, use the [IAM](../iam/overview.md) ark: it mounts these
 clients for you and links identities through its
-[connection store](../access/connections.md), so you write no mapper.
+[connection store](../iam/federated-sign-in.md), so you write no mapper.
 
 ## Configure Clients
 
