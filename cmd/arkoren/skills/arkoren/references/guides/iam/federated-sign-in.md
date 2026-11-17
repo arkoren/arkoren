@@ -3,9 +3,9 @@ title: Federated Sign-In
 description: Add external sign-in, control first-login sign-up per provider, and let signed-in users connect or disconnect their own identities.
 order: 50
 summary:
-  - Mount configured OAuth clients and decide what an unknown external identity may do.
-  - Connect a provider only through an explicit session-bound intent, never by matching a verified account's email.
-  - Understand unverified-account takeover, native mobile login, and Apple's callback requirements.
+  - Construct and start Google and GitHub clients, then mount their IAM routes with session and CSRF protection.
+  - Control first-login sign-up and understand the destructive claim of an unverified built-in account.
+  - Connect and disconnect identities explicitly, or use native login and Apple's protected callback.
 ---
 
 # Federated Sign-In
@@ -15,16 +15,83 @@ IAM stores a **connection** from the provider's verified issuer and subject
 to a local user subject. Later sign-ins use that connection, not the user's
 email or mutable profile.
 
-Set up and start your clients using [OAuth](../oauth/overview.md) first.
-That module owns provider credentials, discovery, callback verification,
-and redirects; IAM owns local users, connections, and login policy.
+The [OAuth](../oauth/overview.md) module owns provider credentials, discovery,
+callback verification, and redirects; IAM owns local users, connections, and
+login policy.
 The [provider comparison](../oauth/providers.md#compatibility-matrix)
 explains differences between Google, Microsoft, GitHub, Apple, and generic
 adapters.
 
-## Add Providers
+## Configure Clients
 
-Give each configured client its own call in the constructor:
+Register Google and GitHub applications with their respective callback URLs
+before constructing the clients. Assume `googleID`, `googleSecret`, `githubID`,
+and `githubSecret` come from your configuration or secret provider. Both
+clients use an existing `cipher *crypto.Encrypter` with a stable key shared by
+every instance that can receive a callback. See
+[Encryption Keys](../encryption/keys.md) for key provisioning; do not generate
+a new key per request or process start.
+
+These fragments use the following imports:
+
+```go
+import (
+	"arkoren.dev/ark/iam"
+	"arkoren.dev/ark/oauth/oauthauth"
+)
+```
+
+Construct the Google client first. Handle the error before continuing:
+
+```go
+google, err := oauthauth.New(oauthauth.Google(), cipher, googleID,
+	func(client *oauthauth.ClientBuilder) {
+		client.ClientSecret(googleSecret)
+		client.RedirectURL("https://app.example.com/auth/google/callback")
+		client.ChallengeURL("/login/challenge")
+	},
+)
+```
+
+Then construct the GitHub client and handle its error:
+
+```go
+github, err := oauthauth.New(oauthauth.GitHub(), cipher, githubID,
+	func(client *oauthauth.ClientBuilder) {
+		client.ClientSecret(githubSecret)
+		client.RedirectURL("https://app.example.com/auth/github/callback")
+		client.ChallengeURL("/login/challenge")
+	},
+)
+```
+
+The registered callback URLs must match these URLs exactly. IAM mounts paths
+using each client's name: these presets use `google` and `github`. If you
+change a name, update the callback URL and provider registration to match.
+`ChallengeURL` points to your front-end second-factor challenge page; configure
+it when users may have a second factor.
+
+Before serving requests, start both clients. In a startup function returning
+an error:
+
+```go
+if err := google.Start(ctx); err != nil {
+	return err
+}
+if err := github.Start(ctx); err != nil {
+	return err
+}
+```
+
+Google uses OIDC discovery and cannot serve login requests until startup
+succeeds; GitHub uses plain OAuth2 and its `Start` is a no-op.
+Alternatively register the clients' `Start` methods with your application's
+startup lifecycle, as shown in [OAuth startup](../oauth/overview.md#start-discovery).
+
+## Mount Providers
+
+Use the existing `db *database.Database` and `store *cache.Cache` described
+in [IAM Overview](overview.md#start-small). Give each client its own call:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
@@ -33,9 +100,20 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 })
 ```
 
-The clients satisfy `iam.Provider`: IAM asks them for their name,
+Handle the constructor error before using `identity`. The clients satisfy
+`iam.Provider`: IAM asks them for their name,
 login handler, and callback handler. You do not write a resolver for mounted
-providers. Apply the connection migrations before serving.
+providers. Add and run `identity.Migrations()` before serving, as described in
+[Prepare Storage](overview.md#prepare-storage).
+
+Mount once at the root of your existing `*router.Router` named `routes`.
+IAM loads the session, but does not provide CSRF protection; use
+`csrf` from `arkoren.dev/core/http/middleware/csrf`:
+
+```go
+web := routes.With(csrf.Middleware(), identity.Middleware())
+identity.Mount(web)
+```
 
 `GET /auth/google` starts Google login; both `GET` and `POST`
 `/auth/google/callback` are mounted for its callback. Other clients follow the
@@ -44,9 +122,23 @@ only letters, digits, hyphens, and underscores, or `New` fails.
 Generic OAuth clients default to `oauth`; rename them in their client settings
 if you use more than one.
 
+For example, add a browser link to start Google sign-in and return to a local
+page:
+
+```html
+<a href="/auth/google?return_to=/projects">Continue with Google</a>
+```
+
+The target must be a validated local path. A first login normally fails with
+`federation:no-account` until the identity is connected or provider sign-up is
+enabled, subject to the unverified-account exception described below.
+
 A connected identity logs its local user in unless that user is disabled or
-deleted. If the user also has a second factor, the browser callback redirects
-to the client's configured `ChallengeURL`. Configure a front-end challenge
+deleted. After successful login, the callback redirects the browser to the
+validated local `return_to` target supplied to the login route, or `/` if none
+was supplied. If the user also has a second factor, the browser callback
+redirects to the client's configured `ChallengeURL` instead; it does not carry
+`return_to` to that page. Configure a front-end challenge
 page on every client whose users may need one; without it, such a callback
 fails rather than bypassing two-factor. The page completes
 [`POST /login/challenge`](two-factor.md#complete-a-login).
@@ -72,6 +164,7 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 
 Here GitHub can create a user; Google cannot. Both can still sign in connected
 identities or connect a provider from an existing user's settings.
+This setting is independent of password registration.
 
 Sign-up requires a nonempty email that the provider reports as verified;
 otherwise it returns `403` `federation:email-unverified` and creates nothing.
@@ -88,12 +181,14 @@ Concurrent first sign-ins of the same identity create one connected user.
 If you need an additional sign-up rule, such as checking invitations, add
 `login.Create(checkInvitation)` in that provider's callback.
 `checkInvitation` is your
-`func(context.Context, auth.External) (string, error)`: return an error to
+`func(context.Context, auth.External) (string, error)`, using standard-library
+`context` and `auth` from `arkoren.dev/core/auth`: return an error to
 refuse, `""` and nil to continue with normal user creation, or a newly created
 subject to handle creation yourself. Never return an existing user found by
 email. Multiple `Create` hooks run in order until one returns a subject;
 errors reach the client, so use a problem value for a safe public refusal.
-This hook applies to sign-up, not every later login.
+This hook applies to sign-up, not every later login; it is not a universal
+access gate.
 
 ## Unverified Accounts
 
