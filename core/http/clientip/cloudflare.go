@@ -13,9 +13,11 @@ import (
 // to another header. The snapshot can become stale and requires releases to
 // update; an intervening proxy is not covered.
 //
-// Cloudflare's shared ranges do not authenticate your zone: protect the origin
-// with zone-specific authenticated origin pulls or a Cloudflare Tunnel.
-// Workers and Pseudo IPv4 settings can change the header's meaning.
+// Cloudflare's shared ranges do not authenticate your zone: for direct
+// connections, protect the origin with zone-specific authenticated origin
+// pulls. Cloudflare Tunnel needs a custom resolver that trusts its connector;
+// this resolver does not identify Tunnel traffic. Workers and Pseudo IPv4
+// settings can change the header's meaning.
 //
 // Example:
 //

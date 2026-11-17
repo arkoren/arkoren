@@ -28,21 +28,57 @@ func ExampleProxies() {
 	// Output: 192.0.2.1
 }
 
-// TestDirectHost verifies host extraction and unchanged fallback representations.
-func TestDirectHost(t *testing.T) {
-	for _, pair := range [][2]string{
-		{"192.0.2.1:443", "192.0.2.1"},
-		{"2001:db8::1", "2001:db8::1"},
-		{"", ""},
-		{"not-an-address", "not-an-address"},
-		{"[::ffff:192.0.2.1]:443", "::ffff:192.0.2.1"},
-		{"[fe80::1%en0]:443", "fe80::1%en0"},
-	} {
-		request := httptest.NewRequest("GET", "/", nil)
-		request.RemoteAddr = pair[0]
-		if got := clientip.Direct()(request); got != pair[1] {
-			t.Fatalf("RemoteAddr %q: got %q, want %q", pair[0], got, pair[1])
-		}
+// TestDirectIPv4 removes the port from an IPv4 connection address.
+func TestDirectIPv4(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = "192.0.2.1:443"
+	if got := clientip.Direct()(request); got != "192.0.2.1" {
+		t.Fatalf("got %q, want IPv4 host", got)
+	}
+}
+
+// TestDirectRawIPv6 preserves an IPv6 address without a port.
+func TestDirectRawIPv6(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = "2001:db8::1"
+	if got := clientip.Direct()(request); got != "2001:db8::1" {
+		t.Fatalf("got %q, want raw IPv6 address", got)
+	}
+}
+
+// TestDirectEmpty preserves an empty connection address.
+func TestDirectEmpty(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = ""
+	if got := clientip.Direct()(request); got != "" {
+		t.Fatalf("got %q, want empty address", got)
+	}
+}
+
+// TestDirectInvalid preserves a connection address that cannot be split.
+func TestDirectInvalid(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = "not-an-address"
+	if got := clientip.Direct()(request); got != "not-an-address" {
+		t.Fatalf("got %q, want unchanged address", got)
+	}
+}
+
+// TestDirectMapped preserves the mapped IPv6 spelling of the connection host.
+func TestDirectMapped(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = "[::ffff:192.0.2.1]:443"
+	if got := clientip.Direct()(request); got != "::ffff:192.0.2.1" {
+		t.Fatalf("got %q, want mapped host", got)
+	}
+}
+
+// TestDirectZone preserves the IPv6 zone when removing the connection port.
+func TestDirectZone(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = "[fe80::1%en0]:443"
+	if got := clientip.Direct()(request); got != "fe80::1%en0" {
+		t.Fatalf("got %q, want zoned host", got)
 	}
 }
 

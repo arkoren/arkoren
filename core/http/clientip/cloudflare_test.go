@@ -140,7 +140,7 @@ func checkCloudflareBoundary(
 ) {
 	t.Helper()
 	first := prefix.Masked().Addr()
-	last := lastAddress(prefix)
+	last := lastAddress(t, prefix)
 	for _, peer := range []netip.Addr{first.Prev(), first, last, last.Next()} {
 		request := httptest.NewRequest("GET", "/", nil)
 		request.RemoteAddr = peer.String()
@@ -159,7 +159,8 @@ func checkCloudflareBoundary(
 
 // lastAddress computes the inclusive end of a masked IPv4 or IPv6 prefix.
 // It preserves the input address family so neighboring addresses stay comparable.
-func lastAddress(prefix netip.Prefix) netip.Addr {
+func lastAddress(t *testing.T, prefix netip.Prefix) netip.Addr {
+	t.Helper()
 	address := prefix.Masked().Addr()
 	bytes := address.AsSlice()
 	for bit := prefix.Bits(); bit < len(bytes)*8; bit++ {
@@ -167,7 +168,7 @@ func lastAddress(prefix netip.Prefix) netip.Addr {
 	}
 	last, ok := netip.AddrFromSlice(bytes)
 	if !ok {
-		panic("invalid address length from netip")
+		t.Fatal("invalid address length from netip")
 	}
 	return last
 }
