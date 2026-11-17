@@ -50,6 +50,8 @@ func Direct() func(*http.Request) string {
 // an entry is malformed. IP literals only are accepted, not IP:port entries.
 // Parsed addresses are unmapped and IPv6 zones removed; an unparseable peer
 // is returned as Direct would return it. IPv6 addresses are not bucketed.
+// Prefixes are not unmapped: an IPv4-mapped IPv6 prefix cannot match an
+// unmapped IPv4 address, so configure the corresponding IPv4 prefix instead.
 //
 // Trust only isolated proxies that append or replace the header. In particular,
 // trusting a network accessible to arbitrary clients permits spoofing.

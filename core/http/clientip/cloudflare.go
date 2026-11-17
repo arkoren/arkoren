@@ -41,6 +41,8 @@ func Cloudflare() func(*http.Request) string {
 	trusted := make([]netip.Prefix, 0, len(ranges))
 	for _, value := range ranges {
 		prefix, err := netip.ParsePrefix(value)
+		// An invalid embedded range must fail conservatively, not expand trust
+		// or panic at construction. Snapshot tests check every listed range.
 		if err == nil {
 			trusted = append(trusted, prefix)
 		}
