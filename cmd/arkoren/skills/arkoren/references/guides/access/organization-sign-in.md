@@ -1,89 +1,106 @@
 ---
 title: Organization Sign-In
-description: Let the people of one organization sign in with Microsoft Entra ID, keep sign-up invite-only and end a leaver's access, with the access facade.
-order: 65
+description: Connect one Microsoft Entra tenant, admit invited users through their first sign-in, and revoke local access when they leave.
+order: 100
 summary:
-  - Register the application in Entra, choose a single tenant or all organizations and connect the client with the facade.
-  - Decide between invite-only and open sign-up, and add invited users so their first Microsoft sign-in claims them.
-  - Disable a user who leaves the organization so their sessions and tokens stop at the next request.
+  - Configure an Entra registration and the claims Arkoren needs for email-based invitations and authentication age.
+  - Keep provider sign-up closed while pre-created users claim their invitations.
+  - Separate organizational sign-in from local account membership and offboarding.
 ---
 
 # Organization Sign-In
 
-An internal tool should not ask employees for another password. With Microsoft
-Entra ID the organization already knows who works there, so the application
-accepts that sign-in and keeps its own list of who may use it. This page connects
-an Entra client to the [access facade](overview.md), decides who may sign in for
-the first time, and ends a leaver's access. It assumes the facade is composed and
-mounted as described in [Access Overview](overview.md), and that your database
-has the facade's migrations.
+An internal application can use Microsoft Entra ID for sign-in while retaining
+its own list of allowed users. Entra proves the identity; Access decides
+whether it maps to a local account. This example accepts one tenant and keeps
+sign-up closed, so belonging to the organization alone does not create a user.
+
+Start with [Access's mounted facade](overview.md) and the
+[connection model](connections.md). This page uses the built-in directory;
+custom users need their own invitation-resolution policy.
 
 ## Register the App
 
-In the Entra admin center, register an application and add the web redirect URI
-`https://app.example.com/auth/microsoft/callback`. The facade mounts every
-provider's callback at `/auth/{name}/callback`, and the Microsoft preset is named
-`microsoft`. Create a client secret, and note the application (client) ID and the
-directory (tenant) ID.
+Register an application in the Entra admin center for the intended tenant.
+Add this web redirect URI:
+`https://app.example.com/auth/microsoft/callback`.
+The Microsoft preset's name is `microsoft`, and Access uses
+`/auth/{name}/callback`.
 
-Then add the optional claims `xms_edov` and `auth_time` to the ID token. `xms_edov`
-says that the owner of the email's domain verified the address. Microsoft's plain
-`email` claim can be unverified and can change, so the preset exposes an address
-only when `xms_edov` is true. Without the claim the application receives no email
-at all: sign-in by an existing connection still works, but a first sign-in cannot
-find the invited user and a new user has no address to be created with.
-`auth_time` says when the user last authenticated at Entra, so a silent approval
-by an old Entra session is not treated as a fresh sign-in; see
-[Fresh Logins](freshness.md#provider-logins).
+Obtain the application client ID (`clientID`), a client secret (`clientSecret`),
+and the directory tenant ID (`tenantID`).
+Keep the secret in your application's secret-management system.
 
-Add both in the application manifest, which works for every registration the same
-way. Open Manifest for the app, and set `optionalClaims` to:
+Configure two optional **ID-token** claims:
+
+- `xms_edov`: the Arkoren preset exposes an email with `EmailVerified` true
+  only when this claim is boolean true. Without it, a known connection can
+  still sign in, but email-based invitations and new-user creation cannot use
+  the missing address.
+- `auth_time`: carries the earlier provider authentication time so silent
+  approval from an old Entra session does not appear as a fresh factor.
+
+Follow Microsoft's
+[optional-claim configuration](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims).
+In the manifest, merge these entries into `optionalClaims.idToken`,
+preserving other claims your application requires:
 
 ```json
 {
   "optionalClaims": {
     "idToken": [
-      { "name": "xms_edov", "source": null, "essential": false, "additionalProperties": [] },
-      { "name": "auth_time", "source": null, "essential": false, "additionalProperties": [] }
+      { "name": "xms_edov" },
+      { "name": "auth_time" }
     ]
   }
 }
 ```
 
-Save the manifest and sign in again: a token issued before the change does not
-carry the claims. Check a token's claims once, for example in a development
-tenant, before relying on them.
+Save and sign in again; old ID tokens do not gain the claims.
+Check their presence in a controlled development tenant without logging or
+sharing whole tokens. The mutable plain `email` claim alone is not sufficient
+evidence for this preset.
 
-## Create the Client
+## Connect the Client
 
-Choose which tenants may sign in when you create the client:
+For a single organization, pass its tenant ID, not a domain name. Import
+`oauthauth` from `arkoren.dev/ark/oauth/oauthauth`:
 
 ```go
-import oauth "arkoren.dev/ark/oauth/oauthauth"
-
-microsoft, err := oauth.New(oauth.Microsoft(tenantID), cipher, clientID,
-	func(login *oauth.ClientBuilder) {
-		login.ClientSecret(clientSecret)
-		login.RedirectURL("https://app.example.com/auth/microsoft/callback")
-	},
-)
+provider := oauthauth.Microsoft(tenantID)
 ```
 
-| Argument | Who may sign in |
-| --- | --- |
-| The tenant ID, a GUID | Only members and guests of that one organization. |
-| `"organizations"` | Work and school accounts of any organization. |
-| `"consumers"` | Personal Microsoft accounts only. |
-| `"common"` | Both classes. |
+The tenant ID selects the verified tenant context, including guests admitted
+to that tenant. Broader aliases select broader audiences:
 
-For an internal tool, pass the tenant ID, not a domain name such as
-`contoso.onmicrosoft.com`. The aliases accept more than your organization:
-`"organizations"` and `"common"` let people from organizations you do not know
-reach the callback, and `"consumers"` lets in any personal Microsoft account,
-which no organization controls. Use them only when you check each identity
-yourself. Start the client with the rest of your application, as
-[OAuth Overview](../oauth/overview.md#start-discovery) shows, and give it to the
-facade:
+| Value | Accepted tenant contexts |
+| --- | --- |
+| A tenant ID | That tenant only |
+| `"organizations"` | Organizational tenants |
+| `"consumers"` | The personal-account tenant |
+| `"common"` | Both organizational and personal tenants |
+
+Do not substitute `"organizations"` for “our organization.” If you use a
+broader alias, your application must enforce its narrower audience policy;
+an invitation is local membership policy, not a replacement for checking the
+intended tenant.
+
+With a configured `*crypto.Encrypter` named `cipher`, create the client:
+
+```go
+microsoft, err := oauthauth.New(provider, cipher, clientID, func(login *oauthauth.ClientBuilder) {
+	login.ClientSecret(clientSecret)
+	login.RedirectURL("https://app.example.com/auth/microsoft/callback")
+})
+```
+
+Handle construction failure, then register the client's
+[discovery startup](../oauth/overview.md#start-discovery) with your application's
+lifecycle. Access does not start it for you.
+If users may enroll local two-factor, also configure `ChallengeURL` to your
+front-end challenge page.
+
+Pass the configured client to Access, leaving sign-up off:
 
 ```go
 iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
@@ -91,90 +108,73 @@ iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 })
 ```
 
-`GET /auth/microsoft` now sends the browser to Entra, and the callback logs a
-known identity in. Call `ChallengeURL` on the client as well when some users have
-[two-factor](two-factor.md) enabled, as [Connections](connections.md#signing-in)
-explains.
+Complete discovery before serving requests, and use the usual Access migrations
+and CSRF/session mounting.
+`GET /auth/microsoft` now starts sign-in; an unknown identity without an
+eligible local user receives `403` `federation:no-account`.
 
-## Choose Who Joins
+## Invite Users
 
-What happens to a person who signs in for the first time is your decision, as
-described in [Connections](connections.md#signing-in).
-
-**Invite-only** is the default, and the right choice when the organization is
-larger than the application's audience. A person you did not add is refused with
-`403` `federation:no-account` and nothing is created. You add people yourself
-with the directory:
+For a provider-only invitation, pre-create an **unverified** local account:
 
 ```go
-subject, err := iam.Directory().Create(ctx, "ada@contoso.com")
+subject, err := iam.Directory().Create(ctx, "ada@acme.example")
 ```
 
-Use `Create`, not `CreateVerified`, for these users. `Create` makes a user with an
-unverified email and no password. When Ada first signs in through Microsoft with
-that address, verified by `xms_edov`, the facade
-[takes the account over](connections.md#unverified-accounts): it marks the email
-verified, connects her Entra identity and logs her in. Later sign-ins match the
-connection, not the email. A user made with `CreateVerified` has nothing to
-prove, and accounts are never linked by email, so her first Microsoft sign-in
-would be refused: `403` with sign-up off and `409` with it on. Use `CreateVerified` only for people who can log in
-another way and connect Microsoft from their settings.
+Do not use `CreateVerified` for this path.
+When Ada first signs in with a provider-verified matching address, Access
+[claims the unverified account](connections.md#unverified-accounts), connects
+her Entra identity, and logs her in. Later sign-ins match that connection,
+not the email. This works with sign-up disabled because no user is created
+at sign-in.
 
-**Open sign-up** lets any accepted identity of one provider create a user. It is a
-setting of that provider, so you can open it for Entra and keep it closed for
-another provider, such as Google, in the same facade:
+`CreateVerified` would protect the account from automatic claiming. Without
+another login method, Ada could not connect her first Microsoft identity:
+the callback would return `403` with sign-up off or an email conflict with
+sign-up on. Use verified provisioning only when the user can already log in
+another way and explicitly connect Microsoft.
+
+If every accepted member and guest of the selected tenant may join, open
+sign-up for Microsoft instead:
 
 ```go
-iam.Provider(microsoft, func(login *access.ProviderBuilder) {
-	login.SignUp(true)
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.Provider(microsoft, func(login *access.ProviderBuilder) {
+		login.SignUp(true)
+	})
 })
-iam.Provider(google)
 ```
 
-A first sign-in then creates a user whose email is verified, because Microsoft
-vouched for it. This is safe only with a single tenant: with `"organizations"`,
-`"common"` or `"consumers"`, anyone with an account in an accepted tenant becomes
-a user. Keep sign-up off for those, and for any application whose audience is a
-subset of the organization.
+A first sign-in can then create a verified user without an invitation.
+With `"organizations"`, `"consumers"`, or `"common"`, that audience is much
+broader than your tenant. Keep sign-up closed unless you deliberately admit
+that audience and enforce any additional policy.
 
 ## Remove Leavers
 
-Signing someone out of Entra does not end sessions or tokens that your
-application already issued. When a person leaves, disable their user:
+Ending a person's Entra session does not revoke a session or token your
+application has already issued. For offboarding, use the directory's
+[`Disable` and `Rotate` transaction](accounts.md#suspend-a-user).
+The disabled flag blocks later checks, including provider sign-in; rotation
+prevents old credentials from becoming valid if the user is re-enabled.
 
-```go
-subject, _, err := iam.Directory().Lookup(ctx, "ada@contoso.com")
-if err != nil {
-	return err
-}
-err = iam.Directory().Disable(ctx, subject)
-```
+Disabling alone is reversible and does not rotate the version.
+Deletion also removes Access-owned rows, but with provider sign-up open a
+later sign-in could create another user. Do not use deletion alone as a
+membership ban.
+With [your own users](own-users.md), enforce disabled state in the provider
+and rotate its reported credential version in your own transaction.
 
-The next request of every session, [API token](tokens.md) and pending login of
-that user is rejected, and a sign-in through Microsoft answers `401`, so a user
-Entra still lists cannot come back. `iam.Directory().Enable(ctx, subject)` reverses
-it. Delete the user with `iam.Directory().Delete` when their data must go as well,
-which removes every feature's rows in one transaction; with sign-up on, a later
-sign-in would then create a new user.
+For sensitive settings, a Microsoft-only user's freshness follows the
+federated factor and any earlier `auth_time`, not merely the callback time.
+`/auth/microsoft?fresh=1` asks Entra to authenticate again but remains a hint.
+A device-token exchange checks the application's new-login age instead.
+Use the [freshness distinctions](freshness.md#provider-logins) rather than
+treating all three as proof that a password was typed.
 
-With [your own users](own-users.md), disabling is yours. Mark the user disabled in
-your store so your driver's `Find` returns `auth.ErrUserDisabled`, and bump the
-same version your `Users.Rotate` bumps, so nothing issued earlier survives a later
-re-enable.
+If you already have a user database, continue with [Your Own Users](own-users.md).
 
-A person who signs in only through Microsoft has no password and no authenticator,
-so they have no step-up method and are fresh right after a sign-in. When Entra
-approves a sign-in silently, because the browser already has an Entra session, the
-`auth_time` claim carries the older time of the original sign-in, and the login is
-as old as that, so a person who signed in to Entra hours ago is not fresh for a
-credential change. Without the optional claim, the silent approval counts as a
-login now. Add `?fresh=1` to `/auth/microsoft` to ask Entra for credentials again;
-it is only a hint (`prompt=login&max_age=0`) that Entra may ignore. The device-token
-exchange asks for `guard.RecentLogin`, which checks when your application's own
-login was created, so a new login that Entra approves silently still passes it; see
-[Fresh Logins](freshness.md#provider-logins) and
-[exchanging a login for a device token](tokens.md#mobile-login).
-
-For the provider's registration and claims, see
-[Providers](../oauth/providers.md#microsoft). For every function and option, see
-[the `access` API reference](https://pkg.go.dev/arkoren.dev/ark/access).
+For Microsoft's identity checks, see the
+[`Microsoft` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#Microsoft);
+for the local integration, see the
+[`access` API](https://pkg.go.dev/arkoren.dev/ark/access).
