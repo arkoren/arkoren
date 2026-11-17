@@ -34,7 +34,10 @@
 //		})
 //		iam.TwoFactor(scheme, cipher)
 //		iam.Tokens()
-//		iam.Provider(google, github)
+//		iam.Provider(google)
+//		iam.Provider(github, func(login *access.ProviderBuilder) {
+//			login.SignUp(true) // off by default, per provider
+//		})
 //	})
 //	if err != nil {
 //		return err
@@ -50,7 +53,7 @@
 //
 // Every feature is off until enabled, including the two ways users appear on
 // their own: self-service registration ([password.Builder.Registration]) and
-// creating a user on a first provider login ([federation.Builder.SignUp]). With
+// creating a user on a first provider login ([ProviderBuilder.SignUp]). With
 // both off the application adds users itself, with [Access.Directory] ([account.Directory.Create],
 // [account.Directory.CreateVerified]) or its own users. The application brings the database, the
 // cache, a hasher for passwords and a cipher for two-factor secrets; the facade
@@ -166,7 +169,7 @@
 //     hold: at issue (403 scope-not-granted) and again on every request, or
 //     within [apitoken.Builder.GrantTTL] of a change.
 //   - A first login with an unknown provider identity creates no user unless
-//     [federation.Builder.SignUp] is on (403 no-account), and then only when the
+//     [ProviderBuilder.SignUp] is on for that provider (403 no-account), and then only when the
 //     provider proved an email (403 email-unverified).
 //   - Federation never links by email, with one exception: an identity whose
 //     email the provider verified takes over the user who holds that email and
@@ -206,7 +209,7 @@
 // identifier, and the unverified-account rules above apply only when you give
 // [Users.Verified] and [Users.ProveEmail]; without them the application must
 // enforce the same rules itself. Registration and sign-up with a provider stay
-// off until [password.Builder.Registration] and [federation.Builder.SignUp] are
+// off until [password.Builder.Registration] and [ProviderBuilder.SignUp] are
 // enabled, and each needs [Users.Create]; [New] fails without it. The
 // application adds its own users in its own store, and [Builder.Directory],
 // which configures the built-in table, cannot be combined with Users.

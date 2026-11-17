@@ -3,8 +3,8 @@ title: Connections
 description: Sign in with external providers, connect them to existing accounts and handle native mobile login, with the access facade.
 order: 60
 summary:
-  - Add providers that satisfy the facade's interface, such as the OAuth module's clients.
-  - Decide whether an unknown identity may create a user, why sign-up needs a proven email, why accounts are never linked by email and how connecting works.
+  - Add providers that satisfy the facade's interface, such as the OAuth module's clients, one call each.
+  - Decide per provider whether an unknown identity may create a user, why sign-up needs a proven email, why accounts are never linked by email and how connecting works.
   - Handle native ID-token login, disconnecting, Apple's form post and how a provider login interacts with step-up.
 ---
 
@@ -12,20 +12,23 @@ summary:
 
 Many users prefer to sign in with an account they already have. A connection links
 one external identity, an issuer and a subject that a provider verified, to one
-local user. Hand the facade the [OAuth](../oauth/overview.md) clients you set up,
-and it mounts their routes and maps the verified identities to users:
+local user. Hand the facade each [OAuth](../oauth/overview.md) client you set up,
+in its own `Provider` call, and it mounts the routes and maps the verified
+identities to users:
 
 ```go
-iam.Provider(google, github) // *oauthauth.Client values
+iam.Provider(google) // an *oauthauth.Client
+iam.Provider(github)
 ```
 
 The facade declares a small `access.Provider` interface (`Name`, `LoginHandler`
 and `CallbackHandler`) that `*oauthauth.Client` satisfies, so the two modules never
 import each other. Each provider is mounted under its name, `GET /auth/google` and
 `GET` or `POST /auth/google/callback`. Names must be unique, and `New` rejects a
-duplicate. Clients for generic OIDC providers are all called `oauth` until you
+name used in two `Provider` calls. Clients for generic OIDC providers are all called `oauth` until you
 rename them; see [Providers](../oauth/providers.md). You write no resolver: the
-facade uses its connection store.
+facade uses one connection store for all providers and gives each provider's
+routes a resolver with that provider's own settings.
 
 ## Signing In
 
@@ -37,14 +40,19 @@ with providers, so `403` fits better than `401`, which would invite retrying wit
 other credentials. Nothing differs between identities, so the answer does not
 reveal who has an account.
 
-To let a first provider login create a user, enable sign-up:
+Sign-up is a setting of each provider, so you can open it for the provider whose
+users you trust and keep it closed for the others. To let a first login with a
+provider create a user, enable sign-up in that provider's call:
 
 ```go
-iam.Provider(google, github)
-iam.Federation(func(links *federation.Builder) {
-	links.SignUp(true)
+iam.Provider(google)
+iam.Provider(github, func(login *access.ProviderBuilder) {
+	login.SignUp(true)
 })
 ```
+
+Here a first login through GitHub creates a user, and one through Google is
+refused with `federation:no-account`.
 
 Sign-up needs an email the provider proved. A first login whose identity has no
 verified email, or no email at all, creates nothing and is refused with `403` and
@@ -56,16 +64,40 @@ starts verified. With [your own users](own-users.md), `Users.Create` receives th
 provider's email and `SignUp(true)` without `Users.Create` makes `New` fail with
 `access.ErrInvalidConfig`.
 
+To add your own rule, such as accepting only invited addresses, give the provider a
+`Create` function. It runs before the facade creates the user and returns the new
+user's subject; returning an empty subject and no error hands the identity on, so
+the facade still creates the user. Several `Create` calls run in the order added:
+
+```go
+iam.Provider(entra, func(login *access.ProviderBuilder) {
+	login.SignUp(true)
+	login.Create(func(ctx context.Context, external auth.External) (string, error) {
+		if !strings.HasSuffix(external.Email, "@acme.example") {
+			return "", errNotInvited
+		}
+
+		return "", nil
+	})
+})
+```
+
+Your function must never return an existing user, because accounts are never
+linked by email. An error it returns reaches the client as it is; make it a
+`problem.Details` value to choose its status.
+
 Sign-up does not affect the other two cases: an identity that is already
 connected always logs its user in, and a logged-in user can always connect a
-provider. With registration and sign-up both off, add users yourself; see
+provider, whatever the provider's setting. With registration and sign-up both off, add users yourself; see
 [Adding Users](accounts.md#adding-users).
 
 Accounts are never linked by email, with one exception for unverified accounts
 described under [Unverified Accounts](#unverified-accounts). If the email belongs
-to an existing, verified user, the callback answers `409`: that user logs in and
-connects the provider from their settings. Concurrent first logins of one
-identity create one user when sign-up is on.
+to an existing, verified user and sign-up is on for the provider, the callback
+answers `409` with the problem `account:email-taken`: that user logs in and
+connects the provider from their settings. With sign-up off the same login is
+`403` with `federation:no-account`, like any unknown identity. Concurrent first
+logins of one identity create one user when sign-up is on.
 
 A login with a second factor enrolled is held pending like any other. The callback
 redirects to the OAuth client's challenge URL, where the page posts to
@@ -117,7 +149,7 @@ only on positive evidence from it, because this rule trusts it with an account.
 
 A logged-in user connects a provider from their settings with
 `POST /connections/{provider}`. It needs a browser session, a fresh login and a
-verified email (`403` `email-unverified` otherwise), so whoever registered an
+verified email (`403` with `account:email-unverified` otherwise), so whoever registered an
 address first cannot attach a provider before its owner proves it. It stores a
 single-use intent in the session for ten minutes and answers `303` to
 `/auth/{provider}`. When that callback completes in the same session, the identity
@@ -125,10 +157,35 @@ is linked to the logged-in user, whether or not sign-up is on. An unknown provid
 is `404`.
 
 Because connecting is a POST, a cross-site request to the provider's login route
-alone can never link an identity to a victim.
+alone can never link an identity to a victim. For the same reason the route is
+wrapped in the facade's JSON check: a request without `Content-Type:
+application/json`, such as a plain HTML form, is `415`.
 
-An identity that belongs to another user is `409`, and a user holds one connection
-per issuer. `GET /connections` lists them as `id`, `issuer`, `created_at` and
+A browser therefore cannot connect with a link or a form. Your front end sends the
+POST with `fetch` and the JSON content type, then navigates to the provider's login
+route itself. The `303` is not for the page to follow: the intent is already stored
+in the session when the answer arrives, and the login route is always
+`/auth/{provider}`, so ignore the redirect and navigate there:
+
+```js
+const response = await fetch(`/connections/${provider}`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  redirect: "manual",
+});
+if (response.type !== "opaqueredirect") {
+  throw new Error(`connect failed with ${response.status}`);
+}
+location.assign(`/auth/${provider}`);
+```
+
+With `redirect: "manual"` the browser hands the `303` back as an opaque redirect
+instead of following it, while a failure (`401`, `403`, `404` or `415`) arrives as
+an ordinary response whose problem body you can show.
+
+An identity that belongs to another user is `409` with `federation:linked-elsewhere`,
+and a user holds one connection per issuer: a callback that would give them a second
+identity of an issuer they already have is `409` with `federation:already-linked`. `GET /connections` lists them as `id`, `issuer`, `created_at` and
 `last_used_at`, and needs a browser session. `DELETE /connections/{id}` removes one
 and needs a fresh login. Removing the user's last way to log in is `409`: the user
 needs a password or another connection first. No email or profile data is stored.

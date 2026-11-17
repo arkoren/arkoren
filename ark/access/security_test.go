@@ -37,7 +37,7 @@ func TestResetDefeatsPreRegistrationHijack(t *testing.T) {
 			iam.Password(hasher(), registration)
 			iam.TwoFactor(totp.New("Example"), cipher(t))
 			iam.Tokens()
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		attacker := sys.client
 		register(t, attacker, "victim@example.com")
@@ -500,7 +500,7 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 			})
 			iam.Password(hasher(), registration)
 			iam.Tokens()
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "a@example.com", true), "")
 		if len(created) != 1 || !created[0] {

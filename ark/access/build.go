@@ -160,16 +160,17 @@ func (iam *Access) buildTokens(settings *Builder) error {
 }
 
 // buildLinks builds the connection store when [Builder.Provider] added any
-// provider. The hooks of the packages add up (see [federation.Builder.TakeOver]
-// and the other setters), so the facade's settings run first and an application
-// callback can only add to them; user creation is the one chain where the
-// facade goes last, so that an application function can refuse or handle an
-// identity before the facade's verified-email creation.
+// provider, and one resolver per provider over it, each with the provider's own
+// sign-up settings. The hooks of the packages add up (see
+// [federation.Builder.TakeOver] and the other setters): the facade's settings
+// are the store's, and a provider's [ProviderBuilder.Create] runs before the
+// facade's own creation, so an application function can refuse or handle an
+// identity first.
 func (iam *Access) buildLinks(settings *Builder, users Users) error {
-	if len(iam.providers) == 0 {
+	if len(settings.providers) == 0 {
 		return nil
 	}
-	configure := append([]federation.BuilderFunc{func(links *federation.Builder) {
+	links, err := federation.NewLinks(iam.provider, iam.db, func(links *federation.Builder) {
 		links.Instance(settings.instance).Events(settings.events).Verified(iam.verified)
 		if iam.verifier != nil {
 			links.Fallback(iam.verifier.Has)
@@ -177,13 +178,19 @@ func (iam *Access) buildLinks(settings *Builder, users Users) error {
 		if iam.directory != nil {
 			links.TakeOver(iam.takeOver(users))
 		}
-	}}, settings.federation...)
-	configure = append(configure, func(links *federation.Builder) {
 		links.Create(createExternal(users.Create))
 	})
-	links, err := federation.NewLinks(iam.provider, iam.db, configure...)
 	if err != nil {
 		return err
+	}
+	for _, setup := range settings.providers {
+		resolve, err := links.Resolver(func(resolver *federation.ResolverBuilder) {
+			resolver.SignUp(setup.settings.signUp).Create(setup.settings.create)
+		})
+		if err != nil {
+			return err
+		}
+		iam.providers = append(iam.providers, mountedProvider{provider: setup.provider, resolve: resolve})
 	}
 	iam.links = links
 	iam.add(links.Migrations(), links.Ping)
@@ -261,7 +268,7 @@ func (iam *Access) chain(settings *Builder, lifetime time.Duration) router.Middl
 // proven email before it gets here, so the user is created verified; the flag
 // still follows [auth.External.EmailVerified], because the application's own
 // [Users.Create] receives it. It is nil without [Users.Create], which makes
-// [federation.Builder.SignUp] fail construction. Whether it is used at all is
+// [ProviderBuilder.SignUp] fail construction. Whether it is used at all is
 // SignUp's decision.
 func createExternal(create func(context.Context, string, bool) (string, error)) func(context.Context, auth.External) (string, error) {
 	if create == nil {

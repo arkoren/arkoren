@@ -422,7 +422,7 @@ func TestMigrationsOnlyForEnabledFeatures(t *testing.T) {
 		iam.Password(hasher(), registration)
 		iam.TwoFactor(totp.New("Example"), cipher(t))
 		iam.Tokens()
-		iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+		iam.Provider(fakeProvider{name: "fake"}, signUp)
 		iam.Instance("tenant_a")
 	})
 	if err != nil {

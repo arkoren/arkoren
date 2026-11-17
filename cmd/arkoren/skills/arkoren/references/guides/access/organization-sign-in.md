@@ -77,8 +77,10 @@ microsoft, err := oauth.New(oauth.Microsoft(tenantID), cipher, clientID,
 | `"common"` | Both classes. |
 
 For an internal tool, pass the tenant ID, not a domain name such as
-`contoso.onmicrosoft.com`. Every other value lets people from organizations you
-do not know reach the callback, so use them only when you check each identity
+`contoso.onmicrosoft.com`. The aliases accept more than your organization:
+`"organizations"` and `"common"` let people from organizations you do not know
+reach the callback, and `"consumers"` lets in any personal Microsoft account,
+which no organization controls. Use them only when you check each identity
 yourself. Start the client with the rest of your application, as
 [OAuth Overview](../oauth/overview.md#start-discovery) shows, and give it to the
 facade:
@@ -118,12 +120,15 @@ prove, and accounts are never linked by email, so her first Microsoft sign-in
 would be refused: `403` with sign-up off and `409` with it on. Use `CreateVerified` only for people who can log in
 another way and connect Microsoft from their settings.
 
-**Open sign-up** lets any accepted identity create a user:
+**Open sign-up** lets any accepted identity of one provider create a user. It is a
+setting of that provider, so you can open it for Entra and keep it closed for
+another provider, such as Google, in the same facade:
 
 ```go
-iam.Federation(func(links *federation.Builder) {
-	links.SignUp(true)
+iam.Provider(microsoft, func(login *access.ProviderBuilder) {
+	login.SignUp(true)
 })
+iam.Provider(google)
 ```
 
 A first sign-in then creates a user whose email is verified, because Microsoft
@@ -163,8 +168,10 @@ approves a sign-in silently, because the browser already has an Entra session, t
 `auth_time` claim carries the older time of the original sign-in, and the login is
 as old as that, so a person who signed in to Entra hours ago is not fresh for a
 credential change. Without the optional claim, the silent approval counts as a
-login now. Add `?fresh=1` to `/auth/microsoft` to make Entra ask for credentials
-again, and the device-token exchange asks for `guard.RecentLogin`; see
+login now. Add `?fresh=1` to `/auth/microsoft` to ask Entra for credentials again;
+it is only a hint (`prompt=login&max_age=0`) that Entra may ignore. The device-token
+exchange asks for `guard.RecentLogin`, which checks when your application's own
+login was created, so a new login that Entra approves silently still passes it; see
 [Fresh Logins](freshness.md#provider-logins) and
 [exchanging a login for a device token](tokens.md#mobile-login).
 

@@ -48,7 +48,7 @@ fresh login.
 ## Adding Users
 
 Registration (`passwords.Registration(true)`) and provider sign-up
-(`links.SignUp(true)`) are both off by default. Without them, no request creates a
+(`login.SignUp(true)`, set for each provider) are both off by default. Without them, no request creates a
 user, and your application adds users through the built-in directory, which the
 facade exposes as `iam.Directory()`:
 
@@ -73,7 +73,8 @@ your own store and the facade only sees their subjects.
 
 Configure the built-in users with `iam.Directory`: email verification and the
 lifetime of its links. It cannot be combined with `iam.Users`, which replaces the
-built-in table; `New` fails with `access.ErrInvalidConfig`.
+built-in table; `New` fails with `access.ErrInvalidConfig`. `account` is
+`arkoren.dev/ark/access/account`:
 
 ```go
 iam.Directory(func(accounts *account.Builder) {

@@ -14,9 +14,20 @@ import (
 // concurrent first login of the same external identity.
 var errLostRace = errors.New("federation: lost link race")
 
+// onboarding is what a logged-out login does with an identity that no
+// connection and no takeover claims: create a user with create when signUp is
+// set, refuse with [ErrNoAccount] otherwise. [Links] holds the one from its
+// [Builder]; [Links.Resolver] makes one per provider.
+type onboarding struct {
+	signUp bool
+	create func(context.Context, auth.External) (string, error)
+}
+
 // Resolve is the [auth.Resolver] of the package: it maps a verified external
 // identity to the local subject to log in, as the protocol module's callback
-// expects. See [Links] for the rules. It reads the logged-in identity and the
+// expects, with the sign-up settings of the [Builder]. [Links.Resolver] makes
+// resolvers with their own sign-up settings over the same connections. See
+// [Links] for the rules. It reads the logged-in identity and the
 // session from ctx, which protocol modules take from the request, so the
 // callback route needs the session and auth middleware. Errors that are
 // problems ([ErrNoAccount], [ErrLinkedElsewhere], the error of [Builder.Create])
@@ -26,6 +37,12 @@ var errLostRace = errors.New("federation: lost link race")
 //
 //	web.Get("/auth/google/callback", google.CallbackHandler(guard, links.Resolve))
 func (links *Links) Resolve(ctx context.Context, external auth.External) (string, error) {
+	return links.resolve(ctx, external, links.onboard)
+}
+
+// resolve is [Links.Resolve] with the sign-up settings to apply to an unknown
+// identity.
+func (links *Links) resolve(ctx context.Context, external auth.External, onboard onboarding) (string, error) {
 	if external.Issuer == "" || external.Subject == "" {
 		return "", fmt.Errorf("federation: empty issuer or subject: %w", auth.ErrNoCredentials)
 	}
@@ -47,7 +64,7 @@ func (links *Links) Resolve(ctx context.Context, external auth.External) (string
 		return current, nil
 	}
 
-	return links.createUser(ctx, external)
+	return links.createUser(ctx, external, onboard)
 }
 
 // login returns the subject of a known connection after checking the user is
@@ -74,15 +91,15 @@ func (links *Links) login(ctx context.Context, found row) (string, error) {
 // [ErrNoAccount] and nothing is written. When a concurrent first login of the
 // same identity wins the insert, this one rolls back and returns the winner's
 // subject.
-func (links *Links) createUser(ctx context.Context, external auth.External) (string, error) {
-	if !links.signUp && links.takeOver == nil {
+func (links *Links) createUser(ctx context.Context, external auth.External, onboard onboarding) (string, error) {
+	if !onboard.signUp && links.takeOver == nil {
 		return "", ErrNoAccount
 	}
 	var subject string
 	var claimed bool
 	err := links.db.WithTransaction(ctx, func(ctx context.Context) error {
 		var err error
-		subject, claimed, err = links.owner(ctx, external)
+		subject, claimed, err = links.owner(ctx, external, onboard)
 		if err != nil {
 			return err
 		}
@@ -117,7 +134,7 @@ func (links *Links) createUser(ctx context.Context, external auth.External) (str
 // ever re-enables or empties a disabled account. A new user needs
 // [Builder.SignUp] and an identity with a proven email ([ErrEmailUnverified]
 // otherwise).
-func (links *Links) owner(ctx context.Context, external auth.External) (subject string, claimed bool, err error) {
+func (links *Links) owner(ctx context.Context, external auth.External, onboard onboarding) (subject string, claimed bool, err error) {
 	if links.takeOver != nil {
 		subject, err := links.takeOver(ctx, external)
 		if err != nil {
@@ -135,13 +152,13 @@ func (links *Links) owner(ctx context.Context, external auth.External) (subject 
 			return subject, true, nil
 		}
 	}
-	if !links.signUp {
+	if !onboard.signUp {
 		return "", false, ErrNoAccount
 	}
 	if !external.EmailVerified || external.Email == "" {
 		return "", false, ErrEmailUnverified
 	}
-	subject, err = links.create(ctx, external)
+	subject, err = onboard.create(ctx, external)
 
 	return subject, false, err
 }

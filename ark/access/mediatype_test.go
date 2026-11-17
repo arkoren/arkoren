@@ -129,7 +129,7 @@ func TestProviderCallbackAcceptsAForm(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		path := callbackPath("fake", "form-user", "form@example.com", true)
 		reply := sys.client.Do(http.MethodPost, path, "sub=x", "Content-Type: application/x-www-form-urlencoded")

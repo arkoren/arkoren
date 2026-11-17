@@ -96,9 +96,9 @@ func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 			iam.Tokens(func(tokens *apitoken.Builder) { tokens.Grants(apitoken.AnyScope, "posts:read").GrantTTL(time.Minute) })
 		}, nil},
 		{"providers", both, func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}) }, nil},
-		{"providers with sign-up", both, func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}).Federation(signUp) }, nil},
+		{"providers with sign-up", both, func(_ *testing.T, iam *access.Builder) { iam.Provider(fakeProvider{name: "fake"}, signUp) }, nil},
 		{"everything", both, func(t *testing.T, iam *access.Builder) {
-			iam.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}, signUp)
 		}, nil},
 		{"own users without create", wire{}, func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
@@ -119,7 +119,7 @@ func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 		{"own users with everything", wire{reset: true}, func(t *testing.T, iam *access.Builder) {
 			provider, users := ownProvider(t)
 			iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved})
-			iam.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}, signUp)
 		}, slices.Concat([]string{"DELETE /account"}, emailRoutes)},
 	}
 	for _, test := range tests {

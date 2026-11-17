@@ -20,6 +20,11 @@
 //     provider verified may be handed an existing user whose email never was, so
 //     whoever registered an address first cannot keep its owner out. A takeover
 //     publishes [AccountClaimed].
+//   - One store serves several providers. [Links.Resolve] applies the sign-up
+//     settings of the [Builder]; [Links.Resolver] makes a resolver with its own
+//     ([ResolverBuilder.SignUp], [ResolverBuilder.Create]) over the same table, so
+//     one provider can create users while another cannot. The facade makes one per
+//     provider.
 //   - The functions of [Builder.Create], [Builder.TakeOver], [Builder.Fallback] and
 //     [Builder.Verified] add up: a second call composes with the first instead of
 //     replacing it (see each setter), so settings the facade made cannot be
