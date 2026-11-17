@@ -9,6 +9,25 @@ import { referencesPlugin } from "./src/plugins/references";
 import { tablesPlugin } from "./src/plugins/tables";
 import { legacyApiRedirects } from "./src/lib/docs/redirects";
 
+/**
+ * Maps the former Access guide slugs to their IAM destinations. Both the
+ * browser pages and their raw-Markdown twins use this same mapping.
+ */
+const iamGuideMoves = {
+  overview: "overview",
+  passwords: "passwords",
+  "email-links": "email-links",
+  registration: "registration",
+  connections: "federated-sign-in",
+  "organization-sign-in": "sso",
+  freshness: "freshness",
+  "two-factor": "two-factor",
+  tokens: "tokens",
+  accounts: "accounts",
+  "own-users": "own-users",
+  routes: "routes",
+};
+
 // https://astro.build/config
 export default defineConfig({
   site: "https://arkoren.dev",
@@ -36,6 +55,7 @@ export default defineConfig({
           search === "" &&
           !/\.(?:md|txt|xml)$/.test(pathname) &&
           !pathname.startsWith("/docs/guides/http/") &&
+          !pathname.startsWith("/docs/guides/access/") &&
           !pathname.startsWith("/docs/api/") &&
           ![
             "/docs/api/core/app",
@@ -64,6 +84,14 @@ export default defineConfig({
   build: { format: "file" },
   redirects: {
     ...legacyApiRedirects(),
+    ...Object.fromEntries(
+      Object.entries(iamGuideMoves).flatMap(([oldName, newName]) =>
+        ["", ".md"].map((extension) => [
+          `/docs/guides/access/${oldName}${extension}`,
+          `/docs/guides/iam/${newName}${extension}`,
+        ]),
+      ),
+    ),
     "/docs/api/llms-full.txt": "/docs/api/llms.txt",
     "/docs/guides": "/docs#guides",
     "/docs/guides/http/signed-links": "/docs/guides/http-capabilities/secure-links",

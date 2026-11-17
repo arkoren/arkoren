@@ -13,7 +13,7 @@
 // [auth.External], which the application maps to its own subject for
 // auth.Bearer. Authorization is done with gate rules such as gate.HasScopes.
 //
-// A Client satisfies the Provider and NativeProvider interfaces of ark/access
+// A Client satisfies the Provider and NativeProvider interfaces of ark/iam
 // structurally: Name, LoginHandler and CallbackHandler, and NonceHandler and
 // NativeHandler, each taking only core types.
 //

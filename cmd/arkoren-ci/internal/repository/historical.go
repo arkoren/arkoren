@@ -37,7 +37,7 @@ func ReleaseInventory(ctx context.Context, root, revision string) (Inventory, er
 				return Inventory{}, err
 			}
 		}
-		policy, err = ParsePolicy(data)
+		policy, err = parsePolicy(data, true)
 
 		if err != nil {
 			return Inventory{}, err

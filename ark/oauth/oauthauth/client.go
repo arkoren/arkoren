@@ -171,7 +171,7 @@ func New(
 // builder set one, otherwise the preset's name ("google", "github",
 // "microsoft" or "apple"), otherwise "oauth". Applications with several
 // providers use it to mount and look up clients (for example under
-// "/auth/{name}"), and ark/access reads it through its Provider interface.
+// "/auth/{name}"), and ark/iam reads it through its Provider interface.
 //
 // Example:
 //

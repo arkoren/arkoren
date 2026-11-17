@@ -22,7 +22,7 @@ To build login yourself, use [Session Login](session-login.md) for passwords and
 browser sessions, [Two-Factor Login](two-factor.md) to require more than one
 proof, and [API Tokens](api-tokens.md) for application-issued keys. All three use
 the same request identity model. If you would rather not write these flows, the
-[Access](../access/overview.md) ark ships registration, login, two-factor and
+[IAM](../iam/overview.md) ark ships registration, login, two-factor and
 tokens as JSON routes, and the [OAuth](../oauth/overview.md) ark adds provider
 sign-in and provider-issued JWT verification.
 

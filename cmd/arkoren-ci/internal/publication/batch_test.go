@@ -397,6 +397,52 @@ func TestHistoricalArrayPolicyBatchSurvivesSchemaClassification(t *testing.T) {
 	}
 }
 
+// TestHistoricalAccessBatchRemainsSignedAndRecoverable verifies original
+// annotation bytes after the development module is renamed.
+func TestHistoricalAccessBatchRemainsSignedAndRecoverable(t *testing.T) {
+	fixture := newFixture(t)
+	writeTest(t, fixture.root, "ark/access/go.mod", "module arkoren.dev/ark/access\n")
+	writeTest(t, fixture.root, ".github/release-modules.json", `{"schema":1,"public":["core","cmd/arkoren","driver/example","foundation/example"],"development":["ark/access"]}`)
+	writeTest(t, fixture.root, "core/payload.go", "package core\n")
+	sha := fixture.commit(t, "fix: historical access policy")
+	plan, err := release.PrepareHistorical(context.Background(), fixture.root, sha, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range plan.Modules {
+		if entry.Directory == "ark/access" {
+			t.Fatal("development module entered historical release plan")
+		}
+	}
+	batch, err := NewBatch(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := batch.Annotation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.push(t, batch)
+	recovered, err := VerifyTag(context.Background(), fixture.root, fixture.trust, "core/v0.1.1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := recovered.Annotation()
+	if err != nil || before != after {
+		t.Fatalf("signed historical annotation changed: %v", err)
+	}
+	if err := Recompute(context.Background(), fixture.root, recovered); err != nil {
+		t.Fatal(err)
+	}
+	command(t, fixture.root, "git", "mv", "ark/access", "ark/iam")
+	writeTest(t, fixture.root, "ark/iam/go.mod", "module arkoren.dev/ark/iam\n")
+	writeTest(t, fixture.root, ".github/release-modules.json", `{"schema":1,"public":["core","cmd/arkoren","driver/example","foundation/example"],"development":["ark/iam"]}`)
+	fixture.commit(t, "ci: rename development module")
+	if _, err := Recorded(context.Background(), fixture.root, fixture.trust); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHistoricalNoPolicyBatchSurvivesSchemaClassification(t *testing.T) {
 	fixture := newFixture(t)
 	command(t, fixture.root, "git", "rm", ".github/release-modules.json")

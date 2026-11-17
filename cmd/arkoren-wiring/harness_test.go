@@ -19,13 +19,12 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"arkoren.dev/ark/access"
-	"arkoren.dev/ark/access/account"
-	"arkoren.dev/ark/access/password"
+	"arkoren.dev/ark/iam"
+	"arkoren.dev/ark/iam/account"
+	"arkoren.dev/ark/iam/password"
 	"arkoren.dev/ark/oauth/oauthauth"
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/link"
-	"arkoren.dev/core/http/middleware/ratelimit"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -230,7 +229,7 @@ func (b *browser) get(path string, headers ...string) reply {
 
 // system is a composed facade behind a running server.
 type system struct {
-	iam      *access.Access
+	identity *iam.IAM
 	provider *fakeProvider
 	browser  *browser
 	verified []account.VerifyMessage
@@ -269,7 +268,7 @@ func newCipher(t *testing.T) *crypto.Encrypter {
 
 // newSystem composes the facade with the Google provider of the fake provider
 // over in-memory SQLite, runs the migrations and serves the routes.
-func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
+func newSystem(t *testing.T, configure ...iam.BuilderFunc) *system {
 	t.Helper()
 
 	return newSystemWith(t, true, true, configure...)
@@ -278,7 +277,7 @@ func newSystem(t *testing.T, configure ...access.BuilderFunc) *system {
 // newSystemWith is [newSystem] with the built-in users table and its email
 // verification when builtIn is true, and without them for a test that brings its
 // own users. signUp is the Google provider's ProviderBuilder.SignUp setting.
-func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...access.BuilderFunc) *system {
+func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...iam.BuilderFunc) *system {
 	t.Helper()
 
 	driver, err := sqlite.New(":memory:")
@@ -313,29 +312,29 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...access.Build
 	if err != nil {
 		t.Fatalf("link.New: %v", err)
 	}
-	sys.iam, err = access.New(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), append([]access.BuilderFunc{func(iam *access.Builder) {
-		iam.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })), func(passwords *password.Builder) {
+	sys.identity, err = iam.New(db, cache.New(memorycache.New()), append([]iam.BuilderFunc{func(identity *iam.Builder) {
+		identity.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })), func(passwords *password.Builder) {
 			passwords.Registration(true).Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
-				return sys.iam.SendReset(ctx, request)
+				return sys.identity.SendReset(ctx, request)
 			}, func(context.Context, password.ResetMessage) error { return nil })
 		})
 		if builtIn {
-			iam.Directory(func(accounts *account.Builder) {
+			identity.Directory(func(accounts *account.Builder) {
 				accounts.Verification(signer, func(ctx context.Context, request account.VerifyRequest) error {
-					return sys.iam.SendVerification(ctx, request)
+					return sys.identity.SendVerification(ctx, request)
 				}, sys.deliverVerification)
 			})
 		}
-		iam.TwoFactor(totp.New("Example"), newCipher(t))
-		iam.Tokens()
-		iam.Provider(google, func(login *access.ProviderBuilder) { login.SignUp(signUp) })
-		iam.Session(func(cookies *session.Builder) { cookies.AllowInsecure(true) })
+		identity.TwoFactor(totp.New("Example"), newCipher(t))
+		identity.Tokens()
+		identity.Provider(google, func(login *iam.ProviderBuilder) { login.SignUp(signUp) })
+		identity.Session(func(cookies *session.Builder) { cookies.AllowInsecure(true) })
 	}}, configure...)...)
 	if err != nil {
-		t.Fatalf("access.New: %v", err)
+		t.Fatalf("iam.New: %v", err)
 	}
 	migrator := migrate.New(db)
-	if err := migrator.Add(sys.iam.Migrations()...); err != nil {
+	if err := migrator.Add(sys.identity.Migrations()...); err != nil {
 		t.Fatalf("add migrations: %v", err)
 	}
 	if err := migrator.Up(t.Context()); err != nil {
@@ -349,8 +348,8 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...access.Build
 			return next(w, r.WithContext(oidc.ClientContext(r.Context(), sys.provider.httpClient())))
 		}
 	})
-	web := routes.With(sys.iam.Middleware())
-	sys.iam.Mount(web)
+	web := routes.With(sys.identity.Middleware())
+	sys.identity.Mount(web)
 	web.Get("/me", func(w http.ResponseWriter, r *http.Request) error {
 		identity, ok := auth.FromContext(r.Context())
 		if !ok {

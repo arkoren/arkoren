@@ -28,10 +28,10 @@ type Policy struct {
 
 // developmentRoots are the reviewed development-only module roots: the
 // maintenance command, the wiring module that tests the public modules
-// together, and ark/access, held back from release until its API settles
+// together, and ark/iam, held back from release until its API settles
 // (move it to public for its first release). Anything else needs a boundary
 // review first.
-var developmentRoots = []string{"ark/access", "cmd/arkoren-ci", "cmd/arkoren-wiring"}
+var developmentRoots = []string{"ark/iam", "cmd/arkoren-ci", "cmd/arkoren-wiring"}
 
 // canonical matches public module roots, never arbitrary command directories.
 var canonical = regexp.MustCompile(`^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$`)
@@ -39,6 +39,12 @@ var canonical = regexp.MustCompile(`^(core|cmd/arkoren|(driver|foundation|ark)/[
 // ParsePolicy rejects unknown fields, duplicates and overlapping classifications,
 // including a directory that is both public (or development) and retired.
 func ParsePolicy(data []byte) (Policy, error) {
+	return parsePolicy(data, false)
+}
+
+// parsePolicy applies the current boundary, with one explicit historical root
+// for replaying signed plans created before ark/access became ark/iam.
+func parsePolicy(data []byte, historical bool) (Policy, error) {
 	policy := Policy{}
 	err := json.Unmarshal(data, &policy, json.RejectUnknownMembers(true))
 
@@ -56,7 +62,7 @@ func ParsePolicy(data []byte) (Policy, error) {
 		seen[directory] = true
 	}
 	for _, directory := range policy.Development {
-		if seen[directory] || !slices.Contains(developmentRoots, directory) {
+		if seen[directory] || (!slices.Contains(developmentRoots, directory) && (!historical || directory != "ark/access")) {
 			return Policy{}, fmt.Errorf("unreviewed or duplicate development module: %s", directory)
 		}
 		seen[directory] = true

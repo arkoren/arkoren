@@ -92,6 +92,29 @@ Default scopes are `openid`, `profile` and `email`. The email stays empty unless
 the optional `xms_edov` claim is boolean true, so configure that claim in the app
 registration if you need it. It is still not a local-account key.
 
+For IAM invitations based on provider-verified email, configure `xms_edov` as an
+optional **ID-token** claim. Also configure the `auth_time` ID-token claim if
+you need the earlier provider authentication time for freshness checks.
+Merge the entries into `optionalClaims.idToken` without removing other claims:
+
+```json
+{
+  "optionalClaims": {
+    "idToken": [
+      { "name": "xms_edov" },
+      { "name": "auth_time" }
+    ]
+  }
+}
+```
+
+See Microsoft's [optional-claim configuration](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims).
+Newly issued tokens contain the configured claims; existing tokens do not
+change. Check claims in a controlled development tenant without logging or
+sharing complete tokens. A plain mutable `email` claim alone is not sufficient
+for this preset. A tenant ID includes guests admitted into that tenant; it is
+not itself a local membership decision. See [SSO](../iam/sso.md).
+
 See the [`Microsoft` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#Microsoft).
 
 ## GitHub
@@ -172,7 +195,7 @@ also supports [native login](native-login.md).
 
 Mounting only `r.Post` for Apple no longer works: add the `r.Get` route for the
 same path, as above. This is a breaking change for `form_post` providers. The
-[Access](../access/overview.md) ark already mounts both methods.
+[IAM](../iam/overview.md) ark already mounts both methods.
 
 See the [`Apple` API](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth#Apple).
 
@@ -196,7 +219,7 @@ The service's `email_verified` claim is not trusted by default. With the default
 `External.Email` is empty and `EmailVerified` false whatever the token says,
 because many OIDC services let users set an address they never proved, and
 trusting it would let such a user take over a local account with the same email
-(the [access facade](../access/connections.md#unverified-accounts) does exactly
+(the [IAM facade](../iam/federated-sign-in.md#unverified-accounts) does exactly
 that for a verified email). Turn trust on only for a service you operate or whose
 address verification you have reviewed:
 

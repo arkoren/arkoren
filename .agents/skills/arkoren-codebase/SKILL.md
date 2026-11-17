@@ -28,7 +28,7 @@ path reads `<module>/vN/<package>`, so a core major version never looks like
 |---|---|---|---|
 | Core | `core/` | one: `arkoren.dev/core` | Lifecycle, the HTTP path, services. No third-party dependencies. |
 | Drivers | `driver/<vendor>/` | one per vendor | Implement a `core/service/<x>` contract and run its `<x>test` conformance suite. Seams in `core/auth` (`UserDriver`, `authtest`) do not make a package a driver. A driver may own infrastructure tables (`postgressearch`). Webhook and CAPTCHA adapters are undecided: the contract test decides each one when it is built. `driver/mcp` and `driver/oauth` moved to `ark/mcp` and `ark/oauth`; the latter plugs into `core/auth`. |
-| Arks | `ark/<name>/` | one per ark, opt in with `go get` | Every other opt-in module that ships behaviour: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features, with extra duties for arks that own tables. `ark/access` (users, passwords, two-factor, tokens and linked accounts as five packages that never import each other), `ark/mcp` and `ark/oauth` are the first. |
+| Arks | `ark/<name>/` | one per ark, opt in with `go get` when released | Every other opt-in module that ships behaviour: protocol modules (OAuth client, SAML, MCP server, OAuth server) and features, with extra duties for arks that own tables. `ark/iam` (users, passwords, two-factor, tokens and linked accounts as five packages that never import each other), `ark/mcp` and `ark/oauth` are the first. |
 | Foundation | `foundation/<name>/` | one per package | Standard-library-only building blocks. |
 | CLI | `cmd/<name>/` | one: `arkoren.dev/cmd/arkoren` | The `arkoren` command, installed with `go install arkoren.dev/cmd/arkoren@latest` or recorded with `go get -tool arkoren.dev/cmd/arkoren@latest`. It uses the pinned official MCP SDK as a protocol client, without driver dependencies. Keep this footprint small because `go tool` dependencies land in the user's `go.mod`. Core remains SDK-free and never imports the CLI. |
 | Development | `cmd/arkoren-ci/` | `arkoren.dev/cmd/arkoren-ci` | Repository maintenance only; standard library only, with no dependency on toolkit or consumer CLI modules. Public source and vanity resolution do not imply a supported release/install namespace. Excluded from releases and the library API catalog. |
@@ -73,7 +73,7 @@ after inventory or workflow changes.
 Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
 working-tree inspection, or append `--commit FULL_SHA` to validate a committed
 inventory and its same-commit policy. CI/audits currently include 48 modules and
-16 integration suites; releases include only the 45 approved public modules (`ark/access` is
+16 integration suites; releases include only the 45 approved public modules (`ark/iam` is
 classified development-only until its first release).
 The development command uses standard flags, JSON stdout and JSON diagnostics on
 stderr. Its focused internal packages own inventory, release planning, exact-SHA
@@ -112,9 +112,9 @@ never dialect SQL or hand-written DDL), registers `OnForget`, ships
 instances. Arks without tables (protocol modules such as OAuth client, SAML, MCP
 server) have none of those four. Keep a provider compatibility matrix in the
 ark's guide wherever providers vary. Modules that need a third-party library
-stay separate arks; `ark/access` is dependency-free (core, foundation, stdlib),
+stay separate arks; `ark/iam` is dependency-free (core, foundation, stdlib),
 so it never imports `ark/oauth`. A development-only module,
-`cmd/arkoren-wiring`, requires both and proves they fit; until `ark/access` has
+`cmd/arkoren-wiring`, requires both and proves they fit; until `ark/iam` has
 a release it builds against the checkout with a local `replace`.
 
 ## How the pieces fit
@@ -359,21 +359,21 @@ dispatched on the body's "method", Fresh/RequireFresh/RecentLogin freshness,
 the Identity.Session marker with RequireSession, and the auth.External and
 auth.Resolver types. Core names only RFC 8176 methods; modules (twofactor,
 oauth) declare their own and publish auth.CredentialEnrolled. There is no
-provider interface in core. ark/access (v0.1.0; owner bootstrap) is the facade over
-these seams: access.New(db, store, clientIP, configure) builds the guard with the default
+provider interface in core. ark/iam (unreleased) is the facade over
+these seams: iam.New(db, store, configure) builds the guard with the default
 registries (second factor: otp then recovery; step up: pwd then otp; federated is
 no step-up method), Mount registers the JSON routes of the enabled features, and
 every credential handler requires Identity.Session and guard.Fresh (a user with
 no step-up method is fresh after any login). Registration and sign-up on a first provider login are off by default (password.Builder.Registration,
-access.ProviderBuilder.SignUp, per provider), and the token scope catalog takes its grant ceiling
-(apitoken.Builder.Grants, GrantTTL, AnyScope) with the shared cache given to NewIssuer. Handlers that read a body are wrapped in internal/web RequireJSON (core contenttype, application/json only, inside each handler constructor, never DELETE). A provider login whose email is verified takes over an unverified built-in user (federation.Builder.TakeOver, set only with the directory: delete password, purge, mark verified, rotate, link, in the login transaction), (it publishes federation.AccountClaimed and, after commit, calls guard.RevokeAll; a first sign-up needs a proven email, federation:email-unverified), and Access.Prune (apitoken.Issuer.Prune) is the scheduled cleanup of idle device, expired and version-dead tokens (GET /tokens hides the version-dead ones). Registration with the built-in users needs password.Builder.Reset. The package hooks the facade sets (password AfterChange/Registered/Taken, twofactor OnEnable/Verified, apitoken Verified, federation Verified/Fallback/TakeOver/Create) add up with the application's callbacks through internal/web (Then, Both, All, Any, First) instead of replacing them: keep new hook setters composing. The facade exposes no federation callbacks: `Builder.Provider(provider, configure ...ProviderBuilderFunc)` takes one call per provider (a duplicate name is ErrInvalidConfig) with its own `SignUp(bool)` and `Create(fn)`; it keeps one `federation.Links` and gives each provider's handlers `Links.Resolver(configure...)`, whose Create runs before the facade's. `Builder.OnEmailProven` and the other hook and list setters add up; `Password`, `TwoFactor` and `Tokens` replace their earlier call. AnyScope returns a private marker, so a literal "*" from a grant function is only a scope name; apitoken and the throttles use core ratelimit.AddressKey, not a local bucket. Packages account, password,
+iam.ProviderBuilder.SignUp, per provider), and the token scope catalog takes its grant ceiling
+(apitoken.Builder.Grants, GrantTTL, AnyScope) with the shared cache given to NewIssuer. Handlers that read a body are wrapped in internal/web RequireJSON (core contenttype, application/json only, inside each handler constructor, never DELETE). A provider login whose email is verified takes over an unverified built-in user (federation.Builder.TakeOver, set only with the directory: delete password, purge, mark verified, rotate, link, in the login transaction), (it publishes federation.AccountClaimed and, after commit, calls guard.RevokeAll; a first sign-up needs a proven email, federation:email-unverified), and IAM.Prune (apitoken.Issuer.Prune) is the scheduled cleanup of idle device, expired and version-dead tokens (GET /tokens hides the version-dead ones). Registration with the built-in users needs password.Builder.Reset. The package hooks the facade sets (password AfterChange/Registered/Taken, twofactor OnEnable/Verified, apitoken Verified, federation Verified/Fallback/TakeOver/Create) add up with the application's callbacks through internal/web (Then, Both, All, Any, First) instead of replacing them: keep new hook setters composing. The facade exposes no federation callbacks: `Builder.Provider(provider, configure ...ProviderBuilderFunc)` takes one call per provider (a duplicate name is ErrInvalidConfig) with its own `SignUp(bool)` and `Create(fn)`; it keeps one `federation.Links` and gives each provider's handlers `Links.Resolver(configure...)`, whose Create runs before the facade's. `Builder.OnEmailProven` and the other hook and list setters add up; `Password`, `TwoFactor` and `Tokens` replace their earlier call. AnyScope returns a private marker, so a literal "*" from a grant function is only a scope name; apitoken and the throttles use core ratelimit.AddressKey, not a local bucket. Packages account, password,
 twofactor, apitoken and federation never import each other; subjects are strings
 and cross-package writes join the context transaction of the one Database. A
 password reset calls Users.Rotate, which bumps UserRecord.Version and ends
-sessions, pending logins and API tokens; tokens never carry factors. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `iam.SendReset` or `iam.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use. ark/oauth requires core v0.8.x: Client.Name(),
+sessions, pending logins and API tokens; tokens never carry factors. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use. ark/oauth requires core v0.8.x: Client.Name(),
 LoginHandler() and CallbackHandler(guard, auth.Resolver) (with NonceHandler() and
 NativeHandler(guard, auth.Resolver) for Google and Apple ID tokens) match the
-Provider and NativeProvider interfaces that ark/access declares, so Client
+Provider and NativeProvider interfaces that ark/iam declares, so Client
 satisfies them structurally. CallbackHandler passes the verified auth.External to
 the resolver and the returned subject to Guard.Begin with oauth.MethodFederated
 (the guard stamps the factor time, keeping an earlier provider auth_time, which can only make the factor older; fresh=1 is recorded in the sealed login state; a generic OIDC provider trusts no email_verified unless OIDCBuilder.TrustEmail(true), and a multi-audience ID token needs azp equal to the client ID; federated

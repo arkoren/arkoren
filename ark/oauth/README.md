@@ -114,7 +114,7 @@ that is not absolute with a path. The hand-off expiry check tolerates 5 seconds 
 
 Breaking for `form_post` providers (Apple): the callback must now be mounted for both GET and POST. Before, a
 POST alone was enough. A GET that carries a code is rejected for these providers; only the hand-off from the
-POST completes the login. `ark/access` `Mount` already routes both methods. `RedirectURL` must be absolute with
+POST completes the login. `ark/iam` `Mount` already routes both methods. `RedirectURL` must be absolute with
 a path.
 
 ## Freshness
