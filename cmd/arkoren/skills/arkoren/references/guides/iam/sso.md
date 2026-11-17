@@ -146,7 +146,8 @@ invitation expiry or separate invitation-secret check.
 > transaction. Earlier sessions and pending logins become invalid. Trust a
 > provider's email evidence only after reviewing its verification policy.
 
-For a new invitation, create the account without attaching other credentials:
+From an authorized administrative operation, create the new invitation account
+without attaching other credentials:
 
 ```go
 subject, err := identity.Directory().Create(ctx, "ada@example.com")
@@ -223,7 +224,9 @@ and protecting operations used outside HTTP.
 
 Ending an upstream session does not revoke the application's local sessions
 or API tokens. When a person leaves, disable their built-in IAM account and
-rotate its credential version in the same database transaction:
+rotate its credential version in the same database transaction. Run this from
+an authorized administrative operation; `subject` is the local user selected
+for offboarding, not an unchecked identifier from a public request:
 
 ```go
 err := db.WithTransaction(ctx, func(ctx context.Context) error {
