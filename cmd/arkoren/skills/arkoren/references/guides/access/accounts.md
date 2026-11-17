@@ -1,100 +1,161 @@
 ---
 title: Sessions and Accounts
 nav: Sessions & Accounts
-description: List and end logins, delete an account, and see how the facade protects credential changes with fresh logins and verified emails.
-order: 70
+description: Manage active logins, suspend or remove users, and choose how credential changes and recovery affect existing access.
+order: 90
 summary:
-  - List a user's logins and end one or all others from the sessions routes.
-  - Add users through the built-in directory when registration and provider sign-up are off.
-  - Delete an account together with every feature's rows in one transaction.
-  - Know which routes need a browser session, a fresh login or a verified email, and what a changed credential ends.
-  - Review a user's connections after a reset, and know what a takeover ends.
+  - List and revoke session logins without mistaking them for device tokens.
+  - Set shared session policy and distinguish reversible suspension from credential-version rotation.
+  - Delete user-owned data through forget hooks and observe security changes without relying on notifications for enforcement.
 ---
 
 # Sessions and Accounts
 
-Users expect to see where they are logged in, end a login they do not recognize
-and delete their account. These routes are always mounted, except account deletion,
-which belongs to the built-in users. This page also gathers the rules that keep a
-stolen session or an unverified address from taking over an account.
+After login works, users need to recognize their active sessions and end
+access they no longer trust. Your application also needs administrative ways
+to suspend or delete a user. Access separates **login records** in the cache
+from the user and credentials in the database; deleting one session is not
+the same as revoking every credential.
 
-## Sessions
+This page assumes the [facade is mounted](overview.md#mount-routes).
+Session-management routes require a guard-authenticated session, not a bearer
+token. Administrative Go methods belong behind your application's own
+authorization, never on unprotected routes.
 
-`GET /sessions` answers `200` with the user's logins as a JSON array. The login of
-the request itself is marked `current`:
+## Manage Sessions
+
+`GET /sessions` returns `200` with the user's active login records.
+An abbreviated entry looks like:
 
 ```json
-[
-  {
-    "id": "Hq3...",
-    "created_at": "2026-11-15T09:30:00Z",
-    "seen_at": "2026-11-15T10:02:00Z",
-    "user_agent": "Mozilla/5.0 ...",
-    "ip": "203.0.113.7",
-    "current": true
-  }
-]
-```
-
-`user_agent` and `ip` are present when the guard records devices, which is the
-default, and are personal data. `seen_at` can lag by five minutes or more.
-
-`DELETE /sessions/{id}` ends the login with that id, on another device or this one,
-and answers `204`. An unknown id changes nothing. `DELETE /sessions` ends every
-login of the user except the one that made the request, and answers `204`. All
-three routes need a browser session; a bearer token is `401`. They do not need a
-fresh login.
-
-## Adding Users
-
-Registration (`passwords.Registration(true)`) and provider sign-up
-(`login.SignUp(true)`, set for each provider) are both off by default. Without them, no request creates a
-user, and your application adds users through the built-in directory, which the
-facade exposes as `iam.Directory()`:
-
-```go
-subject, err := iam.Directory().CreateVerified(ctx, "ada@example.com")
-if err != nil {
-	return err
+{
+  "id": "Hq3...",
+  "created_at": "2026-11-15T09:30:00Z",
+  "seen_at": "2026-11-15T10:02:00Z",
+  "current": true
 }
-err = iam.Verifier().Set(ctx, subject, initialPassword)
 ```
 
-`Create` adds a user with an unverified email, and the facade then refuses them
-connecting a provider, enrolling two-factor and creating tokens until
-`iam.Directory().RequestVerification(ctx, subject)` has dispatched an email
-whose link they followed (see [Sending Email Links](overview.md#sending-email-links)). `CreateVerified` is for users whose address you already know to be
-theirs, such as an invitation they accepted. An email already in use is
-`account.ErrEmailTaken`, and the facade never merges accounts. Run both calls in
-one `db.WithTransaction` when a half-created user must not remain, and give
-the user a way to log in: a password with `iam.Verifier().Set`, or a provider
-they connect themselves. With [your own users](own-users.md) you create users in
-your own store and the facade only sees their subjects.
+The actual response is an array. By default entries also include `user_agent`
+and `ip`; those are personal data. `seen_at` can lag by five minutes or more,
+so do not present it as an exact activity timestamp.
 
-Configure the built-in users with `iam.Directory`: email verification and the
-lifetime of its links. It cannot be combined with `iam.Users`, which replaces the
-built-in table; `New` fails with `access.ErrInvalidConfig`. `account` is
-`arkoren.dev/ark/access/account`:
+To end one listed login, send `DELETE /sessions/{id}`.
+Success is `204`, including for an unknown ID. The current login may also be
+revoked this way. To end every login except the caller's, send
+`DELETE /sessions`. Neither operation needs freshness, so a user can react
+to suspicious activity without first finding another credential.
+
+These requests do not revoke API tokens. A mobile login exchanged for a device
+token is no longer a session; manage it through the
+[token routes](tokens.md#manage-and-prune).
+
+## Session Policy
+
+The facade gives its guard and session middleware the same absolute lifetime:
+24 hours by default. Configure that once, not on each component independently:
 
 ```go
-iam.Directory(func(accounts *account.Builder) {
-	accounts.Verification(signer, dispatch, deliver).VerifyTTL(time.Hour)
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.Password(hasher)
+	iam.SessionLifetime(7 * 24 * time.Hour)
 })
 ```
 
-## Deleting Accounts
+This changes the maximum login age; it does not promise seven days without an
+idle expiry, cache eviction, revocation, or credential change.
+For idle lifetime and renewal, configure the session policy through
+`iam.Session` and follow the [session guide](../http-capabilities/sessions.md).
 
-`DELETE /account` deletes the logged-in user and answers `204`. It needs a browser
-session and a fresh login. The user's row and every feature's rows (passwords,
-two-factor, tokens, connections and login records) are
-removed in one transaction by the provider's forget hooks, and a failure of any
-leaves the user in place. The request's own session ends, and the facade publishes
-`account.UserDeleted` and core's `auth.UserForgotten`.
+For example, to use an application-specific cookie name, import `session`
+from `arkoren.dev/core/http/session`:
 
-With [your own users](own-users.md) the route is absent: you delete your users, and
-you call `provider.Forget` in the same transaction to remove every feature's rows.
-To remove rows of your own tables in the same way, register a hook on that
-provider:
+```go
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.Session(func(cookies *session.Builder) {
+		cookies.Name("__Host-acme.session")
+	})
+})
+```
+
+Keep the host-prefixed cookie's required secure, root-path, no-domain settings.
+This is a session-setting fragment; retain the login features you need.
+The facade applies its own absolute lifetime and default session handle after
+your callback. A `Guard` callback likewise cannot override the shared lifetime,
+handle, or client-address function.
+
+## Credential Changes
+
+A change intended to protect an account must not leave an attacker's earlier
+login working. Access applies these defaults:
+
+| Change | Session effect | Token effect |
+| --- | --- | --- |
+| Password change | End other logins; keep the caller | Revoke all |
+| Enable two-factor | End other logins; keep the caller | Revoke all |
+| Password reset | Rotate version; end all sessions and pending logins | Invalidate all |
+| Provider takeover of an unverified account | Rotate version; invalidate previous sessions and pending logins | Delete all |
+
+If users depend on long-lived personal tokens for scripts, you can preserve
+them for the first two changes. This also preserves personal tokens an
+attacker may have created using the old password. Accept that risk explicitly
+before configuring:
+
+```go
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.Password(hasher)
+	iam.Tokens()
+	iam.KeepPersonalTokens()
+})
+```
+
+Device tokens are still revoked. `KeepPersonalTokens` never exempts a token
+from a password reset, version rotation, or account deletion.
+The individual feature pages describe failure and recovery behavior;
+[Fresh Logins](freshness.md#credential-routes) owns the route requirements.
+
+## Suspend a User
+
+The built-in directory exposes `Disable(ctx, subject)` for reversible
+suspension. The next session, pending-login, token, or provider-login check
+rejects the disabled user. It does not delete their data.
+`Enable(ctx, subject)` clears the disabled flag.
+
+Disabling **does not** change the credential version. An unexpired token or
+otherwise valid session can become usable again after re-enabling.
+For offboarding, rotate the version as well, using the same database
+transaction:
+
+```go
+err := db.WithTransaction(ctx, func(ctx context.Context) error {
+	if err := iam.Directory().Disable(ctx, subject); err != nil {
+		return err
+	}
+
+	return iam.Directory().Rotate(ctx, subject)
+})
+```
+
+The old version's sessions, pending logins, and tokens remain invalid even
+after re-enabling. Rotation does not delete passwords, connections, or
+authenticators. Keep the user disabled while they must not sign in.
+
+The [provisioning example](overview.md#add-a-user) covers adding directory users.
+For provider-only invitations, use the different
+[unverified invitation path](organization-sign-in.md#invite-users), rather
+than assuming `CreateVerified` connects an unknown provider identity.
+
+## Delete an Account
+
+`DELETE /account` requires the current user's session and a fresh login.
+On success it returns `204`, deletes the built-in user and the enabled
+features' SQL rows, and ends the caller's session.
+This is destructive; your application decides how to confirm the deletion
+and whether additional business records must be removed or retained.
+
+The directory calls the shared user provider's **forget hooks** before
+deleting the user. Each hook receives the subject and the transaction context.
+To include application-owned posts, register a hook on that provider:
 
 ```go
 iam.UserProvider().OnForget(func(ctx context.Context, subject string) error {
@@ -102,84 +163,69 @@ iam.UserProvider().OnForget(func(ctx context.Context, subject string) error {
 })
 ```
 
-## Credential Changes
+Here `posts.DeleteBySubject` is your application's subject-filtered deletion
+using the same database and context. A hook error prevents the SQL transaction
+from committing. Cache changes or external side effects do not gain SQL
+rollback merely because their hook runs in that context.
+The guard's hook also removes cached login records.
 
-A stolen cookie or token must not be enough to take an account over. So every
-handler that adds, changes or removes a credential requires a browser session and a
-fresh login. A bearer token, even a valid one, is rejected with `401`, so a stolen
-token can never enroll a second factor or change a password.
+For administrative deletion, `iam.Directory().Delete(ctx, subject)` follows
+the same forget path. Deletion emits `account.UserDeleted` and core's
+`auth.UserForgotten`; an unknown subject returns `auth.ErrUserNotFound`.
+With [custom users](own-users.md#delete-your-users), the built-in account
+route is absent and you own the deletion transaction.
 
-A login is **fresh** when the user proved a factor of one of their step-up methods
-(`pwd` or `otp` by default) within the window, 15 minutes by default. Set another
-window with `iam.Guard(func(policy *auth.GuardBuilder) { policy.FreshFor(...) })`.
-A user who has no step-up method, such as someone who only signs in with a
-provider, is fresh right after any login, so a first enrollment needs nothing
-special. Otherwise the handler answers `403` with the methods the user can confirm
-with, and the client posts to `POST /confirm`, for example
-`{"method": "pwd", "password": "..."}`, then retries. A provider login is not a
-step-up method: it never makes a user who has a password or an authenticator fresh
-again. [Fresh Logins](freshness.md) explains the rule, what a provider's
-`auth_time` changes and why Google and GitHub users sign in again through the
-provider.
+## Security Notifications
 
-| Route | Browser session | Fresh login | Verified email |
-| --- | --- | --- | --- |
-| `PUT /password` | Yes | Yes | No |
-| `POST /two-factor/setup`, `POST /two-factor` | Yes | Yes | Yes |
-| `DELETE /two-factor`, `POST /two-factor/recovery-codes` | Yes | Yes (or a recovery code used within the window), and a recent second factor | No |
-| `POST /tokens` | Yes | Yes | Yes |
-| `POST /device-tokens` | Yes | A login at most five minutes old (`RecentLogin`, not `Fresh`) | Yes |
-| `POST /connections/{provider}` | Yes | Yes | Yes |
-| `DELETE /connections/{id}`, `DELETE /account` | Yes | Yes | No |
-| `GET /tokens`, `DELETE /tokens/{id}`, `GET /connections` | Yes | No | No |
-| `POST /email/verify`, `POST /email/verify/resend` | Yes | No | No |
-
-The checks live in the handlers, so they hold on custom paths too. With
-[your own users](own-users.md), the verified-email column applies only when you
-provide `Users.Verified`.
-
-What a change ends:
-
-- A password change ends the user's other logins and revokes all their tokens,
-  personal and device ones. Someone who stole the password can log in and create a
-  personal token, and that token must not outlive the change. If your users rely
-  on long-lived personal tokens for scripts and you accept the risk, call
-  `iam.KeepPersonalTokens()` to revoke only device tokens. It has no effect
-  without tokens.
-- Enabling two-factor ends the user's other logins and revokes their tokens the
-  same way, for the same reason, and `iam.KeepPersonalTokens()` limits it to
-  device tokens too.
-- A password reset rotates the user, which ends every session, pending login and
-  token. It does not delete the provider connections of a user whose email was
-  already verified: listen for `password.WasReset` and review them, as
-  [Access Overview](overview.md#events) describes.
-- A provider login that takes over an unverified account rotates the user the same
-  way, and also deletes the login records of the person who registered it. It
-  publishes `federation.AccountClaimed`.
-
-## Unverified Accounts
-
-Someone can register an address they do not own before its owner does, then attach
-a provider or an authenticator and wait. The facade closes this in three ways. Until
-the email is verified, the account cannot connect a provider, enroll two-factor or
-create tokens. A completed password reset, which proves the mailbox, marks the
-email verified and deletes every connection, the authenticator, the recovery codes
-and all tokens, in the reset's transaction. And a provider login whose email the
-provider verified [takes the account over](connections.md#unverified-accounts),
-which also deletes its password.
-
-If other modules registered credentials through `iam.SecondFactor` or `iam.StepUp`
-(a passkey package, say), the facade cannot know what to delete. Give it a hook:
+Events let you notify a user or record an audit observation. Pass your existing
+event bus when constructing the facade:
 
 ```go
-iam.OnEmailProven(passkeys.RemoveAll)
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.Password(hasher)
+	iam.Events(bus)
+})
 ```
 
-The hook receives the subject and runs inside the reset, or inside a provider login
-that [takes the account over](connections.md#unverified-accounts), after the
-built-in purge. An error rolls that reset or login back. It does not run when the email was already verified.
-With your own users, the purge needs `Users.Verified` and `Users.ProveEmail`; see
-[Your Own Users](own-users.md#verified-emails).
+The feature events carry local subjects, not emails, passwords, tokens, codes,
+or external identifiers:
 
-For every function and option, see
-[the `access` API reference](https://pkg.go.dev/arkoren.dev/ark/access).
+| Package | Events |
+| --- | --- |
+| `account` | `UserCreated`, `EmailVerified`, `UserDeleted` |
+| `password` | `Changed`, `WasReset` |
+| `twofactor` | `Enabled`, `Disabled`, `Regenerated`, `RecoveryUsed` |
+| `apitoken` | `Issued`, `Revoked` |
+| `federation` | `LinkCreated`, `LinkDeleted`, `AccountClaimed` |
+
+Core additionally emits credential-enrollment, user-forgotten, and
+second-factor-lockout events. Use the normal
+[listener lifecycle](../events/listeners.md) and keep callbacks short:
+they run in-process, not on an email worker. Notifications are not a durable
+audit log or a place to enforce a security decision.
+
+In particular, resetting an **already verified** account keeps its provider
+connections: they may be legitimate ways the owner signs in.
+After `password.WasReset`, review them under your recovery policy:
+
+```go
+connections, err := iam.Links().List(ctx, subject)
+```
+
+Only call this when providers are enabled; `iam.Links()` is nil otherwise.
+Ask the owner to review the list, or use `UnlinkAll(ctx, subject)` if your
+application's explicit policy revokes every connection on recovery.
+A provider takeover of an unverified account already purges connections and
+emits `federation.AccountClaimed`; review application-owned credentials too.
+A listener cannot extend or roll back the reset transaction.
+If your policy requires atomic removal from an already verified account,
+provide an application-owned transactional recovery flow.
+`OnEmailProven` handles unverified-mailbox cleanup only; it is not a hook for
+every reset.
+
+For an organization-specific application, continue with
+[Organization Sign-In](organization-sign-in.md).
+
+For directory administration and facade hooks, see the
+[`account` API](https://pkg.go.dev/arkoren.dev/ark/access/account) and
+[`access` API](https://pkg.go.dev/arkoren.dev/ark/access).

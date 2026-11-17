@@ -1,171 +1,144 @@
 ---
 title: Connections
-description: Sign in with external providers, connect them to existing accounts and handle native mobile login, with the access facade.
-order: 60
+description: Add external sign-in, control first-login sign-up per provider, and let signed-in users connect or disconnect their own identities.
+order: 80
 summary:
-  - Add providers that satisfy the facade's interface, such as the OAuth module's clients, one call each.
-  - Decide per provider whether an unknown identity may create a user, why sign-up needs a proven email, why accounts are never linked by email and how connecting works.
-  - Handle native ID-token login, disconnecting, Apple's form post and how a provider login interacts with step-up.
+  - Mount configured OAuth clients and decide what an unknown external identity may do.
+  - Connect a provider only through an explicit session-bound intent, never by matching a verified account's email.
+  - Understand unverified-account takeover, native mobile login, and Apple's callback requirements.
 ---
 
 # Connections
 
-Many users prefer to sign in with an account they already have. A connection links
-one external identity, an issuer and a subject that a provider verified, to one
-local user. Hand the facade each [OAuth](../oauth/overview.md) client you set up,
-in its own `Provider` call, and it mounts the routes and maps the verified
-identities to users:
+Users can sign in with an external account instead of another password.
+Access stores a **connection** from the provider's verified issuer and subject
+to a local user subject. Later sign-ins use that connection, not the user's
+email or mutable profile.
+
+Set up and start your clients using [OAuth](../oauth/overview.md) first.
+That module owns provider credentials, discovery, callback verification,
+and redirects; Access owns local users, connections, and login policy.
+The [provider comparison](../oauth/providers.md#compatibility-matrix)
+explains differences between Google, Microsoft, GitHub, Apple, and generic
+adapters.
+
+## Add Providers
+
+Give each configured client its own call in the constructor:
 
 ```go
-iam.Provider(google) // an *oauthauth.Client
-iam.Provider(github)
-```
-
-The facade declares a small `access.Provider` interface (`Name`, `LoginHandler`
-and `CallbackHandler`) that `*oauthauth.Client` satisfies, so the two modules never
-import each other. Each provider is mounted under its name, `GET /auth/google` and
-`GET` or `POST /auth/google/callback`. Names must be unique, and `New` rejects a
-name used in two `Provider` calls. Clients for generic OIDC providers are all called `oauth` until you
-rename them; see [Providers](../oauth/providers.md). You write no resolver: the
-facade uses one connection store for all providers and gives each provider's
-routes a resolver with that provider's own settings.
-
-## Signing In
-
-A known identity logs its user in, unless the user was deleted or disabled. What
-happens to an unknown identity is your decision, and by default it is refused:
-the callback answers `403` with the problem `federation:no-account` and creates
-nothing. The identity is verified, but the application has not opened sign-up
-with providers, so `403` fits better than `401`, which would invite retrying with
-other credentials. Nothing differs between identities, so the answer does not
-reveal who has an account.
-
-Sign-up is a setting of each provider, so you can open it for the provider whose
-users you trust and keep it closed for the others. To let a first login with a
-provider create a user, enable sign-up in that provider's call:
-
-```go
-iam.Provider(google)
-iam.Provider(github, func(login *access.ProviderBuilder) {
-	login.SignUp(true)
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.Provider(google)
+	iam.Provider(github)
 })
 ```
 
-Here a first login through GitHub creates a user, and one through Google is
-refused with `federation:no-account`.
+The clients satisfy `access.Provider`: Access asks them for their name,
+login handler, and callback handler. You do not write a resolver for mounted
+providers. Apply the connection migrations before serving.
 
-Sign-up needs an email the provider proved. A first login whose identity has no
-verified email, or no email at all, creates nothing and is refused with `403` and
-the problem `federation:email-unverified`: an account made from an unproven
-address would be an unverified one that the address's real owner could not tell
-from their own. A person in that position verifies the email with the provider or
-signs in another way. The new user is identified by the provider's email and
-starts verified. With [your own users](own-users.md), `Users.Create` receives the
-provider's email and `SignUp(true)` without `Users.Create` makes `New` fail with
-`access.ErrInvalidConfig`.
+`GET /auth/google` starts Google login; both `GET` and `POST`
+`/auth/google/callback` are mounted for its callback. Other clients follow the
+same name-based pattern. Names must be unique safe path segments containing
+only letters, digits, hyphens, and underscores, or `New` fails.
+Generic OAuth clients default to `oauth`; rename them in their client settings
+if you use more than one.
 
-To add your own rule, such as accepting only invited addresses, give the provider a
-`Create` function. It runs before the facade creates the user and returns the new
-user's subject; returning an empty subject and no error hands the identity on, so
-the facade still creates the user. Several `Create` calls run in the order added:
+A connected identity logs its local user in unless that user is disabled or
+deleted. If the user also has a second factor, the browser callback redirects
+to the client's configured `ChallengeURL`. Configure a front-end challenge
+page on every client whose users may need one; without it, such a callback
+fails rather than bypassing two-factor. The page completes
+[`POST /login/challenge`](two-factor.md#complete-a-login).
+
+## First-Time Sign-In
+
+An unknown external identity normally receives `403`
+`federation:no-account`. The exception is a provider-verified email that
+[claims an unverified built-in account](#unverified-accounts).
+Successful authentication at the provider does not otherwise grant membership
+in your application.
+
+To let one provider create new users, enable sign-up for that provider:
 
 ```go
-iam.Provider(entra, func(login *access.ProviderBuilder) {
-	login.SignUp(true)
-	login.Create(func(ctx context.Context, external auth.External) (string, error) {
-		if !strings.HasSuffix(external.Email, "@acme.example") {
-			return "", errNotInvited
-		}
-
-		return "", nil
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.Provider(google)
+	iam.Provider(github, func(login *access.ProviderBuilder) {
+		login.SignUp(true)
 	})
 })
 ```
 
-Your function must never return an existing user, because accounts are never
-linked by email. An error it returns reaches the client as it is; make it a
-`problem.Details` value to choose its status.
+Here GitHub can create a user; Google cannot. Both can still sign in connected
+identities or connect a provider from an existing user's settings.
 
-Sign-up does not affect the other two cases: an identity that is already
-connected always logs its user in, and a logged-in user can always connect a
-provider, whatever the provider's setting. With registration and sign-up both off, add users yourself; see
-[Adding Users](accounts.md#adding-users).
+Sign-up requires a nonempty email that the provider reports as verified;
+otherwise it returns `403` `federation:email-unverified` and creates nothing.
+New users start verified. With [your own users](own-users.md), Access calls
+`Users.Create` with that email and verified flag; enabling sign-up without
+`Users.Create` is a construction error.
 
-Accounts are never linked by email, with one exception for unverified accounts
-described under [Unverified Accounts](#unverified-accounts). If the email belongs
-to an existing, verified user and sign-up is on for the provider, the callback
-answers `409` with the problem `account:email-taken`: that user logs in and
-connects the provider from their settings. With sign-up off the same login is
-`403` with `federation:no-account`, like any unknown identity. Concurrent first
-logins of one identity create one user when sign-up is on.
+A matching email is not permission to attach a new identity to an existing
+**verified** account. With sign-up enabled, such a collision is `409`
+`account:email-taken`; with sign-up disabled, it remains `403`
+`federation:no-account`. The owner logs in another way and connects the provider.
+Concurrent first sign-ins of the same identity create one connected user.
 
-A login with a second factor enrolled is held pending like any other. The callback
-redirects to the OAuth client's challenge URL, where the page posts to
-`/login/challenge`. Set `ChallengeURL` on every OAuth client whose users may have
-two-factor on; without it the callback fails. See
-[Browser Login](../oauth/browser-login.md) for the routes, login state and failures
-on the OAuth side.
+If you need an additional sign-up rule, such as checking invitations, add
+`login.Create(checkInvitation)` in that provider's callback.
+`checkInvitation` is your
+`func(context.Context, auth.External) (string, error)`: return an error to
+refuse, `""` and nil to continue with normal user creation, or a newly created
+subject to handle creation yourself. Never return an existing user found by
+email. Multiple `Create` hooks run in order until one returns a subject;
+errors reach the client, so use a problem value for a safe public refusal.
+This hook applies to sign-up, not every later login.
 
 ## Unverified Accounts
 
-Registering with a password creates an unverified user, so someone can register
-an address that is not theirs. When the real owner later arrives with a provider
-that verified that address, the owner takes the account over instead of being
-turned away. In one transaction the facade:
+There is one deliberate email-based exception. If someone registered Ada's
+address without proving it, a provider identity with a verified matching email
+can claim that **unverified built-in account**. Without this rule, the earlier
+registrant could block the owner.
 
-1. deletes the stored password of the registered user;
-2. deletes what that user attached: connections, authenticator, recovery codes and
-   tokens;
-3. marks the email verified;
-4. rotates the user, which ends every session of the person who registered it;
-5. connects the new identity and logs the owner in.
+In one database transaction, Access marks the address verified, deletes the old
+password and attached connections, authenticator, recovery codes, and tokens,
+rotates the credential version, and connects the owner's identity.
+Database failure rolls back that takeover. Rotation invalidates the earlier
+holder's sessions and pending logins; after commit, Access also attempts
+best-effort removal of their cached login records.
 
-If any step fails, nothing changes. After the commit the facade also deletes the
-login records of that user, so the registrant's logins disappear from the session
-list as well as stopping to work, and it publishes `federation.AccountClaimed`
-with the subject, next to `LinkCreated`. Listen for it to notify the owner or
-audit the takeover. This is the same removal a
-[password reset](passwords.md#verify-emails) performs when it proves the
-mailbox, plus the password. It needs no sign-up, because no user is created, so
-it also applies when sign-up is off. A disabled user is never taken over: the
-callback answers `401` and nothing changes.
+The takeover emits `federation.AccountClaimed` alongside `LinkCreated`.
+It applies even with provider sign-up disabled, because it creates no user.
+A disabled user cannot be claimed or re-enabled this way.
+An already verified account is never taken over.
 
-Only a verified email counts. The `EmailVerified` of the provider's identity must
-be true and the existing user must be unverified; an unverified or empty email
-goes through the usual rules and a verified user is never touched. The OAuth
-presets set it from the provider's own evidence: Google's `email_verified`,
-GitHub's primary verified address, Apple's `email_verified` and Microsoft's
-`xms_edov` claim (the email domain is verified by its owner). A generic
-`oauth.OIDC` client reports no email at all unless you opt in with
-`TrustEmail(true)`, as [Providers](../oauth/providers.md#generic-oidc) explains, so
-with it off such a provider can sign people in but can neither create a user nor
-take an account over. Microsoft's plain
-`email` claim is mutable and unverified, so the preset withholds the address
-without `xms_edov`: add that optional claim in the app registration, or Microsoft
-logins never carry an email. If you write your own provider, set `EmailVerified`
-only on positive evidence from it, because this rule trusts it with an account.
+This rule trusts the provider's email evidence with account ownership.
+Google, GitHub, Apple, and Microsoft presets derive it from their own
+verified-email checks; Microsoft requires `xms_edov`.
+Generic OIDC reports no email by default. Enable its `TrustEmail(true)` only
+after reviewing the provider's address-verification policy.
+See [provider email handling](../oauth/providers.md) before enabling sign-up
+or using pre-created unverified accounts.
 
-## Connecting a Provider
+For application-owned credentials, register
+[`OnEmailProven`](own-users.md#additional-credentials) so a takeover or recovery
+also removes credentials Access does not know about. Automatic provider
+takeover is unavailable with a custom user store; it cannot assume that your
+login identifier is an email.
 
-A logged-in user connects a provider from their settings with
-`POST /connections/{provider}`. It needs a browser session, a fresh login and a
-verified email (`403` with `account:email-unverified` otherwise), so whoever registered an
-address first cannot attach a provider before its owner proves it. It stores a
-single-use intent in the session for ten minutes and answers `303` to
-`/auth/{provider}`. When that callback completes in the same session, the identity
-is linked to the logged-in user, whether or not sign-up is on. An unknown provider name
-is `404`.
+## Connect a Provider
 
-Because connecting is a POST, a cross-site request to the provider's login route
-alone can never link an identity to a victim. For the same reason the route is
-wrapped in the facade's JSON check: a request without `Content-Type:
-application/json`, such as a plain HTML form, is `415`.
+A user who already has an account connects a provider from account settings.
+`POST /connections/{provider}` requires a session, a
+[fresh proof](freshness.md), and a verified email.
+It stores a single-use intent in that session for ten minutes and returns
+`303` to the provider's login URL. The callback must complete in the same session.
 
-A browser therefore cannot connect with a link or a form. Your front end sends the
-POST with `fetch` and the JSON content type, then navigates to the provider's login
-route itself. The `303` is not for the page to follow: the intent is already stored
-in the session when the answer arrives, and the login route is always
-`/auth/{provider}`, so ignore the redirect and navigate there:
+Do not use a plain link or HTML form: a GET to provider login must not link an
+identity, and the connect POST requires the JSON media type.
+In a same-origin front end, first store the intent:
 
 ```js
 const response = await fetch(`/connections/${provider}`, {
@@ -173,72 +146,104 @@ const response = await fetch(`/connections/${provider}`, {
   headers: { "Content-Type": "application/json" },
   redirect: "manual",
 });
+```
+
+Here `provider` is an enabled provider name selected by your UI.
+With manual redirects, a successful `303` appears as an opaque redirect.
+Check that result before navigating:
+
+```js
 if (response.type !== "opaqueredirect") {
-  throw new Error(`connect failed with ${response.status}`);
+  throw new Error(`Connect failed with status ${response.status}`);
 }
 location.assign(`/auth/${provider}`);
 ```
 
-With `redirect: "manual"` the browser hands the `303` back as an opaque redirect
-instead of following it, while a failure (`401`, `403`, `404` or `415`) arrives as
-an ordinary response whose problem body you can show.
+Failures such as `401`, `403`, `404`, or `415` remain ordinary responses;
+display the problem and, if needed, confirm identity before trying again.
+An unknown provider is `404`. Provider sign-up may stay disabled throughout
+this connection flow.
 
-An identity that belongs to another user is `409` with `federation:linked-elsewhere`,
-and a user holds one connection per issuer: a callback that would give them a second
-identity of an issuer they already have is `409` with `federation:already-linked`. `GET /connections` lists them as `id`, `issuer`, `created_at` and
-`last_used_at`, and needs a browser session. `DELETE /connections/{id}` removes one
-and needs a fresh login. Removing the user's last way to log in is `409`: the user
-needs a password or another connection first. No email or profile data is stored.
+The callback returns `409` if the identity belongs to someone else, or the user
+already has another connection for that issuer. Each user can have one
+connection per issuer.
+
+## List and Disconnect
+
+`GET /connections` needs a session and returns connection metadata:
+`id`, `issuer`, `created_at`, and `last_used_at`. Access stores no provider
+email or profile data in the connection.
+
+`DELETE /connections/{id}` also needs a fresh proof and returns `204`.
+Removing the last login method returns `409` `federation:last-link`;
+the user must first have a password or another connection. An unknown or
+unowned connection is `404`.
+
+Connections publish `federation.LinkCreated` and `LinkDeleted` for
+[notifications](accounts.md#security-notifications).
+Provider login does not replace a local step-up proof; see
+[Fresh Logins](freshness.md#provider-logins).
 
 ## Native Login
 
-Providers that also implement `access.NativeProvider`, the Google and Apple
-clients, get two more routes for mobile apps that sign in with the provider's SDK:
+Google and Apple also support native ID-token login through their mobile SDKs.
+Access mounts nonce and native-login routes for clients implementing
+`access.NativeProvider`. The shared OAuth client has those methods for every
+preset, but presets without native support return `oauthauth.ErrUnsupported`;
+route presence is not proof of support.
 
-1. `GET /auth/{name}/nonce` returns `{"nonce": "..."}` and stores it in the
-   session. The app passes it to the SDK.
-2. `POST /auth/{name}/native` with `{"id_token": "..."}` verifies the token and
-   answers like any login: `204`, or `202` with the second-factor methods.
+For a supported, audience-configured client:
 
-The app keeps its cookie jar for these two calls, then exchanges the login for a
-[device token](tokens.md#mobile-login). The OAuth client must list the app's client
-IDs with `NativeAudiences`; see [Native Login](../oauth/native-login.md).
+1. `GET /auth/{name}/nonce` returns a nonce and stores it in the temporary
+   session. Pass it to the provider SDK as required by that provider.
+2. Submit the SDK's ID token to `POST /auth/{name}/native`:
+
+```json
+{
+  "id_token": "..."
+}
+```
+
+The result is `204`, or `202` when a second-factor challenge remains.
+Keep the same cookie jar for the nonce, native login, and any challenge;
+then [exchange the login for a device token](tokens.md#exchange-a-mobile-login).
+Configure the accepted app client IDs with `NativeAudiences`.
+[Native Login](../oauth/native-login.md) covers Google's raw nonce and Apple's
+hashed nonce requirements.
 
 ## Apple Callback
 
-Sign in with Apple answers with a cross-site `POST` form to
-`/auth/apple/callback`. A browser sends that request with an `Origin` of
-`appleid.apple.com`, which core's CSRF middleware refuses unless you allow this one
-route. The sealed login cookie and the `state` value are the defense for this
-route, so exempt only its pattern, on a protection you give the middleware:
+Apple sends a cross-site form POST. Keep CSRF protection on account routes,
+but exempt exactly Apple's callback pattern. Its sealed OAuth state and
+single-use callback handoff protect the protocol route instead.
+
+With standard-library `net/http`, create the narrowly scoped exception:
 
 ```go
 engine := http.NewCrossOriginProtection()
 engine.AddInsecureBypassPattern("POST /auth/apple/callback")
+```
 
+Pass that protection to `csrf` from
+`arkoren.dev/core/http/middleware/csrf` when mounting Access:
+
+```go
 web := routes.With(csrf.Middleware(func(protection *csrf.Builder) {
 	protection.Protection(engine)
 }), iam.Middleware())
 iam.Mount(web)
 ```
 
-Use the name of your Apple client in the pattern; the facade mounts it at
-`/auth/{name}/callback`, and the Apple preset is named `apple`. Without the
-exemption the callback is blocked and no Apple login completes. The same
-route-level `POST` needs `SameSite=Lax` session cookies, which are the default;
-see [Browser Login](../oauth/browser-login.md).
+Use your client's actual name if it is not `apple`.
+HTTPS is required. Keep the default `SameSite=Lax` session policy:
+Apple's POST verifies the identity and redirects to a GET on the same callback;
+that GET must receive the existing session to connect the right account.
+`Mount` registers both methods. Do not add a second callback or disable CSRF
+for the whole authentication area.
 
-## Step-Up
+Next, use [Sessions and Accounts](accounts.md) to manage the local access
+these login methods create, or apply this flow to
+[organization sign-in](organization-sign-in.md).
 
-A provider login proves who the user is, but it is not a step-up method. A user who
-has a password or an authenticator is not made fresh by signing in again through a
-provider, so changing a credential still needs `POST /confirm` with one of their
-methods. A user who signs in only through providers has no step-up method and is
-fresh right after logging in. The provider's `auth_time` claim can only make the
-login older than the callback, never fresher; [Fresh Logins](freshness.md#provider-logins)
-explains what that means for each provider.
-
-Connections publish `federation.LinkCreated` and `federation.LinkDeleted` events.
-
-For every function and option, see
-[the `federation` API reference](https://pkg.go.dev/arkoren.dev/ark/access/federation).
+For connections and resolver hooks, see the
+[`federation` API reference](https://pkg.go.dev/arkoren.dev/ark/access/federation).
