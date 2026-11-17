@@ -215,7 +215,8 @@ api.Use(auth.Require())
 
 Scope checks and resource permissions belong in
 [Authorization Policies](../authorization/policies.md). The token's scopes travel
-on the `auth.Identity`, so `gate.HasScopes` checks them for the mapped identity.
+on the `auth.Identity`, so `gate.HasScopes`, from `arkoren.dev/core/auth/gate`,
+checks them for the mapped identity.
 Token scopes limit the presented credential's authority rather than
 replacing the account's resource permissions.
 

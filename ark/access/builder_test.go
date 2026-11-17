@@ -49,7 +49,7 @@ func TestSignUpWithoutCreateIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(iam *access.Builder) {
-		iam.Users(ownUsersWithoutCreate(t)).Provider(fakeProvider{name: "fake"}).Federation(signUp)
+		iam.Users(ownUsersWithoutCreate(t)).Provider(fakeProvider{name: "fake"}, signUp)
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -139,6 +139,60 @@ func TestDirectoryCallbacksReachTheBuiltInUsers(t *testing.T) {
 		}
 		if left := time.Until(sys.box.lastVerify(t).ExpiresAt); left <= 0 || left > time.Hour {
 			t.Fatalf("verification link expires in %v, want at most an hour", left)
+		}
+	})
+}
+
+// TestPasswordLaterCallReplacesTheEarlier verifies the configuration of the
+// last Password call is the whole configuration: the registration an earlier
+// call enabled is gone.
+func TestPasswordLaterCallReplacesTheEarlier(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Password(hasher(), registration)
+			iam.Password(hasher())
+		})
+		if sys.router.Has(http.MethodPost, "/register") {
+			t.Fatal("POST /register is mounted, want the second Password call to replace the first")
+		}
+	})
+}
+
+// TestTwoFactorLaterCallReplacesTheEarlier verifies the last TwoFactor call
+// replaces the cipher of the earlier one, in both directions.
+func TestTwoFactorLaterCallReplacesTheEarlier(t *testing.T) {
+	t.Parallel()
+
+	if _, err := newFacade(t, func(iam *access.Builder) {
+		iam.TwoFactor(totp.New("Example"), nil)
+		iam.TwoFactor(totp.New("Example"), cipher(t))
+	}); err != nil {
+		t.Fatalf("New with a valid last call = %v, want nil", err)
+	}
+	_, err := newFacade(t, func(iam *access.Builder) {
+		iam.TwoFactor(totp.New("Example"), cipher(t))
+		iam.TwoFactor(totp.New("Example"), nil)
+	})
+	if !errors.Is(err, access.ErrInvalidConfig) {
+		t.Fatalf("New with an invalid last call = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// TestTokensLaterCallReplacesTheEarlier verifies the configure callbacks of an
+// earlier Tokens call are dropped: personal tokens an earlier call turned off
+// work again.
+func TestTokensLaterCallReplacesTheEarlier(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(iam *access.Builder) {
+			iam.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
+			iam.Tokens()
+		})
+		if !sys.router.Has(http.MethodPost, "/tokens") {
+			t.Fatal("POST /tokens is not mounted, want the second Tokens call to replace the first")
 		}
 	})
 }

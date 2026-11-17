@@ -35,7 +35,10 @@ iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	})
 	iam.TwoFactor(scheme, cipher)
 	iam.Tokens()
-	iam.Provider(google, github)
+	iam.Provider(google)
+	iam.Provider(github, func(login *access.ProviderBuilder) {
+		login.SignUp(true) // off by default, set per provider
+	})
 })
 if err != nil {
 	return err
@@ -66,7 +69,9 @@ schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) 
 The hooks the facade sets on its packages (token revocation after a password
 change, the verified-email gates, the takeover, user creation, the registration
 notices) add up with the callbacks you give, so an application callback cannot
-drop them. A provider login whose email the provider verified takes over an
+drop them. `Provider` takes one call per provider, with that provider's own
+sign-up and creation settings; `Password`, `TwoFactor` and `Tokens` replace their
+earlier call. A provider login whose email the provider verified takes over an
 unverified account and publishes `federation.AccountClaimed`; a first provider
 sign-up needs a proven email. A reset does not purge the connections of a verified
 user, so review them after one. Read the [Access guide](../../cmd/arkoren/skills/arkoren/references/guides/access/overview.md)

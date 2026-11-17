@@ -21,14 +21,15 @@ func need(enabled bool, handler, requirement string) {
 
 // RegisterHandler returns the handler of POST /register; see
 // [password.Verifier.RegisterHandler]. It always answers 202 and does not log
-// the user in. With the built-in users and [account.Builder.Verification] it
-// dispatches a verification email for a new user; for a taken address it creates
-// nothing and dispatches, in the same way, a reset notice to the owner
-// ([password.Builder.Reset]) or, without Reset, a verification email for the
-// owner. Without Verification nothing is dispatched on either path. The work is
-// the same on both paths, so the answer and its time do not tell them apart; a
-// failing dispatch is logged and the answer stays 202. It panics unless
-// [Builder.Password] is enabled with [password.Builder.Registration].
+// the user in. With the built-in users it dispatches nothing unless
+// [account.Builder.Verification] is also configured: then a new user gets a
+// verification email and, for a taken address, nothing is created and the owner
+// gets a reset notice ([password.Builder.Reset], which registration with the
+// built-in users requires). With Reset only, nothing is dispatched for a new or
+// a taken address, so both cost the same. The work is the same on both paths,
+// so the answer and its time do not tell them apart; a failing dispatch is
+// logged and the answer stays 202. It panics unless [Builder.Password] is
+// enabled with [password.Builder.Registration].
 //
 // Example:
 //

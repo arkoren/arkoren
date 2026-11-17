@@ -95,7 +95,7 @@ func TestProviderFirstLoginCreatesVerifiedUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		first := sys.client.NewDevice()
 		if reply := first.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
@@ -168,7 +168,7 @@ func TestProviderUnverifiedEmailCreatesNoUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), "")
 		if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "ark/access:federation:email-unverified") {
@@ -188,7 +188,7 @@ func TestProviderNeverLinksByEmail(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		device := sys.client.NewDevice()
@@ -210,7 +210,7 @@ func TestConnectFlowLinksAndListsAndDisconnects(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		connect := sys.client.Post("/connections/fake", "")
@@ -244,7 +244,7 @@ func TestDisconnectLastWayInConflicts(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		device := sys.client.NewDevice()
 		device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
@@ -264,7 +264,7 @@ func TestSilentFederatedReloginNotFreshForUserWithPassword(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Password(hasher(), registration)
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		sys.client.Post("/connections/fake", "")
@@ -296,7 +296,7 @@ func TestNativeRoutesOnlyForNativeProviders(t *testing.T) {
 
 	db := memoryDatabase(t)
 	sys := newApp(t, db, newInstance(t), func(iam *access.Builder) {
-		iam.Provider(fakeProvider{name: "web"}, nativeProvider{fakeProvider{name: "phone"}})
+		iam.Provider(fakeProvider{name: "web"}).Provider(nativeProvider{fakeProvider{name: "phone"}})
 	})
 	for _, route := range []struct {
 		method, path string
@@ -340,7 +340,7 @@ func TestNewRejectsDuplicateProviderNames(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacade(t, func(iam *access.Builder) {
-		iam.Provider(fakeProvider{name: "oauth"}, fakeProvider{name: "oauth"})
+		iam.Provider(fakeProvider{name: "oauth"}).Provider(fakeProvider{name: "oauth"})
 	})
 	if !errors.Is(err, access.ErrInvalidConfig) || !strings.Contains(err.Error(), "oauth") {
 		t.Fatalf("error = %v, want a duplicate-name rejection", err)
@@ -462,7 +462,7 @@ func TestTakeOverPublishesAccountClaimed(t *testing.T) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
 			iam.Events(bus)
 			iam.Password(hasher(), registration)
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp)
+			iam.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "fresh", "new@example.com", true), "")
 		if len(claimed) != 0 {

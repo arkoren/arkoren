@@ -14,7 +14,8 @@ go get arkoren.dev/ark/oauth
 import oauth "arkoren.dev/ark/oauth/oauthauth"
 ```
 
-The examples also use `auth` and `gate` from `arkoren.dev/core/auth`, `session`
+The examples also use `auth` from `arkoren.dev/core/auth`, `gate` from
+`arkoren.dev/core/auth/gate`, `session`
 from `arkoren.dev/core/http/session`, `csrf` from `arkoren.dev/core/http/middleware/csrf`, `application` from
 `arkoren.dev/core/application`, and standard-library `context` and `os`.
 
@@ -342,6 +343,6 @@ Google callbacks use the same direct ordered once-only rules and detach the comp
 OIDC, OAuth2, Apple, Microsoft, and GitHub have no optional builders.
 
 For provider-specific email handling, Apple callback setup, and event payloads,
-follow the [browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/oauth/overview.md).
+follow the [browser login guide](../../cmd/arkoren/skills/arkoren/references/guides/oauth/browser-login.md).
 For every exported identifier, see the
 [`oauthauth` API reference](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth).

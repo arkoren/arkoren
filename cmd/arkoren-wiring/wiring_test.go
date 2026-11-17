@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"arkoren.dev/ark/access"
-	"arkoren.dev/ark/access/federation"
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/auth/memoryauth"
 )
@@ -146,7 +145,7 @@ func TestOwnUsersThroughAccessUsers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
-	sys := newSystemWith(t, false, func(iam *access.Builder) {
+	sys := newSystemWith(t, false, true, func(iam *access.Builder) {
 		iam.Users(access.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
 			Verified:   func(context.Context, string) (bool, error) { return true, nil },
 			ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
@@ -187,9 +186,7 @@ func socialLogin(t *testing.T, sys *system, b *browser, subject, email string) r
 func TestSocialLoginWithoutSignUpIsRefused(t *testing.T) {
 	t.Parallel()
 
-	sys := newSystem(t, func(iam *access.Builder) {
-		iam.Federation(func(links *federation.Builder) { links.SignUp(false) })
-	})
+	sys := newSystemWith(t, true, false)
 	social := sys.browser.device()
 	if r := socialLogin(t, sys, social, "g1", "grace@example.com"); r.status != http.StatusForbidden {
 		t.Fatalf("social login = %d %s, want 403", r.status, r.body)

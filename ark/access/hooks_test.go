@@ -13,7 +13,6 @@ import (
 
 	"arkoren.dev/ark/access"
 	"arkoren.dev/ark/access/apitoken"
-	"arkoren.dev/ark/access/federation"
 	"arkoren.dev/ark/access/password"
 	"arkoren.dev/ark/access/twofactor"
 )
@@ -137,62 +136,15 @@ func TestAppVerifiedKeepsTokenGate(t *testing.T) {
 	})
 }
 
-// TestAppVerifiedKeepsConnectGate verifies an unverified user still cannot
-// connect a provider when the application sets a Verified check that admits all.
-func TestAppVerifiedKeepsConnectGate(t *testing.T) {
+// TestProviderCreateKeepsTheFacadesSignUp verifies a first login still creates
+// a verified user when the provider's Create function declines.
+func TestProviderCreateKeepsTheFacadesSignUp(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher(), registration)
-			iam.Provider(fakeProvider{name: "fake"}).Federation(func(links *federation.Builder) {
-				links.Verified(allVerified)
-			})
-		})
-		register(t, sys.client, "ada@example.com")
-		if reply := sys.client.Post("/connections/fake", ""); reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "account:email-unverified") {
-			t.Fatalf("connect by an unverified user = %d %s, want 403 email-unverified", reply.Status, reply.Body)
-		}
-	})
-}
-
-// TestAppTakeOverKeepsTheFacadesTakeover verifies a provider login whose email
-// is verified still takes over the unverified account when the application sets
-// a TakeOver function that declines.
-func TestAppTakeOverKeepsTheFacadesTakeover(t *testing.T) {
-	t.Parallel()
-
-	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher(), registration)
-			iam.Provider(fakeProvider{name: "fake"}).Federation(func(links *federation.Builder) {
-				links.TakeOver(func(context.Context, auth.External) (string, error) { return "", nil })
-			})
-		})
-		register(t, sys.client, "ada@example.com")
-		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
-		owner := sys.client.NewDevice()
-		if reply := owner.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
-			t.Fatalf("owner callback = %d %s, want 204", reply.Status, reply.Body)
-		}
-		if me := owner.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, squatted+"|") {
-			t.Fatalf("owner /me = %q, want the registered user %s", me.Body, squatted)
-		}
-		if reply := sys.client.NewDevice().Post("/login", login); reply.Status == http.StatusNoContent {
-			t.Fatalf("the squatter's password still logs in: %d", reply.Status)
-		}
-	})
-}
-
-// TestAppCreateKeepsTheFacadesSignUp verifies a first login still creates a
-// verified user when the application sets a Create function that declines.
-func TestAppCreateKeepsTheFacadesSignUp(t *testing.T) {
-	t.Parallel()
-
-	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Provider(fakeProvider{name: "fake"}).Federation(signUp, func(links *federation.Builder) {
-				links.Create(func(context.Context, auth.External) (string, error) { return "", nil })
+			iam.Provider(fakeProvider{name: "fake"}, signUp, func(login *access.ProviderBuilder) {
+				login.Create(func(context.Context, auth.External) (string, error) { return "", nil })
 			})
 		})
 		device := sys.client.NewDevice()
@@ -205,30 +157,6 @@ func TestAppCreateKeepsTheFacadesSignUp(t *testing.T) {
 		}
 		if verified, _ := sys.iam.Directory().Verified(testContext(t), subject); !verified {
 			t.Fatal("the user the facade created from a verified identity is not verified")
-		}
-	})
-}
-
-// TestAppFallbackKeepsThePasswordFallback verifies a user with a password can
-// still remove their last connection when the application sets a Fallback that
-// says no.
-func TestAppFallbackKeepsThePasswordFallback(t *testing.T) {
-	t.Parallel()
-
-	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(iam *access.Builder) {
-			iam.Password(hasher(), registration)
-			iam.Provider(fakeProvider{name: "fake"}).Federation(func(links *federation.Builder) {
-				links.Fallback(func(context.Context, string) (bool, error) { return false, nil })
-			})
-		})
-		registerVerified(t, sys, sys.client, "ada@example.com")
-		if err := sys.iam.Links().Link(testContext(t), mustSubject(t, sys), auth.External{Issuer: "https://fake.example", Subject: "g1"}); err != nil {
-			t.Fatalf("Link: %v", err)
-		}
-		id := between(sys.client.Do(http.MethodGet, "/connections", "").Body, `"id":"`, `"`)
-		if reply := sys.client.Do(http.MethodDelete, "/connections/"+id, ""); reply.Status != http.StatusNoContent {
-			t.Fatalf("disconnect the last connection of a user with a password = %d %s, want 204", reply.Status, reply.Body)
 		}
 	})
 }

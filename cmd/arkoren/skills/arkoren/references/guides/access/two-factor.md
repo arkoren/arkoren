@@ -14,7 +14,8 @@ A password alone can be guessed, phished or leaked. Two-factor adds a time-based
 one-time password (TOTP) from an authenticator app, plus single-use recovery codes
 for a lost phone. Enable it with a TOTP scheme, which
 carries the name authenticator apps show for the account, and a
-[cipher](../encryption/overview.md) that encrypts the secrets:
+[cipher](../encryption/overview.md) that encrypts the secrets. `totp` is
+`arkoren.dev/foundation/totp`:
 
 ```go
 scheme := totp.New("Acme") // the name authenticator apps show for this account
@@ -41,9 +42,10 @@ with a second factor enrolled is parked until the user answers one of them at
 ## Enroll an Authenticator
 
 Enrollment has two steps, and both need a browser session, a fresh login and a
-verified email (`403` `email-unverified` otherwise). A user without a step-up
-method is fresh right after logging in, so the first enrollment needs no extra
-step.
+verified email (`403` with `account:email-unverified` otherwise). A user is fresh
+right after logging in with a step-up method, such as their password, and a user
+with no step-up method is fresh after any login, so the first enrollment needs no
+extra step.
 
 `POST /two-factor/setup` stores a pending secret and answers `200`:
 

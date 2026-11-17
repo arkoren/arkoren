@@ -59,7 +59,8 @@ old session ID was retired.
 > [!NOTE]
 > With the [Access](../access/overview.md) ark you write no mapper:
 > `iam.Provider(client)` mounts these routes and maps identities through its
-> connection store, with connect and disconnect, never linking by email. See
+> connection store, with connect and disconnect, never linking by email. It also
+> sets whether a first login may create a user, for each provider separately. See
 > [Access Connections](../access/connections.md). The rest of this section shows
 > how to write the mapper yourself.
 
@@ -105,12 +106,20 @@ other application errors pass through unchanged.
 
 `external.Email` is optional profile data, and `external.EmailVerified` says
 whether the provider vouched for it. The [provider rules](providers.md) set both
-differently: Google, Microsoft and GitHub leave the email empty unless they can
-vouch for it, while generic OIDC and Apple pass it through with
-`EmailVerified` taken from the `email_verified` claim (a boolean, or Apple's
-string `"true"`), and generic OAuth2 uses whatever your user-info function
-returns. Link by email only when `EmailVerified` is true and your policy allows
-it, and still prefer the issuer and subject link. The display name is
+differently:
+
+- Google, Microsoft and GitHub keep the email only when they can vouch for it, and
+  leave it empty otherwise.
+- Generic OIDC blanks the email and sets `EmailVerified` to false, whatever the
+  token says, unless you set `TrustEmail(true)` and the `email_verified` claim is
+  the boolean `true`.
+- Apple passes the email through, with `EmailVerified` taken from the
+  `email_verified` claim, which it accepts as the boolean `true` or the string
+  `"true"`.
+- Generic OAuth2 uses whatever your user-info function returns.
+
+Link by email only when `EmailVerified` is true and your policy allows it, and
+still prefer the issuer and subject link. The display name is
 `external.Claims["name"]`, untrusted text to escape when rendering.
 
 For browser callbacks, `external.Claims["scope"]` holds the granted scopes as a

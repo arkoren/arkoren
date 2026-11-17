@@ -14,7 +14,7 @@ summary:
 Scripts, integrations and mobile apps cannot use a browser cookie. Tokens give
 them an opaque, revocable credential that the user created on purpose. Enable
 them with the scopes your API understands and a function that says which of
-them each user may hold:
+them each user may hold. `apitoken` is `arkoren.dev/ark/access/apitoken`:
 
 ```go
 iam.Tokens(func(tokens *apitoken.Builder) {
@@ -44,7 +44,7 @@ composition, and `New` fails with `ErrInvalidConfig` when both are off.
 ## Personal Tokens
 
 A user creates a token for a script or integration. `POST /tokens` needs a
-browser session, a fresh login and a verified email (`403` `email-unverified`):
+browser session, a fresh login and a verified email (`403` with `account:email-unverified`):
 
 ```json
 { "name": "CI deploy", "scopes": ["posts:write"], "expires_at": "2026-12-31T00:00:00Z" }
@@ -122,7 +122,8 @@ the stored scopes.
 ## Authenticating Requests
 
 Clients send `Authorization: Bearer <token>`. `iam.Middleware()` authenticates it
-next to sessions, and routes check scopes as usual:
+next to sessions, and routes check scopes as usual, with `gate` from
+`arkoren.dev/core/auth/gate`:
 
 ```go
 api := routes.With(iam.Middleware(), auth.Require())
@@ -150,8 +151,9 @@ jar only for the login:
    Apps that sign in with Google or Apple use the
    [native routes](connections.md#native-login) here instead.
 2. `POST /device-tokens` with `{"device": "Pixel 9"}` trades that login for a
-   device token and ends the session. The answer is `201` with the token and its
-   secret, as for a personal token.
+   device token and ends the session. The device name must not be empty after
+   trimming whitespace and at most 255 bytes, or the answer is `422`. The answer is
+   `201` with the token and its secret, as for a personal token.
 3. Every later call sends `Authorization: Bearer ...`.
 4. To log out, `DELETE /device-tokens/current` revokes the presented token and
    answers `204`.
@@ -191,7 +193,8 @@ and returns `nil`.
 
 `iam.Prune` has the shape `func(context.Context) error`, so it is a
 [scheduled task](../scheduled-tasks/calendar-schedules.md) as it stands. Run it
-daily; it keeps the table small and does not need to run often:
+daily; it keeps the table small and does not need to run often. `schedule` is
+`arkoren.dev/core/service/schedule`:
 
 ```go
 err := scheduler.Add(schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {

@@ -20,10 +20,8 @@ callback, so you pay for, and expose, only what you enable.
 Use it when you want login, two-factor, API tokens, provider sign-in and,
 if you choose, registration working and tested. Write your own handlers on the
 guard instead when your login is unusual enough that you would replace most of
-the routes anyway. The module depends only on core, Arkoren's foundation
-libraries and the standard library, and it never imports the OAuth module: a
-provider joins through a small interface that the [OAuth](../oauth/overview.md)
-clients satisfy.
+the routes anyway. A provider joins through a small interface that the
+[OAuth](../oauth/overview.md) clients satisfy.
 
 ## Installation
 
@@ -39,7 +37,21 @@ The application brings the database, the cache that holds sessions and counters,
 a function that finds the client address, a [hasher](../hashing/overview.md) for
 passwords and a [cipher](../encryption/overview.md) for two-factor secrets. The
 database, the cache and the client address function are required positional
-arguments of `New`; each feature is off until you enable it in the callback:
+arguments of `New`; each feature is off until you enable it in the callback. The
+snippets in this guide use these packages, which the code that follows leaves
+out:
+
+```go
+import (
+	"arkoren.dev/core/http/middleware/ratelimit"
+	"arkoren.dev/foundation/totp"
+
+	"arkoren.dev/ark/access"
+	"arkoren.dev/ark/access/account"
+	"arkoren.dev/ark/access/apitoken"
+	"arkoren.dev/ark/access/password"
+)
+```
 
 ```go
 // Behind a reverse proxy, list the prefixes of your proxies. With no proxy in
@@ -55,9 +67,9 @@ iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
 	})
 	iam.TwoFactor(scheme, cipher)
 	iam.Tokens()
-	iam.Provider(google, github)
-	iam.Federation(func(links *federation.Builder) {
-		links.SignUp(true)
+	iam.Provider(google)
+	iam.Provider(github, func(login *access.ProviderBuilder) {
+		login.SignUp(true)
 	})
 })
 if err != nil {
@@ -71,17 +83,18 @@ module never sends mail itself: password reset and email verification stay off
 until you give them those functions.
 
 Registration and provider sign-up are the two ways a user can appear without
-your code creating them, and both are off until you enable them as above. With
+your code creating them, and both are off until you enable them as above;
+sign-up is a setting of each provider, so here only GitHub creates users. With
 both off, you add users yourself through `iam.Directory()` or your own users; see
 [Adding Users](accounts.md#adding-users).
 
 `New` does no I/O. It returns an error wrapping `access.ErrInvalidConfig` when a
 dependency is missing (the database, the cache or the client address function), a
-provider name is used twice or contains anything but letters, digits, hyphens and underscores, or a package
+provider name is used in two `Provider` calls or contains anything but letters, digits, hyphens and underscores, or a package
 rejects its settings, such as an invalid TOTP scheme, a nil cipher for
-two-factor, registration or sign-up over users that cannot be created, registration with the
-built-in users without `Reset` (the notice to the owner of a taken address needs
-it), a scope catalog without a grant function, or tokens with
+two-factor, registration or a provider's sign-up over users that cannot be created, registration with the
+built-in users without `Reset` (it is how the owner of a taken address takes the
+account back), a scope catalog without a grant function, or tokens with
 neither kind enabled. `New` never guesses the
 client address, because the right source depends on the deployment (see
 [Shared Settings](#shared-settings)).
@@ -95,8 +108,8 @@ client address, because the right source depends on the deployment (see
 | Authenticator app and recovery codes | `iam.TwoFactor(scheme, cipher)` | [Two-Factor](two-factor.md) |
 | Personal and device tokens | `iam.Tokens(configure...)` | [API Tokens](tokens.md) |
 | Scope catalog and its ceiling | `tokens.Grants(grantable, scopes...)`, `GrantTTL`, `AnyScope` | [API Tokens](tokens.md#scope-ceiling) |
-| Sign-in with external providers | `iam.Provider(clients...)` | [Connections](connections.md) |
-| Sign-up on a first provider login | `links.SignUp(true)` | [Connections](connections.md#signing-in) |
+| Sign-in with an external provider | `iam.Provider(client, configure...)`, one call per provider | [Connections](connections.md) |
+| Sign-up on a first login with a provider | `login.SignUp(true)` | [Connections](connections.md#signing-in) |
 | Taking over an unverified account | automatic with the built-in users and providers | [Connections](connections.md#unverified-accounts) |
 | The built-in users | `iam.Directory(configure...)` | [Sessions and Accounts](accounts.md#adding-users) |
 | Your own users table | `iam.Users(users)` | [Your Own Users](own-users.md) |
@@ -104,6 +117,38 @@ client address, because the right source depends on the deployment (see
 The facade also owns the built-in `users` table, which identifies users by
 email; `iam.Directory(...)` configures it and `iam.Directory()` on the built
 facade adds users. To keep your own users instead, see [Your Own Users](own-users.md).
+
+### Repeated Calls
+
+A package of your application can add its own feature settings through an
+`access.BuilderFunc`, so the same builder method may run more than once. The
+facade treats a repeated call in one of three ways:
+
+- **Hooks and lists add up.** Functions you give a package builder, such as
+  `passwords.AfterChange`, `factors.OnEnable`, `tokens.Verified` and
+  `iam.OnEmailProven`, are added to the ones before them instead of replacing
+  them, and passing `nil` never clears one, so no callback can remove a check the
+  facade made. Hooks run in the order added, and every one runs even when an
+  earlier one fails, with the errors joined; `Verified` checks combine so that
+  every check must pass. `iam.SecondFactor`, `iam.StepUp` and `iam.Authenticator`
+  append credentials and authenticators after the built-in ones, and
+  `iam.Directory(configure...)`, `iam.Guard(configure...)` and
+  `iam.Session(configure...)` collect every callback and run them in order.
+- **The facade has the last word on what it owns.** The `Directory` callbacks run
+  after the facade's own instance and event settings. The `Guard` and `Session`
+  callbacks run before the facade's own settings, so the session lifetime, the
+  session handle, the client address function and the credential registries it
+  builds win over what a callback sets.
+- **`Password`, `TwoFactor` and `Tokens` replace.** The last call is the whole
+  configuration of that feature, including its callbacks: an earlier
+  `Registration(true)` is gone when a later `iam.Password(hasher)` has no
+  callback. Compose the settings of one feature into one call. `iam.Users`,
+  `iam.Instance`, `iam.Events` and `iam.SessionLifetime` also keep only the last
+  value.
+
+Configure each provider in one `iam.Provider` call: its sign-up and creation
+settings belong to that call, and a name used in two calls makes `New` fail with
+`access.ErrInvalidConfig`.
 
 ## Enabling Features
 
@@ -114,9 +159,12 @@ behavior; this section shows how to switch it on.
 
 **Registration and passwords.** `iam.Password(hasher)` enables login, confirm and
 change. Registration is a separate switch because an open route is an abuse
-surface. With the built-in users it also needs `Reset`, because the notice to the
-owner of an address someone else registered first is a reset link, and `New` fails
-with `access.ErrInvalidConfig` without it:
+surface. With the built-in users it also needs `Reset`, because the owner of an
+address someone else registered first takes the account back with a password reset,
+and `New` fails with `access.ErrInvalidConfig` without it. The reset notice that
+tells the owner about the attempt is dispatched only when email verification is
+configured as well; with `Reset` alone, registration dispatches nothing for a new
+or a taken address:
 
 ```go
 iam.Password(hasher, func(passwords *password.Builder) {
@@ -150,18 +198,47 @@ iam.Tokens(func(tokens *apitoken.Builder) {
 })
 ```
 
-**Providers and sign-up.** `iam.Provider(clients...)` mounts the sign-in routes of
-the OAuth clients you built. A first login with an unknown identity is refused
-until you open sign-up, and a sign-up needs an email the provider proved. Taking
-over an unverified account that someone registered with the same address needs no
-switch: it applies whenever the built-in users and a provider are enabled.
+**Providers and sign-up.** `iam.Provider(client)` mounts the sign-in routes of one
+OAuth client you built; call it once for each provider. A first login with an
+unknown identity is refused until you open sign-up for that provider, and a
+sign-up needs an email the provider proved. Taking over an unverified account
+that someone registered with the same address needs no switch: it applies to
+every provider whenever the built-in users are enabled.
 
 ```go
-iam.Provider(google, github)
-iam.Federation(func(links *federation.Builder) {
-	links.SignUp(true)
+iam.Provider(google)
+iam.Provider(entra, func(login *access.ProviderBuilder) {
+	login.SignUp(true)
 })
 ```
+
+Because a provider is configured in one call, a package of your application can own
+it and hand the facade a single `access.BuilderFunc`. This one builds the
+Microsoft client and opens sign-up for it:
+
+```go
+func Entra(cfg EntraConfig, cipher *crypto.Encrypter) (access.BuilderFunc, error) {
+	entra, err := oauth.New(oauth.Microsoft(cfg.Tenant), cipher, cfg.ClientID, func(client *oauth.ClientBuilder) {
+		client.ClientSecret(cfg.ClientSecret)
+		client.RedirectURL(cfg.RedirectURL)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return func(iam *access.Builder) {
+		iam.Provider(entra, func(login *access.ProviderBuilder) {
+			login.SignUp(true)
+		})
+	}, nil
+}
+```
+
+Here `oauth` is `arkoren.dev/ark/oauth/oauthauth` and `crypto` is
+`arkoren.dev/core/service/crypto`. Pass the result to `access.New` next to the
+main callback, as in `access.New(db, store, clientIP, configure, entra)`. An
+OIDC client must also be started before it serves logins; see
+[OAuth Overview](../oauth/overview.md#start-discovery).
 
 **Workers, cleanup and migrations.** The reset and verification emails are sent by
 your worker through `iam.SendReset` and `iam.SendVerification`, the cleanup of
@@ -213,7 +290,8 @@ password reset or another version change of the user ended, and device tokens
 nobody uses. `iam.Prune` has the shape `func(context.Context) error`, so it is a
 [scheduled task](../scheduled-tasks/calendar-schedules.md) as it stands. Run it
 daily; it deletes only rows that already answer `401`, is safe to run
-concurrently and does nothing without `iam.Tokens()`:
+concurrently and does nothing without `iam.Tokens()`. `schedule` is
+`arkoren.dev/core/service/schedule`:
 
 ```go
 err := scheduler.Add(schedule.NewEntry("access-prune", iam.Prune, func(entry *schedule.EntryBuilder) {
@@ -261,7 +339,8 @@ and whether it is verified. Both also expire, after an hour for a reset
 Reset and verification links share one signer, built from a random 32-byte key
 that you reserve for links; see [Signed Links](../http-capabilities/secure-links.md)
 for provisioning it. Give it your public origin so the signed value is an absolute
-URL:
+URL, with `key` from `arkoren.dev/foundation/key` and `link` from
+`arkoren.dev/core/http/link`:
 
 ```go
 secret, err := key.LoadShared("link-key.key")
@@ -377,7 +456,8 @@ deliverReset := func(ctx context.Context, message password.ResetMessage) error {
 ```
 
 `message.Notice` is true for the notice that goes to the owner of an address when
-someone tries to register with it. The signed value is a credential until it is
+someone tries to register with it, which happens only when email verification is
+configured as well. The signed value is a credential until it is
 used or expires, so never log it.
 
 Verification delivers an `account.VerifyMessage`, which has the same `Address`,
@@ -472,11 +552,10 @@ connection.
 
 ## Storage and Instances
 
-Each enabled feature keeps its own tables and migration group, named
-`arkoren.dev:ark/access:<package>`. Every package assumes the one
-`*database.Database` you pass to `New`, so writes that span packages, such as
-registering a user and storing their password, or deleting an account, join the
-transaction carried by the context.
+Each enabled feature keeps its own tables and migrations. Writes that span
+features, such as registering a user and storing their password, or deleting an
+account, join the transaction carried by the context of the one `*database.Database`
+you pass to `New`.
 
 A named instance prefixes every table and group, so two facades can share one
 database:
@@ -519,8 +598,10 @@ expect is registered, so a typo fails at startup.
 
 For code that logs users in itself, the facade exposes what it built:
 `iam.Guard()`, `iam.UserProvider()`, `iam.Directory()`, `iam.Verifier()`,
-`iam.Factors()`, `iam.Issuer()` and `iam.Links()`. Each returns nil when its
-feature is off.
+`iam.Factors()`, `iam.Issuer()` and `iam.Links()`. `iam.Guard()` and
+`iam.UserProvider()` always return a value. `iam.Directory()` is nil with your own
+users, and `iam.Verifier()`, `iam.Factors()`, `iam.Issuer()` and `iam.Links()` are
+nil when their feature is off.
 
 For every function and option, see
 [the `access` API reference](https://pkg.go.dev/arkoren.dev/ark/access).

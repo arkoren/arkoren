@@ -12,7 +12,11 @@ summary:
 # Passwords
 
 Passwords give users a way to log in with an email and a secret only they know.
-Enable them by giving the facade a [hasher](../hashing/overview.md):
+Enable them by giving the facade a [hasher](../hashing/overview.md). The
+snippets on this page use `ratelimit` from `arkoren.dev/core/http/middleware/ratelimit`,
+`access` from `arkoren.dev/ark/access` and `password` from
+`arkoren.dev/ark/access/password`, plus `account` from `arkoren.dev/ark/access/account`
+where they configure verification:
 
 ```go
 clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
@@ -38,11 +42,13 @@ iam.Password(hasher, func(passwords *password.Builder) {
 ```
 
 With your own users, `Registration(true)` needs `Users.Create`, and `New` fails
-with `access.ErrInvalidConfig` without it. With the built-in users it needs
-`Reset` as well: when someone registers an address that already belongs to a
-user, the owner is sent a reset notice whose link also proves their mailbox, and
-without `Reset` that owner would have no way to take the account back from
-whoever registered it first. `New` fails with `access.ErrInvalidConfig` without it:
+with `access.ErrInvalidConfig` without it. With the built-in users it needs `Reset`
+as well: when someone registers an address that already belongs to a user, the
+owner takes the account back with a password reset, whose link also proves their
+mailbox, and without `Reset` they would have no way to do it. `New` fails with
+`access.ErrInvalidConfig` without it. Reset alone does not tell the owner: the
+registration notice described [below](#register-and-log-in) goes out only when
+[email verification](#verify-emails) is configured too.
 
 ```go
 iam.Password(hasher, func(passwords *password.Builder) {
@@ -67,7 +73,7 @@ client calls `POST /login` next.
 The answer is the same `202` when the email already belongs to a user, so the
 response alone does not say whether the address was free; see
 [Register Then Log In](#register-then-log-in) for what a following login still
-reveals. In that case nothing is created or changed, and the owner is told instead. The facade never links
+reveals. In that case nothing is created or changed, and, when email verification is also configured, the owner is told instead. The facade never links
 accounts by email. Registrations are throttled per email and per client address,
 and what they dispatch counts against the same limits, so the route cannot flood a
 mailbox. A malformed email is `422`, and
@@ -112,8 +118,9 @@ oracle for whether an address has an account, and anyone can use it.
 
 What bounds it: registration is throttled to 5 attempts per address as typed and
 30 per client address in 15 minutes, and the login throttles apply to the probe
-too. A probe of a taken address sends its owner a reset notice, so it is visible to
-the person it is aimed at. A probe of a free address is not harmless: it creates an
+too. A probe of a taken address sends its owner a reset notice when email verification
+is configured, so it is visible to the person it is aimed at; with Reset only,
+nothing is sent for a new or a taken address, so the owner never learns of it. A probe of a free address is not harmless: it creates an
 unverified account that holds the address until its owner arrives. That account
 can attach nothing until the address is verified, and a password reset or a
 provider login that proves the mailbox takes it over (see
@@ -301,7 +308,7 @@ built-in users it reads the claim of the user the guard loads for each request, 
 a user who just verified passes on their next request, without logging in again.
 A user created by a provider whose email the provider verified starts verified. Until an email is verified,
 the account cannot connect a provider, enroll two-factor or create tokens (`403`
-`email-unverified`). With [your own users](own-users.md), it asks your
+`account:email-unverified`). With [your own users](own-users.md), it asks your
 `Users.Verified` function on every request instead, so the answer is as current as
 your own data; it panics at composition only when you gave no `Users.Verified`.
 

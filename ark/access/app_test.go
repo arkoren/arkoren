@@ -25,7 +25,6 @@ import (
 
 	"arkoren.dev/ark/access"
 	"arkoren.dev/ark/access/account"
-	"arkoren.dev/ark/access/federation"
 	"arkoren.dev/ark/access/internal/apptest"
 	"arkoren.dev/ark/access/password"
 )
@@ -228,8 +227,8 @@ func (box *outbox) verification() access.BuilderFunc {
 }
 
 // signUp lets a first provider login create a user, which is off by default.
-func signUp(links *federation.Builder) {
-	links.SignUp(true)
+func signUp(login *access.ProviderBuilder) {
+	login.SignUp(true)
 }
 
 // hasher returns a fast bcrypt hasher for tests.
