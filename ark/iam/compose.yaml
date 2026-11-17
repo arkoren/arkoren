@@ -1,4 +1,4 @@
-# Services for the integration tests of arkoren.dev/ark/access. Start them
+# Services for the integration tests of arkoren.dev/ark/iam. Start them
 # from this directory with: docker compose up -d --wait
 # The tests also run on in-memory SQLite, which needs no service.
 services:

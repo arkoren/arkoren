@@ -20,12 +20,8 @@
 //
 // # Wiring
 //
-//	// The client address keys the throttles: list your proxies' prefixes behind
-//	// one, or pass none when the application faces the internet directly.
-//	clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.ClientIP(clientIP)
 //		identity.Password(hasher, func(passwords *password.Builder) {
 //			passwords.Registration(true) // off by default
 //			passwords.Reset(signer, dispatchReset, deliverReset)
@@ -60,6 +56,12 @@
 // cache, a hasher for passwords and a cipher for two-factor secrets; the facade
 // does no I/O at construction, the application runs the migrations, and
 // [IAM.Ping] is the readiness check.
+//
+// The default client address is the connection host, ignoring forwarding
+// headers. If a reverse proxy sits in front of the application, configure
+// [Builder.ClientIP] with a resolver that trusts only that infrastructure.
+// The resolvers in arkoren.dev/core/http/clientip return addresses for login
+// records; the throttles independently group IPv6 addresses into /64 buckets.
 //
 // # Email links
 //

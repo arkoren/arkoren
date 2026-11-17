@@ -74,10 +74,7 @@ var ErrNotMigrated = storage.ErrNotMigrated
 // Example:
 //
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.ClientIP(ratelimit.TrustedProxyKey())
-//		identity.Password(hasher, func(passwords *password.Builder) {
-//			passwords.Registration(true)
-//		})
+//		identity.Password(hasher)
 //	})
 //	if err != nil {
 //		return err
@@ -123,10 +120,10 @@ type IAM struct {
 // host of RemoteAddr, without trusting forwarding headers. Behind a
 // reverse proxy r.RemoteAddr is the proxy, so every user shares one counter,
 // and a header read without trusting the proxy that set it lets an attacker
-// pick their own counter. Use Builder.ClientIP with ratelimit.TrustedProxyKey
-// and your trusted proxies' prefixes when a reverse proxy is present.
-// It does no I/O: the
-// application runs [IAM.Migrations] with its migrator, and [IAM.Ping]
+// pick their own counter. Set [Builder.ClientIP] to a resolver from
+// arkoren.dev/core/http/clientip when trusted infrastructure forwards requests.
+// IAM does no I/O at construction: the application runs [IAM.Migrations] with
+// its migrator, and [IAM.Ping]
 // verifies the tables. Errors wrap [ErrInvalidConfig].
 //
 // Build order is: the user provider (built-in directory or [Users]), the
@@ -136,17 +133,8 @@ type IAM struct {
 //
 // Example:
 //
-//	clientIP := ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8"))
-//	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.ClientIP(clientIP)
-//		identity.Password(hasher, func(passwords *password.Builder) {
-//			passwords.Registration(true)
-//		})
-//		identity.TwoFactor(scheme, cipher)
-//		identity.Tokens()
-//		identity.Provider(google)
-//		identity.Provider(github)
+//		identity.Password(hasher)
 //	})
 //	if err != nil {
 //		return err
@@ -186,6 +174,7 @@ func remoteClientIP(request *http.Request) string {
 	if err != nil {
 		return request.RemoteAddr
 	}
+
 	return host
 }
 

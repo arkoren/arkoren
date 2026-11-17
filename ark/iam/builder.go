@@ -41,10 +41,7 @@ import (
 //
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.ClientIP(ratelimit.TrustedProxyKey())
-//		identity.Password(hasher, func(passwords *password.Builder) {
-//			passwords.Registration(true)
-//		})
+//		identity.Password(hasher)
 //		identity.TwoFactor(scheme, cipher)
 //		identity.Tokens()
 //		identity.Provider(google)
@@ -79,15 +76,22 @@ type Builder struct {
 }
 
 // ClientIP selects the address used by login records and all facade throttles.
+// By default, IAM uses the connection host and ignores forwarding headers.
 // Calls replace earlier selections; a final nil makes New return
 // ErrInvalidConfig. The function and its captures remain shared after
-// construction. Trust forwarded headers only from explicitly trusted proxies.
+// construction. Return an address without its port; throttles apply IPv6 /64
+// grouping independently. Trust forwarded headers only from explicitly trusted
+// proxies, for example with arkoren.dev/core/http/clientip.
 //
 // Example:
 //
-//	identity.ClientIP(ratelimit.TrustedProxyKey(netip.MustParsePrefix("10.0.0.0/8")))
+//	identity, err := iam.New(db, store, func(identity *iam.Builder) {
+//		identity.ClientIP(clientip.Cloudflare())
+//		identity.Password(hasher)
+//	})
 func (identity *Builder) ClientIP(clientIP func(*http.Request) string) *Builder {
 	identity.clientIP = clientIP
+
 	return identity
 }
 
