@@ -1,114 +1,159 @@
 ---
 title: Routes
-description: Read the default route table of the access facade, the responses and problems clients receive, and how to serve routes on other paths.
-order: 20
+description: Look up Access's default routes, availability rules, response problems, and the steps for mounting individual handlers on custom paths.
+order: 120
 summary:
-  - See which routes each enabled feature mounts and which features each route needs.
-  - Read the 204 and 202 login responses and the problem statuses and stable types clients receive.
-  - Serve a route on another path with its handler method, and avoid the mounting mistakes that panic.
+  - Find the routes mounted for each enabled feature and distinguish availability from request authorization.
+  - Interpret JSON requirements, login responses, and stable problem types.
+  - Mount custom handlers without losing their security checks or breaking provider redirects.
 ---
 
 # Routes
 
-`iam.Mount(r)` registers the default JSON routes of every enabled feature, so a
-front end or a mobile app can talk to the facade without you writing a handler.
-Only the routes of enabled features are mounted. `r` must already run
-`iam.Middleware()`.
+`iam.Mount(web)` registers the default routes below. `web` must already run
+the [Access middleware and appropriate CSRF protection](overview.md#mount-routes).
+Mount once at the root; register individual handlers instead if your paths
+must differ.
 
-## Route Table
+This page is a lookup reference. The feature guides explain request bodies
+and workflows; [Fresh Logins](freshness.md#credential-routes) compares their
+session, freshness, and verified-email requirements.
 
-| Area | Routes | Needs |
-| --- | --- | --- |
-| Login | `POST /login` | Passwords |
-| Login | `POST /register` | Passwords with `Registration(true)` |
-| Login | `POST /login/challenge`, `GET /login/pending` | A second factor |
-| Login | `POST /logout` | Always |
-| Step-up | `POST /confirm` | A step-up method |
-| Email | `POST /email/verify`, `POST /email/verify/resend` | Built-in users with `accounts.Verification` |
-| Password | `POST /password/forgot`, `POST /password/reset` | Passwords with `passwords.Reset` |
-| Password | `PUT /password` | Passwords |
-| Two-factor | `POST /two-factor/setup`, `POST /two-factor`, `DELETE /two-factor`, `POST /two-factor/recovery-codes` | Two-factor |
-| Tokens | `GET /tokens`, `DELETE /tokens/{id}` | Tokens |
-| Tokens | `POST /tokens` | Tokens with personal tokens on (the default) |
-| Tokens | `POST /device-tokens`, `DELETE /device-tokens/current` | Tokens with device tokens on (the default) |
-| Sessions | `GET /sessions`, `DELETE /sessions/{id}`, `DELETE /sessions` | Always |
-| Providers | `GET /auth/{name}`, `GET` or `POST /auth/{name}/callback` | A provider |
-| Providers | `GET /auth/{name}/nonce`, `POST /auth/{name}/native` | A provider with native login |
-| Connections | `GET /connections`, `POST /connections/{provider}`, `DELETE /connections/{id}` | A provider |
-| Account | `DELETE /account` | Built-in users |
+## Default Routes
 
-Providers mount their routes whether or not sign-up is on for them; sign-up, which
-you set for each provider, only decides whether an unknown identity creates a user
-(`403` otherwise).
+“Required feature” determines whether a route is registered, not whether a
+particular request is authorized.
 
-`POST /connections/{provider}` is wrapped in the `application/json` check like the
-other `POST` routes and answers `303` to the provider's login route. A browser
-therefore connects a provider with `fetch` and the JSON content type, then
-navigates to `/auth/{provider}` itself; a plain HTML form gets `415`. See
-[Connections](connections.md#connecting-a-provider).
-
-A step-up method exists when passwords or two-factor are enabled, or when you add
-one with `iam.StepUp`. A second factor exists when two-factor is enabled or you
-add one with `iam.SecondFactor`. Each feature has its own page for what its
-routes accept and answer: [Passwords](passwords.md), [Two-Factor](two-factor.md),
-[API Tokens](tokens.md), [Connections](connections.md) and
-[Sessions and Accounts](accounts.md).
-
-## Responses
-
-Request and response bodies are JSON, and handlers read at most 64 KiB of body.
-Every `POST`, `PUT` and `PATCH` route requires the media type `application/json`,
-with or without a `charset`, even routes that read no body such as `/logout`;
-a form or a missing `Content-Type` answers `415` with the problem of core's
-[content type middleware](../http-fundamentals/content-type.md)
-(`tag:arkoren.dev,2026-09:core:http/middleware/contenttype:unsupported-media-type`).
-`DELETE` routes
-are not checked, because a form cannot send `DELETE`. The check is built into
-each handler, not into `Mount`, so it also holds when you [serve a route on your
-own path](#custom-paths). The provider routes under `/auth/{name}` are exempt,
-because identity providers redirect with a query or post a form (`form_post`).
-The check is not a replacement for
-[CSRF protection](../browser-security/csrf-protection.md), which you add next to
-`iam.Middleware()`.
-A login that is complete answers `204`. When the user must also answer a second
-factor it answers `202`:
-
-```json
-{ "second_factor": { "methods": ["otp", "recovery"] } }
-```
-
-The client then posts the method and its code to `/login/challenge`, and
-`GET /login/pending` lists the methods again:
-
-```json
-{ "method": "otp", "code": "123456" }
-```
-
-Methods appear in registration order, and the user picks any method they have
-enrolled.
-
-## Problems
-
-Failures are problem responses with a stable `type` of the form
-`tag:arkoren.dev,2026-11:ark/access:<package>:<name>`, so clients can switch on
-the type instead of the text. For example, a wrong password answers
-`tag:arkoren.dev,2026-11:ark/access:password:invalid-credentials`. The status
-groups are:
-
-| Status | Meaning |
+| Route | Required feature |
 | --- | --- |
-| 401 | No login, no pending login, or a credential route reached with a bearer token; also `federation:not-linked`. |
-| 403 | Step-up needed (the problem lists the methods the user can confirm with), `account:email-unverified`, a wrong account, `federation:no-account` (an unknown provider identity with sign-up off), `federation:email-unverified` (a sign-up without a proven email) or `apitoken:scope-not-granted`. |
-| 404 | An unknown token, connection or provider. |
-| 409 | A conflict: two-factor already on, the last way to log in, `account:email-taken`, `federation:linked-elsewhere` or `federation:already-linked`. |
-| 422 | A wrong secret or invalid input, such as a wrong password or a weak one. |
-| 429 | Throttled, with `Retry-After` in seconds. |
+| `POST /login` | Passwords |
+| `POST /register` | Passwords with registration enabled |
+| `GET /login/pending` | A registered second-factor method |
+| `POST /login/challenge` | A registered second-factor method |
+| `POST /logout` | Always |
+| `POST /confirm` | A registered step-up method |
+| `POST /password/forgot` | Passwords with reset configured |
+| `POST /password/reset` | Passwords with reset configured |
+| `PUT /password` | Passwords |
+| `POST /email/verify` | Built-in directory with verification configured |
+| `POST /email/verify/resend` | Built-in directory with verification configured |
+| `POST /two-factor/setup` | Two-factor |
+| `POST /two-factor` | Two-factor |
+| `DELETE /two-factor` | Two-factor |
+| `POST /two-factor/recovery-codes` | Two-factor |
+| `GET /tokens` | Tokens |
+| `DELETE /tokens/{id}` | Tokens |
+| `POST /tokens` | Personal tokens enabled |
+| `POST /device-tokens` | Device tokens enabled |
+| `DELETE /device-tokens/current` | Device tokens enabled |
+| `GET /sessions` | Always |
+| `DELETE /sessions/{id}` | Always |
+| `DELETE /sessions` | Always |
+| `GET /auth/{name}` | That provider registered |
+| `GET /auth/{name}/callback` | That provider registered |
+| `POST /auth/{name}/callback` | That provider registered |
+| `GET /auth/{name}/nonce` | Provider implements `access.NativeProvider` |
+| `POST /auth/{name}/native` | Provider implements `access.NativeProvider` |
+| `GET /connections` | A provider registered |
+| `POST /connections/{provider}` | A provider registered |
+| `DELETE /connections/{id}` | A provider registered |
+| `DELETE /account` | Built-in directory |
 
-Core's own challenge and confirm routes answer a wrong code with `403`, not
-`422`, because the attempt counter lives in core. The names under each package
-are:
+Passwords register `pwd` for step-up. Two-factor registers `otp`, then
+`recovery`, for login challenges, and `otp` for step-up.
+`iam.SecondFactor` and `iam.StepUp` can append application credentials.
+Registration, email recovery, and email verification are opt-in.
+Provider sign-up is configured per provider and defaults to off; it does not
+control whether that provider's routes exist.
 
-| Package | Problem names |
+Native route detection is structural. The shared OAuth client implements the
+native methods even for presets without native support; those handlers return
+`oauthauth.ErrUnsupported`. Google and Apple support native ID-token login
+with explicit audiences. Route presence alone is not a provider-capability
+check; use the [provider comparison](../oauth/providers.md#compatibility-matrix).
+
+## JSON Contract
+
+Access-owned handlers require `Content-Type: application/json` for `POST`,
+`PUT`, and `PATCH`, including bodyless operations such as logout.
+Media-type parameters such as `charset=utf-8` are allowed; form data,
+missing media types, and different JSON media types return `415`.
+Body-reading Access handlers limit JSON input to 64 KiB.
+`DELETE` handlers are not wrapped in the JSON media-type check.
+
+The provider protocol routes under `/auth/{name}` follow the OAuth client's
+own parsing rules: callbacks can arrive as a query or a form.
+The [Apple callback](connections.md#apple-callback) additionally needs its
+precise CSRF exception. Do not disable CSRF for Access's JSON routes.
+
+The JSON checks and credential safeguards live in the handler constructors,
+not just in `Mount`. Custom paths retain them.
+
+## Login Responses
+
+Password and native login return `204` with no body when complete.
+`202` means a second-factor challenge is still required:
+
+```json
+{
+  "second_factor": {
+    "methods": ["otp", "recovery"]
+  }
+}
+```
+
+`GET /login/pending` instead returns `200` with a flat methods object:
+
+```json
+{
+  "methods": ["otp", "recovery"]
+}
+```
+
+Methods appear in registration order; the client submits one offered method
+to `/login/challenge`.
+
+Do not confuse this `202` with registration, forgot-password, or verification
+resend acceptance. Those return an empty body and do not create a login.
+Browser provider callbacks redirect instead of using the JSON login response.
+
+## Problem Responses
+
+Branch on a problem's stable `type`, not its human-readable title or detail.
+Access types have this form:
+
+```text
+tag:arkoren.dev,2026-11:ark/access:<package>:<name>
+```
+
+For example, password-login failure is
+`tag:arkoren.dev,2026-11:ark/access:password:invalid-credentials`.
+Core-owned checks keep their core types.
+
+| Status | Typical meaning |
+| --- | --- |
+| `400` | Malformed JSON; challenge and confirm also use this for oversized bodies |
+| `401` | Missing session or pending login, a disallowed bearer identity, or failed token authentication |
+| `403` | Freshness, email verification, provider membership, wrong verification account, or scope ceiling refused the action |
+| `404` | Unknown or unowned token/connection, or unknown provider |
+| `409` | Conflicting account/credential state, duplicate connection, or last login method |
+| `413` | Body limit exceeded |
+| `415` | Required JSON media type absent or unsupported |
+| `422` | Invalid input, password-login failure, enrollment code failure, or invalid email-link token |
+| `429` | Throttled; inspect `Retry-After` in seconds |
+| `500` | Infrastructure or required-hook failure; consult the feature's partial-success behavior |
+
+Wrong core challenge and confirmation credentials are `403`, not the password-login
+route's `422`. A missing or unknown method is `422`; an exhausted challenge
+budget can discard the pending login and return `401`. Freshness uses
+`tag:arkoren.dev,2026-11:core:auth:step-up-required` with a `methods`
+extension, or `tag:arkoren.dev,2026-11:core:auth:no-step-up-method`.
+The media-type check uses
+`tag:arkoren.dev,2026-09:core:http/middleware/contenttype:unsupported-media-type`.
+
+For package-specific problem names:
+
+| Package | Names |
 | --- | --- |
 | `account` | `email-taken`, `invalid-email`, `invalid-token`, `email-unverified`, `verify-wrong-account`, `throttled` |
 | `password` | `invalid-credentials`, `invalid-password`, `invalid-token`, `throttled` |
@@ -118,68 +163,66 @@ are:
 
 ## Custom Paths
 
-To serve a route on another path, register its handler yourself instead of
-calling `Mount`. Every route has a handler method on the facade:
+If you need different application URLs, register the matching facade handlers
+instead of calling `Mount`:
 
 ```go
-web.Post("/accounts/sign-up", iam.RegisterHandler())
 web.Post("/accounts/sign-in", iam.LoginHandler())
+web.Put("/accounts/password", iam.ChangePasswordHandler())
 ```
 
-The methods are `RegisterHandler`, `LoginHandler`, `ChallengeHandler`,
-`PendingHandler`, `LogoutHandler`, `ConfirmHandler`, `VerifyEmailHandler`,
-`ResendVerificationHandler`, `ForgotPasswordHandler`, `ResetPasswordHandler`,
-`ChangePasswordHandler`, `SetupTwoFactorHandler`, `EnableTwoFactorHandler`,
-`DisableTwoFactorHandler`, `RecoveryCodesHandler`, `ListTokensHandler`,
-`CreateTokenHandler`, `DeleteTokenHandler`, `ExchangeHandler`,
-`DeleteDeviceTokenHandler`, `ListSessionsHandler`, `DeleteSessionHandler`,
-`DeleteOtherSessionsHandler`, `ListConnectionsHandler`, `ConnectHandler`,
-`DeleteConnectionHandler` and `DeleteAccountHandler`. Build a handler for a
-feature you did not enable and it panics at composition, so the mistake surfaces
-at startup and not on the first request.
+Keep the facade middleware and CSRF protection on `web`.
+Session, freshness, verified-email, and JSON checks remain inside the handlers.
+Requesting a disabled feature's handler panics during composition; `Mount`
+instead skips unavailable features. Duplicate route patterns, including a
+second mount, panic through the router.
 
-The verified-email, fresh-login, browser-session and `application/json` checks
-live in the handlers themselves, so they hold on custom paths too.
-
-## Mounting Rules
-
-Mount at the root. The connect handler redirects to `/auth/{name}` and the
-provider callbacks are mounted there, so a prefix would break provider login.
-If a provider must live at another path, mount its handlers yourself and build the
-connect handler with the targets you chose:
+Provider paths need additional care: both the client's registered redirect
+URL and the connect-intent redirect must match your chosen routes.
+For a configured Google client whose `RedirectURL` is
+`https://app.example.com/sso/google/callback`, mount its handlers:
 
 ```go
+callback := google.CallbackHandler(iam.Guard(), iam.Resolve)
 web.Get("/sso/google", google.LoginHandler())
-web.Get("/sso/google/callback", google.CallbackHandler(iam.Guard(), iam.Resolve))
-web.Post("/connections/{provider}", iam.Links().ConnectHandler(iam.Guard(), map[string]string{
-	"google": "/sso/google",
-}))
+web.Get("/sso/google/callback", callback)
+web.Post("/sso/google/callback", callback)
 ```
 
-`iam.Resolve` maps identities through the connection store without ever signing a
-user up. For a hand-mounted provider that should, make its resolver with
-`iam.Links().Resolver`; `federation` is `arkoren.dev/ark/access/federation`:
+`iam.Resolve` uses the shared connection store, including built-in unverified
+account takeover, but **never opens sign-up**. A hand-mounted callback does
+not inherit a registered provider's sign-up settings.
+
+For custom callbacks that should create users, first build a resolver using
+`federation` from `arkoren.dev/ark/access/federation`:
 
 ```go
 resolve, err := iam.Links().Resolver(func(resolver *federation.ResolverBuilder) {
 	resolver.SignUp(true)
 })
-if err != nil {
-	return err
-}
-web.Get("/sso/google/callback", google.CallbackHandler(iam.Guard(), resolve))
 ```
 
-`Mount` skips a route whose requirement is missing instead of panicking: no
-forgot or reset routes without `passwords.Reset` and no email verification routes
-without `accounts.Verification`, because no user could receive a link, and no
-`POST /register` unless registration is enabled. It never
-panics for a configuration `New` accepted, except for one mistake: mounting
-twice, or on a router that already has one of these patterns, panics like any
-duplicate route.
+After handling the error, pass `resolve` in place of `iam.Resolve`.
+The facade must already have a provider registered so `iam.Links()` exists.
 
-`iam.MustAccept(auth.MethodOTP)` fails startup the same way when a credential
-method you rely on is not registered.
+Finally, define where a connection intent sends the browser:
 
-For every function and option, see
-[the `access` API reference](https://pkg.go.dev/arkoren.dev/ark/access).
+```go
+targets := map[string]string{
+	"google": "/sso/google",
+}
+```
+
+Register the connect handler with those targets:
+
+```go
+web.Post("/connections/{provider}", iam.Links().ConnectHandler(iam.Guard(), targets))
+```
+
+That preserves the [explicit connection flow](connections.md#connect-a-provider).
+Update the front end's navigation target too; the default
+`/auth/{provider}` target is no longer correct. If you customize Apple's path,
+update only that callback's CSRF exception to match it.
+
+For the full handler set, see the
+[`access` API reference](https://pkg.go.dev/arkoren.dev/ark/access).

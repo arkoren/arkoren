@@ -1,138 +1,186 @@
 ---
 title: Two-Factor
-description: Enroll an authenticator app, finish logins with a code or a recovery code, and manage both, with the access facade.
-order: 40
+description: Enroll an authenticator, finish a pending login, and recover from a lost device without weakening the account through an old session.
+order: 60
 summary:
-  - Enable two-factor with a cipher, set up an authenticator and receive recovery codes once.
-  - Finish a parked login through the challenge route with a code or a recovery code.
-  - Replace recovery codes or turn two-factor off, and know how codes resist replay, guessing and key rotation.
+  - Enable TOTP with an encryption key and activate enrollment with the first code.
+  - Complete login challenges with an authenticator or a single-use recovery code.
+  - Replace recovery codes or disable two-factor using recent second-factor proof.
 ---
 
 # Two-Factor
 
-A password alone can be guessed, phished or leaked. Two-factor adds a time-based
-one-time password (TOTP) from an authenticator app, plus single-use recovery codes
-for a lost phone. Enable it with a TOTP scheme, which
-carries the name authenticator apps show for the account, and a
-[cipher](../encryption/overview.md) that encrypts the secrets. `totp` is
-`arkoren.dev/foundation/totp`:
+An authenticator adds a possession proof when a password is stolen.
+Access supports time-based one-time passwords (**TOTP**) and recovery codes
+for a lost device. A user enrolls once, then completes a second-factor
+challenge during later logins.
+
+This page assumes [mounted Access routes](overview.md#mount-routes).
+Enrollment requires a verified email, a session, and a
+[fresh login](freshness.md); a bearer token cannot enroll credentials.
+
+## Enable the Feature
+
+Use an existing `*crypto.Encrypter` named `cipher` with a key reserved for
+authenticator secrets. Import `totp` from `arkoren.dev/foundation/totp`:
 
 ```go
-scheme := totp.New("Acme") // the name authenticator apps show for this account
-iam.TwoFactor(scheme, cipher)
+scheme := totp.New("Acme")
 ```
 
-The issuer must be non-empty and contain no colon; an invalid scheme, or a nil
-cipher, makes `New` fail with `access.ErrInvalidConfig`. The scheme also sets the hash, the digit
-count, the period and the accepted drift. The defaults (SHA-1, 6 digits, 30
-seconds, one step of drift) work with every authenticator app, so change them only
-for a reason:
+`Acme` is the service name shown in authenticator apps. It must be nonempty
+and contain no colon. The defaults are SHA-1, six digits, a 30-second period,
+and one time step of accepted drift; keep them unless your clients require
+different parameters.
+
+Enable the feature alongside your existing login method:
 
 ```go
-scheme := totp.New("Acme", func(scheme *totp.Builder) {
-	scheme.Digits(8)
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.Password(hasher)
+	iam.TwoFactor(scheme, cipher)
 })
 ```
 
-Use a key reserved for these secrets. Each user has one authenticator. The guard
-lists the enrolled methods in registration order: `otp`, then `recovery`. A login
-with a second factor enrolled is parked until the user answers one of them at
-`POST /login/challenge`.
+An invalid scheme or nil cipher returns `access.ErrInvalidConfig`.
+Apply the newly enabled feature's migrations before serving its routes.
+Each user can enroll one authenticator.
 
 ## Enroll an Authenticator
 
-Enrollment has two steps, and both need a browser session, a fresh login and a
-verified email (`403` with `account:email-unverified` otherwise). A user is fresh
-right after logging in with a step-up method, such as their password, and a user
-with no step-up method is fresh after any login, so the first enrollment needs no
-extra step.
-
-`POST /two-factor/setup` stores a pending secret and answers `200`:
+From Ada's session, send `POST /two-factor/setup` with the JSON content-type
+header and no body. It returns `200` with a pending enrollment:
 
 ```json
-{ "secret": "JBSWY3DPEHPK3PXP", "uri": "otpauth://totp/Example:ada%40example.com?..." }
+{
+  "secret": "JBSWY3DPEHPK3PXP",
+  "uri": "otpauth://totp/Acme:ada%40example.com?..."
+}
 ```
 
-Render `uri` as a QR code for the user, and show `secret` for manual entry. Both
-contain the secret, so show them only to the enrolling user. Calling setup again
-before the next step replaces the pending secret. Once the authenticator is on,
-setup is `409`.
+Render `uri` as a QR code and offer `secret` for manual entry. Both expose
+the authenticator secret; show them only to Ada and keep them out of logs.
+Setup alone does not enable two-factor. Calling setup again replaces the
+pending secret; after activation it returns `409`.
 
-`POST /two-factor` takes the first code, `{"code": "123456"}`, turns two-factor on
-and answers `200` with the recovery codes:
+Ask Ada for the first code from her app, then send `POST /two-factor`:
 
 ```json
-{ "recovery_codes": ["ABCD-EFGH-IJKL-MNOP", "..."] }
+{
+  "code": "123456"
+}
 ```
 
-This is the only time they are shown. A wrong code is `422`, ten wrong codes in 15
-minutes are `429`, and enabling without setup is `409`. The session records the
-code, so the user stays fresh for the next change.
-
-Enabling also ends every other login of the user and revokes all their tokens
-(only device tokens with `iam.KeepPersonalTokens()`), so a session an attacker
-opened before the second factor existed does not outlive it. All of that happens in the same transaction as the activation: if it
-fails, the answer is `500`, two-factor stays off and no recovery code was shown.
-Enabling publishes `twofactor.Enabled` and core's `auth.CredentialEnrolled`.
-
-## Log In With a Code
-
-After the password, a user with an authenticator gets `202` with
-`{"second_factor": {"methods": ["otp", "recovery"]}}`. The client posts the code to
-the challenge route:
+Success is `200` with recovery codes:
 
 ```json
-{ "method": "otp", "code": "123456" }
+{
+  "recovery_codes": ["ABCD-EFGH-IJKL-MNOP", "..."]
+}
 ```
 
-`{"method": "recovery", "code": "ABCD-EFGH-IJKL-MNOP"}` uses a recovery code
-instead, and case, dashes and spaces do not matter. A wrong code is core's `403`,
-counted per user across methods. The same bodies re-prove a logged-in user at
-`POST /confirm`.
+Offer a way to save them now: the full codes are returned only at creation.
+A wrong enrollment code is `422`, the next attempt after ten failures in
+15 minutes is `429`, and activation without setup is `409`.
 
-A code works once. Each accepted time step must be newer than the last, enforced
-by one atomic update, so of two concurrent identical codes exactly one wins.
-Recovery codes carry 80 random bits, are stored only as hashes and are single
-use. One answer covers a wrong code, a replay, a spent code and a user who is not
-enrolled, so a response never says which. If completing a login fails after a code
-was accepted, the code is spent and the user waits for the next one.
+Activation ends the user's other logins and, by default, revokes every
+personal and device token. If activation or its required revocation steps fail,
+the database activation rolls back and no codes are returned. On success,
+the current session records the authenticator proof; if refreshing that proof
+fails, the codes are still returned so they are not lost.
+The user may need to confirm again before the next sensitive action.
 
-## Manage Two-Factor
+## Complete a Login
 
-`POST /two-factor/recovery-codes` replaces the codes and answers with the new
-list, and the old ones stop working. `DELETE /two-factor` removes the
-authenticator and the codes and answers `204`. Both answer `409` when two-factor
-is not enabled.
+On a later password login, an enrolled user receives `202` with
+`second_factor.methods`, normally `["otp", "recovery"]` in that order.
+Keep the same cookie jar and submit one offered method to
+`POST /login/challenge`:
 
-Weakening two-factor needs more than a fresh login. Both routes also need an
-authenticator or recovery code this session verified recently, within 15 minutes
-by default. A recent password alone is `403` with the enrolled second-factor
-methods in the problem (`"methods": ["otp"]`). The client posts
-`{"method": "otp", ...}` to `/confirm` and retries, so someone holding a password
-and an old session cannot turn two-factor off. A recovery code spent at login
-counts as a recent proof, and it also counts as the fresh login these two routes
-need, even though a recovery code is not a step-up method. A user who lost their
-authenticator can therefore log in with a recovery code and turn two-factor off,
-or replace their codes, within the window without an authenticator code.
+```json
+{
+  "method": "otp",
+  "code": "123456"
+}
+```
 
-To change the window, configure the package, and set the same value as the guard's
-`FreshFor` if you changed that too:
+Success is `204`; the session now authenticates the user. To recover a lost
+authenticator, use one saved code at the same route:
+
+```json
+{
+  "method": "recovery",
+  "code": "ABCD-EFGH-IJKL-MNOP"
+}
+```
+
+Recovery codes ignore case, dashes, and spaces. They contain 80 random bits,
+are stored only as hashes, and can be spent once. A recovery code is not
+accepted at `/confirm`; an authenticator code is.
+
+Pending logins expire after five minutes by default. The guard limits
+attempts per user across challenge methods, so restarting password login
+does not reset that budget. Wrong, replayed, spent, or unenrolled credentials
+receive core's `403`. An absent or expired pending login receives `401`;
+exhausting the challenge budget also discards the pending login, and later
+challenge attempts receive `401`.
+
+An accepted TOTP time step must be newer than the last accepted step.
+Concurrent copies of the same code cannot both succeed. If session completion
+fails after the code was accepted, it is already spent: wait for the next
+authenticator code or use another recovery code.
+
+## Recover or Disable
+
+To weaken two-factor, an old session and the password alone are insufficient.
+Both removal and recovery-code replacement need a fresh login **and** a recent
+second-factor proof, normally within 15 minutes. If required, confirm an
+authenticator code at `POST /confirm`, then retry.
+
+A person who lost the authenticator can instead log in with a recovery code.
+For these two operations only, that recent recovery proof also satisfies the
+freshness check. Complete the change within the window:
+
+| Request | Result |
+| --- | --- |
+| `POST /two-factor/recovery-codes` | `200` with new codes; every old code stops working |
+| `DELETE /two-factor` | `204`; authenticator, pending enrollment, and recovery codes are removed |
+
+Send the JSON content-type header for the `POST`, even without a body.
+Both operations return `409` when two-factor is not enabled.
+An insufficient second-factor proof returns `403` with methods the user can
+confirm, normally `["otp"]`.
+
+If you shorten the guard's freshness window, consider the separate
+second-factor management window too. Import `twofactor` from
+`arkoren.dev/ark/access/twofactor` and configure it during construction:
 
 ```go
-iam.TwoFactor(scheme, cipher, func(factors *twofactor.Builder) {
-	factors.StepUpWindow(5 * time.Minute)
+iam, err := access.New(db, store, clientIP, func(iam *access.Builder) {
+	iam.TwoFactor(scheme, cipher, func(factors *twofactor.Builder) {
+		factors.StepUpWindow(5 * time.Minute)
+	})
 })
 ```
 
-For an account page, read the state with `iam.Factors().Status(ctx, subject)`.
-The `twofactor` events `Disabled`, `Regenerated` and `RecoveryUsed` suit
-notifications such as "two-factor was turned off".
+This fragment shows that setting only; retain your login features in the
+application's actual constructor. Read account-page state through
+`iam.Factors().Status(ctx, subject)`.
 
-## Key Rotation
+## Keep Secrets Usable
 
-Secrets are decrypted with the current cipher and, when you rotate keys, with the
-previous keys you configured on it. A secret sealed with an old key is sealed
-again with the current one on its next use.
+When rotating encryption keys, retain previous decryption keys in the
+[encrypter configuration](../encryption/keys.md). Access decrypts old secrets
+with those keys and re-encrypts them with the current key on their next use.
+Removing an old key before its secrets have moved makes those authenticators
+unusable.
 
-For every function and option, see
-[the `twofactor` API reference](https://pkg.go.dev/arkoren.dev/ark/access/twofactor).
+Activation emits `twofactor.Enabled` and core's `auth.CredentialEnrolled`.
+`Disabled`, `Regenerated`, and `RecoveryUsed` support
+[security notifications](accounts.md#security-notifications).
+
+Next, use [API Tokens](tokens.md) for scripts or first-party mobile clients
+without giving them account-management powers.
+
+For enrollment, recovery, and configuration, see the
+[`twofactor` API reference](https://pkg.go.dev/arkoren.dev/ark/access/twofactor).
