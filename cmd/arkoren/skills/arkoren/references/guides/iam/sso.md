@@ -10,8 +10,9 @@ summary:
 
 # SSO
 
-Single sign-on lets users authenticate with an organization-managed identity
-provider. IAM maps that identity to a local user; your application remains
+Single sign-on lets users reuse an existing identity-provider sign-in across
+applications. For an organization, the provider may be managed centrally.
+IAM maps that identity to a local user; your application remains
 responsible for deciding who may join and what each user may do.
 
 Start with [Federated Sign-In](federated-sign-in.md), which explains connection

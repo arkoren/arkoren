@@ -20,8 +20,9 @@ Use a core release that includes `http/clientip`. IAM does not require that
 release itself; applications choose their own resolver and core version.
 
 These functions return addresses, not rate-limit buckets. In particular they
-do not group IPv6 addresses by `/64`. Use the
-[rate-limiting guide](../abuse-prevention/rate-limiting.md) for bucket policy.
+do not group IPv6 addresses by `/64`. Use
+[client key policy](../abuse-prevention/rate-limiting.md#client-keys) to choose
+the appropriate bucket.
 
 ## Direct Requests
 
@@ -46,15 +47,33 @@ walk at the nearest trusted hop; only bare IP literals are accepted, not
 addresses with ports. An untrusted peer cannot supply a forwarding chain.
 Trusting a network that arbitrary clients can use allows address spoofing.
 
-To use this resolver for IAM's abuse limits, add it to your existing
-construction callback:
+Call `resolve(r)` for an HTTP request `r`. To use this resolver for IAM's abuse
+limits, pass it in the construction callback. Assume the `db` and `store`
+collaborators from [IAM Overview](../iam/overview.md):
 
 ```go
-identity.ClientIP(resolve)
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.ClientIP(resolve)
+})
 ```
 
-See [IAM Overview](../iam/overview.md) for construction. Supplying a resolver
-is optional, and IAM does not import this package on your behalf.
+Handle the construction error before using `identity`. Supplying a resolver is
+optional, and IAM does not import this package on your behalf.
+
+For a generic rate limiter, convert the resolved address to a bucket at the
+`KeyFunc` boundary. Import `net/http` and `ratelimit` from
+`arkoren.dev/core/http/middleware/ratelimit`:
+
+```go
+limiter.KeyFunc(func(r *http.Request) string {
+	return ratelimit.AddressKey(resolve(r))
+})
+```
+
+Here `limiter` is the `*ratelimit.Builder` in the
+[middleware construction callback](../abuse-prevention/rate-limiting.md#client-keys).
+`AddressKey` applies the limiter's IPv6 `/64` grouping; passing `resolve`
+directly would use a separate key for every IPv6 address.
 
 ## Deployment Choices
 
@@ -67,12 +86,24 @@ is optional, and IAM does not import this package on your behalf.
 | Google Cloud external Application Load Balancer | With its [documented header format](https://cloud.google.com/load-balancing/docs/https#x-forwarded-for_header), trust both actual backend-peer ranges and the exact forwarding-rule frontend address (`/32` or `/128`). Restrict backend access to your intended load balancer; shared proxy ranges alone do not establish that boundary. Modes and paths differ, so verify your deployment rather than treating this as an automatic preset. |
 | API Gateway HTTP API | No general preset: [HTTP APIs translate `X-Forwarded-*` to `Forwarded`](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-known-issues.html); Lambda event `sourceIp` requires an adapter. |
 
+## Cloudflare
+
+When Cloudflare connects directly to your origin, select its resolver:
+
+```go
+resolve := clientip.Cloudflare()
+```
+
+Use `resolve(r)` for each request or pass it to IAM as shown above.
 `Cloudflare()` uses an embedded snapshot and performs no network I/O. Releases
 must update the snapshot as Cloudflare's published ranges change. It checks
 only the immediate peer; an intervening proxy is not covered. The shared
-Cloudflare ranges do not authenticate your zone. Protect the origin with
-zone-specific authenticated origin pulls or a Cloudflare Tunnel. Workers and
-Pseudo IPv4 settings can change what `CF-Connecting-IP` means; review
+Cloudflare ranges do not authenticate your zone. Protect a directly connected
+origin with zone-specific Authenticated Origin Pulls. A Cloudflare Tunnel has a
+connector between Cloudflare and the application, so this direct-peer preset
+does not apply; use a resolver that trusts and validates the connector's
+actual forwarding behavior instead. Workers and Pseudo IPv4 settings can
+change what `CF-Connecting-IP` means; review
 [Cloudflare's header behavior](https://developers.cloudflare.com/fundamentals/reference/http-headers/).
 
 For exact parsing and fallback behavior, see the
