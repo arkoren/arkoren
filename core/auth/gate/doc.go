@@ -16,6 +16,8 @@
 // [Bind] adapts rules to a context-only availability check, such as tool
 // availability, that reports false instead of an error for anonymous callers.
 // [HasScopes] is a rule over [auth.Identity] that requires granted scopes.
+// [HasPermission], [HasAnyPermission], [HasRole] and [HasAnyRole] check the
+// [Permission] and [Role] definitions described below.
 //
 // The free functions publish nothing. To observe denials, build a [Gate]
 // with [New] and [Builder.Events] and call its [Gate.Authorize] and
@@ -72,6 +74,55 @@
 //		}
 //		// ...
 //	}
+//
+// # Permissions and roles
+//
+// A [Permission] names an action ("posts:write"); a [Role] names a bundle of
+// permissions ("editor") and may include other roles. Both are immutable values
+// declared once, usually as package variables, and shared by the code that
+// checks them and the store that grants them. They are vocabulary, not a
+// registry: gate never lists, stores or assigns them, and core has no
+// permission store: the application's own store assigns them to users and
+// loads them into each session through [auth.GuardBuilder.Grants].
+//
+//	var (
+//		PostsRead  = gate.NewPermission("posts:read")
+//		PostsWrite = gate.NewPermission("posts:write")
+//
+//		Viewer = gate.NewRole("viewer", func(role *gate.RoleBuilder) {
+//			role.Grants(PostsRead)
+//		})
+//		Editor = gate.NewRole("editor", func(role *gate.RoleBuilder) {
+//			role.Includes(Viewer).Grants(PostsWrite)
+//		})
+//	)
+//
+//	r.With(gate.Require(gate.HasPermission(PostsWrite))).Post("/posts", create)
+//
+// Invalid names never panic at declaration: [Permission.Err] and [Role.Err]
+// report them, and a role that grants an invalid permission or includes an
+// invalid role is invalid too. The rule constructors panic when given an
+// invalid definition or none at all, so a mistake fails when routes are built.
+//
+// The rules read only the [auth.Identity], so the identity must already carry
+// what the user holds. The contract for whoever builds it:
+//
+//   - [auth.Identity.Scopes] holds the names of the user's effective
+//     permissions, which is why permission names are valid OAuth scope tokens.
+//   - [auth.Identity.Roles] holds the expanded role set: the names of
+//     [Role.Expand] for every assigned role. [HasRole] compares names and never
+//     expands, so HasRole(Viewer) passes for an editor because the store also
+//     put "viewer" on the identity.
+//
+// Sessions get both from [auth.GuardBuilder.Grants]. Once it is set, a cookie
+// session passes [HasScopes] and [HasPermission] routes that previously only
+// tokens could pass, so such routes need CSRF protection even when they were
+// written for API clients. A token holds only the
+// scopes it was granted and never roles, so [HasPermission] limits a token to
+// its own grants and [HasRole] denies every token unless a custom authenticator
+// sets roles. Prefer permission checks for authorization; keep role checks for
+// session-only routes and for showing or hiding user interface. Per-resource
+// roles (an editor of one team) stay application rules like CanEdit below.
 //
 // # Resource access belongs in queries
 //

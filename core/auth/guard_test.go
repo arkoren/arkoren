@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1194,5 +1196,187 @@ func TestCompleteSucceedsWhenVersionUnchanged(t *testing.T) {
 
 	if _, err := authenticate(guard, current); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// grantsOf returns a Grants function answering roles and scopes, which counts
+// its calls in calls.
+func grantsOf(calls *atomic.Int64, roles, scopes []string) auth.GuardBuilderFunc {
+	return func(policy *auth.GuardBuilder) {
+		policy.Grants(func(_ context.Context, _ string) ([]string, []string, error) {
+			calls.Add(1)
+
+			return roles, scopes, nil
+		})
+	}
+}
+
+// TestAuthenticatorSetsGrants verifies the roles and scopes from Grants reach
+// the session identity.
+func TestAuthenticatorSetsGrants(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	guard, _ := newGuard(t, grantsOf(&calls, []string{"editor", "viewer"}, []string{"posts:write"}))
+	current := newSession()
+	begin(t, guard, sessionRequest(current), "7")
+
+	identity, err := authenticate(guard, current)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if roles, scopes := identity.Roles(), identity.Scopes(); !slices.Equal(roles, []string{"editor", "viewer"}) || !slices.Equal(scopes, []string{"posts:write"}) {
+		t.Fatalf("roles = %v, scopes = %v", roles, scopes)
+	}
+}
+
+// TestAuthenticatorGrantsErrorFailsAuthentication verifies a failing Grants
+// stops the request with its error instead of yielding an identity.
+func TestAuthenticatorGrantsErrorFailsAuthentication(t *testing.T) {
+	t.Parallel()
+
+	failure := errors.New("store down")
+	guard, _ := newGuard(t, func(policy *auth.GuardBuilder) {
+		policy.Grants(func(context.Context, string) ([]string, []string, error) {
+			return []string{"admin"}, []string{"posts:write"}, failure
+		})
+	})
+	current := newSession()
+	begin(t, guard, sessionRequest(current), "7")
+
+	identity, err := authenticate(guard, current)
+
+	if !errors.Is(err, failure) || !strings.HasPrefix(err.Error(), "auth: load grants: ") || identity.Subject() != "" || identity.Roles() != nil {
+		t.Fatalf("identity = %q %v, err = %v", identity.Subject(), identity.Roles(), err)
+	}
+}
+
+// TestAuthenticatorGrantsNoCredentialsStaysMatchable verifies the wrapped
+// loader error still matches ErrNoCredentials, which makes Middleware treat the
+// request as anonymous.
+func TestAuthenticatorGrantsNoCredentialsStaysMatchable(t *testing.T) {
+	t.Parallel()
+
+	guard, _ := newGuard(t, func(policy *auth.GuardBuilder) {
+		policy.Grants(func(context.Context, string) ([]string, []string, error) {
+			return nil, nil, auth.ErrNoCredentials
+		})
+	})
+	current := newSession()
+	begin(t, guard, sessionRequest(current), "7")
+
+	if _, err := authenticate(guard, current); !errors.Is(err, auth.ErrNoCredentials) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// beginWithFailingGrants logs subject "7" in through the second factor on a
+// guard whose loader fails with failure while fail is set, then runs Begin with
+// another factor with the loader failing. It returns the guard, the session and
+// the outcome and error of that Begin; fail is cleared before returning.
+func beginWithFailingGrants(t *testing.T, failure error) (*auth.Guard, *session.Session, auth.Outcome, error) {
+	t.Helper()
+
+	var fail atomic.Bool
+	guard, _ := newGuard(t, withChecks(secondFactor(true, nil)), func(policy *auth.GuardBuilder) {
+		policy.Grants(func(context.Context, string) ([]string, []string, error) {
+			if fail.Load() {
+				return nil, nil, failure
+			}
+
+			return nil, nil, nil
+		})
+	})
+	current := newSession()
+	r := sessionRequest(current)
+	begin(t, guard, r, "7")
+
+	if err := challenge(guard, r, goodOTP); err != nil {
+		t.Fatal(err)
+	}
+
+	fail.Store(true)
+	outcome, err := guard.Begin(r, "7", federated)
+	fail.Store(false)
+
+	return guard, current, outcome, err
+}
+
+// TestBeginSameSubjectIgnoresFailingGrants verifies a store outage cannot break
+// a step-up login: Begin never loads grants, so the factor is still added.
+func TestBeginSameSubjectIgnoresFailingGrants(t *testing.T) {
+	t.Parallel()
+
+	guard, current, outcome, err := beginWithFailingGrants(t, errors.New("store down"))
+
+	if err != nil || !outcome.Complete() {
+		t.Fatalf("begin = %v, %v", outcome, err)
+	}
+
+	identity, err := authenticate(guard, current)
+
+	if err != nil || len(identity.Factors()) != 3 {
+		t.Fatalf("factors = %+v, %v", identity.Factors(), err)
+	}
+}
+
+// TestBeginSameSubjectIgnoresAnonymousGrants verifies a loader answering
+// ErrNoCredentials cannot make Begin park a logged-in user as a new pending
+// login.
+func TestBeginSameSubjectIgnoresAnonymousGrants(t *testing.T) {
+	t.Parallel()
+
+	guard, current, outcome, err := beginWithFailingGrants(t, auth.ErrNoCredentials)
+
+	if err != nil || !outcome.Complete() {
+		t.Fatalf("begin = %v, %v", outcome, err)
+	}
+
+	if _, err := guard.Pending(sessionRequest(current)); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("pending login exists: %v", err)
+	}
+}
+
+// TestAuthenticatorWithoutGrantsHasNone verifies a guard without Grants builds
+// session identities with no roles and no scopes.
+func TestAuthenticatorWithoutGrantsHasNone(t *testing.T) {
+	t.Parallel()
+
+	guard, _ := newGuard(t)
+	current := newSession()
+	begin(t, guard, sessionRequest(current), "7")
+
+	identity, err := authenticate(guard, current)
+
+	if err != nil || identity.Roles() != nil || identity.Scopes() != nil {
+		t.Fatalf("roles = %v, scopes = %v, err = %v", identity.Roles(), identity.Scopes(), err)
+	}
+}
+
+// TestAuthenticatorCallsGrantsOncePerAuthentication verifies Grants runs once
+// for each authenticated request and never for an anonymous one.
+func TestAuthenticatorCallsGrantsOncePerAuthentication(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	guard, _ := newGuard(t, grantsOf(&calls, nil, nil))
+
+	if _, err := authenticate(guard, newSession()); !errors.Is(err, auth.ErrNoCredentials) {
+		t.Fatalf("anonymous err = %v", err)
+	}
+
+	current := newSession()
+	begin(t, guard, sessionRequest(current), "7")
+
+	for range 2 {
+		if _, err := authenticate(guard, current); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d", calls.Load())
 	}
 }

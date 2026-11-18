@@ -424,6 +424,22 @@ func ExampleGuardBuilder() {
 	// Output: false <nil>
 }
 
+func ExampleGuardBuilder_Grants() {
+	guard := exampleGuard(func(policy *auth.GuardBuilder) {
+		policy.Grants(func(_ context.Context, subject string) ([]string, []string, error) {
+			return []string{"editor", "viewer"}, []string{"posts:read", "posts:write"}, nil
+		})
+	})
+
+	r := exampleRequest()
+	_, _ = guard.Begin(r, "1", auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
+
+	identity, err := guard.Authenticator()(r)
+
+	fmt.Println(identity.Roles(), identity.Scopes(), err)
+	// Output: [editor viewer] [posts:read posts:write] <nil>
+}
+
 func ExampleGuardBuilder_Handle() {
 	handle := session.NewHandle()
 	guard := exampleGuard(func(policy *auth.GuardBuilder) {

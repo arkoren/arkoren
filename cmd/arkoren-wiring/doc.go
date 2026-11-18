@@ -9,8 +9,9 @@
 // the facade over HTTP against in-memory SQLite and a fake OpenID Connect
 // provider: password with TOTP, the application's own users, social login then
 // connect, native login then a device token then GET /me, a silent
-// re-login that is not fresh for a TOTP user, and a provider login refused while
-// sign-up is off.
+// re-login that is not fresh for a TOTP user, a provider login refused while
+// sign-up is off, and a password login whose session passes a core gate
+// permission rule once ark/iam's permission store grants the user a role.
 package wiring
 
 import (

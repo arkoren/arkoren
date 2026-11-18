@@ -114,7 +114,7 @@ const (
 )
 
 // Identity is who is acting: a subject, how it was authenticated and what it may
-// do. It is an immutable value that carries no application user type, so any
+// do (its scopes and roles). It is an immutable value that carries no application user type, so any
 // package can read it from a context with [FromContext]. Build one with
 // [NewIdentity]. The zero Identity has an empty subject and no factors.
 //
@@ -126,6 +126,7 @@ const (
 //	identity := auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
 //		principal.Factors(auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge})
 //		principal.Scopes("posts:write")
+//		principal.Roles("editor")
 //	})
 //	fmt.Println(identity.Subject(), identity.Level() == auth.LevelSingle)
 type Identity struct {
@@ -137,6 +138,9 @@ type Identity struct {
 
 	// scopes are the granted scopes, copied on input and on output.
 	scopes []string
+
+	// roles are the role names the subject holds, copied on input and on output.
+	roles []string
 
 	// actor is the subject acting on behalf of the identity, empty if none.
 	actor string
@@ -209,6 +213,26 @@ func (principal *IdentityBuilder) Scopes(scopes ...string) *IdentityBuilder {
 	return principal
 }
 
+// Roles appends role names the subject holds. The slice is copied, so later
+// edits by the caller do not change the identity. Roles are opaque strings with
+// no validation or hierarchy here: whoever builds the identity puts the
+// expanded set on it (every role held, including the roles those include), and
+// gate.HasRole and gate.HasAnyRole compare names only. [Guard.Authenticator]
+// sets them from [GuardBuilder.Grants]; bearer-token identities normally carry
+// none, because a token holds scopes, not roles.
+//
+// Example:
+//
+//	identity := auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
+//		principal.Roles("editor", "viewer")
+//	})
+//	fmt.Println(identity.Roles())
+func (principal *IdentityBuilder) Roles(roles ...string) *IdentityBuilder {
+	principal.identity.roles = append(principal.identity.roles, roles...)
+
+	return principal
+}
+
 // Actor sets the subject acting on behalf of the identity, for example a
 // support agent impersonating a user. The default, empty, means the identity
 // acts for itself. The setting replaces the previous value on this draft.
@@ -265,6 +289,7 @@ func NewIdentity(subject string, configure ...IdentityBuilderFunc) Identity {
 	identity.subject = subject
 	identity.factors = slices.Clone(identity.factors)
 	identity.scopes = slices.Clone(identity.scopes)
+	identity.roles = slices.Clone(identity.roles)
 
 	return identity
 }
@@ -349,6 +374,19 @@ func (identity Identity) Session() bool {
 //	fmt.Println(identity.Scopes())
 func (identity Identity) Scopes() []string {
 	return slices.Clone(identity.scopes)
+}
+
+// Roles returns a copy of the role names, in the order they were added. A nil
+// result means the identity holds no roles.
+//
+// Example:
+//
+//	identity := auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
+//		principal.Roles("editor")
+//	})
+//	fmt.Println(identity.Roles())
+func (identity Identity) Roles() []string {
+	return slices.Clone(identity.roles)
 }
 
 // Actor returns the subject acting on behalf of the identity, or "" when the

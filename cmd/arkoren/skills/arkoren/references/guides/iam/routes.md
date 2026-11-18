@@ -57,6 +57,12 @@ particular request is authorized.
 | `GET /connections` | A provider registered |
 | `POST /connections/{provider}` | A provider registered |
 | `DELETE /connections/{id}` | A provider registered |
+| `GET /me/permissions` | Permissions with self-service |
+| `GET /users/{subject}/permissions` | Permissions with management |
+| `PUT /users/{subject}/permissions/{name}` | Permissions with management |
+| `DELETE /users/{subject}/permissions/{name}` | Permissions with management |
+| `PUT /users/{subject}/roles/{name}` | Permissions with management |
+| `DELETE /users/{subject}/roles/{name}` | Permissions with management |
 | `DELETE /account` | Built-in directory |
 
 Passwords register `pwd` for step-up. Two-factor registers `otp`, then
@@ -134,9 +140,9 @@ Core-owned checks keep their core types.
 | --- | --- |
 | `400` | Malformed JSON; challenge and confirm also use this for oversized bodies |
 | `401` | Missing session or pending login, a disallowed bearer identity, or failed token authentication |
-| `403` | Freshness, email verification, provider membership, wrong verification account, or scope ceiling refused the action |
-| `404` | Unknown or unowned token/connection, or unknown provider |
-| `409` | Conflicting account/credential state, duplicate connection, or last login method |
+| `403` | Freshness, email verification, provider membership, wrong verification account, scope ceiling, missing management permission, or grant escalation refused the action |
+| `404` | Unknown or unowned token/connection, unknown provider, or unknown user in a permission route |
+| `409` | Conflicting account/credential state, duplicate connection, last login method, or last holder of a protected role |
 | `413` | Body limit exceeded |
 | `415` | Required JSON media type absent or unsupported |
 | `422` | Invalid input, password-login failure, enrollment code failure, or invalid email-link token |
@@ -160,6 +166,7 @@ For package-specific problem names:
 | `twofactor` | `invalid-code`, `already-enabled`, `not-enabled`, `not-enrolling`, `throttled` |
 | `apitoken` | `invalid-request`, `scope-not-granted`, `not-found` |
 | `federation` | `not-linked`, `no-account`, `email-unverified`, `linked-elsewhere`, `already-linked`, `last-link`, `not-found`, `unknown-provider` |
+| `permission` | `unknown-grant`, `not-grantable`, `last-holder`, `user-not-found` |
 
 ## Custom Paths
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
@@ -260,10 +261,62 @@ func HasScopes(required ...string) func(context.Context, auth.Identity) (bool, e
 	required = slices.Clone(required)
 
 	return func(_ context.Context, identity auth.Identity) (bool, error) {
-		granted := identity.Scopes()
-
-		return !slices.ContainsFunc(required, func(scope string) bool {
-			return !slices.Contains(granted, scope)
-		}), nil
+		return containsAll(identity.Scopes(), required), nil
 	}
+}
+
+// containsAll reports whether granted holds every name in required; an empty
+// required is always held.
+func containsAll(granted, required []string) bool {
+	return !slices.ContainsFunc(required, func(name string) bool {
+		return !slices.Contains(granted, name)
+	})
+}
+
+// containsAny reports whether granted holds at least one name in wanted.
+func containsAny(granted, wanted []string) bool {
+	return slices.ContainsFunc(wanted, func(name string) bool {
+		return slices.Contains(granted, name)
+	})
+}
+
+// ruleNames returns the names of definitions for the rule constructor called
+// rule, as a new slice. It panics when definitions is empty or any definition is
+// invalid, because a rule built from them would deny or allow by mistake; the
+// panic message names rule and carries the definition's error.
+func ruleNames[T interface {
+	Name() string
+	Err() error
+}](rule string, definitions []T) []string {
+	if len(definitions) == 0 {
+		panic("gate: " + rule + " needs at least one argument")
+	}
+
+	names := make([]string, 0, len(definitions))
+
+	for _, definition := range definitions {
+		if err := definition.Err(); err != nil {
+			panic("gate: " + rule + ": " + err.Error())
+		}
+
+		names = append(names, definition.Name())
+	}
+
+	return names
+}
+
+// validName reports whether name is 1 to limit bytes of lowercase ASCII
+// letters, digits and the bytes in extra.
+func validName(name string, limit int, extra string) bool {
+	if name == "" || len(name) > limit {
+		return false
+	}
+
+	for _, char := range []byte(name) {
+		if ('a' > char || char > 'z') && ('0' > char || char > '9') && strings.IndexByte(extra, char) < 0 {
+			return false
+		}
+	}
+
+	return true
 }

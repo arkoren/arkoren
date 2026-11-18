@@ -24,6 +24,7 @@ import (
 	"arkoren.dev/ark/iam/password"
 	"arkoren.dev/ark/oauth/oauthauth"
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/auth/gate"
 	"arkoren.dev/core/http/link"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
@@ -358,6 +359,13 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...iam.BuilderF
 			return err
 		}
 		_, err := io.WriteString(w, strings.Join([]string{identity.Subject(), levelName(identity.Level()), boolName(identity.Session())}, "|"))
+
+		return err
+	})
+	// /posts/write needs the posts:write permission on the request's identity,
+	// which a session carries when the facade has Builder.Permissions.
+	web.With(gate.Require(gate.HasPermission(postsWrite))).Get("/posts/write", func(w http.ResponseWriter, _ *http.Request) error {
+		_, err := io.WriteString(w, "allowed")
 
 		return err
 	})
