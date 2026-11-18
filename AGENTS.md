@@ -103,7 +103,7 @@ directories (once published, never again: they must be absent from disk and from
 both creation rulesets, and keep only their bootstrap `v0.1.0` tag). CI discovers all canonical
 filesystem modules, including ignored local ones (currently 48 modules and 16
 integrations); release preparation validates only the exact committed public set
-(45; `ark/iam` stays development-only until its first release). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
+(46). `inventory --commit FULL_SHA` reads policy and manifests from that commit.
 The Go command owns inventory, release plans, exact-SHA evidence, publication,
 notes-PR ownership and administrative policy checks. Native gh owns auto-merge
 and prerelease creation; website TypeScript owns Markdown import/validation.
