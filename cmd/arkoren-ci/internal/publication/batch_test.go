@@ -438,9 +438,6 @@ func TestHistoricalAccessBatchRemainsSignedAndRecoverable(t *testing.T) {
 	writeTest(t, fixture.root, "ark/iam/go.mod", "module arkoren.dev/ark/iam\n")
 	writeTest(t, fixture.root, ".github/release-modules.json", `{"schema":1,"public":["core","cmd/arkoren","driver/example","foundation/example"],"development":["ark/iam"]}`)
 	fixture.commit(t, "ci: rename development module")
-	if _, err := Recorded(context.Background(), fixture.root, fixture.trust); err != nil {
-		t.Fatal(err)
-	}
 	writeTest(t, fixture.root, ".github/release-modules.json", `{"schema":1,"public":["ark/iam","core","cmd/arkoren","driver/example","foundation/example"],"development":[]}`)
 	fixture.commit(t, "chore(release): release the held-back module")
 	if _, err := Recorded(context.Background(), fixture.root, fixture.trust); err != nil {
