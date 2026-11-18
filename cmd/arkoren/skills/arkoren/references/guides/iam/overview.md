@@ -22,10 +22,6 @@ resources they may use. Keep those decisions in your application's
 login flow rather than ready-made routes, use the lower-level
 [authentication packages](../authentication/overview.md) instead.
 
-> [!NOTE]
-> IAM is not released yet. Installation is pending; these guides describe the
-> current API without claiming that `arkoren.dev/ark/iam` is available to download.
-
 ## Features
 
 Every feature is off until you enable it, except the user directory and
@@ -56,6 +52,22 @@ session management, which come with any facade:
   feature's rows together.
 
 The [route reference](routes.md) lists the HTTP routes each feature mounts.
+
+## Installation
+
+Install the ark in your application's module:
+
+```sh
+go get arkoren.dev/ark/iam
+```
+
+IAM requires `arkoren.dev/core` v0.13.0 or later; `go get` raises your core
+requirement to that version when it is older. The packages you import from IAM
+use no database driver of their own: your application chooses and installs
+the [database driver](../database/drivers.md), cache, password hasher, and, for
+two-factor, the encryption driver, and passes them to `iam.New`. IAM never
+creates its tables either; add `identity.Migrations()` to your migrator as
+[Prepare Storage](#prepare-storage) shows.
 
 ## Start Small
 

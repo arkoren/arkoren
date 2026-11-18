@@ -1,10 +1,15 @@
 # arkoren.dev/ark/iam
 
-This module is not released; installation is pending.
-
 Login, optional registration, two-factor authentication, API tokens, social sign-in
 and permissions and roles for an Arkoren application, as JSON routes on core's
 `auth.Guard`.
+
+```sh
+go get arkoren.dev/ark/iam
+```
+
+It requires `arkoren.dev/core` v0.13.0 or later. Your application brings the
+database driver, cache, hasher and cipher, and runs `identity.Migrations()`.
 
 The module has no third-party dependencies (core, foundation and the standard
 library) and never imports `arkoren.dev/ark/oauth`: a provider joins through the

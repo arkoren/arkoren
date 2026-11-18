@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"arkoren.dev/cmd/arkoren-ci/internal/repository"
@@ -67,6 +68,29 @@ func TestHistoricalAccessDevelopmentRoot(t *testing.T) {
 	}
 	if _, err := repository.Inspect(context.Background(), root, sha); err == nil {
 		t.Fatal("current inspection accepted historical access")
+	}
+}
+
+// TestHistoricalIAMDevelopmentRoot preserves the held-back ark/iam boundary of
+// commits before its first release for replay, without approving it for
+// current policy.
+func TestHistoricalIAMDevelopmentRoot(t *testing.T) {
+	root := fixture(t)
+	write(t, root, "ark/iam/go.mod", "module arkoren.dev/ark/iam\n")
+	data := `{"schema":1,"public":["core","cmd/arkoren","driver/example","foundation/example"],"development":["ark/iam","cmd/arkoren-ci"]}`
+	write(t, root, ".github/release-modules.json", data)
+	sha := snapshot(t, root)
+	result, err := repository.ReleaseInventory(context.Background(), root, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(result.Modules, func(module repository.Module) bool {
+		return module.Directory == "ark/iam" && module.Classification == "development"
+	}) {
+		t.Fatalf("historical iam is not a development module: %+v", result.Modules)
+	}
+	if _, err := repository.ParsePolicy([]byte(data)); err == nil {
+		t.Fatal("current parser accepted held-back iam")
 	}
 }
 

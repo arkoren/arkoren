@@ -18,8 +18,8 @@ join, what they can access, and when that access ends.
 
 This guide uses an existing IAM database and cache from the
 [IAM overview](overview.md), and a browser client registered with your
-identity provider. IAM is not released yet; the overview describes its
-availability. Handle each error in these focused fragments before continuing.
+identity provider. Handle each error in these focused fragments before
+continuing.
 
 ## Choose a Provider
 

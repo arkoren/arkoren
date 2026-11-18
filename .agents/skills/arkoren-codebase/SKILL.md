@@ -73,8 +73,7 @@ after inventory or workflow changes.
 Run `GOWORK=off go -C cmd/arkoren-ci run . inventory` from the checkout for
 working-tree inspection, or append `--commit FULL_SHA` to validate a committed
 inventory and its same-commit policy. CI/audits currently include 48 modules and
-16 integration suites; releases include only the 45 approved public modules (`ark/iam` is
-classified development-only until its first release).
+16 integration suites; releases include only the 46 approved public modules.
 The development command uses standard flags, JSON stdout and JSON diagnostics on
 stderr. Its focused internal packages own inventory, release planning, exact-SHA
 evidence, signed publication, notes-PR ownership and policy checks. Native gh owns
@@ -114,8 +113,8 @@ server) have none of those four. Keep a provider compatibility matrix in the
 ark's guide wherever providers vary. Modules that need a third-party library
 stay separate arks; `ark/iam` is dependency-free (core, foundation, stdlib),
 so it never imports `ark/oauth`. A development-only module,
-`cmd/arkoren-wiring`, requires both and proves they fit; until `ark/iam` has
-a release it builds against the checkout with a local `replace`.
+`cmd/arkoren-wiring`, requires both and proves they fit; until the
+`ark/iam/v0.1.0` tag exists it builds against the checkout with a local `replace`.
 
 ## How the pieces fit
 
@@ -376,7 +375,7 @@ expanded role names, stale stored names are ignored, and its routes (GET /me/per
 with Management) need a fresh session holding the management permission and
 refuse escalation. Begin never calls Grants (Guard.active is the login check).
 Roles precompute Expand/Permissions in NewRole; two different same-name roles
-in one hierarchy are ErrDuplicateName. ark/iam (unreleased) is the facade over
+in one hierarchy are ErrDuplicateName. ark/iam is the facade over
 these seams: iam.New(db, store, configure) builds the guard with the default
 registries (second factor: otp then recovery; step up: pwd then otp; federated is
 no step-up method), Mount registers the JSON routes of the enabled features, and
