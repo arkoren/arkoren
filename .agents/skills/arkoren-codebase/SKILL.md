@@ -359,7 +359,16 @@ dispatched on the body's "method", Fresh/RequireFresh/RecentLogin freshness,
 the Identity.Session marker with RequireSession, and the auth.External and
 auth.Resolver types. Core names only RFC 8176 methods; modules (twofactor,
 oauth) declare their own and publish auth.CredentialEnrolled. There is no
-provider interface in core. ark/iam (unreleased) is the facade over
+provider interface in core. Authorization vocabulary is core too:
+gate.Permission and gate.Role (immutable values, no registry, Err not panic;
+the rule constructors HasPermission/HasAnyPermission/HasRole/HasAnyRole panic
+on none or invalid) check Identity.Scopes and Identity.Roles, which are opaque
+strings so auth never imports gate. GuardBuilder.Grants loads a session's roles
+(the expanded set) and scopes per request and an error fails it; tokens carry
+scopes only. An application-owned store assigns them; core ships none and no
+ark calls Grants yet. Begin never calls Grants (Guard.active is the login check).
+Roles precompute Expand/Permissions in NewRole; two different same-name roles
+in one hierarchy are ErrDuplicateName. ark/iam (unreleased) is the facade over
 these seams: iam.New(db, store, configure) builds the guard with the default
 registries (second factor: otp then recovery; step up: pwd then otp; federated is
 no step-up method), Mount registers the JSON routes of the enabled features, and

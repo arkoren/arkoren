@@ -92,6 +92,28 @@ func TestIdentityGettersReturnCopies(t *testing.T) {
 	}
 }
 
+// TestIdentityRolesAreCopied verifies roles append across calls in order and
+// that neither the caller's slice nor a returned slice can change them.
+func TestIdentityRolesAreCopied(t *testing.T) {
+	t.Parallel()
+
+	roles := []string{"editor"}
+	identity := auth.NewIdentity("1", func(principal *auth.IdentityBuilder) {
+		principal.Roles(roles...).Roles("viewer")
+	})
+
+	roles[0] = "admin"
+	identity.Roles()[0] = "admin"
+
+	if got := identity.Roles(); len(got) != 2 || got[0] != "editor" || got[1] != "viewer" {
+		t.Fatalf("roles = %v", got)
+	}
+
+	if (auth.Identity{}).Roles() != nil {
+		t.Fatal("zero identity has roles")
+	}
+}
+
 // TestIdentityRetainedBuilderCannotChangePublishedIdentity verifies the draft
 // is detached at publication.
 func TestIdentityRetainedBuilderCannotChangePublishedIdentity(t *testing.T) {
@@ -183,6 +205,15 @@ func ExampleIdentity_Scopes() {
 	// Output: [read]
 }
 
+func ExampleIdentity_Roles() {
+	identity := auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
+		principal.Roles("editor", "viewer")
+	})
+
+	fmt.Println(identity.Roles())
+	// Output: [editor viewer]
+}
+
 func ExampleIdentity_Actor() {
 	identity := auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
 		principal.Actor("support-7")
@@ -235,6 +266,15 @@ func ExampleIdentityBuilder_Scopes() {
 
 	fmt.Println(identity.Scopes())
 	// Output: [posts:read posts:write]
+}
+
+func ExampleIdentityBuilder_Roles() {
+	identity := auth.NewIdentity("42", func(principal *auth.IdentityBuilder) {
+		principal.Roles("editor", "viewer")
+	})
+
+	fmt.Println(identity.Roles())
+	// Output: [editor viewer]
 }
 
 func ExampleIdentityBuilder_Actor() {

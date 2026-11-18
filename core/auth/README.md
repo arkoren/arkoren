@@ -2,7 +2,7 @@
 
 Use [auth](https://pkg.go.dev/arkoren.dev/core/auth) to resolve who is acting
 from verified credentials. The result is an immutable `auth.Identity` (subject,
-factors, scopes, optional actor and user record) that any package can read
+factors, scopes, roles, optional actor and user record) that any package can read
 without knowing your application's user type. Parsing an identity header is not
 verification. Your verifier must check authenticity, expiry, and revocation
 before returning an identity.
@@ -49,7 +49,11 @@ only through one of them. The provider is asked on every
 request, so a deleted or disabled user is anonymous. Each login also creates a
 login record, so a user can list devices with `Logins` and log them out with
 `Revoke`, `RevokeOthers` and `RevokeAll`; a revoked device is anonymous on its
-next request. Handle mutation errors.
+next request. `policy.Grants(load)` loads the user's roles and scopes from your
+permission store on every authenticated request, so gate permission and role
+rules work for sessions; an error from `load` fails the request, so cache inside
+`load`. Sessions then also pass scope and permission rules, so keep CSRF
+protection on every route a session cookie can reach. Handle mutation errors.
 Rotation does not prove persistence succeeded; session middleware owns saving,
 renewal, and retirement. Handles select context slots, not separate authorization
 realms or physical identity fields.

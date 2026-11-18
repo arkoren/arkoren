@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"time"
@@ -243,7 +244,11 @@ func (guard *Guard) start(r *http.Request, current *session.Session, user UserRe
 // request stays anonymous. It looks the subject up with the provider on every
 // request and builds an [Identity] carrying the stored factors and the
 // provider's [UserRecord], so [UserFromContext] returns its Value. It is the only
-// code that sets [Identity.Session].
+// code that sets [Identity.Session]. With [GuardBuilder.Grants] it also loads
+// the user's roles and scopes once per request, after the login record check;
+// an error from that function is returned wrapped as "auth: load grants", so the
+// request fails instead of continuing without them. Without the option the identity carries
+// no roles and no scopes.
 //
 // A missing session, an absent or unreadable record, a deleted or disabled user
 // ([ErrUserNotFound], [ErrUserDisabled]), a credential version that no longer
@@ -260,34 +265,62 @@ func (guard *Guard) start(r *http.Request, current *session.Session, user UserRe
 //	r.Use(session.Middleware(store), auth.Middleware(guard.Authenticator()))
 func (guard *Guard) Authenticator() Authenticator {
 	return func(r *http.Request) (Identity, error) {
-		stored, user, err := guard.valid(r)
-
-		if errors.Is(err, session.ErrNoSession) {
-			return Identity{}, ErrNoCredentials
-		}
+		stored, user, err := guard.active(r)
 
 		if err != nil {
 			return Identity{}, err
 		}
 
-		active, err := guard.seen(r.Context(), stored.Subject, stored.LoginID)
+		var roles, scopes []string
 
-		if err != nil {
-			return Identity{}, err
-		}
+		if guard.settings.Grants != nil {
+			roles, scopes, err = guard.settings.Grants(r.Context(), stored.Subject)
 
-		if !active {
-			return Identity{}, ErrNoCredentials
+			if err != nil {
+				return Identity{}, fmt.Errorf("auth: load grants: %w", err)
+			}
 		}
 
 		identity := NewIdentity(stored.Subject, func(principal *IdentityBuilder) {
 			principal.Factors(stored.Factors...)
 			principal.Record(user)
+			principal.Roles(roles...)
+			principal.Scopes(scopes...)
 		})
 		identity.session = true
 
 		return identity, nil
 	}
+}
+
+// active returns the session record of r and its user when r is logged in:
+// [Guard.valid] passes and the login record is still active (see [Guard.seen]).
+// A missing session, a failed check and an inactive login record are
+// [ErrNoCredentials]; other errors pass through. It never calls
+// [GuardBuilder.Grants], so [Guard.Begin] can ask whether a user is logged in
+// without depending on the permission store.
+func (guard *Guard) active(r *http.Request) (sessionRecord, UserRecord, error) {
+	stored, user, err := guard.valid(r)
+
+	if errors.Is(err, session.ErrNoSession) {
+		return stored, user, ErrNoCredentials
+	}
+
+	if err != nil {
+		return stored, user, err
+	}
+
+	active, err := guard.seen(r.Context(), stored.Subject, stored.LoginID)
+
+	if err != nil {
+		return stored, user, err
+	}
+
+	if !active {
+		return stored, user, ErrNoCredentials
+	}
+
+	return stored, user, nil
 }
 
 // valid returns the logged-in session record of r and its user, after the

@@ -4,6 +4,7 @@ nav: Overview
 description: Check actions with plain Go rules and keep permission decisions beside the resources they protect.
 summary:
   - Match gate rules to the authenticated user type or identity and distinguish denials from failed checks.
+  - Declare permissions and roles once and check them against the identity for sessions and tokens.
   - Combine route admission with resource checks against authorized store results.
   - Reload identities and recheck permissions before deferred work runs.
 order: 10
@@ -17,9 +18,9 @@ another customer's records. Authentication establishes an identity;
 runs your permission checks before the protected action proceeds.
 
 A **rule** is a Go function that receives a context and your authenticated user
-type, then returns `(bool, error)`. You supply the roles, ownership checks, and
-other application decisions. The gate supplies ordered evaluation and the
-missing-user and forbidden errors.
+type, then returns `(bool, error)`. You supply ownership checks and other
+application decisions. The gate supplies ordered evaluation, the missing-user
+and forbidden errors, and named permissions and roles with ready-made rules.
 
 ## Identity Boundaries
 
@@ -78,6 +79,67 @@ stopping at the first denial or error; put inexpensive checks before external
 lookups. Express alternatives inside a rule with ordinary Go conditions.
 `gate.Require` panics with no rules. For sign-in alone, use
 `auth.Require()` instead.
+
+## Permissions and Roles
+
+When the same ability appears in many routes, give it a name once instead of
+repeating a boolean field check. A **permission** names one action, such as
+`reports:export`; a **role** names a bundle of permissions that you assign to
+users, such as `analyst`. Declare both as package variables:
+
+```go
+var (
+	ReportsRead   = gate.NewPermission("reports:read")
+	ReportsExport = gate.NewPermission("reports:export")
+
+	Viewer = gate.NewRole("viewer", func(role *gate.RoleBuilder) {
+		role.Grants(ReportsRead)
+	})
+	Analyst = gate.NewRole("analyst", func(role *gate.RoleBuilder) {
+		role.Includes(Viewer).Grants(ReportsExport)
+	})
+)
+```
+
+`Analyst` includes `Viewer`, so it holds both permissions. Permission names are
+1 to 128 bytes of lowercase letters, digits, `:`, `.`, `_` and `-`; role names
+are 1 to 64 bytes of lowercase letters, digits, `_` and `-`. An invalid name
+never panics where it is declared: `Err()` reports it, and a role that grants an
+invalid permission or includes an invalid role is invalid too. So is a role
+whose hierarchy reaches two different roles with the same name, or a role named
+like itself; reaching the same role through two paths is fine.
+
+`gate.HasPermission` is a rule over `auth.Identity` that requires every listed
+permission. Use it in place of `canExport`:
+
+```go
+r.With(gate.Require(gate.HasPermission(ReportsExport))).Post("/reports/{id}/export", exportReport)
+```
+
+`gate.HasAnyPermission` accepts one of several, and `gate.HasRole` and
+`gate.HasAnyRole` check roles. Each constructor panics when it receives no
+definition or an invalid one, so a typo fails while routes are built rather
+than silently denying every request.
+
+The rules read only the identity: its scopes hold the user's permission names
+and its roles hold role names. The gate defines this vocabulary but stores no
+assignments. Your permission store assigns roles and permissions to users, and
+a session receives them through `auth.GuardBuilder.Grants`, which calls your
+loader on every authenticated request; [Writing Policies](policies.md#global-permissions)
+shows the wiring. The loader must put the expanded role set on the identity, so
+an analyst also carries `viewer` and passes `gate.HasRole(Viewer)`. API tokens
+carry only the scopes they were granted and no roles. Prefer permission checks
+for authorization so the same route works for sessions and tokens; keep role
+checks for session-only screens.
+
+> [!WARNING]
+> Once `Grants` is set, a cookie session passes `gate.HasPermission` and
+> `gate.HasScopes` routes that previously only API tokens could pass. If such a
+> route runs session authentication without CSRF protection, another site can
+> submit requests with the user's cookie. Keep
+> [CSRF middleware](../browser-security/csrf-protection.md) on every route a session can
+> reach, or serve token-only APIs from a router that authenticates with
+> `auth.Bearer` alone.
 
 ## Resource Checks
 

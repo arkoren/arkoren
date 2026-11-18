@@ -148,9 +148,12 @@ verifyKey := func(ctx context.Context, token string) (auth.Identity, error) {
 It returns an error for missing or disabled accounts, never a zero user with
 nil error or `ErrNoCredentials`. If keys have expiry or granted permissions,
 check expiry here and carry the permitted authority on the identity with
-`principal.Scopes(...)`; [authorization](../authorization/overview.md) still
-decides which actions and resources it allows, for example with
-`gate.HasScopes`.
+`principal.Scopes(...)`. Put only what both the key and its owner still hold
+there, never the owner's full permissions. [Authorization](../authorization/overview.md)
+still decides which actions and resources it allows: `gate.HasPermission`
+checks a declared `gate.Permission` against those scopes, and `gate.HasScopes`
+checks raw scope strings. A key's identity carries scopes and no roles, so
+`gate.HasRole` denies it; check permissions on routes that keys can reach.
 
 `auth.Bearer` checks the header shape, not your key format. Very short tokens can
 reach the verifier. If your format extracts a public lookup identifier or prefix,
@@ -190,7 +193,11 @@ provide a token endpoint, refresh flow, or authorization server.
 Prefer bearer-only API groups when scripts should not inherit browser session
 authority. Such routes do not need CSRF protection for bearer authentication
 because the credential is explicitly supplied, not automatically sent as a cookie.
-Do not apply that exception to routes that also accept sessions.
+Do not apply that exception to routes that also accept sessions. This matters
+more once the guard has `auth.GuardBuilder.Grants`: session identities then
+carry scopes and pass the same `gate.HasPermission` and `gate.HasScopes` checks
+as keys, so a scope check no longer keeps browsers out of a group that also runs
+the guard authenticator.
 
 If the same routes deliberately accept both credentials, configure the
 [session and CSRF middleware](session-login.md#enable-login) and choose

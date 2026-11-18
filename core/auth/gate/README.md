@@ -29,6 +29,28 @@ availability check that reports `false` for anonymous callers, and
 `gate.HasScopes(scopes...)` is a rule over `auth.Identity` that requires every
 listed scope.
 
+Declare permissions and roles once as package values and check them with
+identity rules:
+
+```go
+var (
+	PostsWrite = gate.NewPermission("posts:write")
+	Editor     = gate.NewRole("editor", func(role *gate.RoleBuilder) {
+		role.Grants(PostsWrite)
+	})
+)
+
+r.With(gate.Require(gate.HasPermission(PostsWrite))).Post("/posts", create)
+```
+
+`HasPermission` reads the identity's scopes and `HasRole` its roles; the `Any`
+variants accept one of several. A session carries them when the guard has
+`auth.GuardBuilder.Grants`, and a token carries only the scopes it was granted
+and no roles, so prefer permission checks for authorization. Gate stores no
+assignments: your permission store fills the identity. With `Grants` set, a
+cookie session also passes `HasScopes` and `HasPermission` routes, so those
+routes need CSRF protection.
+
 No identity, no user record, or a record of another type returns
 `auth.ErrUnauthenticated` (401), a denied rule returns `gate.ErrForbidden` (403),
 and a rule error is returned as is. Row-level access belongs in query scopes and

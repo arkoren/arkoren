@@ -11,7 +11,8 @@ order: 30
 
 # Row-Level Access
 
-An invoice-list permission does not tell you which invoices a caller may read.
+An invoice-list [permission](overview.md#permissions-and-roles) does not tell
+you which invoices a caller may read.
 Put that record boundary in the SQL query, rather than loading all invoices and
 discarding forbidden ones afterward. The database then filters the rows before
 pagination, counting, or returning private data to the application.

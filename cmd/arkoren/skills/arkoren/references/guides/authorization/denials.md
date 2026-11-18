@@ -25,7 +25,7 @@ what the caller may learn about the resource:
 | Situation | Response | Responsibility |
 | --- | --- | --- |
 | No identity, or none carrying a user of the rule's exact type, is present | `401 Unauthorized` | The gate returns `auth.ErrUnauthenticated`. |
-| A known actor lacks permission and may know the resource exists | `403 Forbidden` | A rule returning `false, nil` produces `gate.ErrForbidden`. |
+| A known actor lacks permission and may know the resource exists | `403 Forbidden` | A rule returning `false, nil`, including a failed `gate.HasPermission` or `gate.HasRole`, produces `gate.ErrForbidden`. |
 | The record is absent or outside the caller's visibility boundary | `404 Not Found` | Your handler maps scoped `database.ErrNoRows` to `problem.NotFound()`. |
 | An authorized action violates current state, such as removing the last team owner | `409 Conflict` | Your application returns a conflict problem. |
 | A database or service fails while checking permission | Normal error handling | The gate returns the rule's non-nil error unchanged. |

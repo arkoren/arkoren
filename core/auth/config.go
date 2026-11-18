@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -160,6 +161,10 @@ type guardSettings struct {
 
 	// SessionLifetime is the lifetime of the login-record list.
 	SessionLifetime time.Duration
+
+	// Grants loads the roles and scopes of a logged-in subject on every
+	// authenticated request; nil leaves session identities without either.
+	Grants func(ctx context.Context, subject string) (roles, scopes []string, err error)
 }
 
 // GuardBuilder configures [NewGuard] before publication. Callbacks run
@@ -390,6 +395,62 @@ func (policy *GuardBuilder) Events(bus *event.Bus) *GuardBuilder {
 //	})
 func (policy *GuardBuilder) SessionLifetime(lifetime time.Duration) *GuardBuilder {
 	policy.settings.SessionLifetime = lifetime
+
+	return policy
+}
+
+// Grants sets the function that loads the roles and scopes of a logged-in
+// user, typically from an application-owned permission store. [Guard.Authenticator]
+// calls it once per authenticated request, after the provider has found the user
+// and the login record check has passed, and puts the result on the [Identity]
+// with [IdentityBuilder.Roles] and [IdentityBuilder.Scopes], so gate rules such
+// as gate.HasPermission and gate.HasRole can read them. It is not called for
+// anonymous, pending or rejected requests, nor by [Guard.Begin].
+//
+// load receives the request context and the subject. Both returned slices are
+// copied into the identity; nil and empty mean none. Roles should be the
+// expanded set (every role the user holds, including the roles those include),
+// because rules compare names and never expand a hierarchy. Scopes are the
+// user's effective permission names.
+//
+// An error stops authentication: the authenticator returns it wrapped as
+// "auth: load grants: ...", the request fails, and no identity without roles
+// and scopes is ever produced. The wrapping keeps [errors.Is] working, so, as
+// with any [Authenticator], an error matching [ErrNoCredentials] makes the
+// request anonymous instead.
+//
+// Cost and availability: load runs on every authenticated session request, so
+// an outage of its store fails every logged-in request, and its latency adds to
+// each one. Cache inside load (for example with cache.Remember and a short TTL)
+// and clear the entry when grants change; a cached result delays revocation by
+// up to its lifetime.
+//
+// Security: once Grants is set, session identities carry scopes, so they pass
+// gate.HasScopes and gate.HasPermission routes that previously only bearer
+// tokens could pass. Every such route reachable with the session cookie needs
+// CSRF protection. For example, an /api group that skips csrf.Middleware because
+// "only tokens call it" must not run session.Middleware and this authenticator:
+// mount it on a router that authenticates with auth.Bearer alone, or keep CSRF
+// in front of it.
+//
+// The default, nil, gives session identities no roles and no scopes, which was
+// the behavior before this option existed. The setting replaces the previous
+// value on this draft.
+//
+// Example:
+//
+//	guard, err := auth.NewGuard(users, store, func(policy *auth.GuardBuilder) {
+//		policy.Grants(func(ctx context.Context, subject string) ([]string, []string, error) {
+//			grants, err := permissions.ForUser(ctx, subject) // application-owned store
+//			if err != nil {
+//				return nil, nil, err
+//			}
+//
+//			return grants.Roles, grants.Scopes, nil
+//		})
+//	})
+func (policy *GuardBuilder) Grants(load func(ctx context.Context, subject string) (roles, scopes []string, err error)) *GuardBuilder {
+	policy.settings.Grants = load
 
 	return policy
 }
