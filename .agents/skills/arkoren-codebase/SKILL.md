@@ -113,8 +113,7 @@ server) have none of those four. Keep a provider compatibility matrix in the
 ark's guide wherever providers vary. Modules that need a third-party library
 stay separate arks; `ark/iam` is dependency-free (core, foundation, stdlib),
 so it never imports `ark/oauth`. A development-only module,
-`cmd/arkoren-wiring`, requires both and proves they fit; until the
-`ark/iam/v0.1.0` tag exists it builds against the checkout with a local `replace`.
+`cmd/arkoren-wiring`, requires both and proves they fit against the published releases.
 
 ## How the pieces fit
 
@@ -1079,7 +1078,7 @@ on pkg.go.dev; the website's API catalog links modules rather than copying them.
 | Add a vendor module | As above, plus `driver/<vendor>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, and `driver/<vendor>/compose.yaml` when tests need services (fixed `127.0.0.1` ports not used by another module). Verify with `GOWORK=off`; never require another driver module or add local replaces. |
 | Add a core package or middleware | Follow the boundary rules above; include `doc.go`, public examples and relevant consumer guides. Middleware takes `Middleware(required..., configure...)`. |
 | Change a public API | Update Go doc comments/examples, all callers, relevant consumer guides and affected contributor rules. Keep matching public `BuilderFunc` aliases consistent with drafts and callback signatures. |
-| Add an ark | `ark/<name>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, package docs/examples and relevant guides. Verify with `GOWORK=off`; use no local replaces (only `cmd/arkoren-wiring` replaces an ark that has no release yet). It may not import `core/internal` or another ark. Update the Arks guide's availability statement and the website module catalog when the first ark ships. |
+| Add an ark | `ark/<name>/go.mod` requiring a real core version, a relative `use` line in `go.work` for shared development, package docs/examples and relevant guides. Verify with `GOWORK=off`; use no local replaces. It may not import `core/internal` or another ark. Update the Arks guide's availability statement and the website module catalog when the first ark ships. |
 | Add a driver or package that needs tables | Ship `Migrations()` with stable groups and short ids; validate `Builder.Instance`; use read-only readiness checks returning `ErrNotFound` and naming `Migrations()`. Tests must execute migrations before use and exercise two instances. Document application-owned migration execution in package docs and driver guides. Preserve existing group identities and test actual behavior rather than just source spelling. |
 | Add diagnostic MCP tools to a package | `MCPTools(prefix)` on the owner, direct tool/adapter tests, Go doc examples and diagnostic guides. Composition selects and authorizes tools. |
 | Change MCP CLI metadata or safe failures | The `cmd/arkoren` decoding and renderers, its end-to-end MCP tests, and the `guides/cli/` pages. |

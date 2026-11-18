@@ -14,9 +14,7 @@ release or consumer dependency. `cmd/arkoren-wiring` is a development-only
 module that requires `ark/iam` and `ark/oauth` and tests them together
 (they never import each other); it is never released. `scripts/` holds workflow fixtures. The committed
 `go.work` joins imported and explicit development modules. Module
-manifests declare real dependency versions, with no local `replace` directives
-(the one exception is `cmd/arkoren-wiring`, which replaces `ark/iam` with the
-checkout until its first tag exists); `GOWORK=off` checks remain the
+manifests declare real dependency versions, with no local `replace` directives; `GOWORK=off` checks remain the
 independent-module authority.
 
 During the incremental import, the ignored `go.local.work` preserves the full
