@@ -502,7 +502,10 @@ delivery, and lifecycle protocols explicit.
   token scope catalog comes with its grant ceiling (`apitoken.Builder.Grants(grantable,
   scopes...)`, `GrantTTL`, `AnyScope`) and `apitoken.NewIssuer(provider, db, store, ...)`
   takes the shared cache. Its packages (account, password, twofactor,
-  apitoken, federation) take a `*auth.UserProvider` and never import each other;
+  apitoken, federation, permission) take a `*auth.UserProvider` and never import each other;
+  `permission.NewStore(provider, db, store, ...)` stores core gate roles and
+  permissions, and with `identity.Permissions(...)` the facade wires `Store.Load`
+  as the guard's Grants and `Store.Permissions` as the token ceiling;
   their handlers take `*auth.Guard`, require `Identity.Session()` and call
   `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use.
 - Webhook `Event.Map` returns a new credential-free definition with the same

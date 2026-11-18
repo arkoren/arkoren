@@ -4,7 +4,7 @@ nav: Overview
 description: Build a minimal login system with IAM, prepare its storage, and mount its routes with session and CSRF protection.
 order: 10
 summary:
-  - Separate the login features IAM supplies from the resources and policies your application owns.
+  - Find every IAM feature and its guide, and separate them from the resources and policies your application owns.
   - Construct a password-enabled facade, migrate its tables, and provision a known user.
   - Mount the authentication routes and protect application routes without opening registration.
 ---
@@ -25,6 +25,37 @@ login flow rather than ready-made routes, use the lower-level
 > [!NOTE]
 > IAM is not released yet. Installation is pending; these guides describe the
 > current API without claiming that `arkoren.dev/ark/iam` is available to download.
+
+## Features
+
+Every feature is off until you enable it, except the user directory and
+session management, which come with any facade:
+
+- **[Accounts](#add-a-user)**: a built-in, email-based user directory, or
+  [your own users](own-users.md) behind the same API.
+- **[Passwords](passwords.md)**: login, confirmation and password changes,
+  with abuse limits; [registration](registration.md) opens self-service
+  sign-up when you choose.
+- **[Email links](email-links.md)**: password reset and email verification
+  through signed, single-use links your queue delivers.
+- **[Two-factor](two-factor.md)**: authenticator-app codes and recovery codes
+  that finish a pending login.
+- **[Fresh logins](freshness.md)**: recent proof of identity before sensitive
+  account changes.
+- **[Sessions](accounts.md#manage-sessions)**: list a user's logins and log out
+  other devices.
+- **[API and device tokens](tokens.md)**: scoped personal tokens and
+  revocable tokens for first-party apps, capped by what the user may hold.
+- **[Federated sign-in](federated-sign-in.md)**: external providers, per-provider
+  sign-up and user-managed connections; [SSO](sso.md) applies them to
+  organizational sign-in.
+- **[Permissions and roles](permissions.md)**: assign core `gate` roles and
+  permissions to users, check them on sessions and tokens, and manage them
+  through optional routes.
+- **[Account deletion](accounts.md#delete-an-account)**: remove a user and every
+  feature's rows together.
+
+The [route reference](routes.md) lists the HTTP routes each feature mounts.
 
 ## Start Small
 
@@ -140,7 +171,8 @@ private.Get("/posts", listPosts)
 
 `listPosts` is your application handler. An anonymous request receives `401`;
 after Ada [logs in](passwords.md#log-in), the request reaches the handler.
-It must still authorize which posts Ada may read.
+It must still authorize which posts Ada may read, for example with
+[permissions](permissions.md) and a scoped query.
 
 Every IAM JSON `POST`, `PUT`, or `PATCH` needs
 `Content-Type: application/json`, even when no body is needed. A missing or
@@ -170,7 +202,7 @@ and storage behavior.
 ## Configure Features
 
 The following pages add one capability at a time. Keep each feature's settings
-together: a later `Password`, `TwoFactor`, or `Tokens` call replaces that
+together: a later `Password`, `TwoFactor`, `Tokens`, or `Permissions` call replaces that
 feature's earlier configuration rather than extending it. Add each provider
 through its own `Provider` call; provider names must be unique.
 

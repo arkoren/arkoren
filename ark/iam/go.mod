@@ -3,7 +3,7 @@ module arkoren.dev/ark/iam
 go 1.27
 
 require (
-	arkoren.dev/core v0.11.0
+	arkoren.dev/core v0.12.1-0.20261118173128-1b2a3a6eac88
 	arkoren.dev/driver/aes v0.1.0
 	arkoren.dev/driver/bcrypt v0.1.0
 	arkoren.dev/driver/mysql v0.1.0

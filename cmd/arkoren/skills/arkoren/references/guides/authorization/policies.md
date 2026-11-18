@@ -74,8 +74,10 @@ var (
 )
 ```
 
-A **permission store** is your application code that records which users hold
-`Accountant` or `BillingExport`. Arkoren core stores no assignments. Give the
+A **permission store** records which users hold `Accountant` or
+`BillingExport`. Arkoren core stores no assignments. If you use IAM, its
+[permission store](../iam/permissions.md) does this and wires the guard for
+you; otherwise write your own. Give the
 guard a loader that returns a user's role names, including every role those
 include, and permission names. With `users` and `store` from your
 [session login](../authentication/session-login.md) setup and your store's

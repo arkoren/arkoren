@@ -22,6 +22,9 @@ import (
 //	            native providers GET /auth/<name>/nonce, POST /auth/<name>/native
 //	Connections GET /connections, POST /connections/{provider},
 //	            DELETE /connections/{id}
+//	Permissions GET /me/permissions (with SelfService), GET /users/{subject}/permissions,
+//	            PUT and DELETE /users/{subject}/permissions/{name} and
+//	            /users/{subject}/roles/{name} (with Management)
 //	Account     DELETE /account (built-in users only)
 //
 // The password routes need [Builder.Password]; of them, /register also needs
@@ -36,7 +39,10 @@ import (
 // and [account.Builder.Verification]. The token routes need [Builder.Tokens]: listing and
 // revoking serve both kinds, POST /tokens needs [apitoken.Builder.PersonalTokens]
 // and the two device routes [apitoken.Builder.DeviceTokens] (both default to
-// on). /logout and the session routes are always mounted.
+// on). The permission routes need [Builder.Permissions]: /me/permissions also
+// [permission.Builder.SelfService] and the /users/{subject} routes
+// [permission.Builder.Management]. /logout and the session routes are always
+// mounted.
 //
 // r must already run [IAM.Middleware]. The routes live at the paths above:
 // the connect handler redirects to "/auth/<name>" and the providers' callbacks
@@ -59,6 +65,7 @@ func (identity *IAM) Mount(r *router.Router) {
 	identity.mountEmail(r)
 	identity.mountTwoFactor(r)
 	identity.mountTokens(r)
+	identity.mountPermissions(r)
 	r.Get("/sessions", identity.ListSessionsHandler())
 	r.Delete("/sessions/{id}", identity.DeleteSessionHandler())
 	r.Delete("/sessions", identity.DeleteOtherSessionsHandler())
@@ -136,6 +143,26 @@ func (identity *IAM) mountTokens(r *router.Router) {
 		r.Post("/device-tokens", identity.ExchangeHandler())
 		r.Delete("/device-tokens/current", identity.DeleteDeviceTokenHandler())
 	}
+}
+
+// mountPermissions registers the permission routes the store asked for:
+// GET /me/permissions with [permission.Builder.SelfService], and the
+// /users/{subject} routes with [permission.Builder.Management].
+func (identity *IAM) mountPermissions(r *router.Router) {
+	if identity.permissions == nil {
+		return
+	}
+	if identity.permissions.SelfService() {
+		r.Get("/me/permissions", identity.SelfPermissionsHandler())
+	}
+	if _, managed := identity.permissions.Management(); !managed {
+		return
+	}
+	r.Get("/users/{subject}/permissions", identity.UserPermissionsHandler())
+	r.Put("/users/{subject}/permissions/{name}", identity.GrantPermissionHandler())
+	r.Delete("/users/{subject}/permissions/{name}", identity.RevokePermissionHandler())
+	r.Put("/users/{subject}/roles/{name}", identity.GrantRoleHandler())
+	r.Delete("/users/{subject}/roles/{name}", identity.RevokeRoleHandler())
 }
 
 // mountConnections registers the connection routes when [Builder.Provider]

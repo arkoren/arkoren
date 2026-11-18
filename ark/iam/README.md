@@ -2,8 +2,9 @@
 
 This module is not released; installation is pending.
 
-Login, optional registration, two-factor authentication, API tokens and social sign-in
-for an Arkoren application, as JSON routes on core's `auth.Guard`.
+Login, optional registration, two-factor authentication, API tokens, social sign-in
+and permissions and roles for an Arkoren application, as JSON routes on core's
+`auth.Guard`.
 
 The module has no third-party dependencies (core, foundation and the standard
 library) and never imports `arkoren.dev/ark/oauth`: a provider joins through the
@@ -17,6 +18,7 @@ small `iam.Provider` interface that `*oauthauth.Client` satisfies.
 | `twofactor` | TOTP and recovery codes | `totp_secrets`, `recovery_codes` |
 | `apitoken` | personal and device tokens, the bearer authenticator | `api_tokens` |
 | `federation` | links external identities to users | `federation_links` |
+| `permission` | roles and permissions (core `gate` values) assigned to users | `permission_grants` |
 
 The packages never import each other; only the root does. Table names take a
 `<instance>_` prefix for a named instance, and the application runs the
@@ -60,6 +62,14 @@ worker runs `identity.SendReset` or `identity.SendVerification`, which call your
 function to send the email. Without them the forgot-password, reset and
 verification routes are not mounted.
 
+`identity.Permissions(...)` stores role and permission assignments for core
+`gate.Role` and `gate.Permission` values. The guard then loads each session's
+expanded roles and permissions on every request, so `gate.HasPermission` and
+`gate.HasRole` work without a query, and tokens are capped at the owner's
+permissions. Sessions pass scope rules too, so keep CSRF protection on every
+route a session can reach. See the
+[Permissions guide](../../cmd/arkoren/skills/arkoren/references/guides/iam/permissions.md).
+
 Device tokens that nobody uses, expired tokens and tokens that a password reset
 ended stay in the table until you prune them. `identity.Prune` has the shape of a scheduled function; run it daily:
 
@@ -73,8 +83,8 @@ The hooks the facade sets on its packages (token revocation after a password
 change, the verified-email gates, the takeover, user creation, the registration
 notices) add up with the callbacks you give, so an application callback cannot
 drop them. `Provider` takes one call per provider, with that provider's own
-sign-up and creation settings; `Password`, `TwoFactor` and `Tokens` replace their
-earlier call. A provider login whose email the provider verified takes over an
+sign-up and creation settings; `Password`, `TwoFactor`, `Tokens` and `Permissions`
+replace their earlier call. A provider login whose email the provider verified takes over an
 unverified account and publishes `federation.AccountClaimed`; a first provider
 sign-up needs a proven email. A reset does not purge the connections of a verified
 user, so review them after one. Read the [IAM guide](../../cmd/arkoren/skills/arkoren/references/guides/iam/overview.md)

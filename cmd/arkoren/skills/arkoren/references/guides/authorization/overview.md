@@ -126,7 +126,8 @@ and its roles hold role names. The gate defines this vocabulary but stores no
 assignments. Your permission store assigns roles and permissions to users, and
 a session receives them through `auth.GuardBuilder.Grants`, which calls your
 loader on every authenticated request; [Writing Policies](policies.md#global-permissions)
-shows the wiring. The loader must put the expanded role set on the identity, so
+shows the wiring, and [IAM Permissions](../iam/permissions.md) provides a ready
+store. The loader must put the expanded role set on the identity, so
 an analyst also carries `viewer` and passes `gate.HasRole(Viewer)`. API tokens
 carry only the scopes they were granted and no roles. Prefer permission checks
 for authorization so the same route works for sessions and tokens; keep role

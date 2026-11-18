@@ -3,7 +3,7 @@ title: API Tokens
 description: Issue restricted personal tokens, authenticate API requests, and exchange a recent mobile login for a revocable device token.
 order: 90
 summary:
-  - Limit token scopes to both an application catalog and the owner's current permissions.
+  - Limit token scopes to both an application catalog and the owner's current permissions, automatically with the permission store.
   - Create, use, list, and revoke personal tokens without giving them credential-management access.
   - Exchange mobile sessions for device tokens and schedule cleanup of unusable token rows.
 ---
@@ -22,10 +22,34 @@ or create more tokens.
 
 ## Define the Ceiling
 
-A **scope** names an API permission, such as `posts:read`. The application
-declares a catalog of names and a grant function that returns which catalog
-scopes a subject may hold now. Assume your authorization layer provides
-`grantable`, a `func(context.Context, string) ([]string, error)`.
+A **scope** names an API permission, such as `posts:read`. A token may carry
+only scopes from a catalog, and only those its owner may hold now: the
+**ceiling**.
+
+If you enable [permissions](permissions.md), the ceiling is set for you: the
+catalog is every permission the store defines, and each user's ceiling is the
+permissions they hold through their roles and direct grants. Enable both
+features and the tokens follow the store:
+
+```go
+identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Permissions(func(policy *permission.Builder) {
+		policy.Roles(Viewer, Editor)
+	})
+	identity.Tokens()
+})
+```
+
+Revoking a role then removes its permissions from the user's existing tokens on
+their next request, with the default `GrantTTL` of zero. A positive `GrantTTL`
+caches the ceiling on top of the store's `CacheTTL`, so a revoke can take both
+lifetimes to reach a token: keep `GrantTTL` at zero and set `CacheTTL` on the
+store instead. Calling
+`tokens.Grants` yourself replaces this ceiling entirely, including the catalog.
+
+Without the permission store, declare the catalog and a grant function that
+returns which catalog scopes a subject may hold now. Assume your authorization
+layer provides `grantable`, a `func(context.Context, string) ([]string, error)`.
 
 Import `apitoken` from `arkoren.dev/ark/iam/apitoken` and enable tokens
 in your existing constructor:

@@ -19,6 +19,7 @@ import (
 	"arkoren.dev/ark/iam/federation"
 	"arkoren.dev/ark/iam/internal/storage"
 	"arkoren.dev/ark/iam/password"
+	"arkoren.dev/ark/iam/permission"
 	"arkoren.dev/ark/iam/twofactor"
 )
 
@@ -29,7 +30,7 @@ import (
 // registration with the built-in users without [password.Builder.Reset], or a
 // failing package constructor (registration or sign-up without users that can
 // be created, tokens with no kind enabled, a scope catalog without a grant
-// function).
+// function, an invalid or conflicting permission definition).
 //
 // Example:
 //
@@ -82,20 +83,21 @@ var ErrNotMigrated = storage.ErrNotMigrated
 //	web := routes.With(identity.Middleware())
 //	identity.Mount(web)
 type IAM struct {
-	db         *database.Database
-	store      *cache.Cache
-	clientIP   func(*http.Request) string
-	provider   *auth.UserProvider
-	guard      *auth.Guard
-	directory  *account.Directory
-	verifier   *password.Verifier
-	factors    *twofactor.Factors
-	issuer     *apitoken.Issuer
-	links      *federation.Links
-	providers  []mountedProvider
-	middleware router.Middleware
-	migrations []migrate.Definition
-	pingers    []func(context.Context) error
+	db          *database.Database
+	store       *cache.Cache
+	clientIP    func(*http.Request) string
+	provider    *auth.UserProvider
+	guard       *auth.Guard
+	directory   *account.Directory
+	verifier    *password.Verifier
+	factors     *twofactor.Factors
+	issuer      *apitoken.Issuer
+	permissions *permission.Store
+	links       *federation.Links
+	providers   []mountedProvider
+	middleware  router.Middleware
+	migrations  []migrate.Definition
+	pingers     []func(context.Context) error
 
 	// verified tells whether a user's email is verified: the directory's, or
 	// Users.Verified. It is the Verified setting of the packages whose handlers
@@ -339,7 +341,7 @@ func (identity *IAM) SendVerification(ctx context.Context, request account.Verif
 
 // Migrations returns the migrations of the enabled features only, in the order
 // the tables depend on each other: users, passwords, two-factor, tokens,
-// connections. Each package keeps its own migration group, so they may also be
+// connections, permissions. Each package keeps its own migration group, so they may also be
 // added separately. The application adds them to its migrator; the facade never
 // runs DDL.
 //
