@@ -27,7 +27,7 @@ export function releaseModules(repo = RELEASE_REPO): string[] {
     .strictObject({
       schema: z.literal(1),
       public: z.array(z.string().regex(MODULE)).min(1),
-      development: z.array(z.enum(["ark/iam", "cmd/arkoren-ci", "cmd/arkoren-wiring"])),
+      development: z.array(z.enum(["cmd/arkoren-ci", "cmd/arkoren-wiring"])),
       retired: z.array(z.string().regex(MODULE)).optional(),
     })
     .refine(
@@ -51,8 +51,6 @@ export function releaseModules(repo = RELEASE_REPO): string[] {
   const directories = files
     .filter((file) => file.endsWith("/go.mod") && MODULE.test(file.slice(0, -7)))
     .map((file) => file.slice(0, -7))
-    // A canonical module held back from release (development) has no release history.
-    .filter((directory) => !(policy.development as string[]).includes(directory))
     .sort();
   if (JSON.stringify(directories) !== JSON.stringify([...policy.public].sort())) {
     throw new Error("committed public inventory differs from module policy");

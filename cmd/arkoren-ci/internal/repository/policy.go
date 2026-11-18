@@ -27,11 +27,15 @@ type Policy struct {
 }
 
 // developmentRoots are the reviewed development-only module roots: the
-// maintenance command, the wiring module that tests the public modules
-// together, and ark/iam, held back from release until its API settles
-// (move it to public for its first release). Anything else needs a boundary
-// review first.
-var developmentRoots = []string{"ark/iam", "cmd/arkoren-ci", "cmd/arkoren-wiring"}
+// maintenance command and the wiring module that tests the public modules
+// together. Anything else needs a boundary review first.
+var developmentRoots = []string{"cmd/arkoren-ci", "cmd/arkoren-wiring"}
+
+// heldBackRoots were classified development-only before their first release:
+// ark/access, renamed ark/iam, which is now public. Only historical replay
+// accepts them, so signed plans whose commits held the module back still
+// recompute from their own committed policy.
+var heldBackRoots = []string{"ark/access", "ark/iam"}
 
 // canonical matches public module roots, never arbitrary command directories.
 var canonical = regexp.MustCompile(`^(core|cmd/arkoren|(driver|foundation|ark)/[a-z0-9][a-z0-9-]*)$`)
@@ -42,8 +46,8 @@ func ParsePolicy(data []byte) (Policy, error) {
 	return parsePolicy(data, false)
 }
 
-// parsePolicy applies the current boundary, with one explicit historical root
-// for replaying signed plans created before ark/access became ark/iam.
+// parsePolicy applies the current boundary; historical replay also accepts the
+// held-back roots of [heldBackRoots].
 func parsePolicy(data []byte, historical bool) (Policy, error) {
 	policy := Policy{}
 	err := json.Unmarshal(data, &policy, json.RejectUnknownMembers(true))
@@ -62,7 +66,7 @@ func parsePolicy(data []byte, historical bool) (Policy, error) {
 		seen[directory] = true
 	}
 	for _, directory := range policy.Development {
-		if seen[directory] || (!slices.Contains(developmentRoots, directory) && (!historical || directory != "ark/access")) {
+		if seen[directory] || (!slices.Contains(developmentRoots, directory) && (!historical || !slices.Contains(heldBackRoots, directory))) {
 			return Policy{}, fmt.Errorf("unreviewed or duplicate development module: %s", directory)
 		}
 		seen[directory] = true
