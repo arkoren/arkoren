@@ -1,8 +1,8 @@
 // Package iam composes the authentication features of Arkoren into one
 // facade: password login and optional registration, email verification, password reset,
 // two-factor authentication, API and device tokens, sign-in with external
-// providers, connections and account deletion, as JSON routes on core's
-// [auth.Guard].
+// providers, connections, permissions and roles, and account deletion, as JSON
+// routes on core's [auth.Guard].
 //
 // The module is dependency-free (core, foundation and the standard library) and
 // split into packages that never import each other; only this root package
@@ -13,6 +13,7 @@
 //	twofactor   TOTP and recovery codes
 //	apitoken    personal and device tokens, the bearer authenticator, scopes and their grant ceiling
 //	federation  links external identities to users, create on first login when enabled
+//	permission  roles and permissions assigned to users (core gate definitions), last-holder protection
 //
 // It never imports ark/oauth: a module boundary is a dependency boundary. The
 // [Provider] and [NativeProvider] interfaces are satisfied structurally by
@@ -31,6 +32,9 @@
 //		})
 //		identity.TwoFactor(scheme, cipher)
 //		identity.Tokens()
+//		identity.Permissions(func(policy *permission.Builder) {
+//			policy.Roles(Viewer, Editor, Admin).KeepOne(Admin)
+//		})
 //		identity.Provider(google)
 //		identity.Provider(github, func(login *iam.ProviderBuilder) {
 //			login.SignUp(true) // off by default, per provider
@@ -115,6 +119,7 @@
 //	Sessions    GET /sessions · DELETE /sessions/{id} · DELETE /sessions
 //	Providers   GET /auth/<name> · GET|POST /auth/<name>/callback · GET /auth/<name>/nonce · POST /auth/<name>/native
 //	Connections GET /connections · POST /connections/{provider} · DELETE /connections/{id}
+//	Permissions GET /me/permissions (SelfService) · GET /users/{subject}/permissions · PUT|DELETE /users/{subject}/permissions/{name} · PUT|DELETE /users/{subject}/roles/{name} (Management)
 //	Account     DELETE /account
 //
 // # Behavior
@@ -170,7 +175,19 @@
 //     within the step-up window also counts as the fresh login.
 //   - A token's scopes are capped by what [apitoken.Builder.Grants] lets the user
 //     hold: at issue (403 scope-not-granted) and again on every request, or
-//     within [apitoken.Builder.GrantTTL] of a change.
+//     within [apitoken.Builder.GrantTTL] of a change. With [Builder.Permissions]
+//     the cap is the user's permissions from the store, and its catalog the
+//     store's permission names, unless a Grants call in [Builder.Tokens]
+//     replaces both.
+//   - With [Builder.Permissions] the guard loads the user's expanded roles and
+//     permissions on every authenticated session request
+//     ([permission.Store.Load]), so core's gate.HasPermission and gate.HasRole
+//     work on sessions; a token carries its scopes and never roles. Sessions
+//     then pass scope and permission rules, so mount csrf.Middleware on every
+//     route a session can reach. The management routes need a fresh browser
+//     session holding [permission.Builder.Management], and a caller can grant or
+//     revoke only what they hold (403 not-grantable); the last holder of a
+//     [permission.Builder.KeepOne] role cannot lose it (409 last-holder).
 //   - A first login with an unknown provider identity creates no user unless
 //     [ProviderBuilder.SignUp] is on for that provider (403 no-account), and then only when the
 //     provider proved an email (403 email-unverified).

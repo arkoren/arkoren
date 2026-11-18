@@ -18,6 +18,7 @@ import (
 	"arkoren.dev/ark/iam/apitoken"
 	"arkoren.dev/ark/iam/internal/web"
 	"arkoren.dev/ark/iam/password"
+	"arkoren.dev/ark/iam/permission"
 	"arkoren.dev/ark/iam/twofactor"
 )
 
@@ -33,7 +34,7 @@ import (
 // [Builder.Directory], [Builder.Provider], [Builder.SecondFactor],
 // [Builder.StepUp], [Builder.Authenticator], [Builder.Guard] and
 // [Builder.Session]); a nil hook never clears an earlier one. [Builder.Password],
-// [Builder.TwoFactor] and [Builder.Tokens] replace their earlier call
+// [Builder.TwoFactor], [Builder.Tokens] and [Builder.Permissions] replace their earlier call
 // as a whole instead, so the last call is the complete configuration of that
 // feature.
 //
@@ -64,6 +65,8 @@ type Builder struct {
 	twofactor       []twofactor.BuilderFunc
 	tokens          bool
 	apitoken        []apitoken.BuilderFunc
+	permissions     bool
+	permission      []permission.BuilderFunc
 	providers       []providerSetup
 	secondFactor    []auth.Credential
 	stepUp          []auth.Credential
@@ -232,6 +235,45 @@ func (identity *Builder) Tokens(configure ...apitoken.BuilderFunc) *Builder {
 	return identity
 }
 
+// Permissions enables the permission store of the permission package: roles
+// and permissions assigned to users, built on the core gate definitions.
+// configure defines them ([permission.Builder.Roles], [permission.Builder.Define])
+// and sets [permission.Builder.KeepOne], [permission.Builder.CacheTTL] and the
+// opt-in routes ([permission.Builder.SelfService],
+// [permission.Builder.Management]); the facade sets the instance and the event
+// bus first. Later calls replace the earlier one: only the configure callbacks
+// of the last call count.
+//
+// With the store enabled the facade wires it in two places:
+//
+//   - the guard calls [permission.Store.Load] on every authenticated session
+//     request ([auth.GuardBuilder.Grants]), so session identities carry the
+//     user's expanded roles and permissions for gate.HasPermission and
+//     gate.HasRole; this setting comes after [Builder.Guard] callbacks, so they
+//     cannot replace it;
+//   - with [Builder.Tokens], the token ceiling becomes
+//     apitoken.Builder.Grants(store.Permissions, store.Catalog()...), set before
+//     the [Builder.Tokens] callbacks, so a token never carries more than its
+//     owner holds. A Grants call in those callbacks replaces it, and with it this
+//     ceiling. A positive [apitoken.Builder.GrantTTL] caches the ceiling on top
+//     of [permission.Builder.CacheTTL], so a revoke can take both lifetimes to
+//     reach a token: keep GrantTTL at zero, the default, and cache in the store.
+//
+// Sessions then carry scopes and pass scope and permission rules, so every
+// route a session cookie can reach needs CSRF protection.
+//
+// Example:
+//
+//	identity.Permissions(func(policy *permission.Builder) {
+//		policy.Roles(Viewer, Editor, Admin).KeepOne(Admin)
+//	})
+func (identity *Builder) Permissions(configure ...permission.BuilderFunc) *Builder {
+	identity.permissions = true
+	identity.permission = slices.Clone(configure)
+
+	return identity
+}
+
 // KeepPersonalTokens limits what a password change and enabling two-factor
 // revoke to the user's device tokens. By default both revoke every token,
 // personal ones included: someone who stole the password can log in and create a
@@ -337,8 +379,10 @@ func (identity *Builder) Authenticator(authenticators ...auth.Authenticator) *Bu
 // attempt limit, the login limit). The callbacks run first and the facade's own
 // settings after them, so the facade wins: the session lifetime
 // ([Builder.SessionLifetime]), the session handle (always the default one,
-// which the provider handlers of ark/oauth use) and the client address source
-// set by [Builder.ClientIP] replace whatever the callbacks chose. The event bus of
+// which the provider handlers of ark/oauth use), the client address source
+// set by [Builder.ClientIP] and, with [Builder.Permissions], the grants loader
+// ([auth.GuardBuilder.Grants]) replace whatever the callbacks chose. Without
+// [Builder.Permissions] a callback may set its own Grants. The event bus of
 // [Builder.Events] is set before the callbacks and not asserted again, because
 // nothing in the facade depends on it: a callback may replace it, for example to
 // send the guard's events elsewhere.

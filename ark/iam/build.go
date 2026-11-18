@@ -16,13 +16,15 @@ import (
 	"arkoren.dev/ark/iam/apitoken"
 	"arkoren.dev/ark/iam/federation"
 	"arkoren.dev/ark/iam/password"
+	"arkoren.dev/ark/iam/permission"
 	"arkoren.dev/ark/iam/twofactor"
 )
 
-// build constructs the packages and the guard from validated settings, in the
-// order their tables depend on each other: users, passwords, two-factor,
-// tokens, connections. Hooks that need a package built later read it when they
-// run, not here.
+// build constructs the packages and the guard from validated settings: users,
+// passwords, two-factor, permissions, tokens, connections. The permission store
+// comes before the tokens because their ceiling reads it. Migrations are added
+// in the order their tables depend on each other, with the permissions last.
+// Hooks that need a package built later read it when they run, not here.
 func (identity *IAM) build(settings *Builder) error {
 	users, err := identity.buildUsers(settings)
 	if err != nil {
@@ -35,11 +37,17 @@ func (identity *IAM) build(settings *Builder) error {
 	if err := identity.buildTwoFactor(settings); err != nil {
 		return err
 	}
+	if err := identity.buildPermissions(settings); err != nil {
+		return err
+	}
 	if err := identity.buildTokens(settings); err != nil {
 		return err
 	}
 	if err := identity.buildLinks(settings, users); err != nil {
 		return err
+	}
+	if identity.permissions != nil {
+		identity.add(identity.permissions.Migrations(), identity.permissions.Ping)
 	}
 
 	return identity.buildGuard(settings)
@@ -141,14 +149,40 @@ func (identity *IAM) buildTwoFactor(settings *Builder) error {
 	return nil
 }
 
-// buildTokens builds the token issuer when [Builder.Tokens] is set.
+// buildPermissions builds the permission store when [Builder.Permissions] is
+// set. Its migrations are added by build, after the connections'.
+func (identity *IAM) buildPermissions(settings *Builder) error {
+	if !settings.permissions {
+		return nil
+	}
+	configure := append([]permission.BuilderFunc{func(policy *permission.Builder) {
+		policy.Instance(settings.instance).Events(settings.events)
+	}}, settings.permission...)
+	store, err := permission.NewStore(identity.provider, identity.db, identity.store, configure...)
+	if err != nil {
+		return err
+	}
+	identity.permissions = store
+
+	return nil
+}
+
+// buildTokens builds the token issuer when [Builder.Tokens] is set. With the
+// permission store, the ceiling is the user's permissions, set before the
+// application's callbacks so an explicit Grants replaces it.
 func (identity *IAM) buildTokens(settings *Builder) error {
 	if !settings.tokens {
 		return nil
 	}
-	configure := append([]apitoken.BuilderFunc{func(tokens *apitoken.Builder) {
+	configure := []apitoken.BuilderFunc{func(tokens *apitoken.Builder) {
 		tokens.Instance(settings.instance).Events(settings.events).Verified(identity.verified)
-	}}, settings.apitoken...)
+	}}
+	if store := identity.permissions; store != nil {
+		configure = append(configure, func(tokens *apitoken.Builder) {
+			tokens.Grants(store.Permissions, store.Catalog()...)
+		})
+	}
+	configure = append(configure, settings.apitoken...)
 	issuer, err := apitoken.NewIssuer(identity.provider, identity.db, identity.store, configure...)
 	if err != nil {
 		return err
@@ -201,8 +235,9 @@ func (identity *IAM) buildLinks(settings *Builder, users Users) error {
 // buildGuard builds the guard with the credential registries, and the
 // middleware chain around it. The application's [Builder.Guard] callbacks run
 // first and the facade's own settings last, so what the facade owns (the
-// session lifetime, the default session handle, the credential registries and
-// the client address) cannot be overridden. Registries only append, so
+// session lifetime, the default session handle, the credential registries, the
+// client address and, with [Builder.Permissions], the grants loader) cannot be
+// overridden. Registries only append, so
 // credentials a callback registers directly stay in front of the facade's; see
 // [Builder.Guard]. The event bus of [Builder.Events] is set before the
 // callbacks and is not re-asserted: the facade does not depend on it, so a
@@ -214,6 +249,9 @@ func (identity *IAM) buildGuard(settings *Builder) error {
 	configure := append(slices.Clone(settings.guard), func(policy *auth.GuardBuilder) {
 		policy.Handle(session.Handle{}).SessionLifetime(lifetime)
 		policy.SecondFactor(secondFactor...).StepUp(stepUp...).ClientIP(identity.clientIP)
+		if identity.permissions != nil {
+			policy.Grants(identity.permissions.Load)
+		}
 	})
 	// The bus goes first: nothing in the facade depends on it, so an application's
 	// Guard callback may replace it.

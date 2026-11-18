@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/auth/gate"
 	"arkoren.dev/core/http/link"
 	"arkoren.dev/core/http/middleware/ratelimit"
+	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/cache"
@@ -319,6 +321,23 @@ func newAppOn(t *testing.T, db *database.Database, instance string, store *cache
 		_, err := fmt.Fprintf(w, "%s|%d|%t", identity.Subject(), identity.Level(), identity.Session())
 
 		return err
+	})
+
+	// /can/{name} and /is/{name} answer 204 when the request's identity passes
+	// gate.HasPermission or gate.HasRole for name, and 403 otherwise.
+	web.Get("/can/{name}", func(w http.ResponseWriter, r *http.Request) error {
+		if err := gate.Authorize(r.Context(), gate.HasPermission(gate.NewPermission(r.PathValue("name")))); err != nil {
+			return err
+		}
+
+		return response.Status(w, http.StatusNoContent)
+	})
+	web.Get("/is/{name}", func(w http.ResponseWriter, r *http.Request) error {
+		if err := gate.Authorize(r.Context(), gate.HasRole(gate.NewRole(r.PathValue("name")))); err != nil {
+			return err
+		}
+
+		return response.Status(w, http.StatusNoContent)
 	})
 
 	return &app{identity: identity, box: box, client: apptest.ServeRouter(t, r), router: r}
