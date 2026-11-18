@@ -8,8 +8,8 @@
 // # Identity
 //
 // An [Identity] says who is acting: a [Identity.Subject], the [Factor] values
-// that were verified, the granted [Identity.Scopes], an optional
-// [Identity.Actor] and the [UserRecord] the authenticator resolved. It is an
+// that were verified, the granted [Identity.Scopes], the held [Identity.Roles],
+// an optional [Identity.Actor] and the [UserRecord] the authenticator resolved. It is an
 // immutable value built with [NewIdentity] and read from a context with
 // [FromContext], so jobs, MCP tools and arks can use it without importing the
 // application's user type. [Identity.Level] is derived from the factors:
@@ -32,7 +32,12 @@
 //
 // Browser sessions use [Guard], described below. Its [Guard.Authenticator]
 // reads the session record, asks the [UserProvider] on every request and builds
-// an identity with the stored factors and the provider's [UserRecord].
+// an identity with the stored factors and the provider's [UserRecord]. With
+// [GuardBuilder.Grants] it also loads the user's roles and scopes on every
+// request, typically from an application-owned permission store, so gate
+// permission and role rules work for sessions; a failed load fails the request.
+// Session identities then also pass scope rules, so routes reachable with the
+// session cookie need CSRF protection.
 //
 // # Wiring
 //

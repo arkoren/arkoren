@@ -206,9 +206,11 @@ func (guard *Guard) Begin(r *http.Request, subject string, factors ...Factor) (O
 
 	// A session already logged in as this subject passed every check for it, so
 	// the new factors join the existing login instead of replacing it.
-	identity, err := guard.Authenticator()(r)
+	// It does not load grants, so a permission store outage cannot break a
+	// second-factor or step-up login.
+	stored, _, err := guard.active(r)
 
-	if err == nil && identity.Subject() == user.Subject {
+	if err == nil && stored.Subject == user.Subject {
 		if err := guard.confirm(r, factors...); err != nil {
 			return Outcome{}, err
 		}
