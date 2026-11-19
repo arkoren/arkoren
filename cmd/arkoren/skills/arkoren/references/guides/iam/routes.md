@@ -63,7 +63,7 @@ particular request is authorized.
 | `DELETE /users/{subject}/permissions/{name}` | Permissions with management |
 | `PUT /users/{subject}/roles/{name}` | Permissions with management |
 | `DELETE /users/{subject}/roles/{name}` | Permissions with management |
-| `GET /me` | `Me(true)` |
+| `GET /account` | `Account()` |
 | `DELETE /account` | Built-in directory |
 
 Passwords register `pwd` for step-up. Two-factor registers `otp`, then
@@ -79,50 +79,57 @@ native methods even for presets without native support; those handlers return
 with explicit audiences. Route presence alone is not a provider-capability
 check; use the [provider comparison](../oauth/providers.md#compatibility-matrix).
 
-## Whoami
+## Account
 
-`GET /me` answers `200` with the identity of the request, for a session or a
-token. Anonymous requests, and logins that still wait for a second factor,
-answer `401`. Without `Me(true)` the route does not exist and the router
-answers `404`.
+`GET /account` answers `200` with what IAM knows about the user of the request,
+for a session or a token. Anonymous requests, and logins that still wait for a
+second factor, answer `401`. Without an `Account` call the route does not exist
+and the router answers `404`. `identity.Account(ctx)` returns the same
+`iam.AccountView` as a Go value, with or without the route.
 
-It always carries `subject` and, when the user record has them, `email` and
-`email_verified`. Each other section is chosen in the `Me` callback:
+It always carries `subject` and the email facts. With the built-in users these
+come from the directory: `email`, `email_verified`, `verified_at` and
+`created_at`. With your own users they come from the `email` and `email_verified`
+claims of the user record, and there are no timestamps. IAM never encodes your
+user's value. The `Account` callback adds parts:
 
 | Method | Adds |
 | --- | --- |
-| `User(present)` | `user`: your projection, with your own users only |
 | `Permissions(true)` | `roles` and `permissions`, as `GET /me/permissions` |
 | `TwoFactor(true)` | `two_factor`: whether an authenticator is confirmed |
 | `Login(true)` | `login`: `session`, `level` and `methods` |
 
-With the built-in users `user` is always the account, and with everything on:
+Built-in users with everything on:
 
 ```json
 {
   "subject": "3f9c2a7e1b8d4c6fa0e5d7b9c1a3f2e4",
   "email": "ada@example.com",
   "email_verified": true,
+  "verified_at": "2026-11-02T09:14:00Z",
+  "created_at": "2026-10-28T17:40:12Z",
   "roles": ["editor"],
   "permissions": ["posts:read", "posts:write"],
   "two_factor": true,
-  "login": { "session": true, "level": "multi", "methods": ["pwd", "otp"] },
-  "user": {
-    "subject": "3f9c2a7e1b8d4c6fa0e5d7b9c1a3f2e4",
-    "email": "ada@example.com",
-    "verified_at": "2026-11-02T09:14:00Z",
-    "created_at": "2026-10-28T17:40:12Z"
-  }
+  "login": { "session": true, "level": "multi", "methods": ["pwd", "otp"] }
 }
 ```
 
+Your own users, with only the claims their record holds:
+
+```json
+{ "subject": "42", "email": "ada@example.com", "email_verified": true }
+```
+
+A request that carries a token has no factors, so everything else stays and
+`login` is `{"session": false, "level": "none", "methods": []}`.
+
 `verified_at` is left out while the email is unverified, and `email_verified` is
-then `false`. Empty `roles` and `permissions` are `[]`. `login.level` is `single`
-or `multi`; a token request has no factors, so it shows `session: false`, level
-`none` and no methods. `methods` lists the core codes `pwd`, `otp`, `hwk` and
-`swk`. `Permissions(true)` without the permission store, `TwoFactor(true)`
-without two-factor, and `User` with the built-in users are ignored with a
-warning. [Own Users](own-users.md#show-your-users) explains the projection.
+then `false`. A part that is off is absent; a part that is on and empty is `[]`
+or `false`. `login.level` is `single` or `multi`, and `methods` lists the core
+codes `pwd`, `otp`, `hwk` and `swk`. `Permissions(true)` without the permission
+store and `TwoFactor(true)` without two-factor are ignored with a warning.
+[Own Users](own-users.md#show-your-users) shows how to build your own `GET /me`.
 
 ## JSON Contract
 

@@ -52,7 +52,7 @@ Pass this value while enabling passwords:
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
 	identity.Users(users)
-	identity.Password(true, hasher)
+	identity.Password(hasher)
 })
 ```
 
@@ -162,42 +162,37 @@ does not assume it can use the provider's email to find an existing account.
 
 ## Show Your Users
 
-`GET /me` answers with the subject and the `email` and `email_verified` claims of
-your user record. IAM never encodes the raw record value: your driver's struct
-often holds a credentials stamp or a disabled flag. To publish your user, give
-`Me` a projection from your driver's type to the type clients may see. The type
-arguments are inferred from the function:
+IAM encodes no application data. `GET /account` answers with the subject and the
+`email` and `email_verified` claims of your user record, never the raw record
+value: your driver's struct often holds a credentials stamp or a disabled flag.
+To publish a profile, write your own `GET /me` that combines
+`identity.Account(ctx)` with your user:
 
 ```go
-type Account struct {
-	ID               int
-	Name, Email      string
-	Plan             string
-	Disabled         bool
-	CredentialsStamp string
+type Me struct {
+	iam.AccountView
+	Name string `json:"name"`
+	Plan string `json:"plan"`
 }
 
-type PublicAccount struct {
-	ID    int    `json:"id"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Plan  string `json:"plan"`
-}
+web.Get("/me", func(w http.ResponseWriter, r *http.Request) error {
+	view, err := identity.Account(r.Context())
+	if err != nil {
+		return err
+	}
+	profile, err := profiles.Find(r.Context(), view.Subject)
+	if err != nil {
+		return err
+	}
 
-identity.Me(true, func(me *iam.MeBuilder) {
-	me.User(func(account Account) PublicAccount {
-		return PublicAccount{ID: account.ID, Name: account.Name, Email: account.Email, Plan: account.Plan}
-	})
+	return response.JSON(w, http.StatusOK, Me{AccountView: view, Name: profile.Name, Plan: profile.Plan})
 })
 ```
 
-The request then answers `{"subject": "42", "email": "ada@example.com",
-"email_verified": true, "user": {"id": 42, "name": "Ada Lovelace", "email":
-"ada@example.com", "plan": "pro"}}`. Without `User` there is no `user` member.
-A record without a value adds none either. If the value is not an `Account`, the
-request fails with `500` and the log names both types. With the built-in users
-`User` is ignored with a warning, because they always present `account.Account`.
-See [Routes](routes.md#whoami) for the other sections.
+`Account` returns `auth.ErrUnauthenticated` without an identity, so the route
+answers `401` for anonymous requests. Turn on optional parts with
+`identity.Account(func(view *iam.AccountBuilder) { ... })`; the method works
+whether or not that call is made. See [Routes](routes.md#account) for the parts.
 
 ## Delete Your Users
 

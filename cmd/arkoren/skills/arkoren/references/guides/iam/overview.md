@@ -94,7 +94,7 @@ Now enable password login, leaving self-service registration closed:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(true, hasher)
+	identity.Password(hasher)
 })
 ```
 
@@ -104,23 +104,27 @@ proofs. It does not connect resources, create tables, or start workers.
 Missing required dependencies or incompatible settings return an error wrapping
 `iam.ErrInvalidConfig`.
 
-Every feature method takes `enabled` as its first argument: `Password(true,
-hasher)`, `TwoFactor(true, scheme, cipher)`, `Tokens(true)`,
-`Permissions(true)`, `Provider(true, provider)` and `Me(true)`. A feature is off
-until its method is called with `true`. With `false` its callbacks still run but
-their settings are unused, and the components it requires (a hasher, a cipher, a
-provider) may be nil, so one configuration flag can switch a feature without
-changing the surrounding code:
+A feature is on when you call its method: `Password(hasher)`,
+`TwoFactor(scheme, cipher)`, `Tokens()`, `Permissions()`, `Provider(provider)`
+and `Account()`. A feature you never call stays off, and its required components
+(a hasher, a cipher, a provider) are not needed. To follow a configuration flag,
+wrap the call in an `if`:
 
 ```go
-identity.TwoFactor(cfg.TwoFactor, scheme, cipher)
+if cfg.TwoFactor {
+	identity.TwoFactor(scheme, cipher)
+}
 ```
+
+A later call replaces an earlier one, except `Provider`, which adds one provider
+per call. Methods that only toggle a setting still take a bool, for example
+`password.Builder.Registration(true)` and `ProviderBuilder.SignUp(true)`.
 
 A setting whose feature is off is ignored with one warning through
 `slog.Default`, naming the setting and the reason. Registration without users
 that can be created, provider sign-up without `Create`, and registration with
-the built-in users without `Reset` are ignored this way. Missing components of an
-enabled feature, invalid values, contradictions, and anything that would
+the built-in users without `Reset` are ignored this way. Missing components of a
+called feature, invalid values, contradictions, and anything that would
 weaken a protection still fail with `iam.ErrInvalidConfig`.
 
 Other login features stay off. Password registration and first-login provider
@@ -225,7 +229,7 @@ callback, using `session` from `arkoren.dev/core/http/session`:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(true, hasher)
+	identity.Password(hasher)
 	identity.Session(func(cookies *session.Builder) {
 		cookies.AllowInsecure(true)
 	})
@@ -250,7 +254,7 @@ separate table sets in that database, choose an instance during construction:
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
 	identity.Instance("staff")
-	identity.Password(true, hasher)
+	identity.Password(hasher)
 })
 ```
 

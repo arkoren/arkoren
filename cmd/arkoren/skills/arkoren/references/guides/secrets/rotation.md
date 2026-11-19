@@ -129,7 +129,7 @@ them in one JSON object so a read loads the pair from one stored version:
 ```go
 type VerificationSecrets struct {
 	Current  string `json:"current"`
-	Previous string `json:"previous,omitempty"`
+	Previous string `json:"previous,omitzero"`
 }
 
 var verificationSecret = secret.NewSecret[VerificationSecrets]("partner-verification")

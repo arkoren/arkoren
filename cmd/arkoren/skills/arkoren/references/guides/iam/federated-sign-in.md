@@ -95,8 +95,8 @@ in [IAM Overview](overview.md#start-small). Give each client its own call:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(true, google)
-	identity.Provider(true, github)
+	identity.Provider(google)
+	identity.Provider(github)
 })
 ```
 
@@ -118,8 +118,8 @@ web.Group("/", identity.Register)
 `GET /auth/google` starts Google login; both `GET` and `POST`
 `/auth/google/callback` are registered for its callback. Other clients follow the
 same name-based pattern. Names must be unique safe path segments containing
-only letters, digits, hyphens, and underscores, or `New` fails. A provider
-added with `Provider(false, ...)` is left out entirely and may be nil.
+only letters, digits, hyphens, and underscores, or `New` fails. A provider you
+never pass to `Provider` is not mounted at all.
 Generic OAuth clients default to `oauth`; rename them in their client settings
 if you use more than one.
 
@@ -156,8 +156,8 @@ To let one provider create new users, enable sign-up for that provider:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(true, google)
-	identity.Provider(true, github, func(login *iam.ProviderBuilder) {
+	identity.Provider(google)
+	identity.Provider(github, func(login *iam.ProviderBuilder) {
 		login.SignUp(true)
 	})
 })
@@ -268,7 +268,9 @@ connection per issuer.
 
 `GET /connections` needs a session and returns connection metadata:
 `id`, `issuer`, `created_at`, and `last_used_at`. IAM stores no provider
-email or profile data in the connection.
+email or profile data in the connection unless you ask for claims with
+[`KeepClaims`](#keep-claims); then `claims` appears on the connections that hold
+some.
 
 `DELETE /connections/{id}` also needs a fresh proof and returns `204`.
 Removing the last login method returns `409` `federation:last-link`;
@@ -279,6 +281,46 @@ Connections publish `federation.LinkCreated` and `LinkDeleted` for
 [notifications](accounts.md#security-notifications).
 Provider login does not replace a local step-up proof; see
 [Fresh Logins](freshness.md#provider-logins).
+
+## Keep Claims
+
+A provider's verified identity can carry profile claims, such as a name or a
+picture. Name the ones you want to prefill a profile form with, per provider:
+
+```go
+identity.Provider(google, func(login *iam.ProviderBuilder) {
+	login.KeepClaims("name", "picture")
+})
+```
+
+Nothing is kept by default and calls add up. IAM stores the named claims on the
+connection at sign-up, when a user connects the provider, and at every login. A
+login overwrites the claims it carries and keeps the rest, so Apple's name, which
+Apple sends only on the first login, stays. A claim the provider stops sending
+also stays until the connection is removed. Read them with
+`identity.Links().List(ctx, subject)` or from `GET /connections`:
+
+```json
+[{ "id": "9c1f", "issuer": "https://accounts.google.com", "created_at": "2026-11-02T09:14:00Z", "claims": { "name": "Ada Lovelace" } }]
+```
+
+Only strings, booleans, numbers and lists of strings are kept, up to 8 KiB per
+connection. Other values are dropped with one `slog` warning per claim name, and
+an update that would exceed the cap is skipped. A login never fails because of
+claims. An empty name or a protocol claim (`iss`, `sub`, `aud`, `exp`, `iat`,
+`nbf`, `nonce`, `at_hash`, `auth_time`, `scope`, `azp`, `acr`, `amr`) makes
+`iam.New` fail with `iam.ErrInvalidConfig`. Unlinking a connection, removing all
+of a user's connections, and forgetting the user delete the claims with the row.
+
+> [!WARNING]
+> Kept claims are unverified suggestions of the provider and can change at each
+> login. Use them to prefill a form the user confirms. Never use them for
+> authorization, for identity, or to match users to accounts.
+
+The connection table gains a nullable `claims` column in the
+`links-add-claims` migration; run `identity.Migrations()` before deploying.
+Which claims arrive depends on the provider: see
+[Provider claims](../oauth/browser-login.md#provider-claims).
 
 ## Native Login
 

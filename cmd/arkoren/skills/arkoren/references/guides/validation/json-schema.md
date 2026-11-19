@@ -68,7 +68,7 @@ A response type needs shape metadata without input-presence rules. Use `Infer`:
 type Result struct {
 	Name    string            `json:"name"`
 	Elapsed validate.Duration `json:"elapsed"`
-	Note    string            `json:"note,omitempty"`
+	Note    string            `json:"note,omitzero"`
 }
 result := validate.Infer[Result]()
 document, err := result.JSONSchema()
