@@ -2,6 +2,7 @@ package federation
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,8 +19,9 @@ import (
 )
 
 // Link describes one connection of a user to an external identity, as shown in
-// their settings. It holds no email or profile data: those belong to the
-// provider, not to this package.
+// their settings. It holds no email and no profile data except the claims an
+// application explicitly asked to keep with [ResolverBuilder.KeepClaims]; the
+// rest belongs to the provider, not to this package.
 //
 // Example:
 //
@@ -39,6 +41,13 @@ type Link struct {
 
 	// LastUsedAt is when the connection last logged the user in; zero if never.
 	LastUsedAt time.Time `json:"last_used_at,omitzero"`
+
+	// Claims holds the kept claims of the provider, merged across logins. It is
+	// nil unless the provider's resolver was given [ResolverBuilder.KeepClaims]
+	// and the provider sent a kept claim. The values are unverified suggestions
+	// of the provider for prefilling a form, never a basis for authorization or
+	// identity.
+	Claims map[string]any `json:"claims,omitzero"`
 }
 
 // Links owns the table that connects external identities (issuer and subject)
@@ -120,13 +129,16 @@ func NewLinks(provider *auth.UserProvider, db *database.Database, configure ...B
 	return links, nil
 }
 
-// Migrations returns the migration that creates the "federation_links" table
+// Migrations returns the migrations of the "federation_links" table
 // (prefixed "<instance>_" for a named instance) in the group
-// "arkoren.dev:ark/access:federation", plus ":<instance>". The table has two
-// unique keys, (issuer, external) and (subject, issuer): one user per external
-// identity and one connection per issuer and user. The migration creates the
-// table strictly and its down step drops it. The application adds it to its
-// migrator; constructing or reading it never runs DDL.
+// "arkoren.dev:ark/access:federation", plus ":<instance>". "links-create-table"
+// creates the table strictly, with two unique keys, (issuer, external) and
+// (subject, issuer): one user per external identity and one connection per
+// issuer and user; its down step drops it. "links-add-claims" adds the nullable
+// JSON column that holds the kept claims (see [ResolverBuilder.KeepClaims]); an
+// application upgrading from a release without it must run it before the
+// connection store is used. The application adds them to its migrator;
+// constructing or reading the store never runs DDL.
 //
 // Example:
 //
@@ -147,6 +159,14 @@ func (links *Links) Migrations() []migrate.Definition {
 				table.Unique("subject", "issuer")
 			})))
 			migration.Down(migrate.Schema(schema.Drop(links.table)))
+		}),
+		migrate.NewMigration("links-add-claims", func(migration *migrate.MigrationBuilder) {
+			migration.Up(migrate.Schema(schema.Alter(links.table, func(table *schema.Table) {
+				table.JSON("claims").Nullable()
+			})))
+			migration.Down(migrate.Schema(schema.Alter(links.table, func(table *schema.Table) {
+				table.DropColumn("claims")
+			})))
 		}),
 	)
 }
@@ -183,6 +203,9 @@ type row struct {
 	External   string `db:"external"`
 	CreatedAt  int64  `db:"created_at"`
 	LastUsedAt int64  `db:"last_used_at"`
+
+	// Claims is the JSON object of kept claims, NULL when none were kept.
+	Claims sql.NullString `db:"claims"`
 }
 
 // find returns the connection of an external identity, or false when none.
@@ -201,12 +224,14 @@ func (links *Links) find(ctx context.Context, issuer, external string) (row, boo
 }
 
 // insert connects an external identity to subject and reports whether a row was
-// written: false means one of the two unique keys already holds a row.
-func (links *Links) insert(ctx context.Context, subject string, external auth.External) (bool, error) {
+// written: false means one of the two unique keys already holds a row. The row
+// starts with the claims of external that keep names.
+func (links *Links) insert(ctx context.Context, subject string, external auth.External, keep []string) (bool, error) {
 	id, err := storage.NewID()
 	if err != nil {
 		return false, err
 	}
+	claims, _ := mergeClaims(ctx, sql.NullString{}, keepClaims(ctx, external.Claims, keep))
 	affected, err := links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
 		statement.Insert(query.Values(row{
 			ID:        id,
@@ -214,6 +239,7 @@ func (links *Links) insert(ctx context.Context, subject string, external auth.Ex
 			Issuer:    external.Issuer,
 			External:  external.Subject,
 			CreatedAt: time.Now().Unix(),
+			Claims:    claims,
 		}))
 		statement.OnConflict().DoNothing()
 	}))
@@ -259,13 +285,19 @@ func (links *Links) Lookup(ctx context.Context, issuer, external string) (string
 // Link connects an external identity to subject. Connecting an identity that is
 // already connected to subject is a no-op; one connected to another user is
 // [ErrLinkedElsewhere], and a second identity from an issuer the user already
-// has is [ErrAlreadyLinked]. It publishes [LinkCreated].
+// has is [ErrAlreadyLinked]. It publishes [LinkCreated]. It keeps no claims of
+// the identity: they come only from the resolvers of [Links.Resolver].
 //
 // Example:
 //
 //	err := links.Link(ctx, subject, auth.External{Issuer: "https://accounts.google.com", Subject: "1089"})
 func (links *Links) Link(ctx context.Context, subject string, external auth.External) error {
-	written, err := links.insert(ctx, subject, external)
+	return links.link(ctx, subject, external, nil)
+}
+
+// link is [Links.Link] that also stores the claims of external that keep names.
+func (links *Links) link(ctx context.Context, subject string, external auth.External, keep []string) error {
+	written, err := links.insert(ctx, subject, external, keep)
 	if err != nil {
 		return err
 	}
@@ -307,6 +339,7 @@ func (links *Links) List(ctx context.Context, subject string) ([]Link, error) {
 			Issuer:     stored.Issuer,
 			CreatedAt:  storage.Time(stored.CreatedAt),
 			LastUsedAt: storage.Time(stored.LastUsedAt),
+			Claims:     decodeClaims(stored.Claims),
 		})
 	}
 

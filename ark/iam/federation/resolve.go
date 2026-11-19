@@ -14,13 +14,18 @@ import (
 // concurrent first login of the same external identity.
 var errLostRace = errors.New("federation: lost link race")
 
-// onboarding is what a logged-out login does with an identity that no
-// connection and no takeover claims: create a user with create when signUp is
-// set, refuse with [ErrNoAccount] otherwise. [Links] holds the one from its
-// [Builder]; [Links.Resolver] makes one per provider.
+// onboarding is what a login does beyond the connection itself: with an
+// identity that no connection and no takeover claims, create a user with create
+// when signUp is set and refuse with [ErrNoAccount] otherwise, and with any
+// identity store the claims that keep names. [Links] holds the one from its
+// [Builder], which keeps nothing; [Links.Resolver] makes one per provider.
 type onboarding struct {
 	signUp bool
 	create func(context.Context, auth.External) (string, error)
+
+	// keep names the claims of the identity that are stored on its connection,
+	// see [ResolverBuilder.KeepClaims]. Empty keeps nothing.
+	keep []string
 }
 
 // Resolve is the [auth.Resolver] of the package: it maps a verified external
@@ -55,9 +60,9 @@ func (links *Links) resolve(ctx context.Context, external auth.External, onboard
 	case linked && current != "" && existing.Subject != current:
 		return "", ErrLinkedElsewhere
 	case linked:
-		return links.login(ctx, existing)
+		return links.login(ctx, existing, external, onboard.keep)
 	case current != "":
-		if err := links.Link(ctx, current, external); err != nil {
+		if err := links.link(ctx, current, external, onboard.keep); err != nil {
 			return "", err
 		}
 
@@ -68,8 +73,9 @@ func (links *Links) resolve(ctx context.Context, external auth.External, onboard
 }
 
 // login returns the subject of a known connection after checking the user is
-// still allowed in, and records the use.
-func (links *Links) login(ctx context.Context, found row) (string, error) {
+// still allowed in, and records the use together with the claims of external
+// that keep names, merged over the stored ones.
+func (links *Links) login(ctx context.Context, found row, external auth.External, keep []string) (string, error) {
 	if _, err := links.provider.Find(ctx, found.Subject); err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) || errors.Is(err, auth.ErrUserDisabled) {
 			return "", auth.ErrUnauthenticated
@@ -77,9 +83,14 @@ func (links *Links) login(ctx context.Context, found row) (string, error) {
 
 		return "", err
 	}
-	// The time is informational: a failed write must not fail the login.
+	update := map[string]any{"last_used_at": time.Now().Unix()}
+	if claims, changed := mergeClaims(ctx, found.Claims, keepClaims(ctx, external.Claims, keep)); changed {
+		update["claims"] = claims
+	}
+	// The time and the claims are informational: a failed write must not fail
+	// the login.
 	_, _ = links.db.Exec(ctx, query.Table(links.table, func(statement *query.Builder) {
-		statement.Where("id", found.ID).Update(map[string]any{"last_used_at": time.Now().Unix()})
+		statement.Where("id", found.ID).Update(update)
 	}))
 
 	return found.Subject, nil
@@ -103,7 +114,7 @@ func (links *Links) createUser(ctx context.Context, external auth.External, onbo
 		if err != nil {
 			return err
 		}
-		written, err := links.insert(ctx, subject, external)
+		written, err := links.insert(ctx, subject, external, onboard.keep)
 		if err != nil {
 			return err
 		}
@@ -114,7 +125,7 @@ func (links *Links) createUser(ctx context.Context, external auth.External, onbo
 		return nil
 	})
 	if errors.Is(err, errLostRace) {
-		return links.loginWinner(ctx, external)
+		return links.loginWinner(ctx, external, onboard.keep)
 	}
 	if err != nil {
 		return "", err
@@ -164,8 +175,9 @@ func (links *Links) owner(ctx context.Context, external auth.External, onboard o
 }
 
 // loginWinner logs in the user that a concurrent first login of external
-// created and connected first.
-func (links *Links) loginWinner(ctx context.Context, external auth.External) (string, error) {
+// created and connected first. Only the winner's transaction wrote a row, so
+// only its row held the claims of the first login; this login merges its own.
+func (links *Links) loginWinner(ctx context.Context, external auth.External, keep []string) (string, error) {
 	winner, ok, err := links.find(ctx, external.Issuer, external.Subject)
 	if err != nil {
 		return "", err
@@ -174,5 +186,5 @@ func (links *Links) loginWinner(ctx context.Context, external auth.External) (st
 		return "", ErrNotLinked
 	}
 
-	return links.login(ctx, winner)
+	return links.login(ctx, winner, external, keep)
 }

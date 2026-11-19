@@ -207,7 +207,7 @@ func (identity *IAM) buildTokens(settings *Builder) error {
 
 // buildLinks builds the connection store when [Builder.Provider] added any
 // provider, and one resolver per provider over it, each with the provider's own
-// sign-up settings. The hooks of the packages add up (see
+// sign-up and kept-claims settings. The hooks of the packages add up (see
 // [federation.Builder.TakeOver] and the other setters): the facade's settings
 // are the store's, and a provider's [ProviderBuilder.Create] runs before the
 // facade's own creation, so an application function can refuse or handle an
@@ -236,7 +236,7 @@ func (identity *IAM) buildLinks(settings *Builder, users Users) error {
 			signUp = false
 		}
 		resolve, err := links.Resolver(func(resolver *federation.ResolverBuilder) {
-			resolver.SignUp(signUp).Create(setup.settings.create)
+			resolver.SignUp(signUp).Create(setup.settings.create).KeepClaims(setup.settings.keep...)
 		})
 		if err != nil {
 			return err

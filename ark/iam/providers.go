@@ -64,6 +64,7 @@ type NativeProvider interface {
 type ProviderBuilder struct {
 	signUp bool
 	create func(context.Context, auth.External) (string, error)
+	keep   []string
 }
 
 // ProviderBuilderFunc is the callback form of [ProviderBuilder].
@@ -120,6 +121,29 @@ func (login *ProviderBuilder) SignUp(enabled bool) *ProviderBuilder {
 //	})
 func (login *ProviderBuilder) Create(create func(ctx context.Context, external auth.External) (string, error)) *ProviderBuilder {
 	login.create = web.First(login.create, create)
+
+	return login
+}
+
+// KeepClaims names claims of this provider's verified identity that its
+// connection stores, to prefill a profile form from [federation.Links.List]
+// later (Google sends "name" and "picture", GitHub "name" and "login"). Nothing
+// is kept by default and calls add up. The claims are unverified suggestions of
+// the provider: use them to prefill, never for authorization, identity or to
+// match users. A login overwrites the claims it carries and keeps the rest, so
+// Apple's name, sent only on the first login, stays; a claim the provider stops
+// sending stays too. Only strings, booleans, numbers and lists of strings are
+// kept, up to 8 KiB per connection. An empty name or a protocol claim (iss,
+// sub, aud, exp, iat, nbf, nonce, at_hash, auth_time, scope, azp, acr, amr)
+// makes [New] fail with [ErrInvalidConfig]. See
+// [federation.ResolverBuilder.KeepClaims] for the storage rules; GET
+// /connections shows the kept claims.
+//
+// Example:
+//
+//	login.KeepClaims("name", "picture")
+func (login *ProviderBuilder) KeepClaims(names ...string) *ProviderBuilder {
+	login.keep = append(login.keep, names...)
 
 	return login
 }

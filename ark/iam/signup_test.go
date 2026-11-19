@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -143,5 +144,49 @@ func TestSignUpWithoutCreateWarnsPerProvider(t *testing.T) {
 	}
 	if got := warnings.Settings(); len(got) != 1 || !strings.Contains(got[0], "open") {
 		t.Fatalf("warnings = %v, want one naming the provider open", got)
+	}
+}
+
+// TestProviderKeepClaimsIsPerProvider verifies one provider keeps its named
+// claims on the connection while another keeps nothing, and that the claims
+// show up in the connection list.
+func TestProviderKeepClaimsIsPerProvider(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(identity *iam.Builder) {
+			identity.Provider(fakeProvider{name: "keeps"}, signUp, func(login *iam.ProviderBuilder) { login.KeepClaims("name") })
+			identity.Provider(fakeProvider{name: "forgets"}, signUp)
+		})
+		for _, name := range []string{"keeps", "forgets"} {
+			if reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath(name, name+"1", name+"@example.com", true)+"&name=Ada", ""); reply.Status != http.StatusNoContent {
+				t.Fatalf("sign-up with %s = %d %s", name, reply.Status, reply.Body)
+			}
+		}
+		for name, want := range map[string]map[string]any{"keeps": {"name": "Ada"}, "forgets": nil} {
+			subject, _, err := sys.identity.Directory().Lookup(testContext(t), name+"@example.com")
+			if err != nil {
+				t.Fatalf("Lookup %s: %v", name, err)
+			}
+			listed, err := sys.identity.Links().List(testContext(t), subject)
+			if err != nil || len(listed) != 1 || !reflect.DeepEqual(listed[0].Claims, want) {
+				t.Fatalf("%s connections = %+v, %v; want claims %v", name, listed, err, want)
+			}
+		}
+	})
+}
+
+// TestProviderKeepClaimsRefusesProtocolClaims verifies a protocol claim or an
+// empty name makes New fail with ErrInvalidConfig.
+func TestProviderKeepClaimsRefusesProtocolClaims(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"", "sub", "nonce"} {
+		_, err := newFacade(t, func(identity *iam.Builder) {
+			identity.Provider(fakeProvider{name: "fake"}, func(login *iam.ProviderBuilder) { login.KeepClaims(name) })
+		})
+		if !errors.Is(err, iam.ErrInvalidConfig) {
+			t.Errorf("KeepClaims(%q) = %v, want ErrInvalidConfig", name, err)
+		}
 	}
 }

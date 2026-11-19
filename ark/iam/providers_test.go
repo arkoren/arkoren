@@ -48,6 +48,7 @@ func (provider fakeProvider) CallbackHandler(guard *auth.Guard, resolve auth.Res
 			Subject:       query.Get("sub"),
 			Email:         query.Get("email"),
 			EmailVerified: query.Get("verified") == "true",
+			Claims:        map[string]any{"name": query.Get("name"), "picture": "https://p.example/" + query.Get("sub")},
 		})
 		if err != nil {
 			return err
