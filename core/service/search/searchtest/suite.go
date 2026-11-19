@@ -86,7 +86,7 @@ type product struct {
 	// Created is the timestamp used by date comparisons and ordering tests.
 	Created time.Time `json:"created_at"`
 	// Rating is optional so tests can cover absent sortable values.
-	Rating *float64 `json:"rating,omitempty"`
+	Rating *float64 `json:"rating,omitzero"`
 }
 
 // rating returns a pointer to a rating value.

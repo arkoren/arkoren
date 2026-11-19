@@ -83,8 +83,10 @@ type payload struct {
 	// Title is always present because core requires a notification title.
 	Title string `json:"title"`
 	// Body is omitted when empty, independent of data presence.
-	Body string `json:"body,omitempty"`
-	// Data contains application-owned string values, omitted when empty.
+	Body string `json:"body,omitzero"`
+	// Data contains application-owned string values, omitted when empty. It
+	// keeps omitempty, not omitzero: encoding/json/v2 then also drops an empty
+	// non-nil map, which the service worker must never see as "data": {}.
 	Data map[string]string `json:"data,omitempty"`
 }
 

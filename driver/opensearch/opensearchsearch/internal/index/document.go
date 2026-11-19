@@ -20,6 +20,9 @@ type Document struct {
 	Original string `json:"source"`
 
 	// Strings contains only JSON strings; searchable roles use text mappings.
+	// The three containers keep omitempty, not omitzero: EncodeDocument allocates
+	// them eagerly, and encoding/json/v2 then leaves an empty one out of _source
+	// where omitzero would send {} and add empty object mappings.
 	Strings map[string]string `json:"strings,omitempty"`
 
 	// Numbers contains JSON numbers normalized to float64, as in memorysearch.

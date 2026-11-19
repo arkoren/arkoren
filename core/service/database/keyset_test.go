@@ -562,3 +562,48 @@ func TestEachRejectsMutationBeforeResultType(t *testing.T) {
 		t.Fatalf("Each = %v, want ErrInvalidQuery", err)
 	}
 }
+
+// TestCursorPayloadMarksOnlyBackwardCursors verifies a forward cursor omits the
+// "b" member and a backward one writes it, so the common cursor stays short.
+func TestCursorPayloadMarksOnlyBackwardCursors(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	db := database.New(adapterStub{selectFn: func(dest any) {
+		calls++
+
+		switch calls {
+		case 1:
+			*dest.(*[]paginateRow) = []paginateRow{{ID: 1}, {ID: 2}, {ID: 3}}
+		case 2:
+			*dest.(*[]paginateRow) = []paginateRow{{ID: 3}, {ID: 4}, {ID: 5}}
+		default:
+			t.Fatal("unexpected query")
+		}
+	}})
+	statement := query.Table("rows", func(statement *query.Builder) {
+		statement.OrderBy("id")
+	})
+	first, err := db.CursorPaginate[paginateRow](t.Context(), statement, pagination.CursorParams{PerPage: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := db.CursorPaginate[paginateRow](t.Context(), statement, pagination.CursorParams{Cursor: first.NextCursor, PerPage: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward, err := pagination.CursorDecode[map[string]any](first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := forward["b"]; present {
+		t.Fatalf("forward cursor payload = %v, want no b member", forward)
+	}
+	backward, err := pagination.CursorDecode[map[string]any](next.PrevCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backward["b"] != true {
+		t.Fatalf("backward cursor payload = %v, want b true", backward)
+	}
+}

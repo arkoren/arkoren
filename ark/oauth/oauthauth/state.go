@@ -68,14 +68,14 @@ type loginState struct {
 	// Fresh records that the login was started with fresh=1: the authorization
 	// request asked the provider to authenticate the user again. It is a record
 	// of the request, not proof that the provider did.
-	Fresh bool `json:"fresh,omitempty"`
+	Fresh bool `json:"fresh,omitzero"`
 
 	// Expires is when the login stops being accepted.
 	Expires time.Time `json:"expires"`
 
 	// Identity is set only in a hand-off cookie (see [Client.handOff]): the
 	// identity the form_post callback already verified. Nil in a login cookie.
-	Identity *auth.External `json:"identity,omitempty"`
+	Identity *auth.External `json:"identity,omitzero"`
 }
 
 // cookieName returns the cookie name of the login with the given state.

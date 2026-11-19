@@ -61,7 +61,7 @@ type Plan struct {
 	// Modules contains only sorted public namespaces.
 	Modules []Entry `json:"modules"`
 	// Evidence is optional exact-SHA metadata.
-	Evidence any `json:"evidence,omitempty"`
+	Evidence any `json:"evidence,omitzero"`
 }
 
 // revision accepts immutable object IDs only.

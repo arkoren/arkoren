@@ -143,7 +143,7 @@ type item struct {
 	Title string `json:"title"`
 
 	// Value permits mixed JSON types for mapping and comparison checks.
-	Value any `json:"value,omitempty"`
+	Value any `json:"value,omitzero"`
 }
 
 // itemIndex returns an index called name over items whose value is filterable.

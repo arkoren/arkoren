@@ -37,7 +37,7 @@ type Rule struct {
 	// Type selects the GitHub protection operation.
 	Type string `json:"type"`
 	// Parameters retains every server-supplied policy parameter.
-	Parameters jsontext.Value `json:"parameters,omitempty"`
+	Parameters jsontext.Value `json:"parameters,omitzero"`
 }
 
 // Ruleset is the writable shape; server-only metadata is never sent in updates.
