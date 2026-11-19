@@ -8,10 +8,12 @@ import (
 	"context"
 	"encoding/json/v2"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"arkoren.dev/core/auth"
@@ -151,4 +153,66 @@ func (client *Client) Post(path, body string) Reply {
 	client.t.Helper()
 
 	return client.Do(http.MethodPost, path, body)
+}
+
+// Warnings collects the warnings logged through [slog.Default] while a test
+// runs. See [CaptureWarnings].
+type Warnings struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+// Enabled implements [slog.Handler] and keeps warnings only.
+func (warnings *Warnings) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelWarn
+}
+
+// Handle implements [slog.Handler] and keeps a copy of the record.
+func (warnings *Warnings) Handle(_ context.Context, record slog.Record) error {
+	warnings.mu.Lock()
+	defer warnings.mu.Unlock()
+	warnings.records = append(warnings.records, record.Clone())
+
+	return nil
+}
+
+// WithAttrs implements [slog.Handler]; the facade logs flat records, so the
+// attributes of derived loggers are not tracked.
+func (warnings *Warnings) WithAttrs([]slog.Attr) slog.Handler { return warnings }
+
+// WithGroup implements [slog.Handler]; groups are not tracked.
+func (warnings *Warnings) WithGroup(string) slog.Handler { return warnings }
+
+// Settings returns the "setting" attribute of every warning logged so far, in
+// order.
+func (warnings *Warnings) Settings() []string {
+	warnings.mu.Lock()
+	defer warnings.mu.Unlock()
+
+	var settings []string
+	for _, record := range warnings.records {
+		record.Attrs(func(attr slog.Attr) bool {
+			if attr.Key == "setting" {
+				settings = append(settings, attr.Value.String())
+			}
+
+			return true
+		})
+	}
+
+	return settings
+}
+
+// CaptureWarnings makes [slog.Default] record warnings until the test ends and
+// returns what it recorded. It replaces process-wide state, so a test that
+// calls it must not call t.Parallel.
+func CaptureWarnings(t *testing.T) *Warnings {
+	t.Helper()
+
+	warnings := &Warnings{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(warnings))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	return warnings
 }

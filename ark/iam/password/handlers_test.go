@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 
+	"arkoren.dev/ark/iam/internal/apptest"
 	"arkoren.dev/ark/iam/password"
 )
 
@@ -546,21 +548,27 @@ func TestRegisterHandlerWithoutRegistrationPanics(t *testing.T) {
 
 // TestRegistrationRequiresCreate verifies Registration(true) without
 // Users.Create is an invalid configuration.
-func TestRegistrationRequiresCreate(t *testing.T) {
-	t.Parallel()
+func TestRegistrationWithoutCreateIsIgnored(t *testing.T) {
+	warnings := apptest.CaptureWarnings(t)
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newSystem(t, db, instance)
 		users := newFakeUsers()
 		provider, _ := auth.NewUserProvider(users.driver)
-		_, err := password.NewVerifier(provider, db, sys.store, testClientIP, sys.hasher, password.Users{
+		verifier, err := password.NewVerifier(provider, db, sys.store, testClientIP, sys.hasher, password.Users{
 			Lookup: users.Lookup,
 			Rotate: users.Rotate,
 		}, func(passwords *password.Builder) {
 			passwords.Registration(true)
 		})
-		if !errors.Is(err, password.ErrInvalidConfig) {
-			t.Fatalf("NewVerifier error = %v, want ErrInvalidConfig", err)
+		if err != nil {
+			t.Fatalf("NewVerifier error = %v, want the setting ignored", err)
+		}
+		if verifier.Registration() {
+			t.Fatal("Registration() = true, want it ignored without Users.Create")
+		}
+		if got := warnings.Settings(); !slices.Contains(got, "password.Builder.Registration") {
+			t.Fatalf("warnings = %v, want one naming password.Builder.Registration", got)
 		}
 	})
 }

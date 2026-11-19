@@ -36,7 +36,7 @@ func need(enabled bool, handler, requirement string) {
 //	web.Post("/register", identity.RegisterHandler())
 func (identity *IAM) RegisterHandler() router.Handler {
 	need(identity.verifier != nil, "RegisterHandler", "Builder.Password")
-	need(identity.verifier.Registration(), "RegisterHandler", "password.Builder.Registration")
+	need(identity.registration, "RegisterHandler", "password.Builder.Registration, with password.Builder.Reset for the built-in users")
 
 	return identity.verifier.RegisterHandler()
 }

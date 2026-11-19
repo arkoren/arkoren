@@ -98,7 +98,7 @@ func (identity *IAM) registerPassword(r *router.Router) {
 	}
 	r.Post("/login", identity.LoginHandler())
 	r.Put("/password", identity.ChangePasswordHandler())
-	if identity.verifier.Registration() {
+	if identity.registration {
 		r.Post("/register", identity.RegisterHandler())
 	}
 	if identity.reset() {

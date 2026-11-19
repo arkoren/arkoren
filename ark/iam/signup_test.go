@@ -11,6 +11,7 @@ import (
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/iam"
+	"arkoren.dev/ark/iam/internal/apptest"
 )
 
 // TestProviderSignUpIsPerProvider verifies one facade lets one provider create
@@ -127,18 +128,20 @@ func TestProviderTakeOverWorksWithoutSignUp(t *testing.T) {
 	})
 }
 
-// TestSignUpOnOneProviderWithoutCreateIsInvalid verifies a single provider with
-// sign-up is enough to refuse users that cannot be created, and the error names
-// it.
-func TestSignUpOnOneProviderWithoutCreateIsInvalid(t *testing.T) {
-	t.Parallel()
+// TestSignUpWithoutCreateWarnsPerProvider verifies only the provider with
+// sign-up is reported when users cannot be created, and the warning names it.
+func TestSignUpWithoutCreateWarnsPerProvider(t *testing.T) {
+	warnings := apptest.CaptureWarnings(t)
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
 		identity.Users(ownUsersWithoutCreate(t))
 		identity.Provider(true, fakeProvider{name: "closed"})
 		identity.Provider(true, fakeProvider{name: "open"}, signUp)
 	})
-	if !errors.Is(err, iam.ErrInvalidConfig) || !strings.Contains(err.Error(), "open") {
-		t.Fatalf("New = %v, want ErrInvalidConfig naming the provider", err)
+	if err != nil {
+		t.Fatalf("New = %v, want the setting ignored", err)
+	}
+	if got := warnings.Settings(); len(got) != 1 || !strings.Contains(got[0], "open") {
+		t.Fatalf("warnings = %v, want one naming the provider open", got)
 	}
 }

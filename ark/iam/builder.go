@@ -473,7 +473,7 @@ func (identity *Builder) validate() error {
 	if identity.clientIP == nil {
 		return errors.New("client address source is required")
 	}
-	if err := validateProviders(identity.providers, identity.users == nil || identity.users.Create != nil); err != nil {
+	if err := validateProviders(identity.providers); err != nil {
 		return err
 	}
 	if identity.users != nil {

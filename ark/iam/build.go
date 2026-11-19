@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -53,6 +54,13 @@ func (identity *IAM) build(settings *Builder) error {
 	return identity.buildGuard(settings)
 }
 
+// ignore logs the one warning of a setting that [New] leaves out because what it
+// depends on is off. Settings whose dependency is missing, but whose absence
+// would weaken a protection, fail construction instead.
+func ignore(setting, reason string) {
+	slog.Warn("access: setting ignored", "setting", setting, "reason", reason)
+}
+
 // add records the migrations and readiness check of an enabled package.
 func (identity *IAM) add(migrations []migrate.Definition, ping func(context.Context) error) {
 	identity.migrations = append(identity.migrations, migrations...)
@@ -88,8 +96,10 @@ func (identity *IAM) buildPassword(settings *Builder, users Users) error {
 	if err != nil {
 		return err
 	}
-	if identity.directory != nil && verifier.Registration() && !verifier.ResetEnabled() {
-		return errors.New("registration with the built-in users needs password.Builder.Reset: it is how the owner of an address that someone else registered learns of it and takes the account back")
+	identity.registration = verifier.Registration()
+	if identity.registration && identity.directory != nil && !verifier.ResetEnabled() {
+		ignore("password.Builder.Registration", "registration with the built-in users needs password.Builder.Reset: it is how the owner of an address that someone else registered learns of it and takes the account back")
+		identity.registration = false
 	}
 	identity.verifier = verifier
 	identity.add(verifier.Migrations(), verifier.Ping)
@@ -218,8 +228,13 @@ func (identity *IAM) buildLinks(settings *Builder, users Users) error {
 		return err
 	}
 	for _, setup := range settings.providers {
+		signUp := setup.settings.signUp
+		if signUp && users.Create == nil {
+			ignore("ProviderBuilder.SignUp ("+setup.provider.Name()+")", "Users.Create is nil, so no user can be created")
+			signUp = false
+		}
 		resolve, err := links.Resolver(func(resolver *federation.ResolverBuilder) {
-			resolver.SignUp(setup.settings.signUp).Create(setup.settings.create)
+			resolver.SignUp(signUp).Create(setup.settings.create)
 		})
 		if err != nil {
 			return err

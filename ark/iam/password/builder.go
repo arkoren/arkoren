@@ -74,9 +74,10 @@ func (passwords *Builder) Events(bus *event.Bus) *Builder {
 // default is false, because most applications add users themselves (an invite,
 // an admin, a social sign-up) and an open registration route is an abuse
 // surface they never asked for. With false the handler panics at composition.
-// [NewVerifier] fails with [ErrInvalidConfig] when it is true and [Users.Create]
-// is nil. Through the facade with the built-in users, registration also needs
-// [Builder.Reset]: iam.New fails with iam.ErrInvalidConfig without it,
+// [NewVerifier] ignores it, with one warning, when it is true and [Users.Create]
+// is nil: nothing could create the user. Through the facade with the built-in
+// users, registration also needs [Builder.Reset]: iam.New ignores it, with a
+// warning, without it,
 // because the reset notice is how the owner of an address that someone else
 // registered first learns of it and recovers the account.
 //

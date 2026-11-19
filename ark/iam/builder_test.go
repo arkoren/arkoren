@@ -3,6 +3,7 @@ package iam_test
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"arkoren.dev/ark/iam"
 	"arkoren.dev/ark/iam/account"
 	"arkoren.dev/ark/iam/apitoken"
+	"arkoren.dev/ark/iam/internal/apptest"
 	"arkoren.dev/ark/iam/password"
 	"arkoren.dev/ark/iam/permission"
 )
@@ -33,29 +35,34 @@ func ownUsersWithoutCreate(t *testing.T) iam.Users {
 	return iam.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}
 }
 
-// TestRegistrationWithoutCreateIsInvalid verifies Registration(true) over users
-// that cannot be created is refused at construction.
-func TestRegistrationWithoutCreateIsInvalid(t *testing.T) {
-	t.Parallel()
+// TestRegistrationWithoutCreateIsIgnored verifies Registration(true) over users
+// that cannot be created is ignored with a warning, and POST /register is not
+// mounted.
+func TestRegistrationWithoutCreateIsIgnored(t *testing.T) {
+	warnings := apptest.CaptureWarnings(t)
 
-	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
+	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{reset: true}, func(identity *iam.Builder) {
 		identity.Users(ownUsersWithoutCreate(t)).Password(true, hasher(), registration)
 	})
-	if !errors.Is(err, iam.ErrInvalidConfig) {
-		t.Fatalf("New = %v, want ErrInvalidConfig", err)
+	absent(t, sys, "POST /register")
+	if got := warnings.Settings(); !slices.Contains(got, "password.Builder.Registration") {
+		t.Fatalf("warnings = %v, want one naming password.Builder.Registration", got)
 	}
 }
 
-// TestSignUpWithoutCreateIsInvalid verifies SignUp(true) over users that cannot
-// be created is refused at construction.
-func TestSignUpWithoutCreateIsInvalid(t *testing.T) {
-	t.Parallel()
+// TestSignUpWithoutCreateIsIgnored verifies SignUp(true) over users that cannot
+// be created is ignored with a warning, and a first login finds no account.
+func TestSignUpWithoutCreateIsIgnored(t *testing.T) {
+	warnings := apptest.CaptureWarnings(t)
 
-	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
+	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{reset: true}, func(identity *iam.Builder) {
 		identity.Users(ownUsersWithoutCreate(t)).Provider(true, fakeProvider{name: "fake"}, signUp)
 	})
-	if !errors.Is(err, iam.ErrInvalidConfig) {
-		t.Fatalf("New = %v, want ErrInvalidConfig", err)
+	if got := warnings.Settings(); !slices.ContainsFunc(got, func(setting string) bool { return strings.HasPrefix(setting, "ProviderBuilder.SignUp") }) {
+		t.Fatalf("warnings = %v, want one naming ProviderBuilder.SignUp", got)
+	}
+	if !sys.router.Has(http.MethodGet, "/auth/fake") {
+		t.Fatal("GET /auth/fake is not mounted, want the provider kept without sign-up")
 	}
 }
 
