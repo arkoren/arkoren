@@ -107,7 +107,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 		if reply := device.Post("/login", `{"email":"ada@example.com","password":"correct horse"}`); reply.Status != http.StatusNoContent {
 			t.Fatalf("login = %d %s", reply.Status, reply.Body)
 		}
-		if reply := device.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(reply.Body, "u1|1|") {
+		if reply := device.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(reply.Body, "u1|1|") {
 			t.Fatalf("/me = %q", reply.Body)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
@@ -116,7 +116,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 		if users.versions["u1"] != 1 {
 			t.Fatalf("the reset rotated %d times, want once", users.versions["u1"])
 		}
-		if reply := device.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := device.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("the old login survived the rotation: %q", reply.Body)
 		}
 		for _, route := range [][2]string{{"POST", "/email/verify"}, {"POST", "/email/verify/resend"}, {"DELETE", "/account"}} {

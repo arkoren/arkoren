@@ -96,7 +96,7 @@ func (links *Links) Resolver(configure ...ResolverBuilderFunc) (auth.Resolver, e
 	}
 	onboard := onboarding{signUp: settings.signUp, create: web.First(settings.create, links.onboard.create)}
 	if onboard.signUp && onboard.create == nil {
-		slog.Warn("access: setting ignored", "setting", "federation.ResolverBuilder.SignUp", "reason", "no Create function is set, so no user can be created")
+		slog.WarnContext(context.Background(), "access: setting ignored", "setting", "federation.ResolverBuilder.SignUp", "reason", "no Create function is set, so no user can be created")
 		onboard.signUp = false
 	}
 

@@ -67,7 +67,7 @@ func TestApplicationCallbacksCannotOverrideTheSessionHandle(t *testing.T) {
 			identity.Session(func(cookies *session.Builder) { cookies.Handle(session.NewHandle()).MaxLifetime(time.Second) })
 		})
 		register(t, sys.client, "ada@example.com")
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); strings.Contains(reply.Body, "anonymous") {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); strings.Contains(reply.Body, "anonymous") {
 			t.Fatalf("/me after registering = %q, want the user", reply.Body)
 		}
 	})

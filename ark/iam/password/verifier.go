@@ -208,7 +208,7 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		apply(&settings)
 	}
 	if settings.registration && users.Create == nil {
-		slog.Warn("access: setting ignored", "setting", "password.Builder.Registration", "reason", "Users.Create is nil, so no user can be created")
+		slog.WarnContext(context.Background(), "access: setting ignored", "setting", "password.Builder.Registration", "reason", "Users.Create is nil, so no user can be created")
 		settings.registration = false
 	}
 	if err := settings.validate(); err != nil {

@@ -39,7 +39,7 @@ func TestRegisterVerifyAndRequireVerified(t *testing.T) {
 			identity.Password(true, hasher(), registration)
 		})
 		register(t, sys.client, "ada@example.com")
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); !strings.HasSuffix(reply.Body, "|1|true") {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); !strings.HasSuffix(reply.Body, "|1|true") {
 			t.Fatalf("/me after register = %q", reply.Body)
 		}
 		message := sys.box.lastVerify(t)
@@ -95,7 +95,7 @@ func TestTwoFactorEnableChallengeAndRecovery(t *testing.T) {
 		if enable.Status != http.StatusOK || !strings.Contains(enable.Body, "recovery_codes") {
 			t.Fatalf("enable = %d %s", enable.Status, enable.Body)
 		}
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); !strings.Contains(reply.Body, "|2|") {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); !strings.Contains(reply.Body, "|2|") {
 			t.Fatalf("/me after enabling = %q, want level multi", reply.Body)
 		}
 		recovery := between(enable.Body, `["`, `"`)
@@ -148,10 +148,10 @@ func TestPasswordChangeEndsOtherDevices(t *testing.T) {
 		if change.Status != http.StatusNoContent {
 			t.Fatalf("change = %d %s", change.Status, change.Body)
 		}
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); !strings.HasSuffix(reply.Body, "|true") || strings.HasPrefix(reply.Body, "anonymous") {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); !strings.HasSuffix(reply.Body, "|true") || strings.HasPrefix(reply.Body, "anonymous") {
 			t.Fatalf("caller /me = %q", reply.Body)
 		}
-		if reply := other.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := other.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("other device /me = %q, want its login ended", reply.Body)
 		}
 	})
@@ -175,7 +175,7 @@ func TestForgotAndResetFlow(t *testing.T) {
 		if reset.Status != http.StatusNoContent {
 			t.Fatalf("reset = %d %s", reset.Status, reset.Body)
 		}
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("the old session survived the reset: %q", reply.Body)
 		}
 		login := sys.client.NewDevice().Post("/login", `{"email":"ada@example.com","password":"reset horse ok"}`)
@@ -205,7 +205,7 @@ func TestTokensExchangeAndBearer(t *testing.T) {
 		}
 		secret := between(exchange.Body, `"secret":"`, `"`)
 		header := "Authorization: Bearer " + secret
-		me := sys.client.NewDevice().Do(http.MethodGet, "/me", "", header)
+		me := sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", header)
 		if !strings.HasSuffix(me.Body, "|0|false") {
 			t.Fatalf("/me with the token = %q, want level 0 and no session", me.Body)
 		}
@@ -215,7 +215,7 @@ func TestTokensExchangeAndBearer(t *testing.T) {
 		if reply := sys.client.NewDevice().Do(http.MethodDelete, "/device-tokens/current", "", header); reply.Status != http.StatusNoContent {
 			t.Fatalf("device logout = %d", reply.Status)
 		}
-		if reply := sys.client.NewDevice().Do(http.MethodGet, "/me", "", header); reply.Status != http.StatusUnauthorized {
+		if reply := sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", header); reply.Status != http.StatusUnauthorized {
 			t.Fatalf("the revoked token still works: %d", reply.Status)
 		}
 	})
@@ -236,13 +236,13 @@ func TestResetEndsTokens(t *testing.T) {
 			t.Fatalf("Issue: %v", err)
 		}
 		header := "Authorization: Bearer " + secret
-		if reply := sys.client.NewDevice().Do(http.MethodGet, "/me", "", header); reply.Status != http.StatusOK {
+		if reply := sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", header); reply.Status != http.StatusOK {
 			t.Fatalf("token before reset = %d", reply.Status)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
 		token := sys.box.lastReset(t).Signed
 		sys.client.NewDevice().Post("/password/reset", `{"token":"`+token+`","password":"reset horse ok"}`)
-		if reply := sys.client.NewDevice().Do(http.MethodGet, "/me", "", header); reply.Status != http.StatusUnauthorized {
+		if reply := sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", header); reply.Status != http.StatusUnauthorized {
 			t.Fatalf("token after reset = %d, want 401", reply.Status)
 		}
 	})
@@ -266,14 +266,14 @@ func TestSessionsListAndRevoke(t *testing.T) {
 		if reply := sys.client.Do(http.MethodDelete, "/sessions", ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("delete others = %d", reply.Status)
 		}
-		if reply := other.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := other.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("the other login survived: %q", reply.Body)
 		}
 		id := between(sys.client.Do(http.MethodGet, "/sessions", "").Body, `"id":"`, `"`)
 		if reply := sys.client.Do(http.MethodDelete, "/sessions/"+id, ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("delete own = %d", reply.Status)
 		}
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("the revoked login survived: %q", reply.Body)
 		}
 	})
@@ -315,7 +315,7 @@ func TestDeleteAccountRemovesEveryPackagesRows(t *testing.T) {
 		if tokens, _ := sys.identity.Issuer().Tokens(ctx, subject); len(tokens) != 0 {
 			t.Fatalf("tokens survived: %+v", tokens)
 		}
-		if reply := sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+secret); reply.Status != http.StatusUnauthorized {
+		if reply := sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", "Authorization: Bearer "+secret); reply.Status != http.StatusUnauthorized {
 			t.Fatalf("the deleted user's token works: %d", reply.Status)
 		}
 	})
@@ -541,7 +541,7 @@ func TestPruneDeletesIdleDeviceTokens(t *testing.T) {
 			identity.Tokens(true)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
-		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 		if _, _, err := sys.identity.Issuer().IssueDevice(ctx, subject, "phone"); err != nil {
 			t.Fatalf("IssueDevice: %v", err)
 		}

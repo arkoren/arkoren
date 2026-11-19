@@ -117,12 +117,12 @@ func TestProviderTakeOverWorksWithoutSignUp(t *testing.T) {
 			identity.Provider(true, fakeProvider{name: "closed"})
 		})
 		register(t, sys.client, "ada@example.com")
-		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 		owner := sys.client.NewDevice()
 		if reply := owner.Do(http.MethodGet, callbackPath("closed", "c1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("owner callback = %d %s, want 204", reply.Status, reply.Body)
 		}
-		if me := owner.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, squatted+"|") {
+		if me := owner.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(me.Body, squatted+"|") {
 			t.Fatalf("owner /me = %q, want the registered user %s", me.Body, squatted)
 		}
 	})

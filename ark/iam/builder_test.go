@@ -230,7 +230,7 @@ func TestUsersAddedThroughTheDirectoryLogIn(t *testing.T) {
 		if reply := sys.client.Post("/login", `{"email":"ada@example.com","password":"correct horse"}`); reply.Status != http.StatusNoContent {
 			t.Fatalf("login = %d %s", reply.Status, reply.Body)
 		}
-		if me := sys.client.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, subject+"|") {
+		if me := sys.client.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(me.Body, subject+"|") {
 			t.Fatalf("/me = %q, want %s", me.Body, subject)
 		}
 	})

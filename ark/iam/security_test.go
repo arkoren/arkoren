@@ -98,12 +98,12 @@ func TestResetDefeatsPreRegistrationHijack(t *testing.T) {
 		if reply := sys.client.NewDevice().Post("/login", `{"email":"victim@example.com","password":"correct horse"}`); reply.Status != http.StatusUnprocessableEntity {
 			t.Fatalf("attacker's password login = %d, want 422", reply.Status)
 		}
-		if reply := attacker.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := attacker.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("attacker old session = %q, want anonymous", reply.Body)
 		}
 		google := sys.client.NewDevice()
 		google.Do(http.MethodGet, callbackPath("fake", "attacker-g", "victim@example.com", false), "")
-		if reply := google.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := google.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("the attacker's provider login still logs in: %q", reply.Body)
 		}
 		if connections, _ := sys.identity.Links().List(ctx, subject); len(connections) != 0 {
@@ -230,10 +230,10 @@ func TestTwoFactorWithRecentCodeDisablesAndEnableEndsOtherLogins(t *testing.T) {
 		if reply := sys.client.Post("/two-factor", `{"code":"`+code(t, secretOf(setup.Body), 0)+`"}`); reply.Status != http.StatusOK {
 			t.Fatalf("enable = %d %s", reply.Status, reply.Body)
 		}
-		if reply := other.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := other.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("another login after enabling = %q, want anonymous", reply.Body)
 		}
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); reply.Body == "anonymous" {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); reply.Body == "anonymous" {
 			t.Fatalf("the enabling session = %d, want kept", reply.Status)
 		}
 		if reply := sys.client.Post("/two-factor/recovery-codes", ""); reply.Status != http.StatusOK {
@@ -292,7 +292,7 @@ func checkEnablingTwoFactorTokens(t *testing.T, keepPersonal bool, personalStatu
 			t.Fatalf("enable = %d %s", reply.Status, reply.Body)
 		}
 		status := func(secret string) int {
-			return sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+secret).Status
+			return sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", "Authorization: Bearer "+secret).Status
 		}
 		if got := status(device); got != http.StatusUnauthorized {
 			t.Fatalf("device token after enabling two-factor = %d, want 401", got)
@@ -348,7 +348,7 @@ func checkPasswordChangeTokens(t *testing.T, keepPersonal bool, personalStatus i
 			t.Fatalf("change = %d %s", reply.Status, reply.Body)
 		}
 		status := func(secret string) int {
-			return sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+secret).Status
+			return sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", "Authorization: Bearer "+secret).Status
 		}
 		if got := status(device); got != http.StatusUnauthorized {
 			t.Fatalf("device token after a password change = %d, want 401", got)

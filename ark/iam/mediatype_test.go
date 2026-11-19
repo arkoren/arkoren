@@ -101,7 +101,7 @@ func TestBodylessRoutesRequireJSONToo(t *testing.T) {
 				t.Fatalf("%s %s as a form = %d %s, want 415", route.method, route.path, reply.Status, reply.Body)
 			}
 		}
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); !strings.Contains(reply.Body, "|") {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); !strings.Contains(reply.Body, "|") {
 			t.Fatalf("/me after the rejected logout = %q: the session ended", reply.Body)
 		}
 	})

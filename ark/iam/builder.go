@@ -24,7 +24,7 @@ import (
 
 // Builder configures [New] before publication. Each feature is off until its
 // method is called with enabled true: [Builder.Password], [Builder.TwoFactor],
-// [Builder.Tokens], [Builder.Permissions] and [Builder.Provider] take the
+// [Builder.Tokens], [Builder.Permissions], [Builder.Provider] and [Builder.Me] take the
 // switch as their first argument, so the state is explicit at the call site
 // and a feature can follow a configuration flag. With false the callbacks
 // still run, but their settings are unused and the components the feature
@@ -39,7 +39,7 @@ import (
 // [Builder.Directory], [Builder.Provider], [Builder.SecondFactor],
 // [Builder.StepUp], [Builder.Authenticator], [Builder.Guard] and
 // [Builder.Session]); a nil hook never clears an earlier one. [Builder.Password],
-// [Builder.TwoFactor], [Builder.Tokens] and [Builder.Permissions] replace their earlier call
+// [Builder.TwoFactor], [Builder.Tokens], [Builder.Permissions] and [Builder.Me] replace their earlier call
 // as a whole instead, so the last call, including its switch, is the complete
 // configuration of that feature.
 //
@@ -62,6 +62,8 @@ type Builder struct {
 	users           *Users
 	directorySet    bool
 	directory       []account.BuilderFunc
+	meOn            bool
+	me              []MeBuilderFunc
 	passwordOn      bool
 	hasher          *hash.Hasher
 	password        []password.BuilderFunc
@@ -282,6 +284,33 @@ func (identity *Builder) Tokens(enabled bool, configure ...apitoken.BuilderFunc)
 func (identity *Builder) Permissions(enabled bool, configure ...permission.BuilderFunc) *Builder {
 	identity.permissions = enabled
 	identity.permission = settle(enabled, configure)
+
+	return identity
+}
+
+// Me turns GET /me on or off: the identity of the request as JSON, the subject
+// and the email claims of its user record and, as configure chooses, the user,
+// the roles and permissions, the two-factor state and how the request logged in
+// (see [MeBuilder]). With false configure is unused and no route is mounted;
+// [IAM.MeHandler] then panics. Later calls replace the earlier one: only the
+// switch and the configure callbacks of the last call count. Settings that
+// depend on a feature that is off (permissions without [Builder.Permissions],
+// two-factor without [Builder.TwoFactor], a user projection with the built-in
+// users) are ignored with one warning.
+//
+// Example:
+//
+//	identity.Me(true, func(me *iam.MeBuilder) {
+//		me.User(func(account Account) PublicAccount {
+//			return PublicAccount{ID: account.ID, Name: account.Name}
+//		})
+//		me.Permissions(true)
+//		me.TwoFactor(true)
+//		me.Login(true)
+//	})
+func (identity *Builder) Me(enabled bool, configure ...MeBuilderFunc) *Builder {
+	identity.meOn = enabled
+	identity.me = settle(enabled, configure)
 
 	return identity
 }

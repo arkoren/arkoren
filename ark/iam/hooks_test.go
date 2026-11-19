@@ -56,7 +56,7 @@ func TestAppAfterChangeKeepsTokenRevocation(t *testing.T) {
 		if !ran {
 			t.Fatal("the application's AfterChange hook did not run")
 		}
-		if got := sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+personal).Status; got != http.StatusUnauthorized {
+		if got := sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", "Authorization: Bearer "+personal).Status; got != http.StatusUnauthorized {
 			t.Fatalf("personal token after a password change = %d, want 401", got)
 		}
 	})
@@ -92,7 +92,7 @@ func TestAppOnEnableKeepsTokenRevocation(t *testing.T) {
 		if !ran {
 			t.Fatal("the application's OnEnable hook did not run")
 		}
-		if got := sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+personal).Status; got != http.StatusUnauthorized {
+		if got := sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", "Authorization: Bearer "+personal).Status; got != http.StatusUnauthorized {
 			t.Fatalf("personal token after enabling two-factor = %d, want 401", got)
 		}
 	})

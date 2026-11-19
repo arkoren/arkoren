@@ -31,13 +31,16 @@
 //			accounts.Verification(true, signer, dispatchVerification, deliverVerification)
 //		})
 //		identity.TwoFactor(true, scheme, cipher)
-//		identity.Tokens()
+//		identity.Tokens(true)
 //		identity.Permissions(true, func(policy *permission.Builder) {
 //			policy.Roles(Viewer, Editor, Admin).KeepOne(Admin)
 //		})
 //		identity.Provider(true, google)
 //		identity.Provider(true, github, func(login *iam.ProviderBuilder) {
 //			login.SignUp(true) // off by default, per provider
+//		})
+//		identity.Me(true, func(me *iam.MeBuilder) {
+//			me.Permissions(true).TwoFactor(true).Login(true)
 //		})
 //	})
 //	if err != nil {
@@ -50,10 +53,15 @@
 //	web.Group("/", identity.Register)
 //
 //	api := routes.With(identity.Middleware(), auth.Require())
-//	api.Get("/me", me)
+//	api.Get("/posts", listPosts)
 //
-// Every feature is off until enabled, including the two ways users appear on
-// their own: self-service registration ([password.Builder.Registration]) and
+// Every feature is off until enabled with its first argument, `enabled`, and
+// stays off when the method is never called; with false its settings are unused
+// and the components it requires may be nil. A setting that depends on a
+// feature that is off is ignored with one warning logged through slog.Default,
+// and missing components or invalid values still fail [New] with
+// [ErrInvalidConfig]. The two ways users appear on
+// their own are off by default too: self-service registration ([password.Builder.Registration]) and
 // creating a user on a first provider login ([ProviderBuilder.SignUp]). With
 // both off the application adds users itself, with [IAM.Directory] ([account.Directory.Create],
 // [account.Directory.CreateVerified]) or its own users. The application brings the database, the
@@ -120,7 +128,7 @@
 //	Providers   GET /auth/<name> · GET|POST /auth/<name>/callback · GET /auth/<name>/nonce · POST /auth/<name>/native
 //	Connections GET /connections · POST /connections/{provider} · DELETE /connections/{id}
 //	Permissions GET /me/permissions (SelfService) · GET /users/{subject}/permissions · PUT|DELETE /users/{subject}/permissions/{name} · PUT|DELETE /users/{subject}/roles/{name} (Management)
-//	Account     DELETE /account
+//	Account     GET /me (Me) · DELETE /account
 //
 // # Behavior
 //

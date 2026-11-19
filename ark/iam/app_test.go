@@ -311,7 +311,7 @@ func newAppOn(t *testing.T, db *database.Database, instance string, store *cache
 	r := router.New()
 	web := r.With(identity.Middleware())
 	identity.Register(web)
-	web.Get("/me", func(w http.ResponseWriter, r *http.Request) error {
+	web.Get("/whoami", func(w http.ResponseWriter, r *http.Request) error {
 		identity, ok := auth.FromContext(r.Context())
 		if !ok {
 			_, err := fmt.Fprint(w, "anonymous")

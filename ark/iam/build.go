@@ -51,6 +51,8 @@ func (identity *IAM) build(settings *Builder) error {
 		identity.add(identity.permissions.Migrations(), identity.permissions.Ping)
 	}
 
+	identity.buildMe(settings)
+
 	return identity.buildGuard(settings)
 }
 
@@ -58,7 +60,7 @@ func (identity *IAM) build(settings *Builder) error {
 // depends on is off. Settings whose dependency is missing, but whose absence
 // would weaken a protection, fail construction instead.
 func ignore(setting, reason string) {
-	slog.Warn("access: setting ignored", "setting", setting, "reason", reason)
+	slog.WarnContext(context.Background(), "access: setting ignored", "setting", setting, "reason", reason)
 }
 
 // add records the migrations and readiness check of an enabled package.
