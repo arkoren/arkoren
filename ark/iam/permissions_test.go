@@ -37,10 +37,10 @@ var (
 // store with every route, then applies configure.
 func withPermissions(configure ...iam.BuilderFunc) iam.BuilderFunc {
 	return func(identity *iam.Builder) {
-		identity.Password(true, hasher(), registration)
-		identity.Tokens(true)
-		identity.Permissions(true, func(policy *permission.Builder) {
-			policy.Roles(admin).KeepOne(admin).SelfService(true).Management(true, usersManage)
+		identity.Password(hasher(), registration)
+		identity.Tokens()
+		identity.Permissions(func(policy *permission.Builder) {
+			policy.Roles(admin).KeepOne(admin).SelfService(true).Management(usersManage)
 		})
 		for _, apply := range configure {
 			apply(identity)
@@ -174,7 +174,7 @@ func TestPermissionsExplicitGrantsReplacesCeiling(t *testing.T) {
 	t.Parallel()
 
 	sys := newApp(t, memoryDatabase(t), "", withPermissions(func(identity *iam.Builder) {
-		identity.Tokens(true, func(tokens *apitoken.Builder) {
+		identity.Tokens(func(tokens *apitoken.Builder) {
 			tokens.Grants(apitoken.AnyScope, "posts:write")
 		})
 	}))
@@ -188,8 +188,8 @@ func TestPermissionsRoutesRegisterOnlyWhenEnabled(t *testing.T) {
 	t.Parallel()
 
 	sys := newApp(t, memoryDatabase(t), "", func(identity *iam.Builder) {
-		identity.Password(true, hasher(), registration)
-		identity.Permissions(true, func(policy *permission.Builder) {
+		identity.Password(hasher(), registration)
+		identity.Permissions(func(policy *permission.Builder) {
 			policy.Roles(admin)
 		})
 	})
@@ -257,8 +257,8 @@ func TestPermissionsManagementRefusesEscalation(t *testing.T) {
 		role.Grants(usersManage)
 	})
 	sys := newApp(t, memoryDatabase(t), "", withPermissions(func(identity *iam.Builder) {
-		identity.Permissions(true, func(policy *permission.Builder) {
-			policy.Roles(admin, manager).Management(true, usersManage)
+		identity.Permissions(func(policy *permission.Builder) {
+			policy.Roles(admin, manager).Management(usersManage)
 		})
 	}))
 	device, _ := signedUp(t, sys, manager)

@@ -115,7 +115,7 @@ Use `iam` from `arkoren.dev/ark/iam`, with the existing `db` and `store`:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(true, work)
+	identity.Provider(work)
 })
 ```
 
@@ -176,7 +176,7 @@ login, use this alternative registration instead:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(true, work, func(login *iam.ProviderBuilder) {
+	identity.Provider(work, func(login *iam.ProviderBuilder) {
 		login.SignUp(true)
 	})
 })

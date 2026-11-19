@@ -76,7 +76,7 @@ type SignalRequest struct {
 
 	// Force resolves the promise even when the run is not running yet, for
 	// example while it waits for its delay.
-	Force bool `json:"force,omitempty"`
+	Force bool `json:"force,omitzero"`
 }
 
 // CodeCanceled is the Restate failure code of a canceled invocation.

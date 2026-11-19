@@ -42,7 +42,7 @@ type runJob struct {
 	Name string
 	// Payload contains the opaque JSON value forwarded to application dispatch.
 	// Omission denotes a recurring entry; explicit JSON null remains task data.
-	Payload jsontext.Value `json:",omitempty"`
+	Payload jsontext.Value `json:",omitzero"`
 }
 
 // nextAfter returns the first time after the given time that spec matches.

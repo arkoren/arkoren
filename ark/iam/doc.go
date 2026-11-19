@@ -23,24 +23,24 @@
 //
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(true, hasher, func(passwords *password.Builder) {
+//		identity.Password(hasher, func(passwords *password.Builder) {
 //			passwords.Registration(true) // off by default
-//			passwords.Reset(true, signer, dispatchReset, deliverReset)
+//			passwords.Reset(signer, dispatchReset, deliverReset)
 //		})
 //		identity.Directory(func(accounts *account.Builder) {
-//			accounts.Verification(true, signer, dispatchVerification, deliverVerification)
+//			accounts.Verification(signer, dispatchVerification, deliverVerification)
 //		})
-//		identity.TwoFactor(true, scheme, cipher)
-//		identity.Tokens(true)
-//		identity.Permissions(true, func(policy *permission.Builder) {
+//		identity.TwoFactor(scheme, cipher)
+//		identity.Tokens()
+//		identity.Permissions(func(policy *permission.Builder) {
 //			policy.Roles(Viewer, Editor, Admin).KeepOne(Admin)
 //		})
-//		identity.Provider(true, google)
-//		identity.Provider(true, github, func(login *iam.ProviderBuilder) {
+//		identity.Provider(google)
+//		identity.Provider(github, func(login *iam.ProviderBuilder) {
 //			login.SignUp(true) // off by default, per provider
 //		})
-//		identity.Me(true, func(me *iam.MeBuilder) {
-//			me.Permissions(true).TwoFactor(true).Login(true)
+//		identity.Account(func(view *iam.AccountBuilder) {
+//			view.Permissions(true).TwoFactor(true).Login(true)
 //		})
 //	})
 //	if err != nil {
@@ -55,9 +55,8 @@
 //	api := routes.With(identity.Middleware(), auth.Require())
 //	api.Get("/posts", listPosts)
 //
-// Every feature is off until enabled with its first argument, `enabled`, and
-// stays off when the method is never called; with false its settings are unused
-// and the components it requires may be nil. A setting that depends on a
+// Every feature is off until its method is called, and calling it enables the
+// feature; to follow a configuration flag, wrap the call in an if. A setting that depends on a
 // feature that is off is ignored with one warning logged through slog.Default,
 // and missing components or invalid values still fail [New] with
 // [ErrInvalidConfig]. The two ways users appear on
@@ -128,7 +127,7 @@
 //	Providers   GET /auth/<name> · GET|POST /auth/<name>/callback · GET /auth/<name>/nonce · POST /auth/<name>/native
 //	Connections GET /connections · POST /connections/{provider} · DELETE /connections/{id}
 //	Permissions GET /me/permissions (SelfService) · GET /users/{subject}/permissions · PUT|DELETE /users/{subject}/permissions/{name} · PUT|DELETE /users/{subject}/roles/{name} (Management)
-//	Account     GET /me (Me) · DELETE /account
+//	Account     GET /account (Account) · DELETE /account
 //
 // # Behavior
 //

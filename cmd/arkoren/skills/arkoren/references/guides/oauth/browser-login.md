@@ -58,7 +58,7 @@ old session ID was retired.
 
 > [!NOTE]
 > With the [IAM](../iam/overview.md) ark you write no mapper:
-> `identity.Provider(true, client)` mounts these routes and maps identities through its
+> `identity.Provider(client)` mounts these routes and maps identities through its
 > connection store, with connect and disconnect, never linking by email. It also
 > sets whether a first login may create a user, for each provider separately. See
 > [Federated Sign-In](../iam/federated-sign-in.md). The rest of this section shows
@@ -126,6 +126,24 @@ For browser callbacks, `external.Claims["scope"]` holds the granted scopes as a
 space-delimited string from the token response, or the requested scopes if the
 response omits them. These are provider grants, not your local account's
 resource permissions.
+
+## Provider Claims
+
+The verified identity reaches your resolver as `auth.External`. Its `Claims` map
+holds what the provider sent beyond the email:
+
+| Provider | Typical claims |
+| --- | --- |
+| Google | ID-token claims such as `name`, `given_name`, `family_name`, `picture`, `locale` and `hd` |
+| Microsoft | ID-token claims such as `name` and `preferred_username`, plus `oid` and `tid` |
+| GitHub | `name`, falling back to the login |
+| Apple | `name`, on the first login only |
+
+Apple sends the user's name only on the first authorization, so store it then;
+a later login carries no `name`. With IAM, `ProviderBuilder.KeepClaims` does this
+for you and keeps the name through later logins: see
+[Keep Claims](../iam/federated-sign-in.md#keep-claims). Claims are the
+provider's suggestions, not proof of anything beyond the verified identity.
 
 ## Second Factors
 

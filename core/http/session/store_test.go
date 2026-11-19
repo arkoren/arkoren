@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,4 +103,25 @@ func TestMiddlewareRejectsZeroNamespaceAfterCallbacks(t *testing.T) {
 	}, func(cookies *Builder) {
 		called = true
 	})
+}
+
+// TestRecordTombstoneIsWrittenOnlyWhenSet verifies a live record omits the
+// tombstone member, which older records also lack, and a retired one writes it.
+func TestRecordTombstoneIsWrittenOnlyWhenSet(t *testing.T) {
+	t.Parallel()
+
+	live, err := json.Marshal(persistence.Record{ID: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(live), "tombstone") {
+		t.Fatalf("live record %s has a tombstone member", live)
+	}
+	retired, err := json.Marshal(persistence.Record{ID: "a", Tombstone: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(retired), `"tombstone":true`) {
+		t.Fatalf("retired record %s lacks the tombstone", retired)
+	}
 }

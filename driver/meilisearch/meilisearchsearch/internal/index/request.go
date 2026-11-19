@@ -26,9 +26,11 @@ type Request struct {
 	Query string `json:"q"`
 
 	// Filter contains the compiled predicates; empty omits filtering.
-	Filter string `json:"filter,omitempty"`
+	Filter string `json:"filter,omitzero"`
 
-	// Sort lists explicit field directions before relevance tie-breaking.
+	// Sort lists explicit field directions before relevance tie-breaking. It keeps
+	// omitempty, not omitzero: encoding/json/v2 then also drops an empty non-nil
+	// slice, so Meilisearch never receives "sort": [].
 	Sort []string `json:"sort,omitempty"`
 
 	// Page is the one-based page corresponding to the requested offset.

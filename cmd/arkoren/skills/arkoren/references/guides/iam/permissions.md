@@ -51,8 +51,8 @@ top-level roles to IAM with `permission` from `arkoren.dev/ark/iam/permission`:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(true, hasher)
-	identity.Permissions(true, func(policy *permission.Builder) {
+	identity.Password(hasher)
+	identity.Permissions(func(policy *permission.Builder) {
 		policy.Roles(Admin).Define(BillingExport)
 	})
 })
@@ -93,7 +93,7 @@ Some roles must never become empty: without an administrator nobody can
 grant access again. Protect them with `KeepOne`:
 
 ```go
-identity.Permissions(true, func(policy *permission.Builder) {
+identity.Permissions(func(policy *permission.Builder) {
 	policy.Roles(Admin).KeepOne(Admin)
 })
 ```
@@ -190,7 +190,7 @@ The store can register two route groups, both off by default. Self-service lets 
 signed-in user see what they hold:
 
 ```go
-identity.Permissions(true, func(policy *permission.Builder) {
+identity.Permissions(func(policy *permission.Builder) {
 	policy.Roles(Admin).SelfService(true)
 })
 ```
@@ -202,8 +202,8 @@ Management lets administrators change other users' grants. Name the
 permission a caller must hold:
 
 ```go
-identity.Permissions(true, func(policy *permission.Builder) {
-	policy.Roles(Admin).KeepOne(Admin).Management(true, UsersManage)
+identity.Permissions(func(policy *permission.Builder) {
+	policy.Roles(Admin).KeepOne(Admin).Management(UsersManage)
 })
 ```
 

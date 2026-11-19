@@ -3,8 +3,10 @@ package mcp_test
 import (
 	"context"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"arkoren.dev/core/mcp"
@@ -106,5 +108,27 @@ func TestToolFailureRejectsInvalidDetails(t *testing.T) {
 		if _, ok := mcp.ToolErrorMessage(err); ok {
 			t.Fatal("invalid details approved text diagnostics")
 		}
+	}
+}
+
+// TestFailureJSONKeepsApprovedEmptyDetails verifies absent details are omitted
+// while an approved empty object stays on the wire, because json/v2 omitzero
+// only omits a nil value.
+func TestFailureJSONKeepsApprovedEmptyDetails(t *testing.T) {
+	t.Parallel()
+
+	absent, err := json.Marshal(mcp.Failure{Code: "unavailable", Message: "capture disabled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(absent), "details") {
+		t.Fatalf("failure %s has a details member", absent)
+	}
+	empty, err := json.Marshal(mcp.Failure{Code: "unavailable", Message: "capture disabled", Details: jsontext.Value(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(empty), `"details":{}`) {
+		t.Fatalf("failure %s lost its approved empty details", empty)
 	}
 }

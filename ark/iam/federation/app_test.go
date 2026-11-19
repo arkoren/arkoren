@@ -36,6 +36,7 @@ type system struct {
 	users    *memoryauth.Driver
 	provider *auth.UserProvider
 	links    *federation.Links
+	resolve  auth.Resolver
 	guard    *auth.Guard
 	client   *apptest.Client
 
@@ -85,6 +86,7 @@ func newSystem(t *testing.T, db *database.Database, instance string, withCreate,
 		t.Fatalf("NewLinks: %v", err)
 	}
 	migrateUp(t, db, sys.links.Migrations()...)
+	sys.resolve = sys.links.Resolve
 	store := cache.New(memorycache.New())
 	sys.guard, err = auth.NewGuard(sys.provider, store)
 	if err != nil {
@@ -110,12 +112,14 @@ func newSystem(t *testing.T, db *database.Database, instance string, withCreate,
 				Subject       string `json:"subject"`
 				Email         string `json:"email"`
 				EmailVerified bool   `json:"email_verified"`
+
+				Claims map[string]any `json:"claims"`
 			}
 			if err := json.UnmarshalRead(r.Body, &body); err != nil {
 				return err
 			}
-			subject, err := sys.links.Resolve(r.Context(), auth.External{
-				Issuer: body.Issuer, Subject: body.Subject, Email: body.Email, EmailVerified: body.EmailVerified,
+			subject, err := sys.resolve(r.Context(), auth.External{
+				Issuer: body.Issuer, Subject: body.Subject, Email: body.Email, EmailVerified: body.EmailVerified, Claims: body.Claims,
 			})
 			if err != nil {
 				return err

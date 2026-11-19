@@ -33,10 +33,10 @@ features and the tokens follow the store:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Permissions(true, func(policy *permission.Builder) {
+	identity.Permissions(func(policy *permission.Builder) {
 		policy.Roles(Viewer, Editor)
 	})
-	identity.Tokens(true)
+	identity.Tokens()
 })
 ```
 
@@ -56,7 +56,7 @@ in your existing constructor:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Tokens(true, func(tokens *apitoken.Builder) {
+	identity.Tokens(func(tokens *apitoken.Builder) {
 		tokens.Grants(grantable, "posts:read", "posts:write")
 	})
 })
@@ -121,7 +121,7 @@ configure it alongside the catalog:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Tokens(true, func(tokens *apitoken.Builder) {
+	identity.Tokens(func(tokens *apitoken.Builder) {
 		tokens.Grants(grantable, "posts:read", "posts:write")
 		tokens.MaxTTL(30 * 24 * time.Hour)
 	})

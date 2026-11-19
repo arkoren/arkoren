@@ -78,7 +78,7 @@ var ErrNotMigrated = storage.ErrNotMigrated
 // Example:
 //
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(true, hasher)
+//		identity.Password(hasher)
 //	})
 //	if err != nil {
 //		return err
@@ -98,7 +98,7 @@ type IAM struct {
 	permissions *permission.Store
 	links       *federation.Links
 	providers   []mountedProvider
-	me          *MeBuilder
+	account     *AccountBuilder
 	middleware  router.Middleware
 	migrations  []migrate.Definition
 	pingers     []func(context.Context) error
@@ -146,7 +146,7 @@ type IAM struct {
 // Example:
 //
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(true, hasher)
+//		identity.Password(hasher)
 //	})
 //	if err != nil {
 //		return err

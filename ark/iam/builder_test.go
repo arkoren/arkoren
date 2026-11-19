@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
-	"arkoren.dev/core/auth/gate"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/totp"
 
@@ -42,7 +41,7 @@ func TestRegistrationWithoutCreateIsIgnored(t *testing.T) {
 	warnings := apptest.CaptureWarnings(t)
 
 	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{reset: true}, func(identity *iam.Builder) {
-		identity.Users(ownUsersWithoutCreate(t)).Password(true, hasher(), registration)
+		identity.Users(ownUsersWithoutCreate(t)).Password(hasher(), registration)
 	})
 	absent(t, sys, "POST /register")
 	if got := warnings.Settings(); !slices.Contains(got, "password.Builder.Registration") {
@@ -56,7 +55,7 @@ func TestSignUpWithoutCreateIsIgnored(t *testing.T) {
 	warnings := apptest.CaptureWarnings(t)
 
 	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{reset: true}, func(identity *iam.Builder) {
-		identity.Users(ownUsersWithoutCreate(t)).Provider(true, fakeProvider{name: "fake"}, signUp)
+		identity.Users(ownUsersWithoutCreate(t)).Provider(fakeProvider{name: "fake"}, signUp)
 	})
 	if got := warnings.Settings(); !slices.ContainsFunc(got, func(setting string) bool { return strings.HasPrefix(setting, "ProviderBuilder.SignUp") }) {
 		t.Fatalf("warnings = %v, want one naming ProviderBuilder.SignUp", got)
@@ -72,7 +71,7 @@ func TestSignUpOffNeedsNoCreate(t *testing.T) {
 	t.Parallel()
 
 	if _, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Users(ownUsersWithoutCreate(t)).Provider(true, fakeProvider{name: "fake"})
+		identity.Users(ownUsersWithoutCreate(t)).Provider(fakeProvider{name: "fake"})
 	}); err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -97,7 +96,7 @@ func TestTwoFactorWithNilCipherIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.TwoFactor(true, totp.New("Example"), nil)
+		identity.TwoFactor(totp.New("Example"), nil)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -110,7 +109,7 @@ func TestTokensWithNoKindIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Tokens(true, func(tokens *apitoken.Builder) { tokens.PersonalTokens(false).DeviceTokens(false) })
+		identity.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false).DeviceTokens(false) })
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -123,7 +122,7 @@ func TestTokenCatalogWithoutGrantsIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Tokens(true, func(tokens *apitoken.Builder) { tokens.Grants(nil, "posts:read") })
+		identity.Tokens(func(tokens *apitoken.Builder) { tokens.Grants(nil, "posts:read") })
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -161,8 +160,8 @@ func TestPasswordLaterCallReplacesTheEarlier(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Password(true, hasher())
+			identity.Password(hasher(), registration)
+			identity.Password(hasher())
 		})
 		if sys.router.Has(http.MethodPost, "/register") {
 			t.Fatal("POST /register is mounted, want the second Password call to replace the first")
@@ -176,14 +175,14 @@ func TestTwoFactorLaterCallReplacesTheEarlier(t *testing.T) {
 	t.Parallel()
 
 	if _, err := newFacade(t, func(identity *iam.Builder) {
-		identity.TwoFactor(true, totp.New("Example"), nil)
-		identity.TwoFactor(true, totp.New("Example"), cipher(t))
+		identity.TwoFactor(totp.New("Example"), nil)
+		identity.TwoFactor(totp.New("Example"), cipher(t))
 	}); err != nil {
 		t.Fatalf("New with a valid last call = %v, want nil", err)
 	}
 	_, err := newFacade(t, func(identity *iam.Builder) {
-		identity.TwoFactor(true, totp.New("Example"), cipher(t))
-		identity.TwoFactor(true, totp.New("Example"), nil)
+		identity.TwoFactor(totp.New("Example"), cipher(t))
+		identity.TwoFactor(totp.New("Example"), nil)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New with an invalid last call = %v, want ErrInvalidConfig", err)
@@ -198,8 +197,8 @@ func TestTokensLaterCallReplacesTheEarlier(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Tokens(true, func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
-			identity.Tokens(true)
+			identity.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
+			identity.Tokens()
 		})
 		if !sys.router.Has(http.MethodPost, "/tokens") {
 			t.Fatal("POST /tokens is not mounted, want the second Tokens call to replace the first")
@@ -215,7 +214,7 @@ func TestUsersAddedThroughTheDirectoryLogIn(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher())
+			identity.Password(hasher())
 		})
 		if reply := sys.client.Post("/register", `{"email":"ada@example.com","password":"correct horse"}`); reply.Status != http.StatusNotFound {
 			t.Fatalf("register = %d, want 404 while registration is off", reply.Status)
@@ -248,109 +247,111 @@ func absent(t *testing.T, sys *app, routes ...string) {
 	}
 }
 
-// TestPasswordOffNeedsNoHasher verifies Password(false) accepts a nil hasher,
-// runs the callbacks without using them and mounts no password route.
-func TestPasswordOffNeedsNoHasher(t *testing.T) {
+// TestPasswordNotCalledMountsNothing verifies that without a Password call no
+// password route is mounted and no verifier exists.
+func TestPasswordNotCalledMountsNothing(t *testing.T) {
 	t.Parallel()
 
-	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, func(identity *iam.Builder) {
-		identity.Password(false, nil, registration)
-	})
+	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, func(identity *iam.Builder) {})
 	absent(t, sys, "POST /login", "POST /register", "PUT /password", "POST /password/forgot")
+	if sys.identity.Verifier() != nil {
+		t.Fatal("Verifier is not nil without a Password call")
+	}
 }
 
-// TestPasswordOnWithoutHasherIsInvalid verifies Password(true) needs a hasher.
-func TestPasswordOnWithoutHasherIsInvalid(t *testing.T) {
+// TestPasswordWithoutHasherIsInvalid verifies a Password call needs a hasher.
+func TestPasswordWithoutHasherIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	_, err := newFacade(t, func(identity *iam.Builder) { identity.Password(true, nil) })
+	_, err := newFacade(t, func(identity *iam.Builder) { identity.Password(nil) })
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
 	}
 }
 
-// TestTwoFactorOffNeedsNoCipher verifies TwoFactor(false) accepts a zero scheme
-// and a nil cipher and mounts no two-factor route.
-func TestTwoFactorOffNeedsNoCipher(t *testing.T) {
+// TestTwoFactorNotCalledMountsNothing verifies that without a TwoFactor call no
+// two-factor route is mounted.
+func TestTwoFactorNotCalledMountsNothing(t *testing.T) {
 	t.Parallel()
 
-	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
-		identity.TwoFactor(false, totp.Scheme{}, nil)
-	})
+	sys := newApp(t, memoryDatabase(t), newInstance(t))
 	absent(t, sys, "POST /two-factor/setup", "POST /two-factor", "GET /login/pending")
-}
-
-// TestTokensOffMountsNothing verifies Tokens(false) mounts no token route and
-// still runs its callbacks.
-func TestTokensOffMountsNothing(t *testing.T) {
-	t.Parallel()
-
-	ran := false
-	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
-		identity.Tokens(false, func(*apitoken.Builder) { ran = true })
-	})
-	absent(t, sys, "GET /tokens", "POST /tokens", "POST /device-tokens")
-	if !ran {
-		t.Fatal("Tokens(false) did not run its callbacks")
+	if sys.identity.Factors() != nil {
+		t.Fatal("Factors is not nil without a TwoFactor call")
 	}
 }
 
-// TestPermissionsOffMountsNothing verifies Permissions(false) mounts no
-// permission route even when its callbacks ask for them.
-func TestPermissionsOffMountsNothing(t *testing.T) {
+// TestTokensNotCalledMountsNothing verifies that without a Tokens call no token
+// route is mounted and no issuer exists.
+func TestTokensNotCalledMountsNothing(t *testing.T) {
 	t.Parallel()
 
-	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
-		identity.Permissions(false, func(policy *permission.Builder) { policy.SelfService(true) })
-	})
+	sys := newApp(t, memoryDatabase(t), newInstance(t))
+	absent(t, sys, "GET /tokens", "POST /tokens", "POST /device-tokens")
+	if sys.identity.Issuer() != nil {
+		t.Fatal("Issuer is not nil without a Tokens call")
+	}
+}
+
+// TestPermissionsNotCalledMountsNothing verifies that without a Permissions
+// call no permission route is mounted and no store exists.
+func TestPermissionsNotCalledMountsNothing(t *testing.T) {
+	t.Parallel()
+
+	sys := newApp(t, memoryDatabase(t), newInstance(t))
 	absent(t, sys, "GET /me/permissions")
 	if sys.identity.Permissions() != nil {
-		t.Fatal("Permissions is not nil with Permissions(false)")
+		t.Fatal("Permissions is not nil without a Permissions call")
 	}
 }
 
-// TestProviderOffIsNotMounted verifies Provider(false) takes a nil provider and
-// leaves a disabled provider out, even when another call enables the same name.
-func TestProviderOffIsNotMounted(t *testing.T) {
+// TestProviderNotCalledMountsNoProvider verifies that without a Provider call
+// no provider route and no connection store exist, and that a called provider
+// is mounted.
+func TestProviderNotCalledMountsNoProvider(t *testing.T) {
 	t.Parallel()
 
-	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
-		identity.Provider(false, nil).Provider(false, fakeProvider{name: "fake"}).Provider(true, fakeProvider{name: "fake"})
+	without := newApp(t, memoryDatabase(t), newInstance(t))
+	if without.router.Has(http.MethodGet, "/auth/fake") || without.identity.Links() != nil {
+		t.Fatal("a provider is mounted without a Provider call")
+	}
+	with := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
+		identity.Provider(fakeProvider{name: "fake"})
 	})
-	if !sys.router.Has(http.MethodGet, "/auth/fake") {
-		t.Fatal("GET /auth/fake is not mounted for the one enabled provider")
+	if !with.router.Has(http.MethodGet, "/auth/fake") {
+		t.Fatal("GET /auth/fake is not mounted for the called provider")
 	}
 }
 
-// TestResetOffMountsNoRecoveryRoutes verifies Reset(false) needs no signer and
-// mounts neither forgot nor reset.
-func TestResetOffMountsNoRecoveryRoutes(t *testing.T) {
+// TestResetNotCalledMountsNoRecoveryRoutes verifies that without a Reset call
+// neither forgot nor reset is mounted.
+func TestResetNotCalledMountsNoRecoveryRoutes(t *testing.T) {
 	t.Parallel()
 
 	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, func(identity *iam.Builder) {
-		identity.Password(true, hasher(), func(passwords *password.Builder) { passwords.Reset(false, nil, nil, nil) })
+		identity.Password(hasher(), func(passwords *password.Builder) { passwords.Registration(false) })
 	})
 	absent(t, sys, "POST /password/forgot", "POST /password/reset")
 }
 
-// TestVerificationOffMountsNoEmailRoutes verifies Verification(false) needs no
-// signer and mounts no email route.
-func TestVerificationOffMountsNoEmailRoutes(t *testing.T) {
+// TestVerificationNotCalledMountsNoEmailRoutes verifies that without a
+// Verification call no email route is mounted.
+func TestVerificationNotCalledMountsNoEmailRoutes(t *testing.T) {
 	t.Parallel()
 
 	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, func(identity *iam.Builder) {
-		identity.Directory(func(accounts *account.Builder) { accounts.Verification(false, nil, nil, nil) })
+		identity.Directory(func(accounts *account.Builder) { accounts.VerifyTTL(time.Hour) })
 	})
 	absent(t, sys, "POST /email/verify", "POST /email/verify/resend")
 }
 
-// TestManagementOffMountsNoUserRoutes verifies Management(false) takes the zero
-// permission and mounts no /users route.
-func TestManagementOffMountsNoUserRoutes(t *testing.T) {
+// TestManagementNotCalledMountsNoUserRoutes verifies that without a Management
+// call no /users route is mounted.
+func TestManagementNotCalledMountsNoUserRoutes(t *testing.T) {
 	t.Parallel()
 
 	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
-		identity.Permissions(true, func(policy *permission.Builder) { policy.Management(false, gate.Permission{}) })
+		identity.Permissions(func(policy *permission.Builder) { policy.SelfService(true) })
 	})
 	absent(t, sys, "GET /users/abc/permissions", "PUT /users/abc/roles/editor")
 }

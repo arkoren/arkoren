@@ -48,6 +48,7 @@ func (provider fakeProvider) CallbackHandler(guard *auth.Guard, resolve auth.Res
 			Subject:       query.Get("sub"),
 			Email:         query.Get("email"),
 			EmailVerified: query.Get("verified") == "true",
+			Claims:        map[string]any{"name": query.Get("name"), "picture": "https://p.example/" + query.Get("sub")},
 		})
 		if err != nil {
 			return err
@@ -95,7 +96,7 @@ func TestProviderFirstLoginCreatesVerifiedUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		first := sys.client.NewDevice()
 		if reply := first.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
@@ -121,7 +122,7 @@ func TestProviderFirstLoginWithoutSignUpIsRefused(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(true, fakeProvider{name: "fake"})
+			identity.Provider(fakeProvider{name: "fake"})
 		})
 		device := sys.client.NewDevice()
 		reply := device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
@@ -141,8 +142,8 @@ func TestConnectWithoutSignUpStillWorks(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"})
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"})
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		sys.client.Post("/connections/fake", "")
@@ -168,7 +169,7 @@ func TestProviderUnverifiedEmailCreatesNoUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), "")
 		if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "ark/access:federation:email-unverified") {
@@ -187,8 +188,8 @@ func TestProviderNeverLinksByEmail(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		device := sys.client.NewDevice()
@@ -209,8 +210,8 @@ func TestConnectFlowLinksAndListsAndDisconnects(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		connect := sys.client.Post("/connections/fake", "")
@@ -244,7 +245,7 @@ func TestDisconnectLastWayInConflicts(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		device := sys.client.NewDevice()
 		device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
@@ -263,8 +264,8 @@ func TestSilentFederatedReloginNotFreshForUserWithPassword(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		sys.client.Post("/connections/fake", "")
@@ -296,7 +297,7 @@ func TestNativeRoutesOnlyForNativeProviders(t *testing.T) {
 
 	db := memoryDatabase(t)
 	sys := newApp(t, db, newInstance(t), func(identity *iam.Builder) {
-		identity.Provider(true, fakeProvider{name: "web"}).Provider(true, nativeProvider{fakeProvider{name: "phone"}})
+		identity.Provider(fakeProvider{name: "web"}).Provider(nativeProvider{fakeProvider{name: "phone"}})
 	})
 	for _, route := range []struct {
 		method, path string
@@ -327,7 +328,7 @@ func TestResolveWithoutProvidersIsNotLinked(t *testing.T) {
 	t.Parallel()
 
 	sys := newApp(t, memoryDatabase(t), "", func(identity *iam.Builder) {
-		identity.Password(true, hasher(), registration)
+		identity.Password(hasher(), registration)
 	})
 	if _, err := sys.identity.Resolve(context.Background(), auth.External{Issuer: "x", Subject: "y"}); err == nil {
 		t.Fatal("Resolve without providers succeeded")
@@ -340,7 +341,7 @@ func TestNewRejectsDuplicateProviderNames(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacade(t, func(identity *iam.Builder) {
-		identity.Provider(true, fakeProvider{name: "oauth"}).Provider(true, fakeProvider{name: "oauth"})
+		identity.Provider(fakeProvider{name: "oauth"}).Provider(fakeProvider{name: "oauth"})
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) || !strings.Contains(err.Error(), "oauth") {
 		t.Fatalf("error = %v, want a duplicate-name rejection", err)
@@ -353,7 +354,7 @@ func TestProviderNamesMustBeOnePathSegment(t *testing.T) {
 	t.Parallel()
 
 	for _, name := range []string{"a/b", "{x}", "..", "a b", "a?b"} {
-		_, err := newFacade(t, func(identity *iam.Builder) { identity.Provider(true, fakeProvider{name: name}) })
+		_, err := newFacade(t, func(identity *iam.Builder) { identity.Provider(fakeProvider{name: name}) })
 		if !errors.Is(err, iam.ErrInvalidConfig) {
 			t.Errorf("provider name %q: New error = %v, want ErrInvalidConfig", name, err)
 		}
@@ -369,8 +370,8 @@ func TestVerifiedProviderEmailTakesOverUnverifiedAccount(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"})
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "ada@example.com")
 		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
@@ -402,8 +403,8 @@ func TestUnverifiedProviderEmailDoesNotTakeOver(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"})
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "ada@example.com")
 		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
@@ -429,8 +430,8 @@ func TestTakeOverEndsTheRegistrantsLogins(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"})
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "ada@example.com")
 		owner := sys.client.NewDevice()
@@ -461,8 +462,8 @@ func TestTakeOverPublishesAccountClaimed(t *testing.T) {
 		}
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
 			identity.Events(bus)
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "fresh", "new@example.com", true), "")
 		if len(claimed) != 0 {
@@ -485,8 +486,8 @@ func TestTakeOverNeverReenablesADisabledUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.Provider(true, fakeProvider{name: "fake"})
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "ada@example.com")
 		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
@@ -515,7 +516,7 @@ func TestInvitedUserIsClaimedByTheirFirstProviderLogin(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(true, fakeProvider{name: "fake"})
+			identity.Provider(fakeProvider{name: "fake"})
 		})
 		invited, err := sys.identity.Directory().Create(testContext(t), "ada@example.com")
 		if err != nil {
