@@ -63,6 +63,11 @@ routes.Get(application.LivePath, app.LiveHandler())
 routes.Get(application.StartupPath, app.StartupHandler())
 ```
 
+To register all three at once with their OpenAPI operations, call
+`app.RegisterProbes(routes)`, or `routes.Group("/", app.RegisterProbes)`. It
+applies no middleware or prefix of its own and does not register the welcome or
+information endpoints. See [Package Routes](../http-fundamentals/routing.md#package-routes).
+
 The paths are `/readyz`, `/livez`, and `/startupz`. Each returns `200` with
 `ok\n` or `503` with `unavailable\n`. None calls a dependency on request; polling
 readiness more often does not cause more database calls.

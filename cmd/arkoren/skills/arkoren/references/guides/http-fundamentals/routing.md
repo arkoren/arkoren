@@ -159,6 +159,34 @@ parameters and escaped path-segment boundaries. It copies the request and URL,
 not the body or mutable context values. A mount remains an opaque catch-all for
 OpenAPI: omit operation metadata or mark it hidden.
 
+## Package Routes
+
+A package that ships ordinary application routes offers one `XHandler()` method
+per route, so you can register any of them on your own path, and a `Register`
+method that registers all of them at sensible default paths. Unlike a mounted
+handler, which owns its whole path space, these routes are yours to wrap,
+prefix, and document like any others.
+
+`app.RegisterProbes` is the example. It registers `GET /livez`, `GET /readyz`,
+and `GET /startupz` with their handlers and OpenAPI operations:
+
+```go
+routes.Group("/", app.RegisterProbes)
+```
+
+`Register` methods take a `*router.Router`, so the method value also works as a
+direct call, `app.RegisterProbes(routes)`, and under a prefix:
+`routes.Group("/internal", app.RegisterProbes)` serves `/internal/livez` and its
+siblings. A `Register` method applies no middleware and no prefix of its own;
+the routes inherit what the router you pass already carries. Registering a path
+twice panics, like any duplicate route. `RegisterProbes` leaves out the welcome
+page and the information endpoint, which you register yourself when you want
+them.
+
+Use [Mount Native Handlers](#mount-native-handlers) instead for an existing
+`http.Handler` that has its own paths and writes its own errors, such as a
+protocol endpoint.
+
 ## Inspect Routes
 
 `Routes` returns a detached eager collection in registration order, including

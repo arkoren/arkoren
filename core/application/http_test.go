@@ -1150,3 +1150,76 @@ func TestOpenAPIWelcomeMatchesOutput(t *testing.T) {
 		t.Fatalf("HTML schema = %v", schema)
 	}
 }
+
+// serveProbe sends a GET for target through routes and returns the status.
+func serveProbe(routes *router.Router, target string) int {
+	recorder := httptest.NewRecorder()
+
+	routes.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+
+	return recorder.Code
+}
+
+// TestRegisterProbesServesProbes checks that the three default routes exist
+// and answer from the running application.
+func TestRegisterProbesServesProbes(t *testing.T) {
+	app := application.New()
+	routes := router.New()
+
+	app.RegisterProbes(routes)
+
+	mustNil(t, app.Start(context.Background()))
+	t.Cleanup(func() {
+		_ = app.Shutdown(context.Background())
+	})
+
+	for _, target := range []string{application.LivePath, application.ReadyPath, application.StartupPath} {
+		if status := serveProbe(routes, target); status != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", target, status)
+		}
+	}
+}
+
+// TestRegisterProbesUnderGroupPrefix checks the method value works as a group
+// callback and that the prefix comes from the group, not from RegisterProbes.
+func TestRegisterProbesUnderGroupPrefix(t *testing.T) {
+	app := application.New()
+	routes := router.New()
+
+	routes.Group("/internal", app.RegisterProbes)
+
+	if status := serveProbe(routes, "/internal"+application.LivePath); status != http.StatusServiceUnavailable {
+		t.Fatalf("GET /internal/livez before start = %d, want 503", status)
+	}
+
+	if status := serveProbe(routes, application.LivePath); status != http.StatusNotFound {
+		t.Fatalf("GET /livez = %d, want 404 under a prefix", status)
+	}
+}
+
+// TestRegisterProbesRegistersOnlyProbes checks that exactly three GET routes
+// are added, leaving Welcome and Info as explicit opt-ins.
+func TestRegisterProbesRegistersOnlyProbes(t *testing.T) {
+	app := application.New()
+	routes := router.New()
+
+	routes.Group("/", app.RegisterProbes)
+
+	registered := routes.Routes()
+
+	if len(registered) != 3 {
+		t.Fatalf("registered %d routes, want 3", len(registered))
+	}
+
+	for _, route := range registered {
+		if route.Method != http.MethodGet {
+			t.Fatalf("route %s %s, want GET", route.Method, route.Pattern)
+		}
+	}
+
+	for _, target := range []string{"/", application.InfoPath} {
+		if status := serveProbe(routes, target); status != http.StatusNotFound {
+			t.Fatalf("GET %s = %d, want 404", target, status)
+		}
+	}
+}
