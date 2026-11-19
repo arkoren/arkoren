@@ -32,7 +32,7 @@ type cursorPayload struct {
 	Fingerprint string `json:"k"`
 
 	// Backward reports that the cursor pages toward the start.
-	Backward bool `json:"b,omitempty"`
+	Backward bool `json:"b,omitzero"`
 }
 
 // keyset reads and writes ordering keys for rows of one result type.

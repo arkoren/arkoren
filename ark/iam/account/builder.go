@@ -68,11 +68,11 @@ func (accounts *Builder) Events(bus *event.Bus) *Builder {
 	return accounts
 }
 
-// Verification turns email verification on or off: with enabled true
+// Verification turns email verification on: calling it makes
 // [Directory.VerifyHandler] and [Directory.ResendHandler] work, and
-// [Directory.SendVerification] exists for the worker. With false verification
-// stays off, whatever the other arguments are: they may be nil and are not
-// kept. It is off when the method is never called. The package keeps no verification table and runs no goroutine; a
+// [Directory.SendVerification] exists for the worker. Verification is off when
+// the method is never called; to switch it from configuration, wrap the call in
+// an if. A later call replaces the earlier one. The package keeps no verification table and runs no goroutine; a
 // verification link is a value that signer signs and that stops working by
 // itself:
 //
@@ -90,24 +90,21 @@ func (accounts *Builder) Events(bus *event.Bus) *Builder {
 //     SendVerification so the queue retries, which means deliver may run more
 //     than once for one request.
 //
-// With enabled true, signer, dispatch and deliver are all required:
+// Signer, dispatch and deliver are all required:
 // [NewDirectory] fails with [ErrInvalidConfig] when any is nil. Use a signer whose key is reserved for
 // links; a verification link is authenticated for its path, so the links of
 // other features never verify here.
 //
 // Example:
 //
-//	accounts.Verification(true, signer, func(ctx context.Context, request account.VerifyRequest) error {
+//	accounts.Verification(signer, func(ctx context.Context, request account.VerifyRequest) error {
 //		return dispatcher.Dispatch(ctx, verifyJob, request)
 //	}, func(ctx context.Context, message account.VerifyMessage) error {
 //		return mailer.Send(ctx, verifyEmail(message.Address, message.Link("https://app.example.com/verify-email")))
 //	})
-func (accounts *Builder) Verification(enabled bool, signer *link.Signer, dispatch func(ctx context.Context, request VerifyRequest) error, deliver func(ctx context.Context, message VerifyMessage) error) *Builder {
-	accounts.verifySet = enabled
-	accounts.signer, accounts.dispatch, accounts.deliver = nil, nil, nil
-	if enabled {
-		accounts.signer, accounts.dispatch, accounts.deliver = signer, dispatch, deliver
-	}
+func (accounts *Builder) Verification(signer *link.Signer, dispatch func(ctx context.Context, request VerifyRequest) error, deliver func(ctx context.Context, message VerifyMessage) error) *Builder {
+	accounts.verifySet = true
+	accounts.signer, accounts.dispatch, accounts.deliver = signer, dispatch, deliver
 
 	return accounts
 }

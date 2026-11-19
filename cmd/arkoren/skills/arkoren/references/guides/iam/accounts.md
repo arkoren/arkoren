@@ -57,7 +57,7 @@ The facade gives its guard and session middleware the same absolute lifetime:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(true, hasher)
+	identity.Password(hasher)
 	identity.SessionLifetime(7 * 24 * time.Hour)
 })
 ```
@@ -103,8 +103,8 @@ before configuring:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(true, hasher)
-	identity.Tokens(true)
+	identity.Password(hasher)
+	identity.Tokens()
 	identity.KeepPersonalTokens()
 })
 ```
@@ -182,7 +182,7 @@ event bus when constructing the facade:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(true, hasher)
+	identity.Password(hasher)
 	identity.Events(bus)
 })
 ```

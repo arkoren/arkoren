@@ -23,12 +23,11 @@ import (
 )
 
 // Builder configures [New] before publication. Each feature is off until its
-// method is called with enabled true: [Builder.Password], [Builder.TwoFactor],
-// [Builder.Tokens], [Builder.Permissions], [Builder.Provider] and [Builder.Me] take the
-// switch as their first argument, so the state is explicit at the call site
-// and a feature can follow a configuration flag. With false the callbacks
-// still run, but their settings are unused and the components the feature
-// requires may be nil. So are the two ways new users appear on their own:
+// method is called: [Builder.Password], [Builder.TwoFactor], [Builder.Tokens],
+// [Builder.Permissions], [Builder.Provider] and [Builder.Account] enable what
+// they configure, so the call site states what is on. To follow a configuration
+// flag, wrap the call in an if; the callbacks of a method that is never called
+// never run. So are the two ways new users appear on their own:
 // self-service registration ([password.Builder.Registration]) and sign-up with a
 // provider ([ProviderBuilder.SignUp]). Until one is enabled the application
 // adds users itself, through [IAM.Directory] or its own users. Callbacks run
@@ -39,19 +38,19 @@ import (
 // [Builder.Directory], [Builder.Provider], [Builder.SecondFactor],
 // [Builder.StepUp], [Builder.Authenticator], [Builder.Guard] and
 // [Builder.Session]); a nil hook never clears an earlier one. [Builder.Password],
-// [Builder.TwoFactor], [Builder.Tokens], [Builder.Permissions] and [Builder.Me] replace their earlier call
-// as a whole instead, so the last call, including its switch, is the complete
-// configuration of that feature.
+// [Builder.TwoFactor], [Builder.Tokens], [Builder.Permissions] and [Builder.Account] replace their earlier call
+// as a whole instead, so the last call is the complete configuration of that
+// feature.
 //
 // Example:
 //
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(true, hasher)
-//		identity.TwoFactor(true, scheme, cipher)
-//		identity.Tokens(true)
-//		identity.Provider(true, google)
-//		identity.Provider(true, github, func(login *iam.ProviderBuilder) {
+//		identity.Password(hasher)
+//		identity.TwoFactor(scheme, cipher)
+//		identity.Tokens()
+//		identity.Provider(google)
+//		identity.Provider(github, func(login *iam.ProviderBuilder) {
 //			login.SignUp(true)
 //		})
 //	})
@@ -62,8 +61,8 @@ type Builder struct {
 	users           *Users
 	directorySet    bool
 	directory       []account.BuilderFunc
-	meOn            bool
-	me              []MeBuilderFunc
+	accountOn       bool
+	account         []AccountBuilderFunc
 	passwordOn      bool
 	hasher          *hash.Hasher
 	password        []password.BuilderFunc
@@ -98,7 +97,7 @@ type Builder struct {
 //
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
 //		identity.ClientIP(clientip.Cloudflare())
-//		identity.Password(true, hasher)
+//		identity.Password(hasher)
 //	})
 func (identity *Builder) ClientIP(clientIP func(*http.Request) string) *Builder {
 	identity.clientIP = clientIP
@@ -111,7 +110,7 @@ func (identity *Builder) ClientIP(clientIP func(*http.Request) string) *Builder 
 // Example:
 //
 //	var configure iam.BuilderFunc = func(identity *iam.Builder) {
-//		identity.Password(true, hasher)
+//		identity.Password(hasher)
 //	}
 //	identity, err := iam.New(db, store, configure)
 type BuilderFunc = func(*Builder)
@@ -169,7 +168,7 @@ func (identity *Builder) Users(users Users) *Builder {
 // Example:
 //
 //	identity.Directory(func(accounts *account.Builder) {
-//		accounts.Verification(true, signer, dispatch, deliver).VerifyTTL(time.Hour)
+//		accounts.Verification(signer, dispatch, deliver).VerifyTTL(time.Hour)
 //	})
 func (identity *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 	identity.directorySet = true
@@ -178,15 +177,14 @@ func (identity *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 	return identity
 }
 
-// Password turns login, password confirmation and change on or off, hashing
-// with hasher. With enabled true a nil hasher makes [New] fail with
-// [ErrInvalidConfig]; with false the hasher may be nil and the settings in
-// configure are unused. Registration and forgotten-password recovery are not
-// part of it: enable them with [password.Builder.Registration] and
-// [password.Builder.Reset] in configure (the facade then mounts the forgot and
-// reset routes), or add users some other way (see [IAM.Directory]). Later calls
-// replace the earlier one: the last switch, hasher and configure callbacks are
-// all that count, so compose the settings into one call. configure customizes the
+// Password turns login, password confirmation and change on, hashing with
+// hasher. A nil hasher makes [New] fail with [ErrInvalidConfig]. Registration and
+// forgotten-password recovery are not part of it: enable them with
+// [password.Builder.Registration] and [password.Builder.Reset] in configure (the
+// facade then mounts the forgot and reset routes), or add users some other way
+// (see [IAM.Directory]). Later calls replace the earlier one: the last hasher
+// and configure callbacks are all that count, so compose the settings into one
+// call. configure customizes the
 // password package (the policy, the reset lifetime, registration); the facade has already set the
 // instance, the events and the client address. While a user is in a second-factor lockout
 // ([auth.Guard.LockedOut]), a correct password of that user is not refunded by
@@ -196,67 +194,65 @@ func (identity *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 //
 // Example:
 //
-//	identity.Password(true, hasher, func(passwords *password.Builder) {
-//		passwords.Registration(true).Reset(true, signer, dispatchReset, deliverReset)
+//	identity.Password(hasher, func(passwords *password.Builder) {
+//		passwords.Registration(true).Reset(signer, dispatchReset, deliverReset)
 //	})
-func (identity *Builder) Password(enabled bool, hasher *hash.Hasher, configure ...password.BuilderFunc) *Builder {
-	identity.passwordOn = enabled
+func (identity *Builder) Password(hasher *hash.Hasher, configure ...password.BuilderFunc) *Builder {
+	identity.passwordOn = true
 	identity.hasher = hasher
-	identity.password = settle(enabled, configure)
+	identity.password = slices.Clone(configure)
 
 	return identity
 }
 
-// TwoFactor turns the TOTP authenticator and recovery codes on or off. With
-// enabled true, scheme holds the TOTP parameters and the issuer, the service
-// name authenticator apps show (see [totp.New]); an invalid scheme, or a nil
-// cipher, makes [New] fail with [ErrInvalidConfig]. cipher encrypts the
-// secrets (use a key reserved for them). With false the scheme and cipher may
-// be zero and nil, and configure is unused. configure customizes the twofactor
-// package. Later calls replace the earlier one: the last switch, scheme, cipher
-// and configure callbacks are all that count.
+// TwoFactor turns the TOTP authenticator and recovery codes on. scheme holds
+// the TOTP parameters and the issuer, the service name authenticator apps show
+// (see [totp.New]); an invalid scheme, or a nil cipher, makes [New] fail with
+// [ErrInvalidConfig]. cipher encrypts the secrets (use a key reserved for
+// them). configure customizes the twofactor package. Later calls replace the
+// earlier one: the last scheme, cipher and configure callbacks are all that
+// count.
 //
 // Example:
 //
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
-//	identity.TwoFactor(true, scheme, cipher)
-func (identity *Builder) TwoFactor(enabled bool, scheme totp.Scheme, cipher *crypto.Encrypter, configure ...twofactor.BuilderFunc) *Builder {
-	identity.twoFactor = enabled
+//	identity.TwoFactor(scheme, cipher)
+func (identity *Builder) TwoFactor(scheme totp.Scheme, cipher *crypto.Encrypter, configure ...twofactor.BuilderFunc) *Builder {
+	identity.twoFactor = true
 	identity.scheme = scheme
 	identity.cipher = cipher
-	identity.twofactor = settle(enabled, configure)
+	identity.twofactor = slices.Clone(configure)
 
 	return identity
 }
 
-// Tokens turns personal access tokens and device tokens on or off. With false
-// configure is unused. configure sets the
+// Tokens turns personal access tokens and device tokens on. configure sets the
 // scope catalog and the grant ceiling ([apitoken.Builder.Grants]), the kinds
 // ([apitoken.Builder.PersonalTokens], [apitoken.Builder.DeviceTokens]), the
 // prefix and the lifetime cap of the apitoken package. Without a catalog tokens
-// carry no scopes. Later calls replace the earlier one: only the switch and the
-// configure callbacks of the last call count.
+// carry no scopes. Later calls replace the earlier one: only the configure
+// callbacks of the last call count.
 //
 // Example:
 //
-//	identity.Tokens(true, func(tokens *apitoken.Builder) {
+//	identity.Tokens(func(tokens *apitoken.Builder) {
 //		tokens.Grants(apitoken.AnyScope, "posts:read", "posts:write")
 //	})
-func (identity *Builder) Tokens(enabled bool, configure ...apitoken.BuilderFunc) *Builder {
-	identity.tokens = enabled
-	identity.apitoken = settle(enabled, configure)
+func (identity *Builder) Tokens(configure ...apitoken.BuilderFunc) *Builder {
+	identity.tokens = true
+	identity.apitoken = slices.Clone(configure)
 
 	return identity
 }
 
-// Permissions turns the permission store of the permission package on or off:
-// roles and permissions assigned to users, built on the core gate definitions.
-// With false configure is unused. configure defines them ([permission.Builder.Roles], [permission.Builder.Define])
+// Permissions turns the permission store of the permission package on: roles
+// and permissions assigned to users, built on the core gate definitions.
+// configure defines them ([permission.Builder.Roles], [permission.Builder.Define])
 // and sets [permission.Builder.KeepOne], [permission.Builder.CacheTTL] and the
 // opt-in routes ([permission.Builder.SelfService],
 // [permission.Builder.Management]); the facade sets the instance and the event
-// bus first. Later calls replace the earlier one: only the switch and the
-// configure callbacks of the last call count.
+// bus first. Later calls replace the earlier one: only the configure callbacks
+// of the last call count.
 //
 // With the store enabled the facade wires it in two places:
 //
@@ -278,39 +274,36 @@ func (identity *Builder) Tokens(enabled bool, configure ...apitoken.BuilderFunc)
 //
 // Example:
 //
-//	identity.Permissions(true, func(policy *permission.Builder) {
+//	identity.Permissions(func(policy *permission.Builder) {
 //		policy.Roles(Viewer, Editor, Admin).KeepOne(Admin)
 //	})
-func (identity *Builder) Permissions(enabled bool, configure ...permission.BuilderFunc) *Builder {
-	identity.permissions = enabled
-	identity.permission = settle(enabled, configure)
+func (identity *Builder) Permissions(configure ...permission.BuilderFunc) *Builder {
+	identity.permissions = true
+	identity.permission = slices.Clone(configure)
 
 	return identity
 }
 
-// Me turns GET /me on or off: the identity of the request as JSON, the subject
-// and the email claims of its user record and, as configure chooses, the user,
-// the roles and permissions, the two-factor state and how the request logged in
-// (see [MeBuilder]). With false configure is unused and no route is mounted;
-// [IAM.MeHandler] then panics. Later calls replace the earlier one: only the
-// switch and the configure callbacks of the last call count. Settings that
-// depend on a feature that is off (permissions without [Builder.Permissions],
-// two-factor without [Builder.TwoFactor], a user projection with the built-in
-// users) are ignored with one warning.
+// Account turns GET /account on: the facts the facade knows about the
+// authenticated user as JSON, the subject and the email facts and, as configure
+// chooses, the roles and permissions, the two-factor state and how the request
+// logged in (see [AccountBuilder] and [AccountView]). Without the call no route
+// is mounted and [IAM.AccountHandler] panics; [IAM.Account] still answers with
+// the subject and the email facts. Later calls replace the earlier one: only
+// the configure callbacks of the last call count. Settings that depend on a
+// feature that is off (permissions without [Builder.Permissions], two-factor
+// without [Builder.TwoFactor]) are ignored with one warning.
 //
 // Example:
 //
-//	identity.Me(true, func(me *iam.MeBuilder) {
-//		me.User(func(account Account) PublicAccount {
-//			return PublicAccount{ID: account.ID, Name: account.Name}
-//		})
-//		me.Permissions(true)
-//		me.TwoFactor(true)
-//		me.Login(true)
+//	identity.Account(func(view *iam.AccountBuilder) {
+//		view.Permissions(true)
+//		view.TwoFactor(true)
+//		view.Login(true)
 //	})
-func (identity *Builder) Me(enabled bool, configure ...MeBuilderFunc) *Builder {
-	identity.meOn = enabled
-	identity.me = settle(enabled, configure)
+func (identity *Builder) Account(configure ...AccountBuilderFunc) *Builder {
+	identity.accountOn = true
+	identity.account = slices.Clone(configure)
 
 	return identity
 }
@@ -354,31 +347,30 @@ func (identity *Builder) OnEmailProven(hook func(ctx context.Context, subject st
 	return identity
 }
 
-// Provider adds an external identity provider and its settings when enabled is
-// true; with false the provider is left out: it may be nil, and its name and
-// settings (the callbacks still run) are unused. It is mounted
+// Provider adds an external identity provider and its settings. It is mounted
 // under its [Provider.Name], and the facade maps its verified identities to
 // users with the one connection store the providers share
 // (`federation.Links`), so the application writes no resolve function. Configure
 // each provider in its own call, with callbacks that run directly once, in order,
 // on one fresh [ProviderBuilder]; a name used by two calls makes [New] fail with
 // [ErrInvalidConfig]. By default a provider only logs in people the application
-// already has: see [ProviderBuilder.SignUp].
+// already has: see [ProviderBuilder.SignUp]. To follow a configuration flag,
+// wrap the call in an if.
 //
 // Example:
 //
-//	identity.Provider(true, google)
-//	identity.Provider(cfg.Entra, entra, func(login *iam.ProviderBuilder) {
-//		login.SignUp(true)
-//	})
-func (identity *Builder) Provider(enabled bool, provider Provider, configure ...ProviderBuilderFunc) *Builder {
+//	identity.Provider(google)
+//	if cfg.Entra {
+//		identity.Provider(entra, func(login *iam.ProviderBuilder) {
+//			login.SignUp(true)
+//		})
+//	}
+func (identity *Builder) Provider(provider Provider, configure ...ProviderBuilderFunc) *Builder {
 	settings := ProviderBuilder{}
 	for _, apply := range configure {
 		apply(&settings)
 	}
-	if enabled {
-		identity.providers = append(identity.providers, providerSetup{provider: provider, settings: settings})
-	}
+	identity.providers = append(identity.providers, providerSetup{provider: provider, settings: settings})
 
 	return identity
 }
@@ -476,23 +468,6 @@ func (identity *Builder) SessionLifetime(lifetime time.Duration) *Builder {
 	identity.sessionLifetime = lifetime
 
 	return identity
-}
-
-// settle keeps the construction callbacks of a feature switch. For an enabled
-// feature it returns a copy that [New] hands to the package constructor. For a
-// disabled one it runs each callback once, in order, on a throwaway draft, so a
-// callback behaves the same whatever the switch says (a nil entry panics), and
-// keeps nothing: the settings are unused.
-func settle[B any](enabled bool, configure []func(*B)) []func(*B) {
-	if enabled {
-		return slices.Clone(configure)
-	}
-	var discarded B
-	for _, apply := range configure {
-		apply(&discarded)
-	}
-
-	return nil
 }
 
 // validate checks the combinations of settings that no package can see, in

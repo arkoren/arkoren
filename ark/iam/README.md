@@ -32,21 +32,21 @@ migrations: the module never runs DDL.
 ```go
 scheme := totp.New("Acme") // the name authenticator apps show for this account
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(true, hasher, func(passwords *password.Builder) {
+	identity.Password(hasher, func(passwords *password.Builder) {
 		passwords.Registration(true) // off by default: omit it when you add users yourself
-		passwords.Reset(true, signer, dispatchReset, deliverReset) // required with registration and the built-in users
+		passwords.Reset(signer, dispatchReset, deliverReset) // required with registration and the built-in users
 	})
 	identity.Directory(func(accounts *account.Builder) {
-		accounts.Verification(true, signer, dispatchVerification, deliverVerification)
+		accounts.Verification(signer, dispatchVerification, deliverVerification)
 	})
-	identity.TwoFactor(true, scheme, cipher)
-	identity.Tokens(true)
-	identity.Provider(true, google)
-	identity.Provider(true, github, func(login *iam.ProviderBuilder) {
+	identity.TwoFactor(scheme, cipher)
+	identity.Tokens()
+	identity.Provider(google)
+	identity.Provider(github, func(login *iam.ProviderBuilder) {
 		login.SignUp(true) // off by default, set per provider
 	})
-	identity.Me(true, func(me *iam.MeBuilder) { // GET /me
-		me.Login(true)
+	identity.Account(func(view *iam.AccountBuilder) { // GET /account
+		view.Login(true)
 	})
 })
 if err != nil {
@@ -59,13 +59,14 @@ web := routes.With(csrf.Middleware(), identity.Middleware())
 web.Group("/", identity.Register)
 ```
 
-Every feature method takes `enabled` first and is off until called with `true`;
-with `false` its settings are unused and its required components may be nil. A
-setting whose feature is off is ignored with one `slog` warning, while missing
-components, invalid values and contradictions still fail `iam.New`. `GET /me`
-answers the subject, the email claims and the sections `iam.MeBuilder` turns on;
-IAM never encodes a raw user record, so your own users need `me.User` to
-publish a projection.
+A feature is on when you call its method and off when you do not; wrap the call
+in an `if` to follow a configuration flag. A setting whose feature is off is
+ignored with one `slog` warning, while missing components, invalid values and
+contradictions still fail `iam.New`. `GET /account` answers the subject, the
+email facts and the parts `iam.AccountBuilder` turns on. IAM never encodes
+application data: compose your own `GET /me` from `identity.Account(ctx)` and
+your profile. `iam.ProviderBuilder.KeepClaims` stores chosen provider claims on
+the connection, to prefill a profile form.
 
 IAM uses the direct request peer by default. Behind a trusted proxy, configure
 `Builder.ClientIP` using the [Client Addresses guide](../../cmd/arkoren/skills/arkoren/references/guides/http-networking/client-addresses.md).
@@ -78,7 +79,7 @@ worker runs `identity.SendReset` or `identity.SendVerification`, which call your
 function to send the email. Without them the forgot-password, reset and
 verification routes are not mounted.
 
-`identity.Permissions(true, ...)` stores role and permission assignments for core
+`identity.Permissions(...)` stores role and permission assignments for core
 `gate.Role` and `gate.Permission` values. The guard then loads each session's
 expanded roles and permissions on every request, so `gate.HasPermission` and
 `gate.HasRole` work without a query, and tokens are capped at the owner's

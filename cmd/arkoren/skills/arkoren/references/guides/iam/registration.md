@@ -30,12 +30,12 @@ receive a recovery notice. Reuse the signer and callbacks from Email Links:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(true, hasher, func(passwords *password.Builder) {
-		passwords.Reset(true, signer, dispatchReset, deliverReset)
+	identity.Password(hasher, func(passwords *password.Builder) {
+		passwords.Reset(signer, dispatchReset, deliverReset)
 		passwords.Registration(true)
 	})
 	identity.Directory(func(accounts *account.Builder) {
-		accounts.Verification(true, signer, dispatchVerification, deliverVerification)
+		accounts.Verification(signer, dispatchVerification, deliverVerification)
 	})
 })
 ```

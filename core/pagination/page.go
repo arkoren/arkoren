@@ -110,7 +110,7 @@ type Cursor[T any] struct {
 	//		return err
 	//	}
 	//	_ = page.NextCursor
-	NextCursor string `json:"next_cursor,omitempty"`
+	NextCursor string `json:"next_cursor,omitzero"`
 
 	// PrevCursor identifies the previous cursor window when one is available.
 	// Empty means no previous token was emitted, including for an empty result.
@@ -122,5 +122,5 @@ type Cursor[T any] struct {
 	//		return err
 	//	}
 	//	_ = page.PrevCursor
-	PrevCursor string `json:"prev_cursor,omitempty"`
+	PrevCursor string `json:"prev_cursor,omitzero"`
 }

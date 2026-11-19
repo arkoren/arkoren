@@ -196,3 +196,23 @@ func TestCheckRejectsRetiredPatternInCreationRulesets(t *testing.T) {
 		t.Fatalf("retired pattern in creation rulesets accepted: %v", err)
 	}
 }
+
+// TestRuleParametersAreWrittenOnlyWhenPresent verifies a rule without
+// parameters omits the member while a server-supplied empty object is kept, so
+// a rewritten ruleset retains every parameter it was given.
+func TestRuleParametersAreWrittenOnlyWhenPresent(t *testing.T) {
+	absent, err := json.Marshal(Rule{Type: "deletion"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(absent) != `{"type":"deletion"}` {
+		t.Fatalf("rule = %s, want no parameters member", absent)
+	}
+	kept, err := json.Marshal(Rule{Type: "pull_request", Parameters: jsontext.Value(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(kept) != `{"type":"pull_request","parameters":{}}` {
+		t.Fatalf("rule = %s, want the empty parameters kept", kept)
+	}
+}

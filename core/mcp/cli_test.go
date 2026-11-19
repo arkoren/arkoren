@@ -2,8 +2,10 @@ package mcp_test
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"arkoren.dev/core/mcp"
@@ -205,5 +207,30 @@ func TestCLIExampleInvokesJSONHookButNotPolicyOrHandler(t *testing.T) {
 
 	if policyCalls+handlerCalls != 0 {
 		t.Fatalf("construction ran policy %d or handler %d times", policyCalls, handlerCalls)
+	}
+}
+
+// TestCLIInfoJSONOmitsUnsetMembers verifies the published CLI metadata leaves
+// out the summary, role, cursor flag, positional names and examples a tool did
+// not declare, so the wire shape stays small and stable.
+func TestCLIInfoJSONOmitsUnsetMembers(t *testing.T) {
+	t.Parallel()
+
+	tool := mcp.NewTool("service.health", func(context.Context, mcp.NoInput) (mcp.NoInput, error) {
+		return mcp.NoInput{}, nil
+	}, func(action *mcp.ToolBuilder[mcp.NoInput, mcp.NoInput]) {
+		action.CLI("service", "observe")
+	})
+	if err := tool.Err(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(tool.Describe().CLI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range []string{"summary", "role", "cursor", "positional", "examples"} {
+		if strings.Contains(string(data), `"`+member+`"`) {
+			t.Fatalf("CLI metadata %s has an unset %s member", data, member)
+		}
 	}
 }

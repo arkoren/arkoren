@@ -186,21 +186,27 @@ func (warnings *Warnings) WithGroup(string) slog.Handler { return warnings }
 // Settings returns the "setting" attribute of every warning logged so far, in
 // order.
 func (warnings *Warnings) Settings() []string {
+	return warnings.Attrs("setting")
+}
+
+// Attrs returns the value of the attribute named key of every warning logged
+// so far, in order. Warnings without it add nothing.
+func (warnings *Warnings) Attrs(key string) []string {
 	warnings.mu.Lock()
 	defer warnings.mu.Unlock()
 
-	var settings []string
+	var values []string
 	for _, record := range warnings.records {
 		record.Attrs(func(attr slog.Attr) bool {
-			if attr.Key == "setting" {
-				settings = append(settings, attr.Value.String())
+			if attr.Key == key {
+				values = append(values, attr.Value.String())
 			}
 
 			return true
 		})
 	}
 
-	return settings
+	return values
 }
 
 // CaptureWarnings makes [slog.Default] record warnings until the test ends and

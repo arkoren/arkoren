@@ -22,7 +22,8 @@ type Policy struct {
 	// Retired lists directories that once published and must never publish again.
 	// Their existing bootstrap v0.1.0 tags stay valid history; the directory must
 	// no longer exist in the tree and must not appear in Public or Development.
-	// The member is optional and omitted when empty.
+	// The member is optional and omitted when empty. It keeps omitempty, not
+	// omitzero: encoding/json/v2 then drops an empty non-nil list as well as nil.
 	Retired []string `json:"retired,omitempty"`
 }
 

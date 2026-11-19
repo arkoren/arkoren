@@ -71,10 +71,10 @@ type note struct {
 	Title string `json:"title"`
 
 	// Kind is an optional category; nil omits it for missing-value checks.
-	Kind *string `json:"kind,omitempty"`
+	Kind *string `json:"kind,omitzero"`
 
 	// Size is an optional numeric sort key; nil leaves the field absent.
-	Size *float64 `json:"size,omitempty"`
+	Size *float64 `json:"size,omitzero"`
 }
 
 // noteFixture is an engine with one synced, uniquely named index of notes.

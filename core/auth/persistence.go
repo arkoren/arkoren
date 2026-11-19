@@ -38,7 +38,7 @@ type sessionRecord struct {
 
 	// LoginID identifies the session's [LoginRecord]. It survives session ID
 	// rotation; the authenticator ends the session when the record is gone.
-	LoginID string `json:"login_id,omitempty"`
+	LoginID string `json:"login_id,omitzero"`
 }
 
 // pendingLogin is a login whose first factor passed and whose second is awaited.

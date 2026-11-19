@@ -41,24 +41,25 @@ type request struct {
 	To string `json:"To"`
 
 	// CC contains carbon-copy recipient mailboxes.
-	CC string `json:"Cc,omitempty"`
+	CC string `json:"Cc,omitzero"`
 
 	// BCC contains blind-carbon-copy recipient mailboxes.
-	BCC string `json:"Bcc,omitempty"`
+	BCC string `json:"Bcc,omitzero"`
 
 	// ReplyTo contains reply-to mailboxes.
-	ReplyTo string `json:"ReplyTo,omitempty"`
+	ReplyTo string `json:"ReplyTo,omitzero"`
 
 	// Subject is the message subject.
 	Subject string `json:"Subject"`
 
 	// TextBody is the plain-text body.
-	TextBody string `json:"TextBody,omitempty"`
+	TextBody string `json:"TextBody,omitzero"`
 
 	// HTMLBody is the HTML body.
-	HTMLBody string `json:"HtmlBody,omitempty"`
+	HTMLBody string `json:"HtmlBody,omitzero"`
 
-	// Attachments contains API attachment payloads.
+	// Attachments contains API attachment payloads. It keeps omitempty, not
+	// omitzero: encoding/json/v2 then also drops an empty non-nil slice.
 	Attachments []attachment `json:"Attachments,omitempty"`
 }
 
@@ -75,7 +76,7 @@ type attachment struct {
 
 	// ContentID is Postmark's cid:-prefixed inline image reference, matching
 	// the HTML src. Portable mail.Attachment values keep only the bare ID.
-	ContentID string `json:"ContentID,omitempty"`
+	ContentID string `json:"ContentID,omitzero"`
 }
 
 // Driver submits [mail.Message] values through the Postmark API. Each Send

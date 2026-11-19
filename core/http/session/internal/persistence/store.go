@@ -71,7 +71,7 @@ type Record struct {
 	// Tombstone marks an ID that was retired by logout, destroy, or
 	// regeneration. Records written before tombstones existed lack the field
 	// and load as live sessions.
-	Tombstone bool `json:"tombstone,omitempty"`
+	Tombstone bool `json:"tombstone,omitzero"`
 }
 
 // Get loads the session stored under id. found is false when the cache has

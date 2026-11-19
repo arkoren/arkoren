@@ -19,7 +19,7 @@ type Failure struct {
 	Message string `json:"message"`
 	// Details contains copied, explicitly approved fields, or nil when omitted.
 	// Example: fmt.Println(string(failure.Details))
-	Details jsontext.Value `json:"details,omitempty"`
+	Details jsontext.Value `json:"details,omitzero"`
 }
 
 // toolFailure privately marks an approved record. Its retained bytes are never

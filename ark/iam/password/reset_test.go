@@ -348,7 +348,7 @@ func TestSendResetReturnsTheDeliveryError(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		down := errors.New("smtp down")
 		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
-			passwords.Reset(true, newSigner(t, ""), func(context.Context, password.ResetRequest) error { return nil }, func(context.Context, password.ResetMessage) error { return down })
+			passwords.Reset(newSigner(t, ""), func(context.Context, password.ResetRequest) error { return nil }, func(context.Context, password.ResetMessage) error { return down })
 		})
 		sys.registerAda(t, sys.client)
 		if err := sys.verifier.SendReset(testContext(t), password.ResetRequest{Identifier: "ada@example.com"}); !errors.Is(err, down) {
@@ -368,7 +368,7 @@ func TestResetNeedsAllThree(t *testing.T) {
 			Lookup: users.Lookup,
 			Rotate: users.Rotate,
 		}, func(passwords *password.Builder) {
-			passwords.Reset(true, nil, func(context.Context, password.ResetRequest) error { return nil }, func(context.Context, password.ResetMessage) error { return nil })
+			passwords.Reset(nil, func(context.Context, password.ResetRequest) error { return nil }, func(context.Context, password.ResetMessage) error { return nil })
 		})
 		if !errors.Is(err, password.ErrInvalidConfig) {
 			t.Fatalf("NewVerifier error = %v, want ErrInvalidConfig", err)

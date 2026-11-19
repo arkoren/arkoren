@@ -2,7 +2,9 @@ package federation
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"slices"
 
 	"arkoren.dev/core/auth"
 
@@ -24,6 +26,7 @@ import (
 type ResolverBuilder struct {
 	signUp bool
 	create func(context.Context, auth.External) (string, error)
+	keep   []string
 }
 
 // ResolverBuilderFunc is the callback form of [ResolverBuilder].
@@ -69,6 +72,37 @@ func (resolver *ResolverBuilder) Create(create func(ctx context.Context, externa
 	return resolver
 }
 
+// KeepClaims names claims of this provider's verified identity that its
+// connections store, so the application can prefill a profile form from
+// [Links.List] (a name from Google, a login from GitHub). Nothing is kept by
+// default and calls add up. The claims are the provider's own suggestions: they
+// are unverified, never a basis for authorization, identity or matching users,
+// and each login can change them.
+//
+// A value is stored only when it is a JSON string, boolean or number, or a
+// list of strings; anything else is dropped with one warning per claim name.
+// Each login overwrites the claims it carries and keeps the rest, so a provider
+// that sends a claim only once (Apple's name, on the first login) does not lose
+// it, and a claim the provider stops sending stays until the connection is
+// removed. The stored JSON is capped at 8 KiB: an update beyond it is skipped
+// with a warning. They are stored at sign-up, when a logged-in user connects the
+// provider, and on every login (a failing write never fails the login), and
+// deleted with the connection (unlink, [Links.UnlinkAll] and the forget hook).
+//
+// An empty name or a protocol claim (iss, sub, aud, exp, iat, nbf, nonce,
+// at_hash, auth_time, scope, azp, acr, amr) makes [Links.Resolver] fail with
+// [ErrInvalidConfig]. The connection store keeps nothing for [Links.Resolve] and
+// [Links.Link], which take no such setting.
+//
+// Example:
+//
+//	resolver.KeepClaims("name", "picture")
+func (resolver *ResolverBuilder) KeepClaims(names ...string) *ResolverBuilder {
+	resolver.keep = append(resolver.keep, names...)
+
+	return resolver
+}
+
 // Resolver returns an [auth.Resolver] that works like [Links.Resolve] over the
 // same connections, takeover, fallback and events, with the sign-up settings of
 // configure: use it to let one provider create users and another not. A
@@ -77,7 +111,8 @@ func (resolver *ResolverBuilder) Create(create func(ctx context.Context, externa
 // [Builder.Create] ones. With sign-up on and no Create function in either
 // place nothing could create the user, so the setting is ignored: Resolver
 // logs one warning at construction and the resolver behaves as if sign-up were
-// off, a first login failing with [ErrNoAccount]. The resolver is safe for
+// off, a first login failing with [ErrNoAccount]. Invalid [ResolverBuilder.KeepClaims]
+// names make it fail with [ErrInvalidConfig]. The resolver is safe for
 // concurrent use and keeps no reference to the draft.
 //
 // Example:
@@ -94,7 +129,10 @@ func (links *Links) Resolver(configure ...ResolverBuilderFunc) (auth.Resolver, e
 	for _, apply := range configure {
 		apply(&settings)
 	}
-	onboard := onboarding{signUp: settings.signUp, create: web.First(settings.create, links.onboard.create)}
+	if err := validateKeep(settings.keep); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	onboard := onboarding{signUp: settings.signUp, create: web.First(settings.create, links.onboard.create), keep: slices.Clone(settings.keep)}
 	if onboard.signUp && onboard.create == nil {
 		slog.WarnContext(context.Background(), "access: setting ignored", "setting", "federation.ResolverBuilder.SignUp", "reason", "no Create function is set, so no user can be created")
 		onboard.signUp = false

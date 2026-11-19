@@ -29,9 +29,9 @@ func TestVictimsVerifyClickDoesNotVerifyTheAttackersAccount(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.TwoFactor(true, totp.New("Example"), cipher(t))
-			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
+			identity.Password(hasher(), registration)
+			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
 		})
 		register(t, sys.client, "victim@example.com")
 		subject, _, err := sys.identity.Directory().Lookup(ctx, "victim@example.com")
@@ -87,8 +87,8 @@ func TestEnablingTwoFactorFailsClosed(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.TwoFactor(true, totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
+			identity.Password(hasher(), registration)
+			identity.TwoFactor(totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
 				factors.OnEnable(func(context.Context, string) error { return errors.New("revocation down") })
 			})
 		})
@@ -125,7 +125,7 @@ func TestOwnUsersNeedTheVerifiedHooks(t *testing.T) {
 			_, err := construct(newBox(t, wire{}), db, cache.New(memorycache.New()), func(identity *iam.Builder) {
 				identity.Instance(instance)
 				identity.Users(own)
-				identity.Password(true, hasher(), registration)
+				identity.Password(hasher(), registration)
 			})
 			if !errors.Is(err, iam.ErrInvalidConfig) {
 				t.Errorf("%s: New error = %v, want ErrInvalidConfig", name, err)
@@ -142,7 +142,7 @@ func TestOnEmailProvenCallsAddUp(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var calls []string
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
+			identity.Password(hasher(), registration)
 			identity.OnEmailProven(func(context.Context, string) error {
 				calls = append(calls, "first")
 
@@ -174,7 +174,7 @@ func TestOnEmailProvenRunsInTheReset(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var proven []string
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
+			identity.Password(hasher(), registration)
 			identity.OnEmailProven(func(_ context.Context, subject string) error {
 				proven = append(proven, subject)
 

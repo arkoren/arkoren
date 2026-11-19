@@ -54,7 +54,7 @@ type CLIInfo struct {
 	//	if info := tool.Describe().CLI; info != nil {
 	//		fmt.Println(info.Summary)
 	//	}
-	Summary string `json:"summary,omitempty"`
+	Summary string `json:"summary,omitzero"`
 	// Role optionally labels a diagnostic meaning, such as identity or health.
 	// Empty means unspecified; a role neither authorizes use nor promises safety.
 	//
@@ -63,7 +63,7 @@ type CLIInfo struct {
 	//	if info := tool.Describe().CLI; info != nil {
 	//		fmt.Println(info.Role)
 	//	}
-	Role string `json:"role,omitempty"`
+	Role string `json:"role,omitzero"`
 	// Cursor advertises follow through repeated bounded tool calls. The handler
 	// still owns cursor arguments and results; this field installs no behavior.
 	//
@@ -72,8 +72,10 @@ type CLIInfo struct {
 	//	if info := tool.Describe().CLI; info != nil {
 	//		fmt.Println(info.Cursor)
 	//	}
-	Cursor bool `json:"cursor,omitempty"`
-	// Positional lists input property names in command-line argument order.
+	Cursor bool `json:"cursor,omitzero"`
+	// Positional lists input property names in command-line argument order. It
+	// keeps omitempty, not omitzero: encoding/json/v2 then also drops an empty
+	// non-nil slice, keeping the published metadata shape unchanged.
 	//
 	// Example:
 	//
@@ -81,7 +83,8 @@ type CLIInfo struct {
 	//		fmt.Println(info.Positional)
 	//	}
 	Positional []string `json:"positional,omitempty"`
-	// Examples contains detached, typed-decodable argument objects, or nil when
+	// Examples keeps omitempty, not omitzero, for the same reason as Positional.
+	// It contains detached, typed-decodable argument objects, or nil when
 	// none were declared. Reading a report does not repeat their decoding hooks.
 	//
 	// Example:
