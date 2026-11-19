@@ -51,7 +51,7 @@ func (identity *IAM) build(settings *Builder) error {
 		identity.add(identity.permissions.Migrations(), identity.permissions.Ping)
 	}
 
-	identity.buildMe(settings)
+	identity.buildAccount(settings)
 
 	return identity.buildGuard(settings)
 }

@@ -61,8 +61,8 @@ type Builder struct {
 	users           *Users
 	directorySet    bool
 	directory       []account.BuilderFunc
-	meOn            bool
-	me              []MeBuilderFunc
+	accountOn       bool
+	account         []AccountBuilderFunc
 	passwordOn      bool
 	hasher          *hash.Hasher
 	password        []password.BuilderFunc
@@ -284,29 +284,26 @@ func (identity *Builder) Permissions(configure ...permission.BuilderFunc) *Build
 	return identity
 }
 
-// Me turns GET /me on: the identity of the request as JSON, the subject
-// and the email claims of its user record and, as configure chooses, the user,
-// the roles and permissions, the two-factor state and how the request logged in
-// (see [MeBuilder]). Without the call no route is mounted and
-// [IAM.MeHandler] panics. Later calls replace the earlier one: only the
-// configure callbacks of the last call count. Settings that
-// depend on a feature that is off (permissions without [Builder.Permissions],
-// two-factor without [Builder.TwoFactor], a user projection with the built-in
-// users) are ignored with one warning.
+// Account turns GET /account on: the facts the facade knows about the
+// authenticated user as JSON, the subject and the email facts and, as configure
+// chooses, the roles and permissions, the two-factor state and how the request
+// logged in (see [AccountBuilder] and [AccountView]). Without the call no route
+// is mounted and [IAM.AccountHandler] panics; [IAM.Account] still answers with
+// the subject and the email facts. Later calls replace the earlier one: only
+// the configure callbacks of the last call count. Settings that depend on a
+// feature that is off (permissions without [Builder.Permissions], two-factor
+// without [Builder.TwoFactor]) are ignored with one warning.
 //
 // Example:
 //
-//	identity.Me(func(me *iam.MeBuilder) {
-//		me.User(func(account Account) PublicAccount {
-//			return PublicAccount{ID: account.ID, Name: account.Name}
-//		})
-//		me.Permissions(true)
-//		me.TwoFactor(true)
-//		me.Login(true)
+//	identity.Account(func(view *iam.AccountBuilder) {
+//		view.Permissions(true)
+//		view.TwoFactor(true)
+//		view.Login(true)
 //	})
-func (identity *Builder) Me(configure ...MeBuilderFunc) *Builder {
-	identity.meOn = true
-	identity.me = slices.Clone(configure)
+func (identity *Builder) Account(configure ...AccountBuilderFunc) *Builder {
+	identity.accountOn = true
+	identity.account = slices.Clone(configure)
 
 	return identity
 }

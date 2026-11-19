@@ -3,10 +3,10 @@ package iam_test
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"net/http"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -28,14 +28,6 @@ type Account struct {
 	Plan             string
 	Disabled         bool
 	CredentialsStamp string
-}
-
-// PublicAccount is the projection of [Account] that GET /me publishes.
-type PublicAccount struct {
-	ID    int    `json:"id"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Plan  string `json:"plan"`
 }
 
 // ownAccount is the record of the application's user 42.
@@ -73,12 +65,7 @@ func ownUsersOf(t *testing.T, record auth.UserRecord) iam.Users {
 	}
 }
 
-// presentAccount is the projection the tests give MeBuilder.User.
-func presentAccount(account Account) PublicAccount {
-	return PublicAccount{ID: account.ID, Name: account.Name, Email: account.Email, Plan: account.Plan}
-}
-
-// ownApp composes the application's users with password login and the me
+// ownApp composes the application's users with password login and the account
 // settings, and logs ada@example.com in on a new device.
 func ownApp(t *testing.T, record auth.UserRecord, configure ...iam.BuilderFunc) (*app, *apptest.Client) {
 	t.Helper()
@@ -126,13 +113,14 @@ func directoryApp(t *testing.T, verified bool, configure ...iam.BuilderFunc) (*a
 	return sys, device, subject
 }
 
-// meOf fetches GET /me on device, which must answer 200, and decodes the body.
-func meOf(t *testing.T, device *apptest.Client, headers ...string) map[string]any {
+// accountOf fetches GET /account on device, which must answer 200, and decodes
+// the body.
+func accountOf(t *testing.T, device *apptest.Client, headers ...string) map[string]any {
 	t.Helper()
 
-	reply := device.Do(http.MethodGet, "/me", "", headers...)
+	reply := device.Do(http.MethodGet, "/account", "", headers...)
 	if reply.Status != http.StatusOK {
-		t.Fatalf("GET /me = %d %s", reply.Status, reply.Body)
+		t.Fatalf("GET /account = %d %s", reply.Status, reply.Body)
 	}
 	var body map[string]any
 	if err := json.Unmarshal([]byte(reply.Body), &body); err != nil {
@@ -142,8 +130,8 @@ func meOf(t *testing.T, device *apptest.Client, headers ...string) map[string]an
 	return body
 }
 
-// wantMe fails the test unless got equals the JSON document want.
-func wantMe(t *testing.T, got map[string]any, want string) {
+// wantAccount fails the test unless got equals the JSON document want.
+func wantAccount(t *testing.T, got map[string]any, want string) {
 	t.Helper()
 
 	var expected map[string]any
@@ -151,82 +139,91 @@ func wantMe(t *testing.T, got map[string]any, want string) {
 		t.Fatalf("decode want %q: %v", want, err)
 	}
 	if !reflect.DeepEqual(got, expected) {
-		t.Fatalf("GET /me = %v, want %v", got, expected)
+		t.Fatalf("GET /account = %v, want %v", got, expected)
 	}
 }
 
-// withoutTimes removes the timestamps of the built-in user member, after
-// checking that the verified one has them and the unverified one has only
-// created_at.
+// withoutTimes removes the timestamps of a built-in user, after checking that
+// the verified one has both and the unverified one has only created_at.
 func withoutTimes(t *testing.T, body map[string]any, verified bool) {
 	t.Helper()
 
-	user, ok := body["user"].(map[string]any)
-	if !ok {
-		t.Fatalf("user = %v, want an object", body["user"])
-	}
 	for _, name := range []string{"created_at", "verified_at"} {
-		_, present := user[name]
+		_, present := body[name]
 		if want := name == "created_at" || verified; present != want {
-			t.Fatalf("user.%s present = %v, want %v", name, present, want)
+			t.Fatalf("%s present = %v, want %v", name, present, want)
 		}
-		delete(user, name)
+		delete(body, name)
 	}
 }
 
-// TestMeBuiltInUsers verifies the default response of the built-in users: the
-// subject, the email claims and the account.
-func TestMeBuiltInUsers(t *testing.T) {
+// TestAccountBuiltInUsers verifies the default response of the built-in users:
+// the subject, the email facts and the two timestamps.
+func TestAccountBuiltInUsers(t *testing.T) {
 	t.Parallel()
 
-	_, device, subject := directoryApp(t, true, func(identity *iam.Builder) { identity.Me() })
-	body := meOf(t, device)
+	_, device, subject := directoryApp(t, true, func(identity *iam.Builder) { identity.Account() })
+	body := accountOf(t, device)
 	withoutTimes(t, body, true)
-	wantMe(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,
-		"user":{"subject":"`+subject+`","email":"ada@example.com"}}`)
+	wantAccount(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true}`)
 }
 
-// TestMeBuiltInUnverifiedEmail verifies an unverified email shows
+// TestAccountBuiltInUnverifiedEmail verifies an unverified email shows
 // email_verified false and no verified_at.
-func TestMeBuiltInUnverifiedEmail(t *testing.T) {
+func TestAccountBuiltInUnverifiedEmail(t *testing.T) {
 	t.Parallel()
 
-	_, device, subject := directoryApp(t, false, func(identity *iam.Builder) { identity.Me() })
-	body := meOf(t, device)
+	_, device, subject := directoryApp(t, false, func(identity *iam.Builder) { identity.Account() })
+	body := accountOf(t, device)
 	withoutTimes(t, body, false)
-	wantMe(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":false,
-		"user":{"subject":"`+subject+`","email":"ada@example.com"}}`)
+	wantAccount(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":false}`)
 }
 
-// TestMeEmptyListsWhenNothingIsGranted verifies every section on, with nothing
+// TestAccountEmptyListsWhenNothingIsGranted verifies every part on, with nothing
 // granted and no authenticator: roles and permissions are [] and never null,
 // and two_factor is false.
-func TestMeEmptyListsWhenNothingIsGranted(t *testing.T) {
+func TestAccountEmptyListsWhenNothingIsGranted(t *testing.T) {
 	t.Parallel()
 
 	_, device, subject := directoryApp(t, true, func(identity *iam.Builder) {
 		identity.TwoFactor(totp.New("Example"), cipher(t))
 		identity.Permissions(func(policy *permission.Builder) { policy.Roles(admin) })
-		identity.Me(func(me *iam.MeBuilder) { me.Permissions(true).TwoFactor(true).Login(true) })
+		identity.Account(func(view *iam.AccountBuilder) { view.Permissions(true).TwoFactor(true).Login(true) })
 	})
-	body := meOf(t, device)
+	body := accountOf(t, device)
 	withoutTimes(t, body, true)
-	wantMe(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,
+	wantAccount(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,
 		"roles":[],"permissions":[],"two_factor":false,
-		"login":{"session":true,"level":"single","methods":["pwd"]},
-		"user":{"subject":"`+subject+`","email":"ada@example.com"}}`)
+		"login":{"session":true,"level":"single","methods":["pwd"]}}`)
 }
 
-// TestMeShowsRolesPermissionsAndTwoFactor verifies the sections with data: the
+// TestAccountListsAbsentWhenPermissionsAreOff verifies that with the feature
+// present but the setting off, roles and permissions are left out, not [].
+func TestAccountListsAbsentWhenPermissionsAreOff(t *testing.T) {
+	t.Parallel()
+
+	_, device, _ := directoryApp(t, true, func(identity *iam.Builder) {
+		identity.Permissions(func(policy *permission.Builder) { policy.Roles(admin) })
+		identity.Account()
+	})
+	body := accountOf(t, device)
+	for _, name := range []string{"roles", "permissions", "two_factor", "login"} {
+		if _, present := body[name]; present {
+			t.Fatalf("%s is present in %v, want it omitted", name, body)
+		}
+	}
+}
+
+// TestAccountShowsRolesPermissionsAndTwoFactor verifies the parts with data: the
 // expanded roles, the defined permissions, an enrolled authenticator and a
 // login with two methods.
-func TestMeShowsRolesPermissionsAndTwoFactor(t *testing.T) {
+func TestAccountShowsRolesPermissionsAndTwoFactor(t *testing.T) {
 	t.Parallel()
 
 	sys, device, subject := directoryApp(t, true, func(identity *iam.Builder) {
 		identity.TwoFactor(totp.New("Example"), cipher(t))
 		identity.Permissions(func(policy *permission.Builder) { policy.Roles(editor) })
-		identity.Me(func(me *iam.MeBuilder) { me.Permissions(true).TwoFactor(true).Login(true) })
+		identity.Account(func(view *iam.AccountBuilder) { view.Permissions(true).TwoFactor(true).Login(true) })
 	})
 	if err := sys.identity.GrantRole(testContext(t), subject, editor); err != nil {
 		t.Fatalf("GrantRole: %v", err)
@@ -246,7 +243,7 @@ func TestMeShowsRolesPermissionsAndTwoFactor(t *testing.T) {
 	if reply := other.Post("/login/challenge", `{"method":"otp","code":"`+code(t, secret, 30*time.Second)+`"}`); reply.Status != http.StatusNoContent {
 		t.Fatalf("challenge = %d %s", reply.Status, reply.Body)
 	}
-	body := meOf(t, other)
+	body := accountOf(t, other)
 	withoutTimes(t, body, true)
 	roles, _ := body["roles"].([]any)
 	if !slices.Contains(roles, any("editor")) || !slices.Contains(roles, any("viewer")) {
@@ -258,101 +255,61 @@ func TestMeShowsRolesPermissionsAndTwoFactor(t *testing.T) {
 	}
 	delete(body, "roles")
 	delete(body, "permissions")
-	wantMe(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,"two_factor":true,
-		"login":{"session":true,"level":"multi","methods":["pwd","otp"]},
-		"user":{"subject":"`+subject+`","email":"ada@example.com"}}`)
+	wantAccount(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,"two_factor":true,
+		"login":{"session":true,"level":"multi","methods":["pwd","otp"]}}`)
 }
 
-// TestMeOwnUsersWithoutProjectionShowsNoUser verifies the application's users
-// give the claims and never a raw record value.
-func TestMeOwnUsersWithoutProjectionShowsNoUser(t *testing.T) {
-	t.Parallel()
-
-	_, device := ownApp(t, ownRecord(map[string]any{"email": "ada@example.com"}, ownAccount), func(identity *iam.Builder) { identity.Me() })
-	wantMe(t, meOf(t, device), `{"subject":"42","email":"ada@example.com"}`)
-}
-
-// TestMeOwnUsersProjection verifies User presents the projection and nothing of
-// the driver's own struct.
-func TestMeOwnUsersProjection(t *testing.T) {
+// TestAccountOwnUsersShowClaimsNeverTheValue verifies the application's users
+// give the email claims, no timestamps and never a raw record value.
+func TestAccountOwnUsersShowClaimsNeverTheValue(t *testing.T) {
 	t.Parallel()
 
 	claims := map[string]any{"email": "ada@example.com", "email_verified": true}
-	_, device := ownApp(t, ownRecord(claims, ownAccount), func(identity *iam.Builder) {
-		identity.Me(func(me *iam.MeBuilder) { me.User(presentAccount) })
-	})
-	wantMe(t, meOf(t, device), `{"subject":"42","email":"ada@example.com","email_verified":true,
-		"user":{"id":42,"name":"Ada Lovelace","email":"ada@example.com","plan":"pro"}}`)
+	_, device := ownApp(t, ownRecord(claims, ownAccount), func(identity *iam.Builder) { identity.Account() })
+	wantAccount(t, accountOf(t, device), `{"subject":"42","email":"ada@example.com","email_verified":true}`)
 }
 
-// TestMeOwnUsersEverythingOn verifies every section over the application's
-// users, with a projection holding two fields.
-func TestMeOwnUsersEverythingOn(t *testing.T) {
+// TestAccountOwnUsersEverythingOn verifies every part over the application's
+// users.
+func TestAccountOwnUsersEverythingOn(t *testing.T) {
 	t.Parallel()
 
 	_, device := ownApp(t, ownRecord(nil, ownAccount), func(identity *iam.Builder) {
 		identity.Permissions(func(policy *permission.Builder) { policy.Roles(admin) })
 		identity.TwoFactor(totp.New("Example"), cipher(t))
-		identity.Me(func(me *iam.MeBuilder) {
-			me.User(func(account Account) PublicAccount { return PublicAccount{ID: account.ID, Name: account.Name} })
-			me.Permissions(true).TwoFactor(true).Login(true)
-		})
+		identity.Account(func(view *iam.AccountBuilder) { view.Permissions(true).TwoFactor(true).Login(true) })
 	})
-	body := meOf(t, device)
-	user, _ := body["user"].(map[string]any)
-	delete(user, "email")
-	delete(user, "plan")
-	wantMe(t, body, `{"subject":"42","roles":[],"permissions":[],"two_factor":false,
-		"login":{"session":true,"level":"single","methods":["pwd"]},
-		"user":{"id":42,"name":"Ada Lovelace"}}`)
+	wantAccount(t, accountOf(t, device), `{"subject":"42","roles":[],"permissions":[],"two_factor":false,
+		"login":{"session":true,"level":"single","methods":["pwd"]}}`)
 }
 
-// TestMeEmptyClaimsAndNilValue verifies a record without claims or a value
-// shows the subject only, even with a projection configured.
-func TestMeEmptyClaimsAndNilValue(t *testing.T) {
+// TestAccountEmptyClaimsAndNilValue verifies a record without claims or a value
+// shows the subject only.
+func TestAccountEmptyClaimsAndNilValue(t *testing.T) {
 	t.Parallel()
 
-	_, device := ownApp(t, ownRecord(nil, nil), func(identity *iam.Builder) {
-		identity.Me(func(me *iam.MeBuilder) { me.User(presentAccount) })
-	})
-	wantMe(t, meOf(t, device), `{"subject":"42"}`)
+	_, device := ownApp(t, ownRecord(nil, nil), func(identity *iam.Builder) { identity.Account() })
+	wantAccount(t, accountOf(t, device), `{"subject":"42"}`)
 }
 
-// TestMeUserTypeMismatchIs500 verifies a record value that is not the
-// projection's input fails the request instead of leaking it.
-func TestMeUserTypeMismatchIs500(t *testing.T) {
-	_ = apptest.CaptureWarnings(t)
-
-	_, device := ownApp(t, ownRecord(nil, "not an Account"), func(identity *iam.Builder) {
-		identity.Me(func(me *iam.MeBuilder) { me.User(presentAccount) })
-	})
-	reply := device.Do(http.MethodGet, "/me", "")
-	if reply.Status != http.StatusInternalServerError {
-		t.Fatalf("GET /me = %d %s, want 500", reply.Status, reply.Body)
-	}
-	if strings.Contains(reply.Body, "not an Account") {
-		t.Fatalf("body %q leaks the record", reply.Body)
-	}
-}
-
-// TestMeAnonymousIs401 verifies a request without an identity is refused.
-func TestMeAnonymousIs401(t *testing.T) {
+// TestAccountAnonymousIs401 verifies a request without an identity is refused.
+func TestAccountAnonymousIs401(t *testing.T) {
 	t.Parallel()
 
-	sys, _, _ := directoryApp(t, true, func(identity *iam.Builder) { identity.Me() })
-	if reply := sys.client.NewDevice().Do(http.MethodGet, "/me", ""); reply.Status != http.StatusUnauthorized {
-		t.Fatalf("anonymous GET /me = %d %s, want 401", reply.Status, reply.Body)
+	sys, _, _ := directoryApp(t, true, func(identity *iam.Builder) { identity.Account() })
+	if reply := sys.client.NewDevice().Do(http.MethodGet, "/account", ""); reply.Status != http.StatusUnauthorized {
+		t.Fatalf("anonymous GET /account = %d %s, want 401", reply.Status, reply.Body)
 	}
 }
 
-// TestMePendingSecondFactorIs401 verifies a login that still waits for its
+// TestAccountPendingSecondFactorIs401 verifies a login that still waits for its
 // second factor is not an identity.
-func TestMePendingSecondFactorIs401(t *testing.T) {
+func TestAccountPendingSecondFactorIs401(t *testing.T) {
 	t.Parallel()
 
 	sys, device, _ := directoryApp(t, true, func(identity *iam.Builder) {
 		identity.TwoFactor(totp.New("Example"), cipher(t))
-		identity.Me()
+		identity.Account()
 	})
 	setup := device.Post("/two-factor/setup", "")
 	if enable := device.Post("/two-factor", `{"code":"`+code(t, secretOf(setup.Body), 0)+`"}`); enable.Status != http.StatusOK {
@@ -362,60 +319,89 @@ func TestMePendingSecondFactorIs401(t *testing.T) {
 	if login := other.Post("/login", `{"email":"ada@example.com","password":"correct horse"}`); login.Status != http.StatusAccepted {
 		t.Fatalf("login = %d %s", login.Status, login.Body)
 	}
-	if reply := other.Do(http.MethodGet, "/me", ""); reply.Status != http.StatusUnauthorized {
-		t.Fatalf("pending GET /me = %d %s, want 401", reply.Status, reply.Body)
+	if reply := other.Do(http.MethodGet, "/account", ""); reply.Status != http.StatusUnauthorized {
+		t.Fatalf("pending GET /account = %d %s, want 401", reply.Status, reply.Body)
 	}
 }
 
-// TestMeTokenRequestIsNotASession verifies a bearer token shows session false,
-// level none and no methods.
-func TestMeTokenRequestIsNotASession(t *testing.T) {
+// TestAccountTokenRequestIsNotASession verifies a bearer token shows session
+// false, level none and no methods.
+func TestAccountTokenRequestIsNotASession(t *testing.T) {
 	t.Parallel()
 
 	sys, _, subject := directoryApp(t, true, func(identity *iam.Builder) {
 		identity.Tokens()
-		identity.Me(func(me *iam.MeBuilder) { me.Login(true) })
+		identity.Account(func(view *iam.AccountBuilder) { view.Login(true) })
 	})
 	_, secret, err := sys.identity.Issuer().Issue(testContext(t), subject, apitoken.Request{Name: "ci"})
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	body := meOf(t, sys.client.NewDevice(), "Authorization: Bearer "+secret)
+	body := accountOf(t, sys.client.NewDevice(), "Authorization: Bearer "+secret)
 	withoutTimes(t, body, true)
-	wantMe(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,
-		"login":{"session":false,"level":"none","methods":[]},
-		"user":{"subject":"`+subject+`","email":"ada@example.com"}}`)
+	wantAccount(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,
+		"login":{"session":false,"level":"none","methods":[]}}`)
 }
 
-// TestMeIgnoresSectionsWhoseFeatureIsOff verifies Permissions and TwoFactor
-// without their features, and User with the built-in users, are ignored with
-// one warning each and leave the sections out.
-func TestMeIgnoresSectionsWhoseFeatureIsOff(t *testing.T) {
+// TestAccountIgnoresPartsWhoseFeatureIsOff verifies Permissions and TwoFactor
+// without their features are ignored with one warning each and leave the parts
+// out.
+func TestAccountIgnoresPartsWhoseFeatureIsOff(t *testing.T) {
 	warnings := apptest.CaptureWarnings(t)
 
 	_, device, subject := directoryApp(t, true, func(identity *iam.Builder) {
-		identity.Me(func(me *iam.MeBuilder) {
-			me.Permissions(true).TwoFactor(true).User(presentAccount)
-		})
+		identity.Account(func(view *iam.AccountBuilder) { view.Permissions(true).TwoFactor(true) })
 	})
-	body := meOf(t, device)
+	body := accountOf(t, device)
 	withoutTimes(t, body, true)
-	wantMe(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,
-		"user":{"subject":"`+subject+`","email":"ada@example.com"}}`)
-	want := []string{"MeBuilder.Permissions", "MeBuilder.TwoFactor", "MeBuilder.User"}
+	wantAccount(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true}`)
+	want := []string{"AccountBuilder.Permissions", "AccountBuilder.TwoFactor"}
 	if got := warnings.Settings(); !slices.Equal(got, want) {
 		t.Fatalf("warnings = %v, want %v", got, want)
 	}
 }
 
-// TestMeNotCalledMountsNoRoute verifies that without a Me call the route is
-// left out and MeHandler panics.
-func TestMeNotCalledMountsNoRoute(t *testing.T) {
+// TestAccountMethodWorksWithoutBuilderAccount verifies IAM.Account answers with
+// the subject and the email facts when Builder.Account was never called, and
+// that the route is absent.
+func TestAccountMethodWorksWithoutBuilderAccount(t *testing.T) {
+	t.Parallel()
+
+	sys := newApp(t, memoryDatabase(t), newInstance(t))
+	record := ownRecord(map[string]any{"email": "ada@example.com"}, nil)
+	ctx := auth.NewContext(testContext(t), auth.NewIdentity(record.Subject, func(principal *auth.IdentityBuilder) {
+		principal.Record(record)
+	}))
+	view, err := sys.identity.Account(ctx)
+	if err != nil {
+		t.Fatalf("Account: %v", err)
+	}
+	want := iam.AccountView{Subject: "42", Email: "ada@example.com"}
+	if !reflect.DeepEqual(view, want) {
+		t.Fatalf("Account = %+v, want %+v", view, want)
+	}
+	absent(t, sys, "GET /account")
+}
+
+// TestAccountMethodWithoutIdentityIsUnauthenticated verifies a context without
+// an identity returns auth.ErrUnauthenticated.
+func TestAccountMethodWithoutIdentityIsUnauthenticated(t *testing.T) {
+	t.Parallel()
+
+	sys := newApp(t, memoryDatabase(t), newInstance(t))
+	if _, err := sys.identity.Account(context.Background()); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("Account = %v, want auth.ErrUnauthenticated", err)
+	}
+}
+
+// TestAccountNotCalledMountsNoRoute verifies that without an Account call the
+// route is left out and AccountHandler panics.
+func TestAccountNotCalledMountsNoRoute(t *testing.T) {
 	t.Parallel()
 
 	never := newApp(t, memoryDatabase(t), newInstance(t))
-	absent(t, never, "GET /me")
-	if !panics(func() { never.identity.MeHandler() }) {
-		t.Fatal("MeHandler did not panic without a Me call")
+	absent(t, never, "GET /account")
+	if !panics(func() { never.identity.AccountHandler() }) {
+		t.Fatal("AccountHandler did not panic without an Account call")
 	}
 }

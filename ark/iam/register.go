@@ -25,7 +25,7 @@ import (
 //	Permissions GET /me/permissions (with SelfService), GET /users/{subject}/permissions,
 //	            PUT and DELETE /users/{subject}/permissions/{name} and
 //	            /users/{subject}/roles/{name} (with Management)
-//	Account     GET /me (with Me), DELETE /account (built-in users only)
+//	Account     GET /account (with Account), DELETE /account (built-in users only)
 //
 // The password routes need [Builder.Password]; of them, /register also needs
 // [password.Builder.Registration] (off by default; New refuses it without users
@@ -41,7 +41,7 @@ import (
 // and the two device routes [apitoken.Builder.DeviceTokens] (both default to
 // on). The permission routes need [Builder.Permissions]: /me/permissions also
 // [permission.Builder.SelfService] and the /users/{subject} routes
-// [permission.Builder.Management]. GET /me needs [Builder.Me]. /logout and the
+// [permission.Builder.Management]. GET /account needs [Builder.Account]. /logout and the
 // session routes are always registered.
 //
 // Register never installs [IAM.Middleware]; r must already run it. The
@@ -84,8 +84,8 @@ func (identity *IAM) Register(r *router.Router) {
 	r.Delete("/sessions", identity.DeleteOtherSessionsHandler())
 	identity.registerProviders(r)
 	identity.registerConnections(r)
-	if identity.me != nil {
-		r.Get("/me", identity.MeHandler())
+	if identity.account != nil {
+		r.Get("/account", identity.AccountHandler())
 	}
 	if identity.directory != nil {
 		r.Delete("/account", identity.DeleteAccountHandler())

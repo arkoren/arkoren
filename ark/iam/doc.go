@@ -39,8 +39,8 @@
 //		identity.Provider(github, func(login *iam.ProviderBuilder) {
 //			login.SignUp(true) // off by default, per provider
 //		})
-//		identity.Me(func(me *iam.MeBuilder) {
-//			me.Permissions(true).TwoFactor(true).Login(true)
+//		identity.Account(func(view *iam.AccountBuilder) {
+//			view.Permissions(true).TwoFactor(true).Login(true)
 //		})
 //	})
 //	if err != nil {
@@ -127,7 +127,7 @@
 //	Providers   GET /auth/<name> · GET|POST /auth/<name>/callback · GET /auth/<name>/nonce · POST /auth/<name>/native
 //	Connections GET /connections · POST /connections/{provider} · DELETE /connections/{id}
 //	Permissions GET /me/permissions (SelfService) · GET /users/{subject}/permissions · PUT|DELETE /users/{subject}/permissions/{name} · PUT|DELETE /users/{subject}/roles/{name} (Management)
-//	Account     GET /me (Me) · DELETE /account
+//	Account     GET /account (Account) · DELETE /account
 //
 // # Behavior
 //

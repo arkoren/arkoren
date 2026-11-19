@@ -98,7 +98,7 @@ type IAM struct {
 	permissions *permission.Store
 	links       *federation.Links
 	providers   []mountedProvider
-	me          *MeBuilder
+	account     *AccountBuilder
 	middleware  router.Middleware
 	migrations  []migrate.Definition
 	pingers     []func(context.Context) error
