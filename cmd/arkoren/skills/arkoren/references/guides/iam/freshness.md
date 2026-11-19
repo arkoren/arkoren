@@ -62,7 +62,7 @@ This uses `auth` from `arkoren.dev/core/auth` and standard-library `time`:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher)
+	identity.Password(true, hasher)
 	identity.Guard(func(policy *auth.GuardBuilder) {
 		policy.FreshFor(5 * time.Minute)
 	})

@@ -22,19 +22,20 @@ the other.
 
 ## Open Sign-Up
 
-With the built-in users, `Registration(true)` requires password `Reset`;
-otherwise `iam.New` returns `iam.ErrInvalidConfig`. Configure email
+With the built-in users, `Registration(true)` requires password `Reset(true, ...)`;
+without it `iam.New` ignores registration, logs one warning that names
+`password.Builder.Registration`, and mounts no `POST /register`. Configure email
 verification too so new users can prove their addresses and existing owners
 receive a recovery notice. Reuse the signer and callbacks from Email Links:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher, func(passwords *password.Builder) {
-		passwords.Reset(signer, dispatchReset, deliverReset)
+	identity.Password(true, hasher, func(passwords *password.Builder) {
+		passwords.Reset(true, signer, dispatchReset, deliverReset)
 		passwords.Registration(true)
 	})
 	identity.Directory(func(accounts *account.Builder) {
-		accounts.Verification(signer, dispatchVerification, deliverVerification)
+		accounts.Verification(true, signer, dispatchVerification, deliverVerification)
 	})
 })
 ```
