@@ -17,7 +17,7 @@ to suspend or delete a user. IAM separates **login records** in the cache
 from the user and credentials in the database; deleting one session is not
 the same as revoking every credential.
 
-This page assumes the [facade is mounted](overview.md#mount-routes).
+This page assumes the [facade is registered](overview.md#register-routes).
 Session-management routes require a guard-authenticated session, not a bearer
 token. Administrative Go methods belong behind your application's own
 authorization, never on unprotected routes.

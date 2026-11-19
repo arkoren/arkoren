@@ -47,7 +47,7 @@
 //		return err
 //	}
 //	web := routes.With(identity.Middleware()) // session, guard and token authenticators
-//	identity.Mount(web)
+//	web.Group("/", identity.Register)
 //
 //	api := routes.With(identity.Middleware(), auth.Require())
 //	api.Get("/me", me)
@@ -107,7 +107,7 @@
 //
 // # Routes
 //
-// [IAM.Mount] registers these, and each has an IAM.XHandler method for
+// [IAM.Register] registers these, and each has an IAM.XHandler method for
 // custom paths. Bodies and responses are JSON.
 //
 //	Login       POST /register (with Registration) · POST /login · POST /login/challenge · GET /login/pending · POST /logout

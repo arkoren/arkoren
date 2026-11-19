@@ -15,8 +15,8 @@ import (
 	"arkoren.dev/ark/iam/apitoken"
 )
 
-// TestMountOnlyMountsEnabledFeatures verifies the route table per feature set.
-func TestMountOnlyMountsEnabledFeatures(t *testing.T) {
+// TestRegisterOnlyRegistersEnabledFeatures verifies the route table per feature set.
+func TestRegisterOnlyRegistersEnabledFeatures(t *testing.T) {
 	t.Parallel()
 
 	type route struct{ method, path string }
@@ -48,11 +48,11 @@ func TestMountOnlyMountsEnabledFeatures(t *testing.T) {
 	}
 }
 
-// TestMountNeverPanicsOnAcceptedConfiguration verifies Mount succeeds for every
+// TestRegisterNeverPanicsOnAcceptedConfiguration verifies Register succeeds for every
 // feature combination New accepts, and mounts a route only when its requirement
 // holds: forgot and reset need Reset, the email routes need Verification,
 // register needs Registration, and each token kind's routes need that kind.
-func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
+func TestRegisterNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 	t.Parallel()
 
 	ownProvider := func(t *testing.T) (*auth.UserProvider, *ownUsers) {
@@ -128,8 +128,8 @@ func TestMountNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 			t.Fatalf("%s: New: %v", test.name, err)
 		}
 		r := router.New()
-		if panics(func() { identity.Mount(r) }) {
-			t.Errorf("%s: Mount panicked", test.name)
+		if panics(func() { identity.Register(r) }) {
+			t.Errorf("%s: Register panicked", test.name)
 		}
 		for _, route := range test.absent {
 			method, path, _ := strings.Cut(route, " ")

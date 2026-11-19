@@ -131,7 +131,7 @@ type providerSetup struct {
 }
 
 // mountedProvider is a provider with the resolver that carries its sign-up
-// settings, which [IAM.mountProviders] hands to its handlers.
+// settings, which [IAM.registerProviders] hands to its handlers.
 type mountedProvider struct {
 	provider Provider
 	resolve  auth.Resolver
@@ -167,9 +167,9 @@ func validateProviders(setups []providerSetup, creatable bool) error {
 	return nil
 }
 
-// mountProviders registers the login and callback routes of every provider,
+// registerProviders registers the login and callback routes of every provider,
 // and the nonce and native routes of those that implement [NativeProvider].
-func (identity *IAM) mountProviders(r *router.Router) {
+func (identity *IAM) registerProviders(r *router.Router) {
 	for _, mounted := range identity.providers {
 		provider := mounted.provider
 		base := "/auth/" + provider.Name()
