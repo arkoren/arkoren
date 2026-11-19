@@ -52,7 +52,7 @@ Pass this value while enabling passwords:
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
 	identity.Users(users)
-	identity.Password(hasher)
+	identity.Password(true, hasher)
 })
 ```
 
@@ -148,7 +148,8 @@ Creation and credential writes must use the same database transaction context.
 `Create` requires both verification functions, even if users can also be
 created elsewhere. It does not open sign-up by itself:
 enable password `Registration(true)` or a provider's `login.SignUp(true)`
-explicitly. Either feature without `Create` makes `New` fail.
+explicitly. Either setting without `Create` is ignored with a warning: no
+route accepts registrations and the provider only signs in known identities.
 
 With custom users, IAM does not automatically send registration verification
 or taken-address notices. Supply your own `Registered` and `Taken` password
@@ -158,6 +159,45 @@ changing the accepted registration response.
 Automatic provider takeover by matching an unverified email is built-in-directory
 behavior only. Your lookup may accept usernames or other identifiers, so IAM
 does not assume it can use the provider's email to find an existing account.
+
+## Show Your Users
+
+`GET /me` answers with the subject and the `email` and `email_verified` claims of
+your user record. IAM never encodes the raw record value: your driver's struct
+often holds a credentials stamp or a disabled flag. To publish your user, give
+`Me` a projection from your driver's type to the type clients may see. The type
+arguments are inferred from the function:
+
+```go
+type Account struct {
+	ID               int
+	Name, Email      string
+	Plan             string
+	Disabled         bool
+	CredentialsStamp string
+}
+
+type PublicAccount struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Plan  string `json:"plan"`
+}
+
+identity.Me(true, func(me *iam.MeBuilder) {
+	me.User(func(account Account) PublicAccount {
+		return PublicAccount{ID: account.ID, Name: account.Name, Email: account.Email, Plan: account.Plan}
+	})
+})
+```
+
+The request then answers `{"subject": "42", "email": "ada@example.com",
+"email_verified": true, "user": {"id": 42, "name": "Ada Lovelace", "email":
+"ada@example.com", "plan": "pro"}}`. Without `User` there is no `user` member.
+A record without a value adds none either. If the value is not an `Account`, the
+request fails with `500` and the log names both types. With the built-in users
+`User` is ignored with a warning, because they always present `account.Account`.
+See [Routes](routes.md#whoami) for the other sections.
 
 ## Delete Your Users
 

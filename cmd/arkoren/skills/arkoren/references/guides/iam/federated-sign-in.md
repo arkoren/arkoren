@@ -95,8 +95,8 @@ in [IAM Overview](overview.md#start-small). Give each client its own call:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(google)
-	identity.Provider(github)
+	identity.Provider(true, google)
+	identity.Provider(true, github)
 })
 ```
 
@@ -118,7 +118,8 @@ web.Group("/", identity.Register)
 `GET /auth/google` starts Google login; both `GET` and `POST`
 `/auth/google/callback` are registered for its callback. Other clients follow the
 same name-based pattern. Names must be unique safe path segments containing
-only letters, digits, hyphens, and underscores, or `New` fails.
+only letters, digits, hyphens, and underscores, or `New` fails. A provider
+added with `Provider(false, ...)` is left out entirely and may be nil.
 Generic OAuth clients default to `oauth`; rename them in their client settings
 if you use more than one.
 
@@ -155,8 +156,8 @@ To let one provider create new users, enable sign-up for that provider:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(google)
-	identity.Provider(github, func(login *iam.ProviderBuilder) {
+	identity.Provider(true, google)
+	identity.Provider(true, github, func(login *iam.ProviderBuilder) {
 		login.SignUp(true)
 	})
 })

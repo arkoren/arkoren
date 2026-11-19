@@ -10,7 +10,7 @@ summary:
 
 # Passwords
 
-Once [IAM is registered](overview.md#register-routes) with `identity.Password(hasher)`,
+Once [IAM is registered](overview.md#register-routes) with `identity.Password(true, hasher)`,
 an existing user can sign in with their email and password. This page assumes
 that the user already has a password, either provisioned by your application or
 created through [registration](registration.md).
@@ -135,7 +135,7 @@ Attach the policy while enabling passwords:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher, func(passwords *password.Builder) {
+	identity.Password(true, hasher, func(passwords *password.Builder) {
 		passwords.Policy(checkPassword)
 	})
 })

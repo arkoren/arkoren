@@ -3,6 +3,7 @@ package federation_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/iam/federation"
+	"arkoren.dev/ark/iam/internal/apptest"
 )
 
 // verifiedIdentity is a first login whose email the provider proved.
@@ -98,16 +100,23 @@ func TestResolverSignUpKeepsTheEmailRule(t *testing.T) {
 	})
 }
 
-// TestResolverSignUpNeedsCreate verifies sign-up with no Create function in the
-// resolver or the store is ErrInvalidConfig, and that a function on the resolver
-// alone is enough.
-func TestResolverSignUpNeedsCreate(t *testing.T) {
-	t.Parallel()
+// TestResolverSignUpWithoutCreateIsIgnored verifies sign-up with no Create
+// function in the resolver or the store is ignored with a warning, so a first
+// login finds no account, and that a function on the resolver alone is enough.
+func TestResolverSignUpWithoutCreateIsIgnored(t *testing.T) {
+	warnings := apptest.CaptureWarnings(t)
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newSystem(t, db, instance, false, false)
-		if _, err := sys.links.Resolver(func(resolver *federation.ResolverBuilder) { resolver.SignUp(true) }); !errors.Is(err, federation.ErrInvalidConfig) {
-			t.Fatalf("Resolver without Create = %v, want ErrInvalidConfig", err)
+		ignored, err := sys.links.Resolver(func(resolver *federation.ResolverBuilder) { resolver.SignUp(true) })
+		if err != nil {
+			t.Fatalf("Resolver without Create = %v, want the setting ignored", err)
+		}
+		if got := warnings.Settings(); !slices.Contains(got, "federation.ResolverBuilder.SignUp") {
+			t.Fatalf("warnings = %v, want one naming federation.ResolverBuilder.SignUp", got)
+		}
+		if _, err := ignored(testContext(t), verifiedIdentity); !errors.Is(err, federation.ErrNoAccount) {
+			t.Fatalf("first login through the ignored sign-up = %v, want ErrNoAccount", err)
 		}
 		if _, err := sys.links.Resolver(func(resolver *federation.ResolverBuilder) { resolver.SignUp(true).Create(sys.create) }); err != nil {
 			t.Fatalf("Resolver with Create = %v, want nil", err)

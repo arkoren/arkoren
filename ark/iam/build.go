@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -50,7 +51,16 @@ func (identity *IAM) build(settings *Builder) error {
 		identity.add(identity.permissions.Migrations(), identity.permissions.Ping)
 	}
 
+	identity.buildMe(settings)
+
 	return identity.buildGuard(settings)
+}
+
+// ignore logs the one warning of a setting that [New] leaves out because what it
+// depends on is off. Settings whose dependency is missing, but whose absence
+// would weaken a protection, fail construction instead.
+func ignore(setting, reason string) {
+	slog.WarnContext(context.Background(), "access: setting ignored", "setting", setting, "reason", reason)
 }
 
 // add records the migrations and readiness check of an enabled package.
@@ -78,9 +88,9 @@ func (identity *IAM) buildUsers(settings *Builder) (Users, error) {
 	return directoryUsers(directory), nil
 }
 
-// buildPassword builds the password verifier when [Builder.Password] is set.
+// buildPassword builds the password verifier when [Builder.Password] is enabled.
 func (identity *IAM) buildPassword(settings *Builder, users Users) error {
-	if settings.hasher == nil {
+	if !settings.passwordOn {
 		return nil
 	}
 	configure := append([]password.BuilderFunc{identity.passwordPolicy(settings)}, settings.password...)
@@ -88,8 +98,10 @@ func (identity *IAM) buildPassword(settings *Builder, users Users) error {
 	if err != nil {
 		return err
 	}
-	if identity.directory != nil && verifier.Registration() && !verifier.ResetEnabled() {
-		return errors.New("registration with the built-in users needs password.Builder.Reset: it is how the owner of an address that someone else registered learns of it and takes the account back")
+	identity.registration = verifier.Registration()
+	if identity.registration && identity.directory != nil && !verifier.ResetEnabled() {
+		ignore("password.Builder.Registration", "registration with the built-in users needs password.Builder.Reset: it is how the owner of an address that someone else registered learns of it and takes the account back")
+		identity.registration = false
 	}
 	identity.verifier = verifier
 	identity.add(verifier.Migrations(), verifier.Ping)
@@ -130,7 +142,7 @@ func (identity *IAM) passwordPolicy(settings *Builder) password.BuilderFunc {
 	}
 }
 
-// buildTwoFactor builds the two-factor store when [Builder.TwoFactor] is set.
+// buildTwoFactor builds the two-factor store when [Builder.TwoFactor] is enabled.
 func (identity *IAM) buildTwoFactor(settings *Builder) error {
 	if !settings.twoFactor {
 		return nil
@@ -150,7 +162,7 @@ func (identity *IAM) buildTwoFactor(settings *Builder) error {
 }
 
 // buildPermissions builds the permission store when [Builder.Permissions] is
-// set. Its migrations are added by build, after the connections'.
+// enabled. Its migrations are added by build, after the connections'.
 func (identity *IAM) buildPermissions(settings *Builder) error {
 	if !settings.permissions {
 		return nil
@@ -167,7 +179,7 @@ func (identity *IAM) buildPermissions(settings *Builder) error {
 	return nil
 }
 
-// buildTokens builds the token issuer when [Builder.Tokens] is set. With the
+// buildTokens builds the token issuer when [Builder.Tokens] is enabled. With the
 // permission store, the ceiling is the user's permissions, set before the
 // application's callbacks so an explicit Grants replaces it.
 func (identity *IAM) buildTokens(settings *Builder) error {
@@ -218,8 +230,13 @@ func (identity *IAM) buildLinks(settings *Builder, users Users) error {
 		return err
 	}
 	for _, setup := range settings.providers {
+		signUp := setup.settings.signUp
+		if signUp && users.Create == nil {
+			ignore("ProviderBuilder.SignUp ("+setup.provider.Name()+")", "Users.Create is nil, so no user can be created")
+			signUp = false
+		}
 		resolve, err := links.Resolver(func(resolver *federation.ResolverBuilder) {
-			resolver.SignUp(setup.settings.signUp).Create(setup.settings.create)
+			resolver.SignUp(signUp).Create(setup.settings.create)
 		})
 		if err != nil {
 			return err

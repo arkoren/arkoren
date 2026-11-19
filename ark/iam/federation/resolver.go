@@ -2,7 +2,7 @@ package federation
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 
 	"arkoren.dev/core/auth"
 
@@ -75,9 +75,10 @@ func (resolver *ResolverBuilder) Create(create func(ctx context.Context, externa
 // resolver starts from the sign-up setting of the [Builder] given to
 // [NewLinks], and its [ResolverBuilder.Create] functions run before the
 // [Builder.Create] ones. With sign-up on and no Create function in either
-// place it returns an error wrapping [ErrInvalidConfig], so a misconfigured
-// provider fails at construction and never at its first login. The resolver is
-// safe for concurrent use and keeps no reference to the draft.
+// place nothing could create the user, so the setting is ignored: Resolver
+// logs one warning at construction and the resolver behaves as if sign-up were
+// off, a first login failing with [ErrNoAccount]. The resolver is safe for
+// concurrent use and keeps no reference to the draft.
 //
 // Example:
 //
@@ -95,7 +96,8 @@ func (links *Links) Resolver(configure ...ResolverBuilderFunc) (auth.Resolver, e
 	}
 	onboard := onboarding{signUp: settings.signUp, create: web.First(settings.create, links.onboard.create)}
 	if onboard.signUp && onboard.create == nil {
-		return nil, fmt.Errorf("%w: SignUp needs a Create function", ErrInvalidConfig)
+		slog.WarnContext(context.Background(), "access: setting ignored", "setting", "federation.ResolverBuilder.SignUp", "reason", "no Create function is set, so no user can be created")
+		onboard.signUp = false
 	}
 
 	return func(ctx context.Context, external auth.External) (string, error) {

@@ -34,10 +34,10 @@ func TestResetDefeatsPreRegistrationHijack(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
-			identity.Tokens()
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Tokens(true)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		attacker := sys.client
 		register(t, attacker, "victim@example.com")
@@ -98,12 +98,12 @@ func TestResetDefeatsPreRegistrationHijack(t *testing.T) {
 		if reply := sys.client.NewDevice().Post("/login", `{"email":"victim@example.com","password":"correct horse"}`); reply.Status != http.StatusUnprocessableEntity {
 			t.Fatalf("attacker's password login = %d, want 422", reply.Status)
 		}
-		if reply := attacker.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := attacker.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("attacker old session = %q, want anonymous", reply.Body)
 		}
 		google := sys.client.NewDevice()
 		google.Do(http.MethodGet, callbackPath("fake", "attacker-g", "victim@example.com", false), "")
-		if reply := google.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := google.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("the attacker's provider login still logs in: %q", reply.Body)
 		}
 		if connections, _ := sys.identity.Links().List(ctx, subject); len(connections) != 0 {
@@ -130,8 +130,8 @@ func TestResetOfVerifiedAccountKeepsItsFactors(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		subject := mustSubject(t, sys)
@@ -157,7 +157,7 @@ func TestMailGoesToTheStoredAddress(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "bob@gmail.com")
 		if reply := sys.client.NewDevice().Post("/password/forgot", `{"email":"bob@gmaİl.com"}`); reply.Status != http.StatusAccepted {
@@ -180,9 +180,9 @@ func TestTwoFactorNeedsRecentCodeNotPassword(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 			// A one-nanosecond window makes every code "old" without sleeping.
-			identity.TwoFactor(totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
+			identity.TwoFactor(true, totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
 				factors.StepUpWindow(time.Nanosecond)
 			})
 		})
@@ -218,8 +218,8 @@ func TestTwoFactorWithRecentCodeDisablesAndEnableEndsOtherLogins(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
@@ -230,10 +230,10 @@ func TestTwoFactorWithRecentCodeDisablesAndEnableEndsOtherLogins(t *testing.T) {
 		if reply := sys.client.Post("/two-factor", `{"code":"`+code(t, secretOf(setup.Body), 0)+`"}`); reply.Status != http.StatusOK {
 			t.Fatalf("enable = %d %s", reply.Status, reply.Body)
 		}
-		if reply := other.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := other.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("another login after enabling = %q, want anonymous", reply.Body)
 		}
-		if reply := sys.client.Do(http.MethodGet, "/me", ""); reply.Body == "anonymous" {
+		if reply := sys.client.Do(http.MethodGet, "/whoami", ""); reply.Body == "anonymous" {
 			t.Fatalf("the enabling session = %d, want kept", reply.Status)
 		}
 		if reply := sys.client.Post("/two-factor/recovery-codes", ""); reply.Status != http.StatusOK {
@@ -270,9 +270,9 @@ func checkEnablingTwoFactorTokens(t *testing.T, keepPersonal bool, personalStatu
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Tokens(true)
 			if keepPersonal {
 				identity.KeepPersonalTokens()
 			}
@@ -292,7 +292,7 @@ func checkEnablingTwoFactorTokens(t *testing.T, keepPersonal bool, personalStatu
 			t.Fatalf("enable = %d %s", reply.Status, reply.Body)
 		}
 		status := func(secret string) int {
-			return sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+secret).Status
+			return sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", "Authorization: Bearer "+secret).Status
 		}
 		if got := status(device); got != http.StatusUnauthorized {
 			t.Fatalf("device token after enabling two-factor = %d, want 401", got)
@@ -328,8 +328,8 @@ func checkPasswordChangeTokens(t *testing.T, keepPersonal bool, personalStatus i
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.Tokens(true)
 			if keepPersonal {
 				identity.KeepPersonalTokens()
 			}
@@ -348,7 +348,7 @@ func checkPasswordChangeTokens(t *testing.T, keepPersonal bool, personalStatus i
 			t.Fatalf("change = %d %s", reply.Status, reply.Body)
 		}
 		status := func(secret string) int {
-			return sys.client.NewDevice().Do(http.MethodGet, "/me", "", "Authorization: Bearer "+secret).Status
+			return sys.client.NewDevice().Do(http.MethodGet, "/whoami", "", "Authorization: Bearer "+secret).Status
 		}
 		if got := status(device); got != http.StatusUnauthorized {
 			t.Fatalf("device token after a password change = %d, want 401", got)
@@ -366,7 +366,7 @@ func TestForgotRegisterResendAreThrottledAndUniform(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		post := func(path, body, ip string) apptest.Reply {
 			return sys.client.Do(http.MethodPost, path, body, "X-Test-IP: "+ip)
@@ -430,7 +430,7 @@ func TestLoginLockoutNeedsTheSameAddressAndCountsOnlyFailures(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		register(t, sys.client, "ada@example.com")
 		login := func(password, ip string) int {
@@ -498,9 +498,9 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 					return true, nil
 				},
 			})
-			identity.Password(hasher(), registration)
-			identity.Tokens()
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.Tokens(true)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "a@example.com", true), "")
 		if len(created) != 1 || !created[0] {
@@ -560,8 +560,8 @@ func TestSecondFactorLockoutCountsAgainstTheLoginThrottle(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 		})
 		lockSecondFactor(t, sys)
 		for i := range 12 {
@@ -593,8 +593,8 @@ func TestSecondFactorLockoutReachesTheApplicationBus(t *testing.T) {
 			t.Fatalf("Listen: %v", err)
 		}
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 			identity.Events(bus)
 		})
 		lockSecondFactor(t, sys)
@@ -634,7 +634,7 @@ func TestLoginFailsClosedWhenTheLockoutCannotBeRead(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		driver := &brokenLockouts{Driver: memorycache.New()}
 		sys := newAppOn(t, db, instance, cache.New(driver), both, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		register(t, sys.client, "ada@example.com")
 		driver.armed.Store(true)

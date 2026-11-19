@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -123,7 +124,8 @@ type Users struct {
 
 	// Create adds a user with identifier and returns the subject. It is used by
 	// registration and may be nil for an application that registers users
-	// elsewhere; [Builder.Registration] without it is [ErrInvalidConfig]. Its errors
+	// elsewhere; [Builder.Registration] without it is ignored with a warning,
+	// because nothing could create the user. Its errors
 	// (a taken identifier, an invalid one) pass through to the client. It must
 	// fail on an existing identifier and never return the existing user.
 	Create func(ctx context.Context, identifier string) (subject string, err error)
@@ -206,7 +208,8 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		apply(&settings)
 	}
 	if settings.registration && users.Create == nil {
-		return nil, fmt.Errorf("%w: Registration needs Users.Create", ErrInvalidConfig)
+		slog.WarnContext(context.Background(), "access: setting ignored", "setting", "password.Builder.Registration", "reason", "Users.Create is nil, so no user can be created")
+		settings.registration = false
 	}
 	if err := settings.validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)

@@ -392,6 +392,29 @@ HTTP status helpers use New, so they store about:blank and match equivalent
 New constructions. Preserve the explicit 422 "Unprocessable Content" title.
 Raw zero and decoded absent members retain absence; Is performs no normalization.
 
+## Feature switches
+
+A feature a builder turns on takes its switch as the first argument, so the
+state is explicit at the call site and an upgrade cannot silently turn it off.
+
+- **Feature method:** `Feature(enabled bool, required components..., configure ...BuilderFunc)`.
+  The feature is off when the method is never called. With `false` the
+  callbacks still run, but their settings are unused and the required
+  components may be nil.
+- **Toggle without settings:** `Feature(enabled bool)`, such as `Registration`,
+  `SelfService` and `PersonalTokens`.
+- **Banned:** `Enabled` methods, negative names (`NoX`, `WithoutX`,
+  `Disable...`) and Enable/Disable pairs. Flags that describe a declaration
+  (`Deprecated`, `Hidden`) are exempt.
+- **Not features:** configuration of something that always exists
+  (`Directory`) and additive lists (`SecondFactor`, `StepUp`, `Authenticator`)
+  keep their shape.
+- **Ignore or fail at construction:** a feature whose dependency is off counts
+  as off, with one `slog.Warn` at construction naming the setting and the
+  reason. Missing required components, invalid values, contradictions and
+  anything where ignoring would weaken a protection (fail open) still fail
+  with the package's `ErrInvalidConfig`.
+
 ## Collection results
 
 Return collections where callers process data results. Accept standard
@@ -508,16 +531,16 @@ delivery, and lifecycle protocols explicit.
   func(identity *iam.Builder) { ... })` (variable `identity`, builder `identity`), `web.Group("/", identity.Register)`
   and `identity.XHandler()` for custom paths. `Builder.ClientIP` optionally
   overrides the direct-peer address for trusted proxy deployments. Registration (`password.Builder.Registration`) and
-  sign-up on a first provider login (`iam.ProviderBuilder.SignUp`, set per `identity.Provider(provider, configure...)` call) are off by default; the
+  sign-up on a first provider login (`iam.ProviderBuilder.SignUp`, set per `identity.Provider(enabled, provider, configure...)` call) are off by default; the
   token scope catalog comes with its grant ceiling (`apitoken.Builder.Grants(grantable,
   scopes...)`, `GrantTTL`, `AnyScope`) and `apitoken.NewIssuer(provider, db, store, ...)`
   takes the shared cache. Its packages (account, password, twofactor,
   apitoken, federation, permission) take a `*auth.UserProvider` and never import each other;
   `permission.NewStore(provider, db, store, ...)` stores core gate roles and
-  permissions, and with `identity.Permissions(...)` the facade wires `Store.Load`
+  permissions, and with `identity.Permissions(true, ...)` the facade wires `Store.Load`
   as the guard's Grants and `Store.Permissions` as the token ceiling;
   their handlers take `*auth.Guard`, require `Identity.Session()` and call
-  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use.
+  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(true, signer, dispatch, deliver)` and `account.Builder.Verification(true, signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
   preserve the first definition error; nil conversion is a domain error, not

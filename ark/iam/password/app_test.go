@@ -187,7 +187,7 @@ func newSignedSystem(t *testing.T, db *database.Database, instance string, signe
 		passwords.Taken(func(ctx context.Context, identifier string) error {
 			return verifier.RequestReset(ctx, password.ResetRequest{Identifier: identifier, Notice: true})
 		})
-		passwords.Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
+		passwords.Reset(true, signer, func(ctx context.Context, request password.ResetRequest) error {
 			sentMu.Lock()
 			*dispatched = append(*dispatched, request)
 			sentMu.Unlock()

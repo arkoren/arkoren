@@ -20,7 +20,7 @@ import (
 //
 // Example:
 //
-//	identity.Provider(google) // an *oauthauth.Client
+//	identity.Provider(true, google) // an *oauthauth.Client
 type Provider interface {
 	// Name is the provider's name in mounted paths: "/auth/<name>" starts the
 	// login and "/auth/<name>/callback" finishes it. Names must be unique.
@@ -58,7 +58,7 @@ type NativeProvider interface {
 //
 // Example:
 //
-//	identity.Provider(entra, func(login *iam.ProviderBuilder) {
+//	identity.Provider(true, entra, func(login *iam.ProviderBuilder) {
 //		login.SignUp(true)
 //	})
 type ProviderBuilder struct {
@@ -73,7 +73,7 @@ type ProviderBuilder struct {
 //	var enableSignUp identity.ProviderBuilderFunc = func(login *iam.ProviderBuilder) {
 //		login.SignUp(true)
 //	}
-//	identity.Provider(entra, enableSignUp)
+//	identity.Provider(true, entra, enableSignUp)
 type ProviderBuilderFunc = func(*ProviderBuilder)
 
 // SignUp lets a first logged-out login with this provider and an identity the
@@ -88,7 +88,8 @@ type ProviderBuilderFunc = func(*ProviderBuilder)
 // login must carry an email the provider proved, or it fails with
 // [federation.ErrEmailUnverified] (403) and creates nothing. It needs users
 // that can be created, which the built-in users always are; with [Builder.Users]
-// that has no [Users.Create], [New] fails with [ErrInvalidConfig].
+// that has no [Users.Create], nothing could create the user: [New] ignores
+// SignUp, with one warning, and the provider logs in only known identities.
 //
 // Example:
 //
@@ -141,9 +142,8 @@ type mountedProvider struct {
 // letters, digits, hyphens and underscores (it must be one safe path segment of
 // "/auth/<name>": the connect handler redirects there and the router would
 // reject or reinterpret a pattern with braces, slashes or dots), a name used
-// twice, since each name is a mounted path, and sign-up with users that cannot
-// be created.
-func validateProviders(setups []providerSetup, creatable bool) error {
+// twice, since each name is a mounted path.
+func validateProviders(setups []providerSetup) error {
 	names := map[string]bool{}
 	for _, setup := range setups {
 		provider := setup.provider
@@ -159,9 +159,6 @@ func validateProviders(setups []providerSetup, creatable bool) error {
 			return fmt.Errorf("duplicate provider name %q: configure each provider in one Provider call", provider.Name())
 		}
 		names[provider.Name()] = true
-		if setup.settings.signUp && !creatable {
-			return fmt.Errorf("provider %q: SignUp needs users that can be created (Users.Create)", provider.Name())
-		}
 	}
 
 	return nil

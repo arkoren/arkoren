@@ -149,11 +149,11 @@ verification on the built-in directory:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher, func(passwords *password.Builder) {
-		passwords.Reset(signer, dispatchReset, deliverReset)
+	identity.Password(true, hasher, func(passwords *password.Builder) {
+		passwords.Reset(true, signer, dispatchReset, deliverReset)
 	})
 	identity.Directory(func(accounts *account.Builder) {
-		accounts.Verification(signer, dispatchVerification, deliverVerification)
+		accounts.Verification(true, signer, dispatchVerification, deliverVerification)
 	})
 })
 ```
