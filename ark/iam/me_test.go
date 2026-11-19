@@ -85,7 +85,7 @@ func ownApp(t *testing.T, record auth.UserRecord, configure ...iam.BuilderFunc) 
 
 	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, append([]iam.BuilderFunc{func(identity *iam.Builder) {
 		identity.Users(ownUsersOf(t, record))
-		identity.Password(true, hasher())
+		identity.Password(hasher())
 	}}, configure...)...)
 	if err := sys.identity.Verifier().Set(testContext(t), record.Subject, "correct horse"); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -105,7 +105,7 @@ func directoryApp(t *testing.T, verified bool, configure ...iam.BuilderFunc) (*a
 	t.Helper()
 
 	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, append([]iam.BuilderFunc{func(identity *iam.Builder) {
-		identity.Password(true, hasher())
+		identity.Password(hasher())
 	}}, configure...)...)
 	create := sys.identity.Directory().Create
 	if verified {
@@ -179,7 +179,7 @@ func withoutTimes(t *testing.T, body map[string]any, verified bool) {
 func TestMeBuiltInUsers(t *testing.T) {
 	t.Parallel()
 
-	_, device, subject := directoryApp(t, true, func(identity *iam.Builder) { identity.Me(true) })
+	_, device, subject := directoryApp(t, true, func(identity *iam.Builder) { identity.Me() })
 	body := meOf(t, device)
 	withoutTimes(t, body, true)
 	wantMe(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":true,
@@ -191,7 +191,7 @@ func TestMeBuiltInUsers(t *testing.T) {
 func TestMeBuiltInUnverifiedEmail(t *testing.T) {
 	t.Parallel()
 
-	_, device, subject := directoryApp(t, false, func(identity *iam.Builder) { identity.Me(true) })
+	_, device, subject := directoryApp(t, false, func(identity *iam.Builder) { identity.Me() })
 	body := meOf(t, device)
 	withoutTimes(t, body, false)
 	wantMe(t, body, `{"subject":"`+subject+`","email":"ada@example.com","email_verified":false,
@@ -205,9 +205,9 @@ func TestMeEmptyListsWhenNothingIsGranted(t *testing.T) {
 	t.Parallel()
 
 	_, device, subject := directoryApp(t, true, func(identity *iam.Builder) {
-		identity.TwoFactor(true, totp.New("Example"), cipher(t))
-		identity.Permissions(true, func(policy *permission.Builder) { policy.Roles(admin) })
-		identity.Me(true, func(me *iam.MeBuilder) { me.Permissions(true).TwoFactor(true).Login(true) })
+		identity.TwoFactor(totp.New("Example"), cipher(t))
+		identity.Permissions(func(policy *permission.Builder) { policy.Roles(admin) })
+		identity.Me(func(me *iam.MeBuilder) { me.Permissions(true).TwoFactor(true).Login(true) })
 	})
 	body := meOf(t, device)
 	withoutTimes(t, body, true)
@@ -224,9 +224,9 @@ func TestMeShowsRolesPermissionsAndTwoFactor(t *testing.T) {
 	t.Parallel()
 
 	sys, device, subject := directoryApp(t, true, func(identity *iam.Builder) {
-		identity.TwoFactor(true, totp.New("Example"), cipher(t))
-		identity.Permissions(true, func(policy *permission.Builder) { policy.Roles(editor) })
-		identity.Me(true, func(me *iam.MeBuilder) { me.Permissions(true).TwoFactor(true).Login(true) })
+		identity.TwoFactor(totp.New("Example"), cipher(t))
+		identity.Permissions(func(policy *permission.Builder) { policy.Roles(editor) })
+		identity.Me(func(me *iam.MeBuilder) { me.Permissions(true).TwoFactor(true).Login(true) })
 	})
 	if err := sys.identity.GrantRole(testContext(t), subject, editor); err != nil {
 		t.Fatalf("GrantRole: %v", err)
@@ -268,7 +268,7 @@ func TestMeShowsRolesPermissionsAndTwoFactor(t *testing.T) {
 func TestMeOwnUsersWithoutProjectionShowsNoUser(t *testing.T) {
 	t.Parallel()
 
-	_, device := ownApp(t, ownRecord(map[string]any{"email": "ada@example.com"}, ownAccount), func(identity *iam.Builder) { identity.Me(true) })
+	_, device := ownApp(t, ownRecord(map[string]any{"email": "ada@example.com"}, ownAccount), func(identity *iam.Builder) { identity.Me() })
 	wantMe(t, meOf(t, device), `{"subject":"42","email":"ada@example.com"}`)
 }
 
@@ -279,7 +279,7 @@ func TestMeOwnUsersProjection(t *testing.T) {
 
 	claims := map[string]any{"email": "ada@example.com", "email_verified": true}
 	_, device := ownApp(t, ownRecord(claims, ownAccount), func(identity *iam.Builder) {
-		identity.Me(true, func(me *iam.MeBuilder) { me.User(presentAccount) })
+		identity.Me(func(me *iam.MeBuilder) { me.User(presentAccount) })
 	})
 	wantMe(t, meOf(t, device), `{"subject":"42","email":"ada@example.com","email_verified":true,
 		"user":{"id":42,"name":"Ada Lovelace","email":"ada@example.com","plan":"pro"}}`)
@@ -291,9 +291,9 @@ func TestMeOwnUsersEverythingOn(t *testing.T) {
 	t.Parallel()
 
 	_, device := ownApp(t, ownRecord(nil, ownAccount), func(identity *iam.Builder) {
-		identity.Permissions(true, func(policy *permission.Builder) { policy.Roles(admin) })
-		identity.TwoFactor(true, totp.New("Example"), cipher(t))
-		identity.Me(true, func(me *iam.MeBuilder) {
+		identity.Permissions(func(policy *permission.Builder) { policy.Roles(admin) })
+		identity.TwoFactor(totp.New("Example"), cipher(t))
+		identity.Me(func(me *iam.MeBuilder) {
 			me.User(func(account Account) PublicAccount { return PublicAccount{ID: account.ID, Name: account.Name} })
 			me.Permissions(true).TwoFactor(true).Login(true)
 		})
@@ -313,7 +313,7 @@ func TestMeEmptyClaimsAndNilValue(t *testing.T) {
 	t.Parallel()
 
 	_, device := ownApp(t, ownRecord(nil, nil), func(identity *iam.Builder) {
-		identity.Me(true, func(me *iam.MeBuilder) { me.User(presentAccount) })
+		identity.Me(func(me *iam.MeBuilder) { me.User(presentAccount) })
 	})
 	wantMe(t, meOf(t, device), `{"subject":"42"}`)
 }
@@ -324,7 +324,7 @@ func TestMeUserTypeMismatchIs500(t *testing.T) {
 	_ = apptest.CaptureWarnings(t)
 
 	_, device := ownApp(t, ownRecord(nil, "not an Account"), func(identity *iam.Builder) {
-		identity.Me(true, func(me *iam.MeBuilder) { me.User(presentAccount) })
+		identity.Me(func(me *iam.MeBuilder) { me.User(presentAccount) })
 	})
 	reply := device.Do(http.MethodGet, "/me", "")
 	if reply.Status != http.StatusInternalServerError {
@@ -339,7 +339,7 @@ func TestMeUserTypeMismatchIs500(t *testing.T) {
 func TestMeAnonymousIs401(t *testing.T) {
 	t.Parallel()
 
-	sys, _, _ := directoryApp(t, true, func(identity *iam.Builder) { identity.Me(true) })
+	sys, _, _ := directoryApp(t, true, func(identity *iam.Builder) { identity.Me() })
 	if reply := sys.client.NewDevice().Do(http.MethodGet, "/me", ""); reply.Status != http.StatusUnauthorized {
 		t.Fatalf("anonymous GET /me = %d %s, want 401", reply.Status, reply.Body)
 	}
@@ -351,8 +351,8 @@ func TestMePendingSecondFactorIs401(t *testing.T) {
 	t.Parallel()
 
 	sys, device, _ := directoryApp(t, true, func(identity *iam.Builder) {
-		identity.TwoFactor(true, totp.New("Example"), cipher(t))
-		identity.Me(true)
+		identity.TwoFactor(totp.New("Example"), cipher(t))
+		identity.Me()
 	})
 	setup := device.Post("/two-factor/setup", "")
 	if enable := device.Post("/two-factor", `{"code":"`+code(t, secretOf(setup.Body), 0)+`"}`); enable.Status != http.StatusOK {
@@ -373,8 +373,8 @@ func TestMeTokenRequestIsNotASession(t *testing.T) {
 	t.Parallel()
 
 	sys, _, subject := directoryApp(t, true, func(identity *iam.Builder) {
-		identity.Tokens(true)
-		identity.Me(true, func(me *iam.MeBuilder) { me.Login(true) })
+		identity.Tokens()
+		identity.Me(func(me *iam.MeBuilder) { me.Login(true) })
 	})
 	_, secret, err := sys.identity.Issuer().Issue(testContext(t), subject, apitoken.Request{Name: "ci"})
 	if err != nil {
@@ -394,7 +394,7 @@ func TestMeIgnoresSectionsWhoseFeatureIsOff(t *testing.T) {
 	warnings := apptest.CaptureWarnings(t)
 
 	_, device, subject := directoryApp(t, true, func(identity *iam.Builder) {
-		identity.Me(true, func(me *iam.MeBuilder) {
+		identity.Me(func(me *iam.MeBuilder) {
 			me.Permissions(true).TwoFactor(true).User(presentAccount)
 		})
 	})
@@ -408,18 +408,14 @@ func TestMeIgnoresSectionsWhoseFeatureIsOff(t *testing.T) {
 	}
 }
 
-// TestMeOffMountsNoRoute verifies Me(false) and no Me call both leave the
-// route out, and MeHandler panics.
-func TestMeOffMountsNoRoute(t *testing.T) {
+// TestMeNotCalledMountsNoRoute verifies that without a Me call the route is
+// left out and MeHandler panics.
+func TestMeNotCalledMountsNoRoute(t *testing.T) {
 	t.Parallel()
 
-	off := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
-		identity.Me(false, func(me *iam.MeBuilder) { me.User(presentAccount) })
-	})
 	never := newApp(t, memoryDatabase(t), newInstance(t))
-	absent(t, off, "GET /me")
 	absent(t, never, "GET /me")
-	if !panics(func() { off.identity.MeHandler() }) {
-		t.Fatal("MeHandler did not panic with Me(false)")
+	if !panics(func() { never.identity.MeHandler() }) {
+		t.Fatal("MeHandler did not panic without a Me call")
 	}
 }

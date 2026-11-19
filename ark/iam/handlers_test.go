@@ -76,7 +76,7 @@ func panics(f func()) (panicked bool) {
 func TestRegisterHandlerPanicsWithoutRegistration(t *testing.T) {
 	t.Parallel()
 
-	identity, err := newFacade(t, func(identity *iam.Builder) { identity.Password(true, hasher()) })
+	identity, err := newFacade(t, func(identity *iam.Builder) { identity.Password(hasher()) })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -91,13 +91,13 @@ func TestTokenKindHandlersPanicWhenKindDisabled(t *testing.T) {
 	t.Parallel()
 
 	personal, err := newFacade(t, func(identity *iam.Builder) {
-		identity.Tokens(true, func(tokens *apitoken.Builder) { tokens.DeviceTokens(false) })
+		identity.Tokens(func(tokens *apitoken.Builder) { tokens.DeviceTokens(false) })
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	device, err := newFacade(t, func(identity *iam.Builder) {
-		identity.Tokens(true, func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
+		identity.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -123,7 +123,7 @@ func TestTokenKindHandlersPanicWhenKindDisabled(t *testing.T) {
 func TestResetAndVerificationAreRequiredForTheirHandlers(t *testing.T) {
 	t.Parallel()
 
-	identity, err := newFacadeWith(t, wire{}, func(identity *iam.Builder) { identity.Password(true, hasher()) })
+	identity, err := newFacadeWith(t, wire{}, func(identity *iam.Builder) { identity.Password(hasher()) })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRegisterWithResetAndVerificationDispatchesOnBothPaths(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newAppWith(t, db, instance, both, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
+		sys := newAppWith(t, db, instance, both, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
 		fresh, taken := registerBoth(sys)
 		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
 			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
@@ -176,7 +176,7 @@ func TestRegisterWithResetOnlyDispatchesNothing(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newAppWith(t, db, instance, wire{reset: true}, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
+		sys := newAppWith(t, db, instance, wire{reset: true}, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
 		fresh, taken := registerBoth(sys)
 		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
 			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
@@ -195,9 +195,9 @@ func TestRegisterDispatchFailureStaysAccepted(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newAppWith(t, db, instance, both, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
+			identity.Password(hasher(), registration)
 			identity.Directory(func(accounts *account.Builder) {
-				accounts.Verification(true, newSigner(t, ""), func(context.Context, account.VerifyRequest) error { return errors.New("queue down") }, func(context.Context, account.VerifyMessage) error { return nil })
+				accounts.Verification(newSigner(t, ""), func(context.Context, account.VerifyRequest) error { return errors.New("queue down") }, func(context.Context, account.VerifyMessage) error { return nil })
 			})
 		})
 		fresh, taken := registerBoth(sys)
@@ -214,7 +214,7 @@ func TestResendDispatchesAndTheWorkerSkipsAVerifiedUser(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
 		register(t, sys.client, "ada@example.com")
 		if reply := sys.client.Post("/email/verify/resend", ""); reply.Status != http.StatusAccepted {
 			t.Fatalf("resend = %d %s", reply.Status, reply.Body)
@@ -243,7 +243,7 @@ func TestVerifyLinkSecondClickIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
 		register(t, sys.client, "ada@example.com")
 		body := `{"token":"` + sys.box.lastVerify(t).Signed + `"}`
 		if reply := sys.client.Post("/email/verify", body); reply.Status != http.StatusNoContent {

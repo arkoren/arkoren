@@ -23,7 +23,7 @@ import (
 //
 // Example:
 //
-//	identity.Me(true, func(me *iam.MeBuilder) {
+//	identity.Me(func(me *iam.MeBuilder) {
 //		me.Permissions(true).TwoFactor(true).Login(true)
 //	})
 type MeBuilder struct {
@@ -40,7 +40,7 @@ type MeBuilder struct {
 //	var describe iam.MeBuilderFunc = func(me *iam.MeBuilder) {
 //		me.Login(true)
 //	}
-//	identity.Me(true, describe)
+//	identity.Me(describe)
 type MeBuilderFunc = func(*MeBuilder)
 
 // User adds a "user" member with what present returns for the application's own

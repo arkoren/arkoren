@@ -177,7 +177,7 @@ func TestRegisterTakenDispatchFailureStaysAccepted(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
-			passwords.Reset(true, newSigner(t, ""), func(context.Context, password.ResetRequest) error { return errors.New("queue down") }, func(context.Context, password.ResetMessage) error { return nil })
+			passwords.Reset(newSigner(t, ""), func(context.Context, password.ResetRequest) error { return errors.New("queue down") }, func(context.Context, password.ResetMessage) error { return nil })
 		})
 		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
 		reply := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
@@ -420,7 +420,7 @@ func TestForgotDispatchErrorIs500(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
-			passwords.Reset(true, newSigner(t, ""), func(context.Context, password.ResetRequest) error { return errors.New("queue down") }, func(context.Context, password.ResetMessage) error { return nil })
+			passwords.Reset(newSigner(t, ""), func(context.Context, password.ResetRequest) error { return errors.New("queue down") }, func(context.Context, password.ResetMessage) error { return nil })
 		})
 		if reply := sys.client.Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusInternalServerError {
 			t.Fatalf("forgot with a failing dispatch = %d %s, want 500", reply.Status, reply.Body)

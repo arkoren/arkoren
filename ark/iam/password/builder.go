@@ -18,7 +18,7 @@ import (
 // Example:
 //
 //	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, users, func(passwords *password.Builder) {
-//		passwords.Reset(true, signer, dispatch, deliver).ResetTTL(30 * time.Minute)
+//		passwords.Reset(signer, dispatch, deliver).ResetTTL(30 * time.Minute)
 //	})
 type Builder struct {
 	instance     string
@@ -83,19 +83,18 @@ func (passwords *Builder) Events(bus *event.Bus) *Builder {
 //
 // Example:
 //
-//	passwords.Registration(true).Reset(true, true, signer, dispatch, deliver)
+//	passwords.Registration(true).Reset(signer, dispatch, deliver)
 func (passwords *Builder) Registration(enabled bool) *Builder {
 	passwords.registration = enabled
 
 	return passwords
 }
 
-// Reset turns forgotten-password recovery on or off: with enabled true
+// Reset turns forgotten-password recovery on: calling it makes
 // [Verifier.ForgotHandler] and [Verifier.ResetHandler] work, and
-// [Verifier.SendReset] exists for the worker. With false recovery stays off,
-// whatever the other arguments are: they may be nil and are not kept, so a
-// deployment can switch the feature from configuration without changing the
-// call. It is off when the method is never called.
+// [Verifier.SendReset] exists for the worker. Recovery is off when the method is
+// never called; to switch it from configuration, wrap the call in an if. A later
+// call replaces the earlier one.
 // The package keeps no reset table and runs no goroutine; a reset link is a
 // value that signer signs and that stops working by itself:
 //
@@ -116,24 +115,21 @@ func (passwords *Builder) Registration(enabled bool) *Builder {
 //     returned by SendReset so the queue retries, which means deliver may run
 //     more than once for one request.
 //
-// With enabled true, signer, dispatch and deliver are all required:
+// Signer, dispatch and deliver are all required:
 // [NewVerifier] fails with [ErrInvalidConfig] when any is nil. Use a signer whose key is reserved for
 // links, and share it only with code that signs distinct paths; a reset link is
 // authenticated for its path, so links of other features never work here.
 //
 // Example:
 //
-//	passwords.Reset(true, signer, func(ctx context.Context, request password.ResetRequest) error {
+//	passwords.Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
 //		return dispatcher.Dispatch(ctx, resetJob, request)
 //	}, func(ctx context.Context, message password.ResetMessage) error {
 //		return mailer.Send(ctx, resetEmail(message.Address, message.Link("https://app.example.com/reset-password")))
 //	})
-func (passwords *Builder) Reset(enabled bool, signer *link.Signer, dispatch func(ctx context.Context, request ResetRequest) error, deliver func(ctx context.Context, message ResetMessage) error) *Builder {
-	passwords.resetSet = enabled
-	passwords.signer, passwords.dispatch, passwords.deliver = nil, nil, nil
-	if enabled {
-		passwords.signer, passwords.dispatch, passwords.deliver = signer, dispatch, deliver
-	}
+func (passwords *Builder) Reset(signer *link.Signer, dispatch func(ctx context.Context, request ResetRequest) error, deliver func(ctx context.Context, message ResetMessage) error) *Builder {
+	passwords.resetSet = true
+	passwords.signer, passwords.dispatch, passwords.deliver = signer, dispatch, deliver
 
 	return passwords
 }

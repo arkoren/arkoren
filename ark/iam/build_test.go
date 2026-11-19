@@ -28,8 +28,8 @@ func TestDefaultRegistriesAreOrdered(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
-			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Password(hasher(), registration)
+			identity.TwoFactor(totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		setup := sys.client.Post("/two-factor/setup", "")
@@ -62,7 +62,7 @@ func TestApplicationCallbacksCannotOverrideTheSessionHandle(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(true, hasher(), registration)
+			identity.Password(hasher(), registration)
 			identity.Guard(func(policy *auth.GuardBuilder) { policy.Handle(session.NewHandle()).SessionLifetime(time.Second) })
 			identity.Session(func(cookies *session.Builder) { cookies.Handle(session.NewHandle()).MaxLifetime(time.Second) })
 		})
@@ -121,7 +121,7 @@ func TestClientAddressSnapshot(t *testing.T) {
 		identity.ClientIP(func(*http.Request) string {
 			return "192.0.2.42"
 		})
-		identity.Password(true, hasher(), registration)
+		identity.Password(hasher(), registration)
 	})
 	draft.ClientIP(func(*http.Request) string {
 		return "192.0.2.100"
@@ -147,7 +147,7 @@ func TestClientAddressOverridesGuard(t *testing.T) {
 				return "192.0.2.99"
 			})
 		})
-		identity.Password(true, hasher(), registration)
+		identity.Password(hasher(), registration)
 	})
 	register(t, sys.client, "guard@example.com")
 	reply := sys.client.Do(http.MethodGet, "/sessions", "")
@@ -164,7 +164,7 @@ func TestDefaultClientAddressIgnoresForwarding(t *testing.T) {
 	db := memoryDatabase(t)
 	store := cache.New(memorycache.New())
 	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-		identity.Password(true, hasher())
+		identity.Password(hasher())
 		identity.Session(func(cookies *session.Builder) {
 			cookies.AllowInsecure(true)
 		})
@@ -203,7 +203,7 @@ func TestRawIPv6AddressAndThrottle(t *testing.T) {
 		identity.ClientIP(func(request *http.Request) string {
 			return request.Header.Get("X-Test-IP")
 		})
-		identity.Password(true, hasher(), registration)
+		identity.Password(hasher(), registration)
 	})
 	register(t, sys.client, "ipv6@example.com")
 	client := sys.client.NewDevice()
@@ -240,7 +240,7 @@ func TestRawIPv6AddressAndThrottle(t *testing.T) {
 func TestRegistrationWithResetOnlyIsValid(t *testing.T) {
 	t.Parallel()
 
-	if _, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) }); err != nil {
+	if _, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) { identity.Password(hasher(), registration) }); err != nil {
 		t.Fatalf("registration with reset only: %v", err)
 	}
 }
@@ -253,7 +253,7 @@ func TestRegistrationWithoutResetIsIgnored(t *testing.T) {
 	warnings := apptest.CaptureWarnings(t)
 
 	for _, w := range []wire{{}, {verify: true}} {
-		sys := newAppWith(t, memoryDatabase(t), newInstance(t), w, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
+		sys := newAppWith(t, memoryDatabase(t), newInstance(t), w, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
 		absent(t, sys, "POST /register")
 	}
 	if got := warnings.Settings(); len(got) != 2 || got[0] != "password.Builder.Registration" {

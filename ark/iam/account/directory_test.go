@@ -91,7 +91,7 @@ func newDirectoryWith(t *testing.T, db *database.Database, instance string, sign
 
 	directory, err := account.NewDirectory(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 		accounts.Instance(instance).Events(bus)
-		accounts.Verification(true, signer, box.dispatch, box.deliver)
+		accounts.Verification(signer, box.dispatch, box.deliver)
 	})
 	if err != nil {
 		t.Fatalf("NewDirectory: %v", err)
