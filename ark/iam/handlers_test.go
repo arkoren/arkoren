@@ -118,8 +118,8 @@ func TestTokenKindHandlersPanicWhenKindDisabled(t *testing.T) {
 
 // TestResetAndVerificationAreRequiredForTheirHandlers verifies the
 // composition-time panics of the handler methods for a missing Reset or
-// Verification; Mount instead skips those routes (see
-// TestMountNeverPanicsOnAcceptedConfiguration).
+// Verification; Register instead skips those routes (see
+// TestRegisterNeverPanicsOnAcceptedConfiguration).
 func TestResetAndVerificationAreRequiredForTheirHandlers(t *testing.T) {
 	t.Parallel()
 

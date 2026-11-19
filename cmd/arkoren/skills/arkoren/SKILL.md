@@ -465,7 +465,7 @@ opaque to inference.
 
 #### IAM
 
-- [IAM Overview](references/guides/iam/overview.md): Build a minimal login system with IAM, prepare its storage, and mount its routes with session and CSRF protection.
+- [IAM Overview](references/guides/iam/overview.md): Build a minimal login system with IAM, prepare its storage, and register its routes with session and CSRF protection.
 - [Passwords](references/guides/iam/passwords.md): Sign in with a password, handle a pending second factor, and confirm or change credentials through the IAM routes.
 - [Email Links](references/guides/iam/email-links.md): Wire durable email delivery, then let users reset passwords and verify addresses through signed, single-use links.
 - [Registration](references/guides/iam/registration.md): Open password sign-up deliberately, handle its accepted response, and give both new users and existing address owners a safe path forward.
@@ -477,7 +477,7 @@ opaque to inference.
 - [API Tokens](references/guides/iam/tokens.md): Issue restricted personal tokens, authenticate API requests, and exchange a recent mobile login for a revocable device token.
 - [Sessions and Accounts](references/guides/iam/accounts.md): Manage active logins, suspend or remove users, and choose how credential changes and recovery affect existing access.
 - [Your Own Users](references/guides/iam/own-users.md): Connect an existing user store to IAM while preserving credential versioning, email ownership checks, and transactional cleanup.
-- [Routes](references/guides/iam/routes.md): Look up IAM's default routes, availability rules, response problems, and the steps for mounting individual handlers on custom paths.
+- [Routes](references/guides/iam/routes.md): Look up IAM's default routes, availability rules, response problems, and the steps for registering individual handlers on custom paths.
 
 #### OAuth
 
