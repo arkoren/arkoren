@@ -20,8 +20,8 @@ func TestProviderSignUpIsPerProvider(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "open"}, signUp)
-			identity.Provider(fakeProvider{name: "closed"})
+			identity.Provider(true, fakeProvider{name: "open"}, signUp)
+			identity.Provider(true, fakeProvider{name: "closed"})
 		})
 		if reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("open", "o1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("sign-up provider = %d %s, want 204", reply.Status, reply.Body)
@@ -43,7 +43,7 @@ func TestProviderSignUpNeedsAProvenEmail(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), "")
 		if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "federation:email-unverified") {
@@ -61,10 +61,10 @@ func TestProviderCreateIsPerProvider(t *testing.T) {
 	errNotInvited := errors.New("not invited")
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "work"}, signUp, func(login *iam.ProviderBuilder) {
+			identity.Provider(true, fakeProvider{name: "work"}, signUp, func(login *iam.ProviderBuilder) {
 				login.Create(func(context.Context, auth.External) (string, error) { return "", errNotInvited })
 			})
-			identity.Provider(fakeProvider{name: "home"}, signUp)
+			identity.Provider(true, fakeProvider{name: "home"}, signUp)
 		})
 		if reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("work", "w1", "ada@example.com", true), ""); reply.Status == http.StatusNoContent {
 			t.Fatalf("work sign-up = %d, want the Create refusal", reply.Status)
@@ -83,7 +83,7 @@ func TestProviderCreateCallsAddUp(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var calls []string
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"}, signUp, func(login *iam.ProviderBuilder) {
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp, func(login *iam.ProviderBuilder) {
 				login.Create(func(context.Context, auth.External) (string, error) {
 					calls = append(calls, "first")
 					return "", nil
@@ -111,9 +111,9 @@ func TestProviderTakeOverWorksWithoutSignUp(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "open"}, signUp)
-			identity.Provider(fakeProvider{name: "closed"})
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "open"}, signUp)
+			identity.Provider(true, fakeProvider{name: "closed"})
 		})
 		register(t, sys.client, "ada@example.com")
 		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
@@ -135,8 +135,8 @@ func TestSignUpOnOneProviderWithoutCreateIsInvalid(t *testing.T) {
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
 		identity.Users(ownUsersWithoutCreate(t))
-		identity.Provider(fakeProvider{name: "closed"})
-		identity.Provider(fakeProvider{name: "open"}, signUp)
+		identity.Provider(true, fakeProvider{name: "closed"})
+		identity.Provider(true, fakeProvider{name: "open"}, signUp)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) || !strings.Contains(err.Error(), "open") {
 		t.Fatalf("New = %v, want ErrInvalidConfig naming the provider", err)

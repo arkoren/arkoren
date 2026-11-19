@@ -21,7 +21,7 @@ func TestFormContentTypeIsRejected(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
 		register(t, sys.client, "ada@example.com")
 		for _, contentType := range []string{"application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "text/plain"} {
 			reply := sys.client.NewDevice().Do(http.MethodPost, "/login", login, "Content-Type: "+contentType)
@@ -38,7 +38,7 @@ func TestMissingContentTypeIsRejected(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
 		register(t, sys.client, "ada@example.com")
 		if reply := sys.client.NewDevice().Do(http.MethodPost, "/login", login, "Content-Type: "); reply.Status != http.StatusUnsupportedMediaType {
 			t.Fatalf("login without a Content-Type = %d %s, want 415", reply.Status, reply.Body)
@@ -52,7 +52,7 @@ func TestJSONContentTypeAcceptsParameters(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
 		register(t, sys.client, "ada@example.com")
 		for _, contentType := range []string{"application/json; charset=utf-8", "Application/JSON"} {
 			if reply := sys.client.NewDevice().Do(http.MethodPost, "/login", login, "Content-Type: "+contentType); reply.Status != http.StatusNoContent {
@@ -68,7 +68,7 @@ func TestJSONContentTypeIsNotAPrefixMatch(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
 		register(t, sys.client, "ada@example.com")
 		if reply := sys.client.NewDevice().Do(http.MethodPost, "/login", login, "Content-Type: application/jsonp"); reply.Status != http.StatusUnsupportedMediaType {
 			t.Fatalf("login as application/jsonp = %d, want 415", reply.Status)
@@ -84,9 +84,9 @@ func TestBodylessRoutesRequireJSONToo(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Tokens(true)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		for _, route := range []struct{ method, path string }{
@@ -113,7 +113,7 @@ func TestDeleteRoutesAreNotChecked(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		if reply := sys.client.Do(http.MethodDelete, "/sessions", "", "Content-Type: application/x-www-form-urlencoded"); reply.Status != http.StatusNoContent {
 			t.Fatalf("DELETE /sessions as a form = %d %s, want 204", reply.Status, reply.Body)
@@ -128,8 +128,8 @@ func TestProviderCallbackAcceptsAForm(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		path := callbackPath("fake", "form-user", "form@example.com", true)
 		reply := sys.client.Do(http.MethodPost, path, "sub=x", "Content-Type: application/x-www-form-urlencoded")

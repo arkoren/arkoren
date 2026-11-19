@@ -75,7 +75,7 @@ var ErrNotMigrated = storage.ErrNotMigrated
 // Example:
 //
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(hasher)
+//		identity.Password(true, hasher)
 //	})
 //	if err != nil {
 //		return err
@@ -136,7 +136,7 @@ type IAM struct {
 // Example:
 //
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(hasher)
+//		identity.Password(true, hasher)
 //	})
 //	if err != nil {
 //		return err

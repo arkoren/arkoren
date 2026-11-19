@@ -218,7 +218,7 @@ func registration(passwords *password.Builder) {
 // reset configures forgotten-password recovery on the outbox of the facade
 // being built, whatever its wiring says.
 func reset(passwords *password.Builder) {
-	passwords.Reset(buildingBox.signer, buildingBox.dispatchReset, buildingBox.deliverReset)
+	passwords.Reset(true, buildingBox.signer, buildingBox.dispatchReset, buildingBox.deliverReset)
 }
 
 // verification returns the callback that configures email verification of the
@@ -226,7 +226,7 @@ func reset(passwords *password.Builder) {
 func (box *outbox) verification() iam.BuilderFunc {
 	return func(identity *iam.Builder) {
 		identity.Directory(func(accounts *account.Builder) {
-			accounts.Verification(box.signer, box.dispatchVerify, box.deliverVerify)
+			accounts.Verification(true, box.signer, box.dispatchVerify, box.deliverVerify)
 		})
 	}
 }

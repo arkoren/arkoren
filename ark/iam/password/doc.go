@@ -74,7 +74,7 @@
 //		Create: directory.Create,
 //		Rotate: directory.Rotate,
 //	}, func(passwords *password.Builder) {
-//		passwords.Registration(true).Reset(signer, dispatch, deliver)
+//		passwords.Registration(true).Reset(true, signer, dispatch, deliver)
 //	})
 //	if err != nil {
 //		return err

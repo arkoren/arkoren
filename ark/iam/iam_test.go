@@ -36,7 +36,7 @@ func TestRegisterVerifyAndRequireVerified(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		register(t, sys.client, "ada@example.com")
 		if reply := sys.client.Do(http.MethodGet, "/me", ""); !strings.HasSuffix(reply.Body, "|1|true") {
@@ -82,8 +82,8 @@ func TestTwoFactorEnableChallengeAndRecovery(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		setup := sys.client.Post("/two-factor/setup", "")
@@ -139,7 +139,7 @@ func TestPasswordChangeEndsOtherDevices(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
@@ -164,7 +164,7 @@ func TestForgotAndResetFlow(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		if reply := sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusAccepted {
@@ -192,8 +192,8 @@ func TestTokensExchangeAndBearer(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Tokens(func(tokens *apitoken.Builder) {
+			identity.Password(true, hasher(), registration)
+			identity.Tokens(true, func(tokens *apitoken.Builder) {
 				tokens.Grants(apitoken.AnyScope, "posts:read")
 			})
 		})
@@ -227,8 +227,8 @@ func TestResetEndsTokens(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.Tokens(true)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		_, secret, err := sys.identity.Issuer().Issue(testContext(t), mustSubject(t, sys), apitoken.Request{Name: "ci"})
@@ -254,7 +254,7 @@ func TestSessionsListAndRevoke(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
@@ -287,9 +287,9 @@ func TestDeleteAccountRemovesEveryPackagesRows(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Tokens(true)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		subject := mustSubject(t, sys)
@@ -328,7 +328,7 @@ func TestConfirmWithPassword(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		stale := sys.client.NewDevice()
@@ -350,14 +350,14 @@ func TestTwoInstancesShareOneDatabase(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		first := newApp(t, db, instance+"_a", func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Tokens(true)
 		})
 		second := newApp(t, db, instance+"_b", func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Tokens(true)
 		})
 		register(t, first.client, "ada@example.com")
 		register(t, second.client, "ada@example.com")
@@ -380,7 +380,7 @@ func TestNewRejectsBadConfig(t *testing.T) {
 	if _, err := newFacade(t, func(identity *iam.Builder) { identity.SessionLifetime(-1) }); !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Errorf("negative lifetime error = %v", err)
 	}
-	if _, err := newFacade(t, func(identity *iam.Builder) { identity.TwoFactor(totp.New("bad:issuer"), cipher(t)) }); !errors.Is(err, iam.ErrInvalidConfig) {
+	if _, err := newFacade(t, func(identity *iam.Builder) { identity.TwoFactor(true, totp.New("bad:issuer"), cipher(t)) }); !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Errorf("invalid issuer error = %v", err)
 	}
 }
@@ -390,8 +390,8 @@ func TestMustAcceptPanicsForUnregisteredMethod(t *testing.T) {
 	t.Parallel()
 
 	identity, err := newFacade(t, func(identity *iam.Builder) {
-		identity.Password(hasher(), registration)
-		identity.TwoFactor(totp.New("Example"), cipher(t))
+		identity.Password(true, hasher(), registration)
+		identity.TwoFactor(true, totp.New("Example"), cipher(t))
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -419,10 +419,10 @@ func TestMigrationsOnlyForEnabledFeatures(t *testing.T) {
 		return strings.Join(seen, ",")
 	}
 	all, err := newFacade(t, func(identity *iam.Builder) {
-		identity.Password(hasher(), registration)
-		identity.TwoFactor(totp.New("Example"), cipher(t))
-		identity.Tokens()
-		identity.Provider(fakeProvider{name: "fake"}, signUp)
+		identity.Password(true, hasher(), registration)
+		identity.TwoFactor(true, totp.New("Example"), cipher(t))
+		identity.Tokens(true)
+		identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		identity.Instance("tenant_a")
 	})
 	if err != nil {
@@ -431,7 +431,7 @@ func TestMigrationsOnlyForEnabledFeatures(t *testing.T) {
 	if got, want := groups(all), "account:tenant_a,password:tenant_a,twofactor:tenant_a,apitoken:tenant_a,federation:tenant_a"; got != want {
 		t.Errorf("groups = %s, want %s", got, want)
 	}
-	passwordOnly, _ := newFacade(t, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+	passwordOnly, _ := newFacade(t, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
 	if got, want := groups(passwordOnly), "account,password"; got != want {
 		t.Errorf("groups = %s, want %s", got, want)
 	}
@@ -474,7 +474,7 @@ func TestRegisterTakenAddressNotifiesTheOwner(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
 		fresh := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
 		taken := sys.client.NewDevice().Post("/register", `{"email":"Ada@example.com","password":"another horse"}`)
 		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
@@ -498,7 +498,7 @@ func TestSendWorkersForwardToThePackages(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(true, hasher(), registration) })
 		register(t, sys.client, "ada@example.com")
 		if err := sys.identity.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
 			t.Fatalf("SendReset: %v", err)
@@ -537,8 +537,8 @@ func TestPruneDeletesIdleDeviceTokens(t *testing.T) {
 			t.Fatalf("Prune without tokens = %v, want nil", err)
 		}
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.Tokens(true)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]

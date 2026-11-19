@@ -90,7 +90,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 				Verified:   func(context.Context, string) (bool, error) { return true, nil },
 				ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
 			})
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		if sys.identity.Directory() != nil {
 			t.Fatal("the built-in directory was built next to Users")
@@ -138,7 +138,7 @@ func TestOwnUsersValidation(t *testing.T) {
 	}
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
 		identity.Users(iam.Users{Provider: provider})
-		identity.Password(hasher(), registration)
+		identity.Password(true, hasher(), registration)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Errorf("Password without Lookup and Rotate error = %v", err)

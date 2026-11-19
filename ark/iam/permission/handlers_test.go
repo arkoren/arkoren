@@ -40,7 +40,7 @@ func newServer(t *testing.T) *server {
 
 	store := cache.New(memorycache.New())
 	sys := newFixtureOn(t, sqliteDB(t), "", store, func(policy *permission.Builder) {
-		policy.Roles(manager, owner).Management(usersManage)
+		policy.Roles(manager, owner).Management(true, usersManage)
 	})
 	guard, err := auth.NewGuard(sys.provider, store, func(policy *auth.GuardBuilder) {
 		policy.Grants(sys.store.Load)

@@ -8,12 +8,15 @@ import (
 	"time"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/auth/gate"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/ark/iam"
 	"arkoren.dev/ark/iam/account"
 	"arkoren.dev/ark/iam/apitoken"
+	"arkoren.dev/ark/iam/password"
+	"arkoren.dev/ark/iam/permission"
 )
 
 // ownUsersWithoutCreate returns the application's users without a Create
@@ -36,7 +39,7 @@ func TestRegistrationWithoutCreateIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Users(ownUsersWithoutCreate(t)).Password(hasher(), registration)
+		identity.Users(ownUsersWithoutCreate(t)).Password(true, hasher(), registration)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -49,7 +52,7 @@ func TestSignUpWithoutCreateIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Users(ownUsersWithoutCreate(t)).Provider(fakeProvider{name: "fake"}, signUp)
+		identity.Users(ownUsersWithoutCreate(t)).Provider(true, fakeProvider{name: "fake"}, signUp)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -62,7 +65,7 @@ func TestSignUpOffNeedsNoCreate(t *testing.T) {
 	t.Parallel()
 
 	if _, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Users(ownUsersWithoutCreate(t)).Provider(fakeProvider{name: "fake"})
+		identity.Users(ownUsersWithoutCreate(t)).Provider(true, fakeProvider{name: "fake"})
 	}); err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -87,7 +90,7 @@ func TestTwoFactorWithNilCipherIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.TwoFactor(totp.New("Example"), nil)
+		identity.TwoFactor(true, totp.New("Example"), nil)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -100,7 +103,7 @@ func TestTokensWithNoKindIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false).DeviceTokens(false) })
+		identity.Tokens(true, func(tokens *apitoken.Builder) { tokens.PersonalTokens(false).DeviceTokens(false) })
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -113,7 +116,7 @@ func TestTokenCatalogWithoutGrantsIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Tokens(func(tokens *apitoken.Builder) { tokens.Grants(nil, "posts:read") })
+		identity.Tokens(true, func(tokens *apitoken.Builder) { tokens.Grants(nil, "posts:read") })
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New = %v, want ErrInvalidConfig", err)
@@ -151,8 +154,8 @@ func TestPasswordLaterCallReplacesTheEarlier(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Password(hasher())
+			identity.Password(true, hasher(), registration)
+			identity.Password(true, hasher())
 		})
 		if sys.router.Has(http.MethodPost, "/register") {
 			t.Fatal("POST /register is mounted, want the second Password call to replace the first")
@@ -166,14 +169,14 @@ func TestTwoFactorLaterCallReplacesTheEarlier(t *testing.T) {
 	t.Parallel()
 
 	if _, err := newFacade(t, func(identity *iam.Builder) {
-		identity.TwoFactor(totp.New("Example"), nil)
-		identity.TwoFactor(totp.New("Example"), cipher(t))
+		identity.TwoFactor(true, totp.New("Example"), nil)
+		identity.TwoFactor(true, totp.New("Example"), cipher(t))
 	}); err != nil {
 		t.Fatalf("New with a valid last call = %v, want nil", err)
 	}
 	_, err := newFacade(t, func(identity *iam.Builder) {
-		identity.TwoFactor(totp.New("Example"), cipher(t))
-		identity.TwoFactor(totp.New("Example"), nil)
+		identity.TwoFactor(true, totp.New("Example"), cipher(t))
+		identity.TwoFactor(true, totp.New("Example"), nil)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Fatalf("New with an invalid last call = %v, want ErrInvalidConfig", err)
@@ -188,8 +191,8 @@ func TestTokensLaterCallReplacesTheEarlier(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Tokens(func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
-			identity.Tokens()
+			identity.Tokens(true, func(tokens *apitoken.Builder) { tokens.PersonalTokens(false) })
+			identity.Tokens(true)
 		})
 		if !sys.router.Has(http.MethodPost, "/tokens") {
 			t.Fatal("POST /tokens is not mounted, want the second Tokens call to replace the first")
@@ -205,7 +208,7 @@ func TestUsersAddedThroughTheDirectoryLogIn(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher())
+			identity.Password(true, hasher())
 		})
 		if reply := sys.client.Post("/register", `{"email":"ada@example.com","password":"correct horse"}`); reply.Status != http.StatusNotFound {
 			t.Fatalf("register = %d, want 404 while registration is off", reply.Status)
@@ -224,4 +227,123 @@ func TestUsersAddedThroughTheDirectoryLogIn(t *testing.T) {
 			t.Fatalf("/me = %q, want %s", me.Body, subject)
 		}
 	})
+}
+
+// absent fails the test for each "METHOD /path" route that is mounted on sys.
+func absent(t *testing.T, sys *app, routes ...string) {
+	t.Helper()
+
+	for _, route := range routes {
+		method, path, _ := strings.Cut(route, " ")
+		if sys.router.Has(method, path) {
+			t.Errorf("%s is mounted, want it absent", route)
+		}
+	}
+}
+
+// TestPasswordOffNeedsNoHasher verifies Password(false) accepts a nil hasher,
+// runs the callbacks without using them and mounts no password route.
+func TestPasswordOffNeedsNoHasher(t *testing.T) {
+	t.Parallel()
+
+	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, func(identity *iam.Builder) {
+		identity.Password(false, nil, registration)
+	})
+	absent(t, sys, "POST /login", "POST /register", "PUT /password", "POST /password/forgot")
+}
+
+// TestPasswordOnWithoutHasherIsInvalid verifies Password(true) needs a hasher.
+func TestPasswordOnWithoutHasherIsInvalid(t *testing.T) {
+	t.Parallel()
+
+	_, err := newFacade(t, func(identity *iam.Builder) { identity.Password(true, nil) })
+	if !errors.Is(err, iam.ErrInvalidConfig) {
+		t.Fatalf("New = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// TestTwoFactorOffNeedsNoCipher verifies TwoFactor(false) accepts a zero scheme
+// and a nil cipher and mounts no two-factor route.
+func TestTwoFactorOffNeedsNoCipher(t *testing.T) {
+	t.Parallel()
+
+	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
+		identity.TwoFactor(false, totp.Scheme{}, nil)
+	})
+	absent(t, sys, "POST /two-factor/setup", "POST /two-factor", "GET /login/pending")
+}
+
+// TestTokensOffMountsNothing verifies Tokens(false) mounts no token route and
+// still runs its callbacks.
+func TestTokensOffMountsNothing(t *testing.T) {
+	t.Parallel()
+
+	ran := false
+	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
+		identity.Tokens(false, func(*apitoken.Builder) { ran = true })
+	})
+	absent(t, sys, "GET /tokens", "POST /tokens", "POST /device-tokens")
+	if !ran {
+		t.Fatal("Tokens(false) did not run its callbacks")
+	}
+}
+
+// TestPermissionsOffMountsNothing verifies Permissions(false) mounts no
+// permission route even when its callbacks ask for them.
+func TestPermissionsOffMountsNothing(t *testing.T) {
+	t.Parallel()
+
+	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
+		identity.Permissions(false, func(policy *permission.Builder) { policy.SelfService(true) })
+	})
+	absent(t, sys, "GET /me/permissions")
+	if sys.identity.Permissions() != nil {
+		t.Fatal("Permissions is not nil with Permissions(false)")
+	}
+}
+
+// TestProviderOffIsNotMounted verifies Provider(false) takes a nil provider and
+// leaves a disabled provider out, even when another call enables the same name.
+func TestProviderOffIsNotMounted(t *testing.T) {
+	t.Parallel()
+
+	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
+		identity.Provider(false, nil).Provider(false, fakeProvider{name: "fake"}).Provider(true, fakeProvider{name: "fake"})
+	})
+	if !sys.router.Has(http.MethodGet, "/auth/fake") {
+		t.Fatal("GET /auth/fake is not mounted for the one enabled provider")
+	}
+}
+
+// TestResetOffMountsNoRecoveryRoutes verifies Reset(false) needs no signer and
+// mounts neither forgot nor reset.
+func TestResetOffMountsNoRecoveryRoutes(t *testing.T) {
+	t.Parallel()
+
+	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, func(identity *iam.Builder) {
+		identity.Password(true, hasher(), func(passwords *password.Builder) { passwords.Reset(false, nil, nil, nil) })
+	})
+	absent(t, sys, "POST /password/forgot", "POST /password/reset")
+}
+
+// TestVerificationOffMountsNoEmailRoutes verifies Verification(false) needs no
+// signer and mounts no email route.
+func TestVerificationOffMountsNoEmailRoutes(t *testing.T) {
+	t.Parallel()
+
+	sys := newAppWith(t, memoryDatabase(t), newInstance(t), wire{}, func(identity *iam.Builder) {
+		identity.Directory(func(accounts *account.Builder) { accounts.Verification(false, nil, nil, nil) })
+	})
+	absent(t, sys, "POST /email/verify", "POST /email/verify/resend")
+}
+
+// TestManagementOffMountsNoUserRoutes verifies Management(false) takes the zero
+// permission and mounts no /users route.
+func TestManagementOffMountsNoUserRoutes(t *testing.T) {
+	t.Parallel()
+
+	sys := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
+		identity.Permissions(true, func(policy *permission.Builder) { policy.Management(false, gate.Permission{}) })
+	})
+	absent(t, sys, "GET /users/abc/permissions", "PUT /users/abc/roles/editor")
 }

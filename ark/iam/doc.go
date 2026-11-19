@@ -23,20 +23,20 @@
 //
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(hasher, func(passwords *password.Builder) {
+//		identity.Password(true, hasher, func(passwords *password.Builder) {
 //			passwords.Registration(true) // off by default
-//			passwords.Reset(signer, dispatchReset, deliverReset)
+//			passwords.Reset(true, signer, dispatchReset, deliverReset)
 //		})
 //		identity.Directory(func(accounts *account.Builder) {
-//			accounts.Verification(signer, dispatchVerification, deliverVerification)
+//			accounts.Verification(true, signer, dispatchVerification, deliverVerification)
 //		})
-//		identity.TwoFactor(scheme, cipher)
+//		identity.TwoFactor(true, scheme, cipher)
 //		identity.Tokens()
-//		identity.Permissions(func(policy *permission.Builder) {
+//		identity.Permissions(true, func(policy *permission.Builder) {
 //			policy.Roles(Viewer, Editor, Admin).KeepOne(Admin)
 //		})
-//		identity.Provider(google)
-//		identity.Provider(github, func(login *iam.ProviderBuilder) {
+//		identity.Provider(true, google)
+//		identity.Provider(true, github, func(login *iam.ProviderBuilder) {
 //			login.SignUp(true) // off by default, per provider
 //		})
 //	})

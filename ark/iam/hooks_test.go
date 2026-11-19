@@ -36,14 +36,14 @@ func TestAppAfterChangeKeepsTokenRevocation(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var ran bool
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration, func(passwords *password.Builder) {
+			identity.Password(true, hasher(), registration, func(passwords *password.Builder) {
 				passwords.AfterChange(func(context.Context, string) error {
 					ran = true
 
 					return nil
 				})
 			})
-			identity.Tokens()
+			identity.Tokens(true)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		_, personal, err := sys.identity.Issuer().Issue(testContext(t), mustSubject(t, sys), apitoken.Request{Name: "ci"})
@@ -70,15 +70,15 @@ func TestAppOnEnableKeepsTokenRevocation(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var ran bool
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
 				factors.OnEnable(func(context.Context, string) error {
 					ran = true
 
 					return nil
 				})
 			})
-			identity.Tokens()
+			identity.Tokens(true)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		_, personal, err := sys.identity.Issuer().Issue(testContext(t), mustSubject(t, sys), apitoken.Request{Name: "ci"})
@@ -105,8 +105,8 @@ func TestAppVerifiedKeepsTwoFactorGate(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
 				factors.Verified(allVerified)
 			})
 		})
@@ -124,8 +124,8 @@ func TestAppVerifiedKeepsTokenGate(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Tokens(func(tokens *apitoken.Builder) {
+			identity.Password(true, hasher(), registration)
+			identity.Tokens(true, func(tokens *apitoken.Builder) {
 				tokens.Verified(allVerified)
 			})
 		})
@@ -143,7 +143,7 @@ func TestProviderCreateKeepsTheFacadesSignUp(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"}, signUp, func(login *iam.ProviderBuilder) {
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp, func(login *iam.ProviderBuilder) {
 				login.Create(func(context.Context, auth.External) (string, error) { return "", nil })
 			})
 		})
@@ -170,7 +170,7 @@ func TestAppRegisteredKeepsTheVerificationRequest(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var ran bool
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration, func(passwords *password.Builder) {
+			identity.Password(true, hasher(), registration, func(passwords *password.Builder) {
 				passwords.Registered(func(context.Context, string, string) error {
 					ran = true
 
@@ -199,7 +199,7 @@ func TestAppTakenKeepsTheOwnerNotice(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var ran bool
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration, func(passwords *password.Builder) {
+			identity.Password(true, hasher(), registration, func(passwords *password.Builder) {
 				passwords.Taken(func(context.Context, string) error {
 					ran = true
 

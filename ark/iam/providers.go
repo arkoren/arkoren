@@ -20,7 +20,7 @@ import (
 //
 // Example:
 //
-//	identity.Provider(google) // an *oauthauth.Client
+//	identity.Provider(true, google) // an *oauthauth.Client
 type Provider interface {
 	// Name is the provider's name in mounted paths: "/auth/<name>" starts the
 	// login and "/auth/<name>/callback" finishes it. Names must be unique.
@@ -58,7 +58,7 @@ type NativeProvider interface {
 //
 // Example:
 //
-//	identity.Provider(entra, func(login *iam.ProviderBuilder) {
+//	identity.Provider(true, entra, func(login *iam.ProviderBuilder) {
 //		login.SignUp(true)
 //	})
 type ProviderBuilder struct {
@@ -73,7 +73,7 @@ type ProviderBuilder struct {
 //	var enableSignUp identity.ProviderBuilderFunc = func(login *iam.ProviderBuilder) {
 //		login.SignUp(true)
 //	}
-//	identity.Provider(entra, enableSignUp)
+//	identity.Provider(true, entra, enableSignUp)
 type ProviderBuilderFunc = func(*ProviderBuilder)
 
 // SignUp lets a first logged-out login with this provider and an identity the

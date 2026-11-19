@@ -34,10 +34,10 @@ func TestResetDefeatsPreRegistrationHijack(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
-			identity.Tokens()
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Tokens(true)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		attacker := sys.client
 		register(t, attacker, "victim@example.com")
@@ -130,8 +130,8 @@ func TestResetOfVerifiedAccountKeepsItsFactors(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		subject := mustSubject(t, sys)
@@ -157,7 +157,7 @@ func TestMailGoesToTheStoredAddress(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		registerVerified(t, sys, sys.client, "bob@gmail.com")
 		if reply := sys.client.NewDevice().Post("/password/forgot", `{"email":"bob@gmaİl.com"}`); reply.Status != http.StatusAccepted {
@@ -180,9 +180,9 @@ func TestTwoFactorNeedsRecentCodeNotPassword(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 			// A one-nanosecond window makes every code "old" without sleeping.
-			identity.TwoFactor(totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
+			identity.TwoFactor(true, totp.New("Example"), cipher(t), func(factors *twofactor.Builder) {
 				factors.StepUpWindow(time.Nanosecond)
 			})
 		})
@@ -218,8 +218,8 @@ func TestTwoFactorWithRecentCodeDisablesAndEnableEndsOtherLogins(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		other := sys.client.NewDevice()
@@ -270,9 +270,9 @@ func checkEnablingTwoFactorTokens(t *testing.T, keepPersonal bool, personalStatu
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
+			identity.Tokens(true)
 			if keepPersonal {
 				identity.KeepPersonalTokens()
 			}
@@ -328,8 +328,8 @@ func checkPasswordChangeTokens(t *testing.T, keepPersonal bool, personalStatus i
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Tokens()
+			identity.Password(true, hasher(), registration)
+			identity.Tokens(true)
 			if keepPersonal {
 				identity.KeepPersonalTokens()
 			}
@@ -366,7 +366,7 @@ func TestForgotRegisterResendAreThrottledAndUniform(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		post := func(path, body, ip string) apptest.Reply {
 			return sys.client.Do(http.MethodPost, path, body, "X-Test-IP: "+ip)
@@ -430,7 +430,7 @@ func TestLoginLockoutNeedsTheSameAddressAndCountsOnlyFailures(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		register(t, sys.client, "ada@example.com")
 		login := func(password, ip string) int {
@@ -498,9 +498,9 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 					return true, nil
 				},
 			})
-			identity.Password(hasher(), registration)
-			identity.Tokens()
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.Tokens(true)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "a@example.com", true), "")
 		if len(created) != 1 || !created[0] {
@@ -560,8 +560,8 @@ func TestSecondFactorLockoutCountsAgainstTheLoginThrottle(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 		})
 		lockSecondFactor(t, sys)
 		for i := range 12 {
@@ -593,8 +593,8 @@ func TestSecondFactorLockoutReachesTheApplicationBus(t *testing.T) {
 			t.Fatalf("Listen: %v", err)
 		}
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.TwoFactor(totp.New("Example"), cipher(t))
+			identity.Password(true, hasher(), registration)
+			identity.TwoFactor(true, totp.New("Example"), cipher(t))
 			identity.Events(bus)
 		})
 		lockSecondFactor(t, sys)
@@ -634,7 +634,7 @@ func TestLoginFailsClosedWhenTheLockoutCannotBeRead(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		driver := &brokenLockouts{Driver: memorycache.New()}
 		sys := newAppOn(t, db, instance, cache.New(driver), both, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		register(t, sys.client, "ada@example.com")
 		driver.armed.Store(true)
