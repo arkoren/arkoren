@@ -123,7 +123,7 @@ The [route reference](routes.md) maps actions to their default URLs.
 
 To require a session and a recent credential proof on your own billing route,
 start from the authenticated `web` router in
-[Overview](overview.md#mount-routes):
+[Overview](overview.md#register-routes):
 
 ```go
 billing := web.With(auth.RequireSession(), identity.Guard().RequireFresh(5*time.Minute))

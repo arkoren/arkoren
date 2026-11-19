@@ -3,7 +3,7 @@ title: Federated Sign-In
 description: Add external sign-in, control first-login sign-up per provider, and let signed-in users connect or disconnect their own identities.
 order: 50
 summary:
-  - Construct and start Google and GitHub clients, then mount their IAM routes with session and CSRF protection.
+  - Construct and start Google and GitHub clients, then register their IAM routes with session and CSRF protection.
   - Control first-login sign-up and understand the destructive claim of an unverified built-in account.
   - Connect and disconnect identities explicitly, or use native login and Apple's protected callback.
 ---
@@ -65,7 +65,7 @@ github, err := oauthauth.New(oauthauth.GitHub(), cipher, githubID,
 )
 ```
 
-The registered callback URLs must match these URLs exactly. IAM mounts paths
+The registered callback URLs must match these URLs exactly. IAM registers paths
 using each client's name: these presets use `google` and `github`. If you
 change a name, update the callback URL and provider registration to match.
 `ChallengeURL` points to your front-end second-factor challenge page; configure
@@ -88,7 +88,7 @@ succeeds; GitHub uses plain OAuth2 and its `Start` is a no-op.
 Alternatively register the clients' `Start` methods with your application's
 startup lifecycle, as shown in [OAuth startup](../oauth/overview.md#start-discovery).
 
-## Mount Providers
+## Register Providers
 
 Use the existing `db *database.Database` and `store *cache.Cache` described
 in [IAM Overview](overview.md#start-small). Give each client its own call:
@@ -102,21 +102,21 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 
 Handle the constructor error before using `identity`. The clients satisfy
 `iam.Provider`: IAM asks them for their name,
-login handler, and callback handler. You do not write a resolver for mounted
+login handler, and callback handler. You do not write a resolver for registered
 providers. Add and run `identity.Migrations()` before serving, as described in
 [Prepare Storage](overview.md#prepare-storage).
 
-Mount once at the root of your existing `*router.Router` named `routes`.
+Register once at the root of your existing `*router.Router` named `routes`.
 IAM loads the session, but does not provide CSRF protection; use
 `csrf` from `arkoren.dev/core/http/middleware/csrf`:
 
 ```go
 web := routes.With(csrf.Middleware(), identity.Middleware())
-identity.Mount(web)
+web.Group("/", identity.Register)
 ```
 
 `GET /auth/google` starts Google login; both `GET` and `POST`
-`/auth/google/callback` are mounted for its callback. Other clients follow the
+`/auth/google/callback` are registered for its callback. Other clients follow the
 same name-based pattern. Names must be unique safe path segments containing
 only letters, digits, hyphens, and underscores, or `New` fails.
 Generic OAuth clients default to `oauth`; rename them in their client settings
@@ -282,7 +282,7 @@ Provider login does not replace a local step-up proof; see
 ## Native Login
 
 Google and Apple also support native ID-token login through their mobile SDKs.
-IAM mounts nonce and native-login routes for clients implementing
+IAM registers nonce and native-login routes for clients implementing
 `iam.NativeProvider`. The shared OAuth client has those methods for every
 preset, but presets without native support return `oauthauth.ErrUnsupported`;
 route presence is not proof of support.
@@ -320,20 +320,20 @@ engine.AddInsecureBypassPattern("POST /auth/apple/callback")
 ```
 
 Pass that protection to `csrf` from
-`arkoren.dev/core/http/middleware/csrf` when mounting IAM:
+`arkoren.dev/core/http/middleware/csrf` when registering IAM:
 
 ```go
 web := routes.With(csrf.Middleware(func(protection *csrf.Builder) {
 	protection.Protection(engine)
 }), identity.Middleware())
-identity.Mount(web)
+web.Group("/", identity.Register)
 ```
 
 Use your client's actual name if it is not `apple`.
 HTTPS is required. Keep the default `SameSite=Lax` session policy:
 Apple's POST verifies the identity and redirects to a GET on the same callback;
 that GET must receive the existing session to connect the right account.
-`Mount` registers both methods. Do not add a second callback or disable CSRF
+`Register` adds both methods. Do not add a second callback or disable CSRF
 for the whole authentication area.
 
 Next, use [Sessions and Accounts](accounts.md) to manage the local access

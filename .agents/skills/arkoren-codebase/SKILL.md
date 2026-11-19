@@ -377,7 +377,7 @@ Roles precompute Expand/Permissions in NewRole; two different same-name roles
 in one hierarchy are ErrDuplicateName. ark/iam is the facade over
 these seams: iam.New(db, store, configure) builds the guard with the default
 registries (second factor: otp then recovery; step up: pwd then otp; federated is
-no step-up method), Mount registers the JSON routes of the enabled features, and
+no step-up method), Register registers the JSON routes of the enabled features, and
 every credential handler requires Identity.Session and guard.Fresh (a user with
 no step-up method is fresh after any login). Registration and sign-up on a first provider login are off by default (password.Builder.Registration,
 iam.ProviderBuilder.SignUp, per provider), and the token scope catalog takes its grant ceiling

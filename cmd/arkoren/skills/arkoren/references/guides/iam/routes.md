@@ -1,19 +1,19 @@
 ---
 title: Routes
-description: Look up IAM's default routes, availability rules, response problems, and the steps for mounting individual handlers on custom paths.
+description: Look up IAM's default routes, availability rules, response problems, and the steps for registering individual handlers on custom paths.
 order: 120
 summary:
-  - Find the routes mounted for each enabled feature and distinguish availability from request authorization.
+  - Find the routes registered for each enabled feature and distinguish availability from request authorization.
   - Interpret JSON requirements, login responses, and stable problem types.
-  - Mount custom handlers without losing their security checks or breaking provider redirects.
+  - Register custom handlers without losing their security checks or breaking provider redirects.
 ---
 
 # Routes
 
-`identity.Mount(web)` registers the default routes below. `web` must already run
-the [IAM middleware and appropriate CSRF protection](overview.md#mount-routes).
-Mount once at the root; register individual handlers instead if your paths
-must differ.
+`web.Group("/", identity.Register)` registers the default routes below. `web`
+must already run the [IAM middleware and appropriate CSRF
+protection](overview.md#register-routes). Register once at the root, never under
+a path prefix; register individual handlers instead if your paths must differ.
 
 This page is a lookup reference. The feature guides explain request bodies
 and workflows; [Fresh Logins](freshness.md#credential-routes) compares their
@@ -93,7 +93,7 @@ The [Apple callback](federated-sign-in.md#apple-callback) additionally needs its
 precise CSRF exception. Do not disable CSRF for IAM's JSON routes.
 
 The JSON checks and credential safeguards live in the handler constructors,
-not just in `Mount`. Custom paths retain them.
+not just in `Register`. Custom paths retain them.
 
 ## Login Responses
 
@@ -171,7 +171,7 @@ For package-specific problem names:
 ## Custom Paths
 
 If you need different application URLs, register the matching facade handlers
-instead of calling `Mount`:
+instead of calling `Register`:
 
 ```go
 web.Post("/accounts/sign-in", identity.LoginHandler())
@@ -180,14 +180,14 @@ web.Put("/accounts/password", identity.ChangePasswordHandler())
 
 Keep the facade middleware and CSRF protection on `web`.
 Session, freshness, verified-email, and JSON checks remain inside the handlers.
-Requesting a disabled feature's handler panics during composition; `Mount`
+Requesting a disabled feature's handler panics during composition; `Register`
 instead skips unavailable features. Duplicate route patterns, including a
-second mount, panic through the router.
+second `Register`, panic through the router.
 
 Provider paths need additional care: both the client's registered redirect
 URL and the connect-intent redirect must match your chosen routes.
 For a configured Google client whose `RedirectURL` is
-`https://app.example.com/sso/google/callback`, mount its handlers:
+`https://app.example.com/sso/google/callback`, register its handlers:
 
 ```go
 callback := google.CallbackHandler(identity.Guard(), identity.Resolve)
@@ -197,7 +197,7 @@ web.Post("/sso/google/callback", callback)
 ```
 
 `identity.Resolve` uses the shared connection store, including built-in unverified
-account takeover, but **never opens sign-up**. A hand-mounted callback does
+account takeover, but **never opens sign-up**. A hand-registered callback does
 not inherit a registered provider's sign-up settings.
 
 For custom callbacks that should create users, first build a resolver using

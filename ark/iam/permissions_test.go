@@ -182,9 +182,9 @@ func TestPermissionsExplicitGrantsReplacesCeiling(t *testing.T) {
 	mintToken(t, device, http.StatusCreated, "posts:write")
 }
 
-// TestPermissionsRoutesMountOnlyWhenEnabled verifies no permission route exists
+// TestPermissionsRoutesRegisterOnlyWhenEnabled verifies no permission route exists
 // without SelfService and Management.
-func TestPermissionsRoutesMountOnlyWhenEnabled(t *testing.T) {
+func TestPermissionsRoutesRegisterOnlyWhenEnabled(t *testing.T) {
 	t.Parallel()
 
 	sys := newApp(t, memoryDatabase(t), "", func(identity *iam.Builder) {

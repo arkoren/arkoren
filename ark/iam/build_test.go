@@ -181,7 +181,7 @@ func TestDefaultClientAddressIgnoresForwarding(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 	routes := router.New()
-	identity.Mount(routes.With(identity.Middleware()))
+	identity.Register(routes.With(identity.Middleware()))
 	client := apptest.ServeRouter(t, routes)
 	reply := client.Do(http.MethodPost, "/login", `{"email":"peer@example.com","password":"correct horse"}`,
 		"X-Forwarded-For: 203.0.113.12", "CF-Connecting-IP: 203.0.113.13")

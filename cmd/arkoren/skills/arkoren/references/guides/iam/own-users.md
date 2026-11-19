@@ -56,7 +56,7 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 })
 ```
 
-With the usual `Mount`, this enables password login and change without
+With the usual `Register`, this enables password login and change without
 registration or email recovery.
 You can configure `passwords.Reset` using the same
 [email-link handoff](email-links.md); IAM then mails the address returned by
@@ -114,7 +114,7 @@ middleware constructor panics. Without the pair, IAM cannot gate enrollment
 or purge unverified credentials on reset; your application owns both rules.
 
 Your application also owns ordinary email-verification messages and UI.
-IAM's `/email/verify` and `/email/verify/resend` routes are not mounted
+IAM's `/email/verify` and `/email/verify/resend` routes are not registered
 with custom users, and requesting their handlers directly panics.
 
 ## Let Users Join
@@ -221,7 +221,7 @@ Use this hook for required credential removal, not an event listener.
 Register a provider `OnForget` hook too if your credential store must be cleaned
 up on account deletion.
 
-For exact route availability and custom mounting, use the [Routes](routes.md)
+For exact route availability and custom registration, use the [Routes](routes.md)
 reference.
 
 For adapter fields and extension hooks, see the

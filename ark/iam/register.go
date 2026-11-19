@@ -4,8 +4,8 @@ import (
 	"arkoren.dev/core/http/router"
 )
 
-// Mount registers the default routes of the enabled features on r. Only the
-// routes of enabled features are mounted; "Always" routes need nothing.
+// Register adds the default routes of the enabled features to r. Only the
+// routes of enabled features are registered; "Always" routes need nothing.
 //
 //	Login       POST /register (with Registration), POST /login, POST /login/challenge,
 //	            GET /login/pending, POST /logout
@@ -31,7 +31,7 @@ import (
 // [password.Builder.Registration] (off by default; New refuses it without users
 // that can be created), and /password/forgot and /password/reset need
 // [password.Builder.Reset], because without it no user could receive a reset
-// link. Mount skips a route
+// link. Register skips a route
 // whose requirement is missing instead of panicking, so it never panics for a
 // configuration [New] accepted; the matching XHandler method still panics when
 // asked for directly. The challenge and pending routes need a registered second factor,
@@ -42,44 +42,57 @@ import (
 // on). The permission routes need [Builder.Permissions]: /me/permissions also
 // [permission.Builder.SelfService] and the /users/{subject} routes
 // [permission.Builder.Management]. /logout and the session routes are always
-// mounted.
+// registered.
 //
-// r must already run [IAM.Middleware]. The routes live at the paths above:
-// the connect handler redirects to "/auth/<name>" and the providers' callbacks
-// are mounted there, so do not mount under a prefix. To serve other paths, register
-// the XHandler methods yourself; for another connect target use
-// [federation.Links.ConnectHandler] on [IAM.Links]. The connect, token,
-// two-factor setup and enable handlers enforce the verified-email rule
-// themselves, so they are gated on every path, including the package handlers
-// of [IAM.Links], [IAM.Issuer] and [IAM.Factors] used directly.
-// Mounting twice, or on a
-// router that already has these patterns, panics like any duplicate route.
+// Register never installs [IAM.Middleware]; r must already run it. The
+// middleware identifies the user behind every request, session, token or
+// device, and it belongs on every route of the application that needs to know
+// who is calling, not only on IAM's. Install it once, on the router that
+// carries all of those routes, and derive IAM's routes from that router, so
+// the application's own routes and IAM's share one identification step and
+// installing it twice (or forgetting it here) cannot happen by accident.
+//
+// The routes live at the paths above, at the root. The connect handler
+// redirects to the absolute path "/auth/<name>" and the providers' callbacks
+// are registered there, so r must not carry a path prefix: under a prefix the
+// redirects would point at routes that do not exist, and nothing reports it.
+// To serve other paths, register the XHandler methods yourself; for another
+// connect target use [federation.Links.ConnectHandler] on [IAM.Links]. The
+// XHandler methods stay public for custom paths, for a single feature, and
+// for per-route middleware. The connect, token, two-factor setup and enable
+// handlers enforce the verified-email rule themselves, so they are gated on
+// every path, including the package handlers of [IAM.Links], [IAM.Issuer] and
+// [IAM.Factors] used directly. Registering twice, or on a router that already
+// has these patterns, panics like any duplicate route.
+//
+// Register is a plain func(*router.Router) method, so its method value fits
+// [router.Router.Group].
 //
 // Example:
 //
 //	web := routes.With(identity.Middleware())
-//	identity.Mount(web)
-func (identity *IAM) Mount(r *router.Router) {
-	identity.mountPassword(r)
-	identity.mountLogin(r)
-	identity.mountEmail(r)
-	identity.mountTwoFactor(r)
-	identity.mountTokens(r)
-	identity.mountPermissions(r)
+//	web.Group("/", identity.Register)
+func (identity *IAM) Register(r *router.Router) {
+	identity.registerPassword(r)
+	identity.registerLogin(r)
+	identity.registerEmail(r)
+	identity.registerTwoFactor(r)
+	identity.registerTokens(r)
+	identity.registerPermissions(r)
 	r.Get("/sessions", identity.ListSessionsHandler())
 	r.Delete("/sessions/{id}", identity.DeleteSessionHandler())
 	r.Delete("/sessions", identity.DeleteOtherSessionsHandler())
-	identity.mountProviders(r)
-	identity.mountConnections(r)
+	identity.registerProviders(r)
+	identity.registerConnections(r)
 	if identity.directory != nil {
 		r.Delete("/account", identity.DeleteAccountHandler())
 	}
 }
 
-// mountPassword registers the password routes when [Builder.Password] is set:
+// registerPassword registers the password routes when [Builder.Password] is set:
 // login and change always, registration when users can be created, and the
 // forgot and reset routes when [password.Builder.Reset] is set.
-func (identity *IAM) mountPassword(r *router.Router) {
+func (identity *IAM) registerPassword(r *router.Router) {
 	if identity.verifier == nil {
 		return
 	}
@@ -94,9 +107,9 @@ func (identity *IAM) mountPassword(r *router.Router) {
 	}
 }
 
-// mountLogin registers the guard's routes: the challenge and pending routes
+// registerLogin registers the guard's routes: the challenge and pending routes
 // with a second factor, /logout always and /confirm with a step-up method.
-func (identity *IAM) mountLogin(r *router.Router) {
+func (identity *IAM) registerLogin(r *router.Router) {
 	if identity.secondFactor {
 		r.Post("/login/challenge", identity.ChallengeHandler())
 		r.Get("/login/pending", identity.PendingHandler())
@@ -107,9 +120,9 @@ func (identity *IAM) mountLogin(r *router.Router) {
 	}
 }
 
-// mountEmail registers the email verification routes with the built-in users
+// registerEmail registers the email verification routes with the built-in users
 // and [account.Builder.Verification].
-func (identity *IAM) mountEmail(r *router.Router) {
+func (identity *IAM) registerEmail(r *router.Router) {
 	if !identity.verification() {
 		return
 	}
@@ -117,9 +130,9 @@ func (identity *IAM) mountEmail(r *router.Router) {
 	r.Post("/email/verify/resend", identity.ResendVerificationHandler())
 }
 
-// mountTwoFactor registers the two-factor routes when [Builder.TwoFactor] is
+// registerTwoFactor registers the two-factor routes when [Builder.TwoFactor] is
 // set.
-func (identity *IAM) mountTwoFactor(r *router.Router) {
+func (identity *IAM) registerTwoFactor(r *router.Router) {
 	if identity.factors == nil {
 		return
 	}
@@ -129,8 +142,8 @@ func (identity *IAM) mountTwoFactor(r *router.Router) {
 	r.Post("/two-factor/recovery-codes", identity.RecoveryCodesHandler())
 }
 
-// mountTokens registers the token routes when [Builder.Tokens] is set.
-func (identity *IAM) mountTokens(r *router.Router) {
+// registerTokens registers the token routes when [Builder.Tokens] is set.
+func (identity *IAM) registerTokens(r *router.Router) {
 	if identity.issuer == nil {
 		return
 	}
@@ -145,10 +158,10 @@ func (identity *IAM) mountTokens(r *router.Router) {
 	}
 }
 
-// mountPermissions registers the permission routes the store asked for:
+// registerPermissions registers the permission routes the store asked for:
 // GET /me/permissions with [permission.Builder.SelfService], and the
 // /users/{subject} routes with [permission.Builder.Management].
-func (identity *IAM) mountPermissions(r *router.Router) {
+func (identity *IAM) registerPermissions(r *router.Router) {
 	if identity.permissions == nil {
 		return
 	}
@@ -165,9 +178,9 @@ func (identity *IAM) mountPermissions(r *router.Router) {
 	r.Delete("/users/{subject}/roles/{name}", identity.RevokeRoleHandler())
 }
 
-// mountConnections registers the connection routes when [Builder.Provider]
+// registerConnections registers the connection routes when [Builder.Provider]
 // added any provider.
-func (identity *IAM) mountConnections(r *router.Router) {
+func (identity *IAM) registerConnections(r *router.Router) {
 	if identity.links == nil {
 		return
 	}

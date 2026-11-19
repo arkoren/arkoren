@@ -3,7 +3,7 @@ title: SSO
 description: Use a configured identity provider for organizational sign-in while retaining control of local membership and access.
 order: 60
 summary:
-  - Restrict a work identity provider and mount its client for organizational sign-in.
+  - Restrict a work identity provider and register its client for organizational sign-in.
   - Admit invited users with verified provider email or choose explicit sign-up.
   - Check ongoing application membership and revoke local access during offboarding.
 ---
@@ -108,7 +108,7 @@ Until discovery succeeds, OIDC handlers return `503`. Your application's
 If users have local two-factor authentication, configure `ChallengeURL` to a
 front-end challenge page; otherwise a login requiring that challenge fails.
 
-## Mount Sign-In
+## Register Sign-In
 
 Register the started client with IAM, retaining the default closed sign-up.
 Use `iam` from `arkoren.dev/ark/iam`, with the existing `db` and `store`:
@@ -120,7 +120,7 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 ```
 
 Apply the enabled [migrations](overview.md#prepare-storage) and
-[mount the facade](overview.md#mount-routes) once with session and CSRF
+[register the facade](overview.md#register-routes) once with session and CSRF
 protection. The client
 name makes `GET /auth/work` the login entry point and
 `/auth/work/callback` the callback. Offer a link to `/auth/work` on your login
@@ -206,7 +206,7 @@ activeMember := func(ctx context.Context, actor auth.Identity) (bool, error) {
 ```
 
 Apply that rule to the session-authenticated `web` group from
-[Mount Routes](overview.md#mount-routes),
+[Register Routes](overview.md#register-routes),
 before your application's `listProjects` handler:
 
 ```go
