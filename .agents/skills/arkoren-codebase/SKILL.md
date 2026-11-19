@@ -254,6 +254,12 @@ unsigned hints requiring authenticated resource lookup, not authenticated
 reconciliation, and fulfillment; these integrations introduce no billing ark or
 driver-owned tables. See the consumer payments guides for supported profiles.
 
+**Package routes** follow the rule in `arkoren-go` (API shapes): opaque
+protocol endpoints are `http.Handler` values attached with `router.Mount`;
+ordinary routes come as `XHandler()` methods plus `Register`/`Register<Set>`
+(`Application.RegisterProbes`), with no middleware or prefix of their own. The
+generated starter will use `RegisterProbes` after the next core release.
+
 **HTTP documentation** belongs to the router's actual registrations. Optional
 operation callbacks describe requests and responses; they do not change handler,
 validation, error-mapping, or authentication behavior. Keep the public route-list
