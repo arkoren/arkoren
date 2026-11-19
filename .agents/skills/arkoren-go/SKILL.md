@@ -142,6 +142,16 @@ related calls together rather than putting every call on its own line.
 A multiline callback body does not require a break before its method call.
 Ordinary mutable builders prefer one setting action per line.
 
+**Package routes.** Opaque protocol endpoints (OAuth server, MCP, webhooks)
+implement `http.Handler` and are attached with `router.Mount(prefix, handler)`.
+A package that adds ordinary application routes exposes one `XHandler()` method
+per route plus `Register(r *router.Router)` (or `Register<Set>` when one type
+owns several route sets, e.g. `Application.RegisterProbes`). `Register`
+registers sensible default paths and operations, applies no middleware or
+prefix of its own, and is used preferably as `routes.Group("/", pkg.Register)`.
+Its signature stays `func(*router.Router)` so the method value works as a group
+callback and as a direct call.
+
 Every public API takes one of three shapes.
 
 Every exported construction draft has a matching function alias:

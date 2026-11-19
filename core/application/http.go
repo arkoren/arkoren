@@ -109,6 +109,43 @@ func (application *Application) StartupHandler() router.Handler {
 	})
 }
 
+// RegisterProbes registers the three probe routes with their default paths and
+// OpenAPI operations on routes:
+//
+//	GET /livez     [Application.LiveHandler]    with [LiveOperation]
+//	GET /readyz    [Application.ReadyHandler]   with [ReadyOperation]
+//	GET /startupz  [Application.StartupHandler] with [StartupOperation]
+//
+// It is the package-route form of registering [LivePath], [ReadyPath] and
+// [StartupPath] by hand. Welcome and Info are not registered: they stay
+// explicit opt-ins because Info exposes operational data and Welcome is a
+// public page. Use the individual handlers for custom paths or to omit a probe.
+//
+// RegisterProbes applies no middleware and adds no prefix of its own. The routes
+// inherit whatever middleware and group prefix the router it is given already
+// carries, so probes registered on a router with authentication or CSRF
+// middleware are subject to it. Duplicate registrations panic like any other
+// route: calling it twice on the same router, or registering a probe path
+// yourself first, panics.
+//
+// Its signature is func(*router.Router), so the method value works both as a
+// direct call and as a group callback, which is the preferred form:
+//
+// Example:
+//
+//	app := application.New()
+//	routes := router.New()
+//	routes.Group("/", app.RegisterProbes)
+//
+// Calling app.RegisterProbes(routes) directly is equivalent, and
+// routes.Group("/internal", app.RegisterProbes) serves /internal/livez,
+// /internal/readyz and /internal/startupz instead.
+func (application *Application) RegisterProbes(routes *router.Router) {
+	routes.Get(LivePath, application.LiveHandler(), LiveOperation)
+	routes.Get(ReadyPath, application.ReadyHandler(), ReadyOperation)
+	routes.Get(StartupPath, application.StartupHandler(), StartupOperation)
+}
+
 // probeHandler answers 200 "ok" when healthy reports true and 503
 // "unavailable" otherwise.
 func probeHandler(healthy func(*http.Request) bool) router.Handler {
