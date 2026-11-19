@@ -280,3 +280,58 @@ func TestUseOnChildWithoutRoutesIsAllowed(t *testing.T) {
 	})
 	r.With(noop).Use(noop)
 }
+
+// TestPrefixRegistersUnderPattern verifies that a prefixed sub-router joins
+// nested prefixes and registers on the parent's multiplexer.
+func TestPrefixRegistersUnderPattern(t *testing.T) {
+	t.Parallel()
+
+	r := router.New()
+	r.Prefix("/api").Prefix("v1").Get("/users", ok)
+
+	response := r.Record(httptest.NewRequest(http.MethodGet, "/api/v1/users", nil))
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusNoContent)
+	}
+}
+
+// TestPrefixMiddlewareDoesNotChangeParent verifies that middleware added to a
+// prefixed sub-router stays scoped to it.
+func TestPrefixMiddlewareDoesNotChangeParent(t *testing.T) {
+	t.Parallel()
+
+	tag := func(next router.Handler) router.Handler {
+		return func(w http.ResponseWriter, r *http.Request) error {
+			w.Header().Set("X-Scoped", "yes")
+
+			return next(w, r)
+		}
+	}
+
+	r := router.New()
+	api := r.Prefix("/api")
+	api.Use(tag)
+	api.Get("/a", ok)
+	r.Get("/b", ok)
+
+	if got := r.Record(httptest.NewRequest(http.MethodGet, "/api/a", nil)).Header.Get("X-Scoped"); got != "yes" {
+		t.Fatalf("prefixed route header = %q, want yes", got)
+	}
+
+	if got := r.Record(httptest.NewRequest(http.MethodGet, "/b", nil)).Header.Get("X-Scoped"); got != "" {
+		t.Fatalf("parent route header = %q, want empty", got)
+	}
+}
+
+// TestUseOnParentAfterPrefixRegistrationPanics verifies that a route registered
+// through a prefixed sub-router seals the parent router.
+func TestUseOnParentAfterPrefixRegistrationPanics(t *testing.T) {
+	t.Parallel()
+
+	r := router.New()
+	r.Prefix("/api").Get("/a", ok)
+
+	mustPanic(t, func() {
+		r.Use(noop)
+	})
+}

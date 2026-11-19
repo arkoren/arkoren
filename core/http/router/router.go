@@ -137,12 +137,29 @@ func New() *Router {
 //	})
 //	fmt.Println(routes.Has(http.MethodGet, "/users/7")) // true
 func (router *Router) Group(pattern string, subrouter func(*Router)) {
-	subrouter(&Router{
+	subrouter(router.Prefix(pattern))
+}
+
+// Prefix returns a sub-router that adds pattern to the current path prefix,
+// the value form of [Router.Group]. See [Router.Method] for path normalization
+// rules. Like [Router.Clone], it shares the multiplexer and root route registry,
+// copies the current middleware stack so its [Router.Use] calls do not change
+// the parent, and seals ancestor middleware once a route is registered through
+// it.
+//
+// Example:
+//
+//	routes := router.New()
+//	users := routes.Prefix("/users")
+//	users.Get("/{id}", router.HTTP(http.NotFoundHandler()))
+//	fmt.Println(routes.Has(http.MethodGet, "/users/7")) // true
+func (router *Router) Prefix(pattern string) *Router {
+	return &Router{
 		native:      nil, // parent's native will be used
 		pattern:     path.Join(router.pattern, pattern),
 		parent:      router,
 		middlewares: slices.Clone(router.middlewares),
-	})
+	}
 }
 
 // Grouped creates a cloned sub-router for scoping middleware without a path

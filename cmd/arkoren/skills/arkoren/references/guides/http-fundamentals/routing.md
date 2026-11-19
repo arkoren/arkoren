@@ -53,7 +53,7 @@ rules. Optional route metadata describes an [OpenAPI contract](../openapi/overvi
 not runtime decoding or validation.
 
 Finish registration before serving requests, even for an empty router. Keep the
-pointer from `New`; use `Clone`, `With`, or `Group` rather than copying a router
+pointer from `New`; use `Clone`, `With`, `Prefix`, or `Group` rather than copying a router
 value. Focused fragments in these guides keep error results visible but omit
 routine propagation; complete handlers must handle errors before using results.
 
@@ -104,6 +104,15 @@ routes.Group("/billing", func(billing *router.Router) {
 ```
 
 Both routes run through `requireBilling`; routes outside the group do not.
+`Prefix` returns the same sub-router without a callback, for code that keeps
+it in a variable or passes it to another function:
+
+```go
+billing := routes.Prefix("/billing")
+billing.Use(requireBilling)
+billing.Get("/invoices", listInvoices)
+```
+
 `With(requireBilling).Get(...)` scopes extra middleware to one registration.
 `Grouped` scopes middleware without adding a prefix, while `Clone` returns a
 sub-router with an independent middleware stack and the same route registry.
