@@ -11,6 +11,7 @@ import (
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/iam"
+	"arkoren.dev/ark/iam/internal/apptest"
 )
 
 // TestProviderSignUpIsPerProvider verifies one facade lets one provider create
@@ -20,8 +21,8 @@ func TestProviderSignUpIsPerProvider(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "open"}, signUp)
-			identity.Provider(fakeProvider{name: "closed"})
+			identity.Provider(true, fakeProvider{name: "open"}, signUp)
+			identity.Provider(true, fakeProvider{name: "closed"})
 		})
 		if reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("open", "o1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("sign-up provider = %d %s, want 204", reply.Status, reply.Body)
@@ -43,7 +44,7 @@ func TestProviderSignUpNeedsAProvenEmail(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), "")
 		if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "federation:email-unverified") {
@@ -61,10 +62,10 @@ func TestProviderCreateIsPerProvider(t *testing.T) {
 	errNotInvited := errors.New("not invited")
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "work"}, signUp, func(login *iam.ProviderBuilder) {
+			identity.Provider(true, fakeProvider{name: "work"}, signUp, func(login *iam.ProviderBuilder) {
 				login.Create(func(context.Context, auth.External) (string, error) { return "", errNotInvited })
 			})
-			identity.Provider(fakeProvider{name: "home"}, signUp)
+			identity.Provider(true, fakeProvider{name: "home"}, signUp)
 		})
 		if reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("work", "w1", "ada@example.com", true), ""); reply.Status == http.StatusNoContent {
 			t.Fatalf("work sign-up = %d, want the Create refusal", reply.Status)
@@ -83,7 +84,7 @@ func TestProviderCreateCallsAddUp(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		var calls []string
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"}, signUp, func(login *iam.ProviderBuilder) {
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp, func(login *iam.ProviderBuilder) {
 				login.Create(func(context.Context, auth.External) (string, error) {
 					calls = append(calls, "first")
 					return "", nil
@@ -111,34 +112,36 @@ func TestProviderTakeOverWorksWithoutSignUp(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "open"}, signUp)
-			identity.Provider(fakeProvider{name: "closed"})
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "open"}, signUp)
+			identity.Provider(true, fakeProvider{name: "closed"})
 		})
 		register(t, sys.client, "ada@example.com")
-		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 		owner := sys.client.NewDevice()
 		if reply := owner.Do(http.MethodGet, callbackPath("closed", "c1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("owner callback = %d %s, want 204", reply.Status, reply.Body)
 		}
-		if me := owner.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, squatted+"|") {
+		if me := owner.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(me.Body, squatted+"|") {
 			t.Fatalf("owner /me = %q, want the registered user %s", me.Body, squatted)
 		}
 	})
 }
 
-// TestSignUpOnOneProviderWithoutCreateIsInvalid verifies a single provider with
-// sign-up is enough to refuse users that cannot be created, and the error names
-// it.
-func TestSignUpOnOneProviderWithoutCreateIsInvalid(t *testing.T) {
-	t.Parallel()
+// TestSignUpWithoutCreateWarnsPerProvider verifies only the provider with
+// sign-up is reported when users cannot be created, and the warning names it.
+func TestSignUpWithoutCreateWarnsPerProvider(t *testing.T) {
+	warnings := apptest.CaptureWarnings(t)
 
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
 		identity.Users(ownUsersWithoutCreate(t))
-		identity.Provider(fakeProvider{name: "closed"})
-		identity.Provider(fakeProvider{name: "open"}, signUp)
+		identity.Provider(true, fakeProvider{name: "closed"})
+		identity.Provider(true, fakeProvider{name: "open"}, signUp)
 	})
-	if !errors.Is(err, iam.ErrInvalidConfig) || !strings.Contains(err.Error(), "open") {
-		t.Fatalf("New = %v, want ErrInvalidConfig naming the provider", err)
+	if err != nil {
+		t.Fatalf("New = %v, want the setting ignored", err)
+	}
+	if got := warnings.Settings(); len(got) != 1 || !strings.Contains(got[0], "open") {
+		t.Fatalf("warnings = %v, want one naming the provider open", got)
 	}
 }

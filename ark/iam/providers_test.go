@@ -95,20 +95,20 @@ func TestProviderFirstLoginCreatesVerifiedUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		first := sys.client.NewDevice()
 		if reply := first.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("callback = %d %s", reply.Status, reply.Body)
 		}
-		subject := strings.SplitN(first.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		subject := strings.SplitN(first.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 		record, err := sys.identity.UserProvider().Find(testContext(t), subject)
 		if err != nil || record.Claims["email_verified"] != true || record.Claims["email"] != "ada@example.com" {
 			t.Fatalf("record = %+v, %v", record, err)
 		}
 		second := sys.client.NewDevice()
 		second.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
-		if reply := second.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(reply.Body, subject+"|") {
+		if reply := second.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(reply.Body, subject+"|") {
 			t.Fatalf("second login /me = %q, want user %s", reply.Body, subject)
 		}
 	})
@@ -121,7 +121,7 @@ func TestProviderFirstLoginWithoutSignUpIsRefused(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"})
+			identity.Provider(true, fakeProvider{name: "fake"})
 		})
 		device := sys.client.NewDevice()
 		reply := device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
@@ -141,20 +141,20 @@ func TestConnectWithoutSignUpStillWorks(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"})
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"})
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		sys.client.Post("/connections/fake", "")
 		if reply := sys.client.Do(http.MethodGet, callbackPath("fake", "g1", "", false), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("connecting callback = %d %s", reply.Status, reply.Body)
 		}
-		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 		other := sys.client.NewDevice()
 		if reply := other.Do(http.MethodGet, callbackPath("fake", "g1", "", false), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("login with the connected identity = %d %s", reply.Status, reply.Body)
 		}
-		if me := other.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, subject+"|") {
+		if me := other.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(me.Body, subject+"|") {
 			t.Fatalf("/me = %q, want user %s", me.Body, subject)
 		}
 	})
@@ -168,7 +168,7 @@ func TestProviderUnverifiedEmailCreatesNoUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		reply := sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), "")
 		if reply.Status != http.StatusForbidden || !strings.Contains(reply.Body, "ark/access:federation:email-unverified") {
@@ -187,8 +187,8 @@ func TestProviderNeverLinksByEmail(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		device := sys.client.NewDevice()
@@ -196,7 +196,7 @@ func TestProviderNeverLinksByEmail(t *testing.T) {
 		if reply.Status != http.StatusConflict {
 			t.Fatalf("callback = %d %s, want 409", reply.Status, reply.Body)
 		}
-		if me := device.Do(http.MethodGet, "/me", ""); me.Body != "anonymous" {
+		if me := device.Do(http.MethodGet, "/whoami", ""); me.Body != "anonymous" {
 			t.Fatalf("the provider login reached the existing account: %q", me.Body)
 		}
 	})
@@ -209,8 +209,8 @@ func TestConnectFlowLinksAndListsAndDisconnects(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		connect := sys.client.Post("/connections/fake", "")
@@ -222,7 +222,7 @@ func TestConnectFlowLinksAndListsAndDisconnects(t *testing.T) {
 		}
 		other := sys.client.NewDevice()
 		other.Do(http.MethodGet, callbackPath("fake", "g1", "", false), "")
-		if a, b := sys.client.Do(http.MethodGet, "/me", "").Body, other.Do(http.MethodGet, "/me", "").Body; strings.SplitN(a, "|", 2)[0] != strings.SplitN(b, "|", 2)[0] {
+		if a, b := sys.client.Do(http.MethodGet, "/whoami", "").Body, other.Do(http.MethodGet, "/whoami", "").Body; strings.SplitN(a, "|", 2)[0] != strings.SplitN(b, "|", 2)[0] {
 			t.Fatalf("the provider login reached another user: %q vs %q", a, b)
 		}
 		list := sys.client.Do(http.MethodGet, "/connections", "")
@@ -244,7 +244,7 @@ func TestDisconnectLastWayInConflicts(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		device := sys.client.NewDevice()
 		device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
@@ -263,8 +263,8 @@ func TestSilentFederatedReloginNotFreshForUserWithPassword(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		sys.client.Post("/connections/fake", "")
@@ -296,7 +296,7 @@ func TestNativeRoutesOnlyForNativeProviders(t *testing.T) {
 
 	db := memoryDatabase(t)
 	sys := newApp(t, db, newInstance(t), func(identity *iam.Builder) {
-		identity.Provider(fakeProvider{name: "web"}).Provider(nativeProvider{fakeProvider{name: "phone"}})
+		identity.Provider(true, fakeProvider{name: "web"}).Provider(true, nativeProvider{fakeProvider{name: "phone"}})
 	})
 	for _, route := range []struct {
 		method, path string
@@ -327,7 +327,7 @@ func TestResolveWithoutProvidersIsNotLinked(t *testing.T) {
 	t.Parallel()
 
 	sys := newApp(t, memoryDatabase(t), "", func(identity *iam.Builder) {
-		identity.Password(hasher(), registration)
+		identity.Password(true, hasher(), registration)
 	})
 	if _, err := sys.identity.Resolve(context.Background(), auth.External{Issuer: "x", Subject: "y"}); err == nil {
 		t.Fatal("Resolve without providers succeeded")
@@ -340,7 +340,7 @@ func TestNewRejectsDuplicateProviderNames(t *testing.T) {
 	t.Parallel()
 
 	_, err := newFacade(t, func(identity *iam.Builder) {
-		identity.Provider(fakeProvider{name: "oauth"}).Provider(fakeProvider{name: "oauth"})
+		identity.Provider(true, fakeProvider{name: "oauth"}).Provider(true, fakeProvider{name: "oauth"})
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) || !strings.Contains(err.Error(), "oauth") {
 		t.Fatalf("error = %v, want a duplicate-name rejection", err)
@@ -353,7 +353,7 @@ func TestProviderNamesMustBeOnePathSegment(t *testing.T) {
 	t.Parallel()
 
 	for _, name := range []string{"a/b", "{x}", "..", "a b", "a?b"} {
-		_, err := newFacade(t, func(identity *iam.Builder) { identity.Provider(fakeProvider{name: name}) })
+		_, err := newFacade(t, func(identity *iam.Builder) { identity.Provider(true, fakeProvider{name: name}) })
 		if !errors.Is(err, iam.ErrInvalidConfig) {
 			t.Errorf("provider name %q: New error = %v, want ErrInvalidConfig", name, err)
 		}
@@ -369,23 +369,23 @@ func TestVerifiedProviderEmailTakesOverUnverifiedAccount(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"})
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "ada@example.com")
-		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 
 		owner := sys.client.NewDevice()
 		if reply := owner.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("owner callback = %d %s, want 204", reply.Status, reply.Body)
 		}
-		if me := owner.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, squatted+"|") {
+		if me := owner.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(me.Body, squatted+"|") {
 			t.Fatalf("owner /me = %q, want the registered user %s", me.Body, squatted)
 		}
 		if verified, err := sys.identity.Directory().Verified(testContext(t), squatted); err != nil || !verified {
 			t.Fatalf("Verified after the takeover = %v, %v", verified, err)
 		}
-		if me := sys.client.Do(http.MethodGet, "/me", ""); me.Body != "anonymous" {
+		if me := sys.client.Do(http.MethodGet, "/whoami", ""); me.Body != "anonymous" {
 			t.Fatalf("the squatter's session survived: %q", me.Body)
 		}
 		if reply := sys.client.NewDevice().Post("/login", login); reply.Status == http.StatusNoContent {
@@ -402,11 +402,11 @@ func TestUnverifiedProviderEmailDoesNotTakeOver(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"})
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "ada@example.com")
-		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 
 		device := sys.client.NewDevice()
 		if reply := device.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", false), ""); reply.Status != http.StatusForbidden {
@@ -429,8 +429,8 @@ func TestTakeOverEndsTheRegistrantsLogins(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"})
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "ada@example.com")
 		owner := sys.client.NewDevice()
@@ -461,15 +461,15 @@ func TestTakeOverPublishesAccountClaimed(t *testing.T) {
 		}
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
 			identity.Events(bus)
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"}, signUp)
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"}, signUp)
 		})
 		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "fresh", "new@example.com", true), "")
 		if len(claimed) != 0 {
 			t.Fatalf("AccountClaimed after a first login = %v, want none", claimed)
 		}
 		register(t, sys.client, "ada@example.com")
-		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		squatted := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 		sys.client.NewDevice().Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), "")
 		if len(claimed) != 1 || claimed[0] != squatted {
 			t.Fatalf("AccountClaimed = %v, want [%s]", claimed, squatted)
@@ -485,11 +485,11 @@ func TestTakeOverNeverReenablesADisabledUser(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Provider(fakeProvider{name: "fake"})
+			identity.Password(true, hasher(), registration)
+			identity.Provider(true, fakeProvider{name: "fake"})
 		})
 		register(t, sys.client, "ada@example.com")
-		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/me", "").Body, "|", 2)[0]
+		subject := strings.SplitN(sys.client.Do(http.MethodGet, "/whoami", "").Body, "|", 2)[0]
 		if err := sys.identity.Directory().Disable(testContext(t), subject); err != nil {
 			t.Fatalf("Disable: %v", err)
 		}
@@ -515,7 +515,7 @@ func TestInvitedUserIsClaimedByTheirFirstProviderLogin(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newApp(t, db, instance, func(identity *iam.Builder) {
-			identity.Provider(fakeProvider{name: "fake"})
+			identity.Provider(true, fakeProvider{name: "fake"})
 		})
 		invited, err := sys.identity.Directory().Create(testContext(t), "ada@example.com")
 		if err != nil {
@@ -525,12 +525,12 @@ func TestInvitedUserIsClaimedByTheirFirstProviderLogin(t *testing.T) {
 		if reply := first.Do(http.MethodGet, callbackPath("fake", "g1", "ada@example.com", true), ""); reply.Status != http.StatusNoContent {
 			t.Fatalf("first callback = %d %s, want 204", reply.Status, reply.Body)
 		}
-		if me := first.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, invited+"|") {
+		if me := first.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(me.Body, invited+"|") {
 			t.Fatalf("/me = %q, want the invited user %s", me.Body, invited)
 		}
 		later := sys.client.NewDevice()
 		later.Do(http.MethodGet, callbackPath("fake", "g1", "", false), "")
-		if me := later.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(me.Body, invited+"|") {
+		if me := later.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(me.Body, invited+"|") {
 			t.Fatalf("second login /me = %q, want the invited user %s", me.Body, invited)
 		}
 	})

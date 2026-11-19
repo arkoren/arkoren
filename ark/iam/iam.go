@@ -25,12 +25,15 @@ import (
 
 // ErrInvalidConfig is wrapped by the errors of [New] for an unusable
 // configuration: a missing dependency (database, store or client address
-// source), a duplicate provider name, an invalid instance or scheme, a nil
-// two-factor cipher, [Builder.Directory] combined with [Builder.Users],
-// registration with the built-in users without [password.Builder.Reset], or a
-// failing package constructor (registration or sign-up without users that can
-// be created, tokens with no kind enabled, a scope catalog without a grant
-// function, an invalid or conflicting permission definition).
+// source), a duplicate provider name, an invalid instance or scheme, an enabled
+// feature without its required components (a nil hasher or two-factor cipher),
+// [Builder.Directory] combined with [Builder.Users], or a failing package
+// constructor (tokens with no kind enabled, a scope catalog without a grant
+// function, an invalid or conflicting permission definition). A setting whose
+// dependency is off is not an error: registration without users that can be
+// created or, with the built-in users, without [password.Builder.Reset], and
+// sign-up without users that can be created, are ignored with one warning
+// logged through slog.Default naming the setting.
 //
 // Example:
 //
@@ -75,7 +78,7 @@ var ErrNotMigrated = storage.ErrNotMigrated
 // Example:
 //
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(hasher)
+//		identity.Password(true, hasher)
 //	})
 //	if err != nil {
 //		return err
@@ -95,6 +98,7 @@ type IAM struct {
 	permissions *permission.Store
 	links       *federation.Links
 	providers   []mountedProvider
+	me          *MeBuilder
 	middleware  router.Middleware
 	migrations  []migrate.Definition
 	pingers     []func(context.Context) error
@@ -111,6 +115,11 @@ type IAM struct {
 	emailProven  func(context.Context, string) error
 	keepPersonal bool
 
+	// registration reports whether POST /register is on: the password package
+	// has Registration, and with the built-in users also Reset. [New] ignores
+	// the setting otherwise.
+	registration bool
+
 	// secondFactor and stepUp report whether the guard's registries are not
 	// empty, which the handlers that need one check.
 	secondFactor bool
@@ -126,7 +135,8 @@ type IAM struct {
 // arkoren.dev/core/http/clientip when trusted infrastructure forwards requests.
 // IAM does no I/O at construction: the application runs [IAM.Migrations] with
 // its migrator, and [IAM.Ping]
-// verifies the tables. Errors wrap [ErrInvalidConfig].
+// verifies the tables. Errors wrap [ErrInvalidConfig]; a setting that depends
+// on a feature that is off is ignored with a warning instead.
 //
 // Build order is: the user provider (built-in directory or [Users]), the
 // enabled packages, then the guard with their credentials registered. The
@@ -136,7 +146,7 @@ type IAM struct {
 // Example:
 //
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
-//		identity.Password(hasher)
+//		identity.Password(true, hasher)
 //	})
 //	if err != nil {
 //		return err

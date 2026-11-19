@@ -37,8 +37,8 @@ Enable the feature alongside your existing login method:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher)
-	identity.TwoFactor(scheme, cipher)
+	identity.Password(true, hasher)
+	identity.TwoFactor(true, scheme, cipher)
 })
 ```
 
@@ -157,7 +157,7 @@ second-factor management window too. Import `twofactor` from
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.TwoFactor(scheme, cipher, func(factors *twofactor.Builder) {
+	identity.TwoFactor(true, scheme, cipher, func(factors *twofactor.Builder) {
 		factors.StepUpWindow(5 * time.Minute)
 	})
 })

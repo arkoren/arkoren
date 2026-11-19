@@ -107,7 +107,7 @@ func TestNewStoreRejectsUndefinedManagement(t *testing.T) {
 	t.Parallel()
 
 	if _, err := newStore(t, func(policy *permission.Builder) {
-		policy.Roles(editor).Management(usersManage)
+		policy.Roles(editor).Management(true, usersManage)
 	}); !errors.Is(err, permission.ErrInvalidConfig) {
 		t.Fatalf("err = %v", err)
 	}

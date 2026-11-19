@@ -63,6 +63,7 @@ particular request is authorized.
 | `DELETE /users/{subject}/permissions/{name}` | Permissions with management |
 | `PUT /users/{subject}/roles/{name}` | Permissions with management |
 | `DELETE /users/{subject}/roles/{name}` | Permissions with management |
+| `GET /me` | `Me(true)` |
 | `DELETE /account` | Built-in directory |
 
 Passwords register `pwd` for step-up. Two-factor registers `otp`, then
@@ -77,6 +78,51 @@ native methods even for presets without native support; those handlers return
 `oauthauth.ErrUnsupported`. Google and Apple support native ID-token login
 with explicit audiences. Route presence alone is not a provider-capability
 check; use the [provider comparison](../oauth/providers.md#compatibility-matrix).
+
+## Whoami
+
+`GET /me` answers `200` with the identity of the request, for a session or a
+token. Anonymous requests, and logins that still wait for a second factor,
+answer `401`. Without `Me(true)` the route does not exist and the router
+answers `404`.
+
+It always carries `subject` and, when the user record has them, `email` and
+`email_verified`. Each other section is chosen in the `Me` callback:
+
+| Method | Adds |
+| --- | --- |
+| `User(present)` | `user`: your projection, with your own users only |
+| `Permissions(true)` | `roles` and `permissions`, as `GET /me/permissions` |
+| `TwoFactor(true)` | `two_factor`: whether an authenticator is confirmed |
+| `Login(true)` | `login`: `session`, `level` and `methods` |
+
+With the built-in users `user` is always the account, and with everything on:
+
+```json
+{
+  "subject": "3f9c2a7e1b8d4c6fa0e5d7b9c1a3f2e4",
+  "email": "ada@example.com",
+  "email_verified": true,
+  "roles": ["editor"],
+  "permissions": ["posts:read", "posts:write"],
+  "two_factor": true,
+  "login": { "session": true, "level": "multi", "methods": ["pwd", "otp"] },
+  "user": {
+    "subject": "3f9c2a7e1b8d4c6fa0e5d7b9c1a3f2e4",
+    "email": "ada@example.com",
+    "verified_at": "2026-11-02T09:14:00Z",
+    "created_at": "2026-10-28T17:40:12Z"
+  }
+}
+```
+
+`verified_at` is left out while the email is unverified, and `email_verified` is
+then `false`. Empty `roles` and `permissions` are `[]`. `login.level` is `single`
+or `multi`; a token request has no factors, so it shows `session: false`, level
+`none` and no methods. `methods` lists the core codes `pwd`, `otp`, `hwk` and
+`swk`. `Permissions(true)` without the permission store, `TwoFactor(true)`
+without two-factor, and `User` with the built-in users are ignored with a
+warning. [Own Users](own-users.md#show-your-users) explains the projection.
 
 ## JSON Contract
 

@@ -33,10 +33,10 @@ features and the tokens follow the store:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Permissions(func(policy *permission.Builder) {
+	identity.Permissions(true, func(policy *permission.Builder) {
 		policy.Roles(Viewer, Editor)
 	})
-	identity.Tokens()
+	identity.Tokens(true)
 })
 ```
 
@@ -56,7 +56,7 @@ in your existing constructor:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Tokens(func(tokens *apitoken.Builder) {
+	identity.Tokens(true, func(tokens *apitoken.Builder) {
 		tokens.Grants(grantable, "posts:read", "posts:write")
 	})
 })
@@ -76,7 +76,7 @@ every catalog scope. Use it only when your resource-level authorization
 already limits those scopes to the owner's permissions. A literal `"*"`
 returned by your own function is merely a scope named `"*"`, not a wildcard.
 
-Both token kinds are enabled by `Tokens()`. In its callback,
+Both token kinds are enabled by `Tokens(true)`. In its callback,
 `DeviceTokens(false)` removes the exchange and current-device revocation routes;
 `PersonalTokens(false)` removes personal-token creation. Listing and individual
 revocation remain. Disabling both makes construction fail.
@@ -121,7 +121,7 @@ configure it alongside the catalog:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Tokens(func(tokens *apitoken.Builder) {
+	identity.Tokens(true, func(tokens *apitoken.Builder) {
 		tokens.Grants(grantable, "posts:read", "posts:write")
 		tokens.MaxTTL(30 * 24 * time.Hour)
 	})

@@ -179,18 +179,22 @@ func (policy *Builder) SelfService(enabled bool) *Builder {
 	return policy
 }
 
-// Management enables the management handlers ([Store.UserHandler],
-// [Store.GrantHandler] and the others) and names the permission a caller must
-// hold to use them. The facade of arkoren.dev/ark/iam then mounts the
-// /users/{subject} routes. The permission must be defined by the store; without
-// Management the handlers panic at composition.
+// Management turns the management handlers ([Store.UserHandler],
+// [Store.GrantHandler] and the others) on or off and names the permission a
+// caller must hold to use them. With enabled true the facade of
+// arkoren.dev/ark/iam mounts the /users/{subject} routes, and the permission
+// must be defined by the store. With false, required is ignored (it may be the
+// zero permission). Unless it is enabled the handlers panic at composition.
 //
 // Example:
 //
-//	policy.Roles(Admin).Management(UsersManage)
-func (policy *Builder) Management(required gate.Permission) *Builder {
-	policy.management = required
-	policy.managed = true
+//	policy.Roles(Admin).Management(true, UsersManage)
+func (policy *Builder) Management(enabled bool, required gate.Permission) *Builder {
+	policy.managed = enabled
+	policy.management = gate.Permission{}
+	if enabled {
+		policy.management = required
+	}
 
 	return policy
 }

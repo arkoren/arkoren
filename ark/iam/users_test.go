@@ -90,7 +90,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 				Verified:   func(context.Context, string) (bool, error) { return true, nil },
 				ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
 			})
-			identity.Password(hasher(), registration)
+			identity.Password(true, hasher(), registration)
 		})
 		if sys.identity.Directory() != nil {
 			t.Fatal("the built-in directory was built next to Users")
@@ -107,7 +107,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 		if reply := device.Post("/login", `{"email":"ada@example.com","password":"correct horse"}`); reply.Status != http.StatusNoContent {
 			t.Fatalf("login = %d %s", reply.Status, reply.Body)
 		}
-		if reply := device.Do(http.MethodGet, "/me", ""); !strings.HasPrefix(reply.Body, "u1|1|") {
+		if reply := device.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(reply.Body, "u1|1|") {
 			t.Fatalf("/me = %q", reply.Body)
 		}
 		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
@@ -116,7 +116,7 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 		if users.versions["u1"] != 1 {
 			t.Fatalf("the reset rotated %d times, want once", users.versions["u1"])
 		}
-		if reply := device.Do(http.MethodGet, "/me", ""); reply.Body != "anonymous" {
+		if reply := device.Do(http.MethodGet, "/whoami", ""); reply.Body != "anonymous" {
 			t.Fatalf("the old login survived the rotation: %q", reply.Body)
 		}
 		for _, route := range [][2]string{{"POST", "/email/verify"}, {"POST", "/email/verify/resend"}, {"DELETE", "/account"}} {
@@ -138,7 +138,7 @@ func TestOwnUsersValidation(t *testing.T) {
 	}
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
 		identity.Users(iam.Users{Provider: provider})
-		identity.Password(hasher(), registration)
+		identity.Password(true, hasher(), registration)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Errorf("Password without Lookup and Rotate error = %v", err)

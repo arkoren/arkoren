@@ -272,7 +272,7 @@ func TestSendVerificationReturnsTheDeliveryError(t *testing.T) {
 		down := errors.New("smtp down")
 		directory, err := account.NewDirectory(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 			accounts.Instance(instance)
-			accounts.Verification(newSigner(t, ""), (&outbox{}).dispatch, func(context.Context, account.VerifyMessage) error { return down })
+			accounts.Verification(true, newSigner(t, ""), (&outbox{}).dispatch, func(context.Context, account.VerifyMessage) error { return down })
 		})
 		if err != nil {
 			t.Fatalf("NewDirectory: %v", err)
@@ -310,7 +310,7 @@ func TestVerificationNeedsAllThree(t *testing.T) {
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		_, err := account.NewDirectory(db, cache.New(memorycache.New()), ratelimit.TrustedProxyKey(), func(accounts *account.Builder) {
 			accounts.Instance(instance)
-			accounts.Verification(nil, (&outbox{}).dispatch, (&outbox{}).deliver)
+			accounts.Verification(true, nil, (&outbox{}).dispatch, (&outbox{}).deliver)
 		})
 		if !errors.Is(err, account.ErrInvalidConfig) {
 			t.Fatalf("error = %v, want ErrInvalidConfig", err)

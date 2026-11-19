@@ -18,7 +18,7 @@ import (
 // Example:
 //
 //	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, users, func(passwords *password.Builder) {
-//		passwords.Reset(signer, dispatch, deliver).ResetTTL(30 * time.Minute)
+//		passwords.Reset(true, signer, dispatch, deliver).ResetTTL(30 * time.Minute)
 //	})
 type Builder struct {
 	instance     string
@@ -74,23 +74,28 @@ func (passwords *Builder) Events(bus *event.Bus) *Builder {
 // default is false, because most applications add users themselves (an invite,
 // an admin, a social sign-up) and an open registration route is an abuse
 // surface they never asked for. With false the handler panics at composition.
-// [NewVerifier] fails with [ErrInvalidConfig] when it is true and [Users.Create]
-// is nil. Through the facade with the built-in users, registration also needs
-// [Builder.Reset]: iam.New fails with iam.ErrInvalidConfig without it,
+// [NewVerifier] ignores it, with one warning, when it is true and [Users.Create]
+// is nil: nothing could create the user. Through the facade with the built-in
+// users, registration also needs [Builder.Reset]: iam.New ignores it, with a
+// warning, without it,
 // because the reset notice is how the owner of an address that someone else
 // registered first learns of it and recovers the account.
 //
 // Example:
 //
-//	passwords.Registration(true).Reset(signer, dispatch, deliver)
+//	passwords.Registration(true).Reset(true, true, signer, dispatch, deliver)
 func (passwords *Builder) Registration(enabled bool) *Builder {
 	passwords.registration = enabled
 
 	return passwords
 }
 
-// Reset turns on forgotten-password recovery: [Verifier.ForgotHandler] and
-// [Verifier.ResetHandler] work, and [Verifier.SendReset] exists for the worker.
+// Reset turns forgotten-password recovery on or off: with enabled true
+// [Verifier.ForgotHandler] and [Verifier.ResetHandler] work, and
+// [Verifier.SendReset] exists for the worker. With false recovery stays off,
+// whatever the other arguments are: they may be nil and are not kept, so a
+// deployment can switch the feature from configuration without changing the
+// call. It is off when the method is never called.
 // The package keeps no reset table and runs no goroutine; a reset link is a
 // value that signer signs and that stops working by itself:
 //
@@ -111,23 +116,24 @@ func (passwords *Builder) Registration(enabled bool) *Builder {
 //     returned by SendReset so the queue retries, which means deliver may run
 //     more than once for one request.
 //
-// signer, dispatch and deliver are all required: [NewVerifier] fails with
-// [ErrInvalidConfig] when any is nil. Use a signer whose key is reserved for
+// With enabled true, signer, dispatch and deliver are all required:
+// [NewVerifier] fails with [ErrInvalidConfig] when any is nil. Use a signer whose key is reserved for
 // links, and share it only with code that signs distinct paths; a reset link is
 // authenticated for its path, so links of other features never work here.
 //
 // Example:
 //
-//	passwords.Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
+//	passwords.Reset(true, signer, func(ctx context.Context, request password.ResetRequest) error {
 //		return dispatcher.Dispatch(ctx, resetJob, request)
 //	}, func(ctx context.Context, message password.ResetMessage) error {
 //		return mailer.Send(ctx, resetEmail(message.Address, message.Link("https://app.example.com/reset-password")))
 //	})
-func (passwords *Builder) Reset(signer *link.Signer, dispatch func(ctx context.Context, request ResetRequest) error, deliver func(ctx context.Context, message ResetMessage) error) *Builder {
-	passwords.signer = signer
-	passwords.dispatch = dispatch
-	passwords.deliver = deliver
-	passwords.resetSet = true
+func (passwords *Builder) Reset(enabled bool, signer *link.Signer, dispatch func(ctx context.Context, request ResetRequest) error, deliver func(ctx context.Context, message ResetMessage) error) *Builder {
+	passwords.resetSet = enabled
+	passwords.signer, passwords.dispatch, passwords.deliver = nil, nil, nil
+	if enabled {
+		passwords.signer, passwords.dispatch, passwords.deliver = signer, dispatch, deliver
+	}
 
 	return passwords
 }
