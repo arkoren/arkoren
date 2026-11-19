@@ -1,12 +1,12 @@
 ---
 title: IAM Overview
 nav: Overview
-description: Build a minimal login system with IAM, prepare its storage, and mount its routes with session and CSRF protection.
+description: Build a minimal login system with IAM, prepare its storage, and register its routes with session and CSRF protection.
 order: 10
 summary:
   - Find every IAM feature and its guide, and separate them from the resources and policies your application owns.
   - Construct a password-enabled facade, migrate its tables, and provision a known user.
-  - Mount the authentication routes and protect application routes without opening registration.
+  - Register the authentication routes and protect application routes without opening registration.
 ---
 
 # IAM Overview
@@ -51,7 +51,7 @@ session management, which come with any facade:
 - **[Account deletion](accounts.md#delete-an-account)**: remove a user and every
   feature's rows together.
 
-The [route reference](routes.md) lists the HTTP routes each feature mounts.
+The [route reference](routes.md) lists the HTTP routes each feature registers.
 
 ## Installation
 
@@ -156,7 +156,7 @@ inside one [database transaction](../database/transactions.md), passing its
 context to both calls. These direct Go methods are privileged application
 operations; they are not substitutes for the guarded public account routes.
 
-## Mount Routes
+## Register Routes
 
 IAM's middleware loads sessions and identifies the caller. It does **not**
 provide CSRF protection. Because the account routes accept session cookies,
@@ -165,13 +165,20 @@ exposing them:
 
 ```go
 web := routes.With(csrf.Middleware(), identity.Middleware())
-identity.Mount(web)
+web.Group("/", identity.Register)
 ```
 
-Here `routes` is your existing `*router.Router`. Mount once, at the root:
-provider redirects use `/auth/{name}`. `Mount` registers only the routes your
-configuration supports; for this facade, `/login` exists but `/register` does not.
+Here `routes` is your existing `*router.Router`. `Register` adds only the
+routes your configuration supports; for this facade, `/login` exists but `/register` does not.
 The [route reference](routes.md) covers the full list and custom paths.
+
+`Register` never installs the middleware itself. Install it once on the router
+that carries every route needing to know who is calling, and register IAM on
+that router: your own routes and IAM's then share one identification step.
+Register at the root. Provider redirects use absolute paths such as
+`/auth/{name}`, so a router with a path prefix would send users to routes that
+do not exist, without any error. To serve other paths, register the
+[individual handlers](routes.md#custom-paths).
 
 Your own routes are not automatically private. After the middleware, require an
 authenticated caller with `auth` from `arkoren.dev/core/auth`:

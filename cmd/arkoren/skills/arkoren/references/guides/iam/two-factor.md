@@ -15,7 +15,7 @@ IAM supports time-based one-time passwords (**TOTP**) and recovery codes
 for a lost device. A user enrolls once, then completes a second-factor
 challenge during later logins.
 
-This page assumes [mounted IAM routes](overview.md#mount-routes).
+This page assumes [registered IAM routes](overview.md#register-routes).
 Enrollment requires a verified email, a session, and a
 [fresh login](freshness.md); a bearer token cannot enroll credentials.
 

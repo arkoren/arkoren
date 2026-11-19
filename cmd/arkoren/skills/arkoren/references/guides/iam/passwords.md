@@ -10,7 +10,7 @@ summary:
 
 # Passwords
 
-Once [IAM is mounted](overview.md#mount-routes) with `identity.Password(hasher)`,
+Once [IAM is registered](overview.md#register-routes) with `identity.Password(hasher)`,
 an existing user can sign in with their email and password. This page assumes
 that the user already has a password, either provisioned by your application or
 created through [registration](registration.md).

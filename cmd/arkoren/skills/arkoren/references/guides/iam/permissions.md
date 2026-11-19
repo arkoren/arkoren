@@ -7,7 +7,7 @@ summary:
   - Declare permissions and roles with core gate and give them to IAM's permission store.
   - Grant and revoke them in Go, protect roles that must keep a holder, and transfer them safely.
   - Check them with gate rules on sessions and tokens, or for any user from jobs and admin screens.
-  - Mount the self-service and management routes with their session, freshness, and escalation rules.
+  - Register the self-service and management routes with their session, freshness, and escalation rules.
 ---
 
 # Permissions
@@ -186,7 +186,7 @@ only on purpose: your own grant function then decides what tokens may carry.
 
 ## Routes
 
-The store can mount two route groups, both off by default. Self-service lets a
+The store can register two route groups, both off by default. Self-service lets a
 signed-in user see what they hold:
 
 ```go
@@ -207,7 +207,7 @@ identity.Permissions(func(policy *permission.Builder) {
 })
 ```
 
-This mounts `GET /users/{subject}/permissions` and `PUT` and `DELETE` on
+This registers `GET /users/{subject}/permissions` and `PUT` and `DELETE` on
 `/users/{subject}/permissions/{name}` and `/users/{subject}/roles/{name}`.
 Every call needs a browser session holding `users:manage`; a token is refused
 with `401`. Writes also need a [fresh login](freshness.md) and

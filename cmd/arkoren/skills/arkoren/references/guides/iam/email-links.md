@@ -158,8 +158,8 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 })
 ```
 
-This leaves registration closed. Without `Reset`, IAM mounts neither
-`/password/forgot` nor `/password/reset`. Without `Verification`, it mounts
+This leaves registration closed. Without `Reset`, IAM registers neither
+`/password/forgot` nor `/password/reset`. Without `Verification`, it registers
 neither email route. A partially configured flow makes construction fail;
 requesting one of its unavailable handlers directly panics during composition.
 
@@ -253,7 +253,7 @@ To send Ada a verification email from your invitation flow, use:
 err := identity.Directory().RequestVerification(ctx, subject)
 ```
 
-The mounted `POST /email/verify/resend` requests the same work for the logged-in
+The registered `POST /email/verify/resend` requests the same work for the logged-in
 user and returns `202`. It allows 5 requests per user and 20 per client address
 in 15 minutes, then `429`. Dispatch failure returns `500`.
 [Registration](registration.md) can also request verification automatically.
@@ -290,7 +290,7 @@ verified := web.With(auth.Require(), identity.RequireVerified())
 verified.Post("/posts", createPost)
 ```
 
-`web` is the authenticated router from [Overview](overview.md#mount-routes).
+`web` is the authenticated router from [Overview](overview.md#register-routes).
 An unverified user receives `403`; a successful verification takes effect on the
 next request without another login. With [your own users](own-users.md#verified-emails),
 you provide the corresponding verification functions and UI yourself.

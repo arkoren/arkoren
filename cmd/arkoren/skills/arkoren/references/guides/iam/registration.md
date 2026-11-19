@@ -39,7 +39,7 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 })
 ```
 
-After mounting, `POST /register` exists. Turning registration off removes that
+After registering, `POST /register` exists. Turning registration off removes that
 route; it does not remove existing users or their ability to log in.
 
 ## Register an Address

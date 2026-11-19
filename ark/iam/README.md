@@ -17,7 +17,7 @@ small `iam.Provider` interface that `*oauthauth.Client` satisfies.
 
 | Package | Owns | Tables |
 | --- | --- | --- |
-| `iam` | the facade: `New`, `Builder`, `Mount`, `Provider`, `Users` | none |
+| `iam` | the facade: `New`, `Builder`, `Register`, `Provider`, `Users` | none |
 | `account` | users by email, signed email verification links, the user provider | `users` |
 | `password` | login, optional register, confirm, change, forgot and reset with signed links | `password_hashes` |
 | `twofactor` | TOTP and recovery codes | `totp_secrets`, `recovery_codes` |
@@ -53,7 +53,7 @@ if err := migrator.Add(identity.Migrations()...); err != nil {
 	return err
 }
 web := routes.With(csrf.Middleware(), identity.Middleware())
-identity.Mount(web)
+web.Group("/", identity.Register)
 ```
 
 IAM uses the direct request peer by default. Behind a trusted proxy, configure

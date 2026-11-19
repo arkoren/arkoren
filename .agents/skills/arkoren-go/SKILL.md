@@ -495,7 +495,7 @@ delivery, and lifecycle protocols explicit.
   a second factor redirects to ClientBuilder.ChallengeURL or fails with
   ErrNoChallengeURL.
   ark/iam composes the guard, the packages and the routes: `iam.New(db, store,
-  func(identity *iam.Builder) { ... })` (variable `identity`, builder `identity`), `identity.Mount(web)`
+  func(identity *iam.Builder) { ... })` (variable `identity`, builder `identity`), `web.Group("/", identity.Register)`
   and `identity.XHandler()` for custom paths. `Builder.ClientIP` optionally
   overrides the direct-peer address for trusted proxy deployments. Registration (`password.Builder.Registration`) and
   sign-up on a first provider login (`iam.ProviderBuilder.SignUp`, set per `identity.Provider(provider, configure...)` call) are off by default; the
