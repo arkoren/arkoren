@@ -15,8 +15,9 @@ Go 1.27 service (`{{.Module}}`) built with Arkoren, a modular Go toolkit.
 ## Project notes
 
 - `cmd/server/main.go` constructs `application.New(bootstrap.Application())`,
-  runs the exported `Compose`, and maps the result to the exit status. `Compose`
-  is the explicit list of what the process runs.
+  runs `server.Compose`, and maps the result to the exit status.
+  `Compose`, in `internal/bootstrap/server/compose.go`, is the
+  explicit list of what the process runs.
 - Settings are environment variables read inside the provider or function that
   uses them; there is no config package. The executable uses `godotenv/autoload`;
   existing environment variables win and loading errors are ignored.

@@ -43,10 +43,11 @@ type Violation struct {
 // sorted by file and line. An empty result means the project conforms.
 //
 // Rules:
-//   - internal/bootstrap never imports a feature (root, child or below);
+//   - the internal/bootstrap package never imports a feature (root, child or
+//     below); its process roots, internal/bootstrap/<process>, may;
 //   - a surface child (web, jobs, flow, tools, events, schedules,
-//     <feature>test) is imported only by cmd packages; _test.go files may
-//     import any child, since fixtures exist for tests;
+//     <feature>test) is imported only by process roots and cmd packages;
+//     _test.go files may import any child, since fixtures exist for tests;
 //   - a child below a feature never imports that feature;
 //   - feature and platform packages never import arkoren.dev/driver/... or
 //     arkoren.dev/ark/iam: only bootstrap wires vendors;
@@ -120,12 +121,12 @@ func (project *Project) checkImports(src *source, add func(rule, file string, li
 
 		if from.kind == kindBootstrap && toFeature {
 			add(RuleBootstrapImport, src.rel, line, "internal/bootstrap imports feature package "+rel+
-				": bootstrap never imports a feature; let the feature or cmd import bootstrap instead")
+				": bootstrap never imports a feature; register features from a process root, internal/bootstrap/<process>")
 		}
 
-		if to.kind == kindAbove && from.kind != kindCmd && !src.test {
-			add(RuleSurfaceImport, src.rel, line, "import "+rel+": a surface child is imported only by cmd/<process>; "+
-				"register it from that process's Compose")
+		if to.kind == kindAbove && from.kind != kindProcess && from.kind != kindCmd && !src.test {
+			add(RuleSurfaceImport, src.rel, line, "import "+rel+": a surface child is imported only by process roots; "+
+				"register it from the process's Compose in internal/bootstrap/<process>")
 		}
 
 		if from.kind == kindBelow && to.feature == from.feature && (to.kind == kindFeature || to.kind == kindAbove) {

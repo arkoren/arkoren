@@ -1,0 +1,34 @@
+package server
+
+import (
+	"arkoren.dev/core/application"
+
+	"{{.Module}}/internal/bootstrap"
+	welcomeweb "{{.Module}}/internal/welcome/web"
+)
+
+// Compose is the explicit list of what the server process runs. cmd/server
+// passes it to app.Run; every call finishes composition before any registered
+// startup callback runs. This process root may import feature surfaces; the
+// internal/bootstrap package itself never does, because features import it.
+//
+// Registration functions mount routes on the shared router, so they come first.
+// Diagnostics is registered only when application debug is enabled. Listen comes
+// last: it serves the router after every route is mounted. compose.Use obtains
+// shared providers such as bootstrap.Router; it constructs a value, not a
+// started service. If composition fails, app.Run cleans up acquired resources
+// and returns the error; startup does not begin.
+//
+// Add a feature with `arkoren add feature NAME --web`, or import its
+// registration package and call it here. See
+// https://arkoren.dev/docs/guides/application/composition and
+// https://arkoren.dev/docs/guides/first-steps/project-layout.
+func Compose(compose *application.Composer) {
+	welcomeweb.Routes(compose)
+
+	if compose.App().Debug() {
+		bootstrap.Diagnostics(compose)
+	}
+
+	bootstrap.Listen(compose)
+}

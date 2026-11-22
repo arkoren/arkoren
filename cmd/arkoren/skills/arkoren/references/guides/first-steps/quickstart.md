@@ -119,7 +119,7 @@ the welcome page and probes were mounted on. Registration maps the method and
 path to the handler; it does not open a listener. Use POST because the next step
 records a greeting and changes state.
 
-In `cmd/server/main.go`, import `example.com/hello/internal/greeting` and add the
+In `internal/bootstrap/server/compose.go`, import `example.com/hello/internal/greeting` and add the
 registration to `Compose`, after the welcome routes and before diagnostics and
 the listener:
 

@@ -77,7 +77,7 @@ func TestTidyCancellationPreservesCause(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if err := tidy(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
+	if err := Tidy(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled tidy = %v", err)
 	}
 }
@@ -86,7 +86,7 @@ func TestTidyCancellationPreservesCause(t *testing.T) {
 func TestTidyMissingGo(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
-	if err := tidy(t.Context(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "retry go mod tidy") {
+	if err := Tidy(t.Context(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "retry go mod tidy") {
 		t.Fatalf("missing Go = %v", err)
 	}
 }

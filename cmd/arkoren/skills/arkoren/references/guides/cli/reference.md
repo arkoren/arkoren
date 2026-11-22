@@ -25,8 +25,8 @@ Uppercase operands below are values you supply, not literal words.
 | `arkoren`, `arkoren -h`, `arkoren --help` | Offline root help as text; no endpoint configuration is read. |
 | `arkoren --version` | Installed CLI version as JSON, offline. |
 | `arkoren new DIR [flags]` | Create a starter and resolve Go dependencies; `--skip-tidy` creates files offline. Existing files are never overwritten. |
-| `arkoren add feature NAME [--web --jobs --flow --tools --events --schedules] [--process NAME]` | Create `internal/NAME` with the requested surfaces and register them in `cmd/NAME/main.go`'s `Compose`. |
-| `arkoren add process\|provider\|migration NAME` | Create `cmd/NAME`, a bootstrap provider, or a registered migration. All `add` forms accept `--dry-run` and never overwrite. |
+| `arkoren add feature NAME [--web --jobs --flow --tools --events --schedules] [--process NAME]` | Create `internal/NAME` with the requested surfaces and register them in the `Compose` of `internal/bootstrap/PROCESS` (default `server`). |
+| `arkoren add process\|provider\|migration NAME` | Create `cmd/NAME`, a bootstrap provider, or a registered migration. All `add` forms accept `--dry-run` and `--skip-tidy`, never overwrite, and run `go mod tidy` when new files import an unrequired module. |
 | `arkoren check` | Report layout rule violations with file and line as JSON; exit 1 if there are any. |
 | `arkoren map [--text]` | Print processes, providers, features and migrations from source. |
 | `arkoren skills install\|update\|status [flags]` | Manage the CLI's bundled documentation offline. |

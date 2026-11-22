@@ -3,7 +3,7 @@ title: Project Layout
 description: Organize a service into processes, shared bootstrap providers, and feature packages, with one visible place that wires each process.
 order: 50
 summary:
-  - Run each process from its own cmd directory whose Compose function lists what it runs.
+  - Run each process from its own cmd directory, with a Compose function in bootstrap that lists what it runs.
   - Keep shared resources as providers in bootstrap, which never imports a feature.
   - Lay out a feature as a root package with surfaces above it and clients below it.
   - Wire features with providers, registration functions, and consumer-defined interfaces.
@@ -33,7 +33,9 @@ hello/
 │   │   ├── logging.go
 │   │   ├── router.go
 │   │   ├── listener.go
-│   │   └── mcp.go
+│   │   ├── mcp.go
+│   │   ├── server/compose.go
+│   │   └── migrate/compose.go
 │   ├── migrations/
 │   ├── platform/
 │   │   └── ui/
@@ -49,17 +51,21 @@ hello/
 └── go.mod
 ```
 
-The generator creates `cmd/server`, `bootstrap`, and the `welcome` example. Add
+The generator creates `cmd/server`, `bootstrap` with `bootstrap/server`, and the
+`welcome` example. Add
 the rest as the application needs it; an empty directory earns nothing.
 
 ## Processes
 
 Each process has its own `cmd/<process>/main.go`: `server`, `worker`, `migrate`.
 One binary can run several surfaces, and a process that needs a different set
-of them gets its own directory. `main` builds the application, runs an exported
-`Compose` function, and maps the result to the exit status.
+of them gets its own directory. `main` builds the application, runs the
+process's exported `Compose` function, and maps the result to the exit status.
 
-`Compose` is the explicit list of what the process runs:
+`Compose` lives in the process root `internal/bootstrap/<process>`, a package
+named for the process that `main` imports. It may import feature surfaces and
+`bootstrap` alike, which the `bootstrap` package itself never may. `Compose` is
+the explicit list of what the process runs:
 
 ```go
 func Compose(compose *application.Composer) {
@@ -126,11 +132,11 @@ its own sub-packages. It imports another feature's root only in `feature.go`, to
 
 Sub-packages sit on one side of the root:
 
-- Above the root, packages import the root and only `cmd` imports them:
+- Above the root, packages import the root and only process roots import them:
   `web/` for routes, `jobs/` for queue handlers, `flow/` for workflows, `tools/`
   for MCP tools, `events/` for listeners, `schedules/`, and `<feature>test/` for
   fakes and fixtures. Each exports plain registration functions that take the
-  composer, like `Routes(compose)`. In `cmd`, alias them `<feature><surface>`,
+  composer, like `Routes(compose)`. In process roots, alias them `<feature><surface>`,
   as in `catalogweb`.
 - Below the root, packages are imported by the root and import nothing from the
   feature: outbound clients such as `carrier/`, generated code, and shared wire

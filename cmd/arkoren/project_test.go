@@ -331,7 +331,7 @@ func TestNewDefaults(t *testing.T) {
 	}
 
 	inventory := []string{
-		"cmd/server/main.go", "internal/bootstrap/listener.go", "internal/bootstrap/mcp.go",
+		"cmd/server/main.go", "internal/bootstrap/server/compose.go", "internal/bootstrap/listener.go", "internal/bootstrap/mcp.go",
 		"internal/bootstrap/router.go", "internal/welcome/web/routes.go",
 		"internal/bootstrap/app.go", "internal/bootstrap/logging.go", ".env", ".env.example", "go.mod", "README.md",
 		"Dockerfile", "Makefile", ".dockerignore", ".gitignore", ".editorconfig",

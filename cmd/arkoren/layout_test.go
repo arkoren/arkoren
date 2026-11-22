@@ -54,7 +54,7 @@ func TestAddFeatureDryRunWritesNothing(t *testing.T) {
 	t.Parallel()
 
 	env := scaffoldedProject(t)
-	before, err := os.ReadFile(filepath.Join(env.Dir, "cmd/server/main.go"))
+	before, err := os.ReadFile(filepath.Join(env.Dir, "internal/bootstrap/server/compose.go"))
 
 	if err != nil {
 		t.Fatal(err)
@@ -62,17 +62,17 @@ func TestAddFeatureDryRunWritesNothing(t *testing.T) {
 
 	report, err := runLayout(t, env, "add", "feature", "orders", "--web", "--dry-run")
 
-	if err != nil || report["dry_run"] != true || len(report["created"].([]any)) != 5 {
+	if err != nil || report["dry_run"] != true || len(report["created"].([]any)) != 6 {
 		t.Fatalf("report = %v, err = %v", report, err)
 	}
 
 	edited := report["edited"].([]any)[0].(map[string]any)
 
-	if edited["path"] != "cmd/server/main.go" || edited["inserted"].([]any)[0] != "ordersweb.Routes(compose)" {
+	if edited["path"] != "internal/bootstrap/server/compose.go" || edited["inserted"].([]any)[0] != "ordersweb.Routes(compose)" {
 		t.Fatalf("edited = %v", edited)
 	}
 
-	after, _ := os.ReadFile(filepath.Join(env.Dir, "cmd/server/main.go"))
+	after, _ := os.ReadFile(filepath.Join(env.Dir, "internal/bootstrap/server/compose.go"))
 
 	if _, err := os.Stat(filepath.Join(env.Dir, "internal/orders")); !errors.Is(err, os.ErrNotExist) || !bytes.Equal(before, after) {
 		t.Fatalf("dry run changed the project: %v", err)
@@ -85,8 +85,10 @@ func TestAddFeatureWritesFilesAndRegistration(t *testing.T) {
 
 	env := scaffoldedProject(t)
 
-	if _, err := runLayout(t, env, "add", "feature", "orders", "--web", "--jobs"); err != nil {
-		t.Fatal(err)
+	report, err := runLayout(t, env, "add", "feature", "orders", "--web", "--jobs", "--skip-tidy")
+
+	if err != nil || report["tidied"] != false {
+		t.Fatalf("report = %v, err = %v", report, err)
 	}
 
 	for _, rel := range []string{"internal/orders/service.go", "internal/orders/web/web.go", "internal/orders/jobs/jobs.go"} {
@@ -95,10 +97,10 @@ func TestAddFeatureWritesFilesAndRegistration(t *testing.T) {
 		}
 	}
 
-	main, _ := os.ReadFile(filepath.Join(env.Dir, "cmd/server/main.go"))
+	compose, _ := os.ReadFile(filepath.Join(env.Dir, "internal/bootstrap/server/compose.go"))
 
-	if !strings.Contains(string(main), "ordersjobs.Handlers(compose)") {
-		t.Fatalf("main.go:\n%s", main)
+	if !strings.Contains(string(compose), "ordersjobs.Handlers(compose)") {
+		t.Fatalf("compose.go:\n%s", compose)
 	}
 }
 
@@ -224,14 +226,28 @@ func TestLayoutHelpIsOffline(t *testing.T) {
 }
 
 // TestLayoutCommandsOnBuiltProject scaffolds a project, applies every kind of
-// add, then builds it and requires `check` to stay clean. It needs the Go
-// toolchain and resolves third-party modules, so short mode skips it.
+// add, then builds it and requires `check` to stay clean. The first add imports
+// foundation modules the scaffold does not require, so it must run go mod tidy;
+// the rest skip it because the build below tidies against the checkout. It needs
+// the Go toolchain and resolves third-party modules, so short mode skips it.
 func TestLayoutCommandsOnBuiltProject(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a generated project")
 	}
 
 	env := scaffoldedProject(t)
+
+	report, err := runLayout(t, env, "add", "feature", "catalog", "--web")
+
+	if err != nil || report["tidied"] != true {
+		t.Fatalf("add without --skip-tidy: report = %v, err = %v", report, err)
+	}
+
+	module, _ := os.ReadFile(filepath.Join(env.Dir, "go.mod"))
+
+	if !strings.Contains(string(module), "arkoren.dev/foundation/query ") {
+		t.Fatalf("go.mod after tidy lacks foundation/query:\n%s", module)
+	}
 
 	for _, args := range [][]string{
 		{"add", "feature", "orders", "--web", "--jobs", "--flow", "--tools", "--events", "--schedules"},
@@ -242,7 +258,7 @@ func TestLayoutCommandsOnBuiltProject(t *testing.T) {
 		{"add", "migration", "create_orders"},
 		{"add", "migration", "add-order-status"},
 	} {
-		if _, err := runLayout(t, env, args...); err != nil {
+		if _, err := runLayout(t, env, append(args, "--skip-tidy")...); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
 	}
@@ -265,7 +281,7 @@ func TestLayoutCommandsOnBuiltProject(t *testing.T) {
 		t.Fatalf("go vet after add: %v\n%s", err, output)
 	}
 
-	report, err := runLayout(t, env, "check")
+	report, err = runLayout(t, env, "check")
 
 	if err != nil || report["ok"] != true {
 		t.Fatalf("check after add: %v, %v", report, err)

@@ -33,7 +33,8 @@ type Process struct {
 	// Name is the directory name below cmd/.
 	Name string `json:"name"`
 	// Compose lists the calls of the exported Compose function in source
-	// order. A call inside an if statement carries the condition, as in
+	// order, read from the process root internal/bootstrap/<process> (or from
+	// cmd/<process>/main.go in projects that declare Compose there). A call inside an if statement carries the condition, as in
 	// "bootstrap.Diagnostics(compose) [if compose.App().Debug()]".
 	Compose []string `json:"compose,omitzero"`
 }
@@ -100,7 +101,9 @@ func (project *Project) Map() Map {
 
 		switch role.kind {
 		case kindCmd:
-			mapProcess(&inventory, src)
+			mapProcess(&inventory, path.Base(src.dir), src)
+		case kindProcess:
+			mapProcess(&inventory, strings.Split(src.dir, "/")[2], src)
 		case kindBootstrap:
 			if src.dir == "internal/bootstrap" {
 				inventory.Bootstrap.Providers = append(inventory.Bootstrap.Providers, providerVars(src.file, app)...)
@@ -169,9 +172,9 @@ func registrations(file *ast.File, app string) []string {
 	return names
 }
 
-// mapProcess records the Compose calls of a cmd package file.
-func mapProcess(inventory *Map, src *source) {
-	name := path.Base(src.dir)
+// mapProcess records the Compose calls of a process root file, or of a
+// cmd/<process>/main.go in projects that still declare Compose there.
+func mapProcess(inventory *Map, name string, src *source) {
 	index := slices.IndexFunc(inventory.Processes, func(process Process) bool { return process.Name == name })
 
 	if index < 0 {

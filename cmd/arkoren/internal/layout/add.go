@@ -35,6 +35,13 @@ var featurePattern = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 var reservedFeatureNames = []string{
 	"bootstrap", "migrations", "platform", "application", "router", "http", "context", "time",
 	"queue", "workflow", "mcp", "schedule", "event", "web", "jobs", "flow", "tools", "events", "schedules",
+	"request", "response", "problem", "errormap", "query",
+}
+
+// surfaceExtras are the files a surface child gets beside <surface>.go, as
+// template suffix and file name: web declares its problems in problems.go.
+var surfaceExtras = map[string][][2]string{
+	"web": {{"web_problems", "problems"}},
 }
 
 // Plan is the set of changes one `arkoren add` operation would make: new files
@@ -80,7 +87,8 @@ var surfaceFunctions = map[string]string{
 
 // AddFeature plans internal/<name>: the root files (<name>.go, service.go,
 // store.go, feature.go with DefaultStore and DefaultService) and one child
-// package per requested surface exporting a registration function, plus the
+// package per requested surface exporting a registration function (web also
+// gets problems.go mapping the root's ErrNotFound to a problem), plus the
 // calls and imports that register each surface in the Compose of the chosen
 // process. Child packages are imported with the alias <name><surface>.
 //
@@ -140,6 +148,14 @@ func (project *Project) AddFeature(options FeatureOptions, templates fs.FS) (*Pl
 			return nil, err
 		}
 
+		for _, extra := range surfaceExtras[surface] {
+			err := project.render(plan, templates, "add/feature/"+extra[0]+".go", "internal/"+name+"/"+surface+"/"+extra[1]+".go", data)
+
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		registrations = append(registrations, registration{
 			importPath: project.Module + "/internal/" + name + "/" + surface,
 			alias:      name + surface,
@@ -151,21 +167,47 @@ func (project *Project) AddFeature(options FeatureOptions, templates fs.FS) (*Pl
 		return plan, nil
 	}
 
-	main := "cmd/" + process + "/main.go"
+	target := project.composeFile(process)
 
-	if !slices.ContainsFunc(project.sources, func(src *source) bool { return src.rel == main }) {
-		return nil, console.UsageError("process %q not found: no %s (create it with arkoren add process %s)", process, main, process)
+	if target == "" {
+		return nil, console.UsageError("process %q not found: no Compose in internal/bootstrap/%s (create it with arkoren add process %s)",
+			process, process, process)
 	}
 
-	return plan, project.planEdit(plan, main, func(content []byte) ([]byte, []string, error) {
-		return addRegistrations(main, content, project.Module, registrations)
+	return plan, project.planEdit(plan, target, func(content []byte) ([]byte, []string, error) {
+		return addRegistrations(target, content, project.Module, registrations)
 	})
 }
 
-// AddProcess plans cmd/<name>/main.go: a process that builds the application
-// from bootstrap.Application and runs an empty exported Compose. The name is
-// lowercase words of letters and digits joined by hyphens, and cmd/<name> must
-// not exist.
+// composeFile returns the file declaring the Compose of process: a non-test
+// file of the process root internal/bootstrap/<process>, or, in projects that
+// still declare it there, cmd/<process>/main.go. It returns "" when neither
+// declares Compose.
+func (project *Project) composeFile(process string) string {
+	legacy := ""
+
+	for _, src := range project.sources {
+		if src.test || composeDecl(src.file) == nil {
+			continue
+		}
+
+		if src.dir == "internal/bootstrap/"+process {
+			return src.rel
+		}
+
+		if src.rel == "cmd/"+process+"/main.go" {
+			legacy = src.rel
+		}
+	}
+
+	return legacy
+}
+
+// AddProcess plans a new process: internal/bootstrap/<name>/compose.go with
+// an empty exported Compose, and cmd/<name>/main.go, which builds the
+// application from bootstrap.Application and runs that Compose. The name is
+// lowercase words of letters and digits joined by hyphens; the package name
+// drops the hyphens. Neither directory may exist.
 //
 // Example:
 //
@@ -175,12 +217,24 @@ func (project *Project) AddProcess(name string, templates fs.FS) (*Plan, error) 
 		return nil, console.UsageError("process name %q must be lowercase letters and digits, optionally joined by hyphens", name)
 	}
 
-	if err := project.refuseExisting("cmd/" + name); err != nil {
-		return nil, err
+	for _, dir := range []string{"cmd/" + name, "internal/bootstrap/" + name} {
+		if err := project.refuseExisting(dir); err != nil {
+			return nil, err
+		}
+	}
+
+	pkg := strings.ReplaceAll(name, "-", "")
+
+	if token.IsKeyword(pkg) {
+		return nil, console.UsageError("process name %q is a Go keyword", name)
 	}
 
 	plan := &Plan{}
-	data := map[string]string{"Module": project.Module, "Process": name}
+	data := map[string]string{"Module": project.Module, "Process": name, "Package": pkg}
+
+	if err := project.render(plan, templates, "add/process/compose.go", "internal/bootstrap/"+name+"/compose.go", data); err != nil {
+		return nil, err
+	}
 
 	return plan, project.render(plan, templates, "add/process/main.go", "cmd/"+name+"/main.go", data)
 }
@@ -217,7 +271,10 @@ func (project *Project) AddProvider(name string, templates fs.FS) (*Plan, error)
 // migration in All. The sequence is four digits, one more than the highest
 // numbered file already in the directory, so files sort in running order. The
 // migration id is the name with hyphens; the exported variable is its
-// CamelCase form. The stub defines an empty Up step and a TODO.
+// CamelCase form. The stub extracts its schema-builder operations into exported
+// variables beside the migration: a name starting with "create" creates (and
+// on Down drops) the table named by the remaining words, any other name alters
+// that table with an empty change that fails until a TODO is resolved.
 //
 // If internal/migrations declares All, the new variable is appended to the
 // slice literal it returns. Otherwise migrations.go is created with All; an
@@ -258,7 +315,15 @@ func (project *Project) AddMigration(name string, templates fs.FS) (*Plan, error
 	}
 
 	plan := &Plan{}
-	data := map[string]string{"Name": identifier, "ID": id}
+	data := map[string]string{"Name": identifier, "ID": id, "Table": strings.Join(words(name), "_")}
+
+	if parts := words(name); len(parts) > 1 {
+		data["Table"] = strings.Join(parts[1:], "_")
+
+		if parts[0] == "create" {
+			data["Create"] = "true"
+		}
+	}
 	target := dir + "/" + fmt.Sprintf("%04d_%s.go", sequence, strings.ReplaceAll(name, "-", "_"))
 
 	if err := project.render(plan, templates, "add/migration/migration.go", target, data); err != nil {

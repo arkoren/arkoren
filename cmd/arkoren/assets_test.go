@@ -268,7 +268,7 @@ func TestNewDiagnosticsIsPlainRegistration(t *testing.T) {
 		t.Fatal("Diagnostics owns debug policy or adds authentication to the starter")
 	}
 
-	contains(t, renderedNewSource(t, "cmd/server/main.go"), "if compose.App().Debug() {\n\t\tbootstrap.Diagnostics(compose)")
+	contains(t, renderedNewSource(t, "internal/bootstrap/server/compose.go"), "if compose.App().Debug() {\n\t\tbootstrap.Diagnostics(compose)")
 }
 
 // TestNewMainAutoloadsEnvironment keeps dotenv loading out of the run helper.
@@ -1228,12 +1228,17 @@ func TestNewBootstrapComposesSuppliedApplication(t *testing.T) {
 	t.Parallel()
 
 	source := renderedNewSource(t, "cmd/server/main.go")
+	compose := renderedNewSource(t, "internal/bootstrap/server/compose.go")
 
-	contains(t, source,
-		"func Compose(compose *application.Composer) {", "welcomeweb.Routes(compose)",
+	contains(t, source, `"example.com/hello/internal/bootstrap/server"`, "app.Run(ctx, server.Compose)")
+	contains(t, compose,
+		"package server", "func Compose(compose *application.Composer) {", "welcomeweb.Routes(compose)",
 		"if compose.App().Debug() {", "bootstrap.Diagnostics(compose)", "bootstrap.Listen(compose)",
-		"app.Run(ctx, Compose)",
 	)
+
+	if strings.Contains(source, "func Compose") || strings.Contains(source, "welcomeweb") {
+		t.Fatal("main declares the process graph instead of importing it from internal/bootstrap/server")
+	}
 
 	if strings.Contains(source, "func New(") {
 		t.Fatal("main still creates components")
@@ -1253,7 +1258,7 @@ func TestNewBootstrapComposesSuppliedApplication(t *testing.T) {
 func TestNewComposeOrdersRegistration(t *testing.T) {
 	t.Parallel()
 
-	source := renderedNewSource(t, "cmd/server/main.go")
+	source := renderedNewSource(t, "internal/bootstrap/server/compose.go")
 
 	routes := strings.Index(source, "welcomeweb.Routes(compose)")
 	diagnostics := strings.Index(source, "bootstrap.Diagnostics(compose)")
@@ -1332,7 +1337,7 @@ func TestNewMainReturnsLifecycleError(t *testing.T) {
 	source := renderedNewSource(t, "cmd/server/main.go")
 
 	contains(t, source,
-		"app := application.New(", "return app.Run(ctx, Compose)",
+		"app := application.New(", "return app.Run(ctx, server.Compose)",
 		"func run() error", "if run() != nil {", "os.Exit(1)",
 	)
 
