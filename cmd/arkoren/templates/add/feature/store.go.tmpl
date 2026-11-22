@@ -22,7 +22,7 @@ func NewStore(compose *application.Composer) *Store {
 // SelectAll is the statement that lists the {{.Feature}} rows, newest first.
 // Build every statement with the query builder in an exported func like this
 // one (or a var when it takes no input). Store methods only run it with the
-// database's Query or Exec, and tests can assert the statement on its own.
+// database's Select, Find or Exec, and tests can assert the statement on its own.
 func SelectAll() query.Query {
 	return query.Table("{{.Feature}}", func(statement *query.Builder) {
 		statement.Select("id").OrderByDesc("id")

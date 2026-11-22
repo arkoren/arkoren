@@ -122,7 +122,8 @@ your first endpoint.
 ## Starter Defaults
 
 `cmd/server/main.go` creates the application and calls
-`app.Run(ctx, Compose)`. `Compose` is the explicit list of what the process runs:
+`app.Run(ctx, server.Compose)`. `Compose`, in `internal/bootstrap/server`, is the
+explicit list of what the process runs:
 the welcome feature's routes, the diagnostics endpoint when debug is on, and
 the HTTP listener. `internal/bootstrap` holds the shared router provider and the
 `Listen` and `Diagnostics` registration functions, and

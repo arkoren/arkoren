@@ -5,10 +5,11 @@ A small shop service shaped by the arkoren-structure rules: a `server` with HTTP
 ## Contents
 
 - Bootstrap providers: database (two singletons, one constructor), queue (driver, dispatcher, consumer, runner), router, migrator
-- Migrations
-- Feature root: declarations, providers, store, service with a cross-feature interface and an after-commit event
-- Surfaces: web routes, job handlers, an event listener in another feature
-- Processes: server, worker, migrate
+- Migrations: schema-builder operations extracted into exported variables
+- Feature root: declarations, providers, a store with exported query functions, a service with an extracted transaction body and an after-commit event
+- Web surface: routes, handlers using the request and response helpers, a validation schema, problems
+- Other surfaces: job handlers, an event listener in another feature
+- Processes: thin `main` functions and the `Compose` of each process in `internal/bootstrap/<process>`
 - Test: composing surfaces and recording a request
 
 ## Bootstrap providers
@@ -143,40 +144,53 @@ func Migrate(compose *application.Composer) {
 
 ## Migrations
 
-Generated projects keep each migration in its own file (`arkoren add migration`); one file is shown here.
+Each migration has its own numbered file (`arkoren add migration`). Schema changes are schema-builder operations in exported variables, never dialect SQL, and the migration only references them.
 
 `internal/migrations/migrations.go`
 
 ```go
 package migrations
 
-import (
-	"context"
-
-	"arkoren.dev/core/service/database"
-	"arkoren.dev/core/service/database/migrate"
-	"arkoren.dev/foundation/query"
-)
+import "arkoren.dev/core/service/database/migrate"
 
 // All returns the application's migrations in order.
 func All() []migrate.Definition {
 	return []migrate.Definition{CreateOrders}
 }
+```
 
-// CreateOrders creates the orders table.
-var CreateOrders = migrate.NewMigration("0001_create_orders", func(migration *migrate.MigrationBuilder) {
-	migration.Up(func(ctx context.Context, db *database.Database) error {
-		_, err := db.Exec(ctx, query.Raw("CREATE TABLE orders (id INTEGER PRIMARY KEY, sku TEXT NOT NULL, total INTEGER NOT NULL)"))
+`internal/migrations/0001_create_orders.go`
 
-		return err
-	})
+```go
+package migrations
+
+import (
+	"arkoren.dev/core/service/database/migrate"
+	"arkoren.dev/foundation/query/schema"
+)
+
+// OrdersTable creates the orders table.
+var OrdersTable = schema.Create("orders", func(table *schema.Table) {
+	table.ID()
+	table.String("sku", 64)
+	table.BigInteger("total")
+	table.Timestamps()
+})
+
+// DropOrdersTable reverses OrdersTable and destroys its data.
+var DropOrdersTable = schema.Drop("orders")
+
+// CreateOrders applies OrdersTable.
+var CreateOrders = migrate.NewMigration("create-orders", func(migration *migrate.MigrationBuilder) {
+	migration.Up(migrate.Schema(OrdersTable))
+	migration.Down(migrate.Schema(DropOrdersTable))
 })
 ```
 
 
 ## Feature root
 
-The root declares what others listen to or dispatch, because the root cannot import its own children. `catalog` is a second feature whose service satisfies the interface `orders` defines.
+The root declares what others listen to or dispatch, because the root cannot import its own children. Statements are built by exported query functions that Store methods only run; the function passed to `WithTransaction` is an exported method too. `catalog` is a second feature whose service satisfies the interface `orders` defines.
 
 `internal/orders/orders.go`
 
@@ -184,22 +198,27 @@ The root declares what others listen to or dispatch, because the root cannot imp
 package orders
 
 import (
+	"errors"
+
 	"arkoren.dev/core/event"
 	"arkoren.dev/core/service/queue"
 )
 
-// Placement describes a placed order.
+// Placement describes an order to place.
 type Placement struct {
-	SKU   string
-	Total int64
+	SKU   string `json:"sku"`
+	Total int64  `json:"total"`
 }
+
+// ErrOutOfStock reports an unavailable SKU. Surfaces map it to their own errors.
+var ErrOutOfStock = errors.New("orders: out of stock")
 
 // Placed is emitted after an order commits. Declared in the root so any package may listen.
 var Placed = event.NewTopic[Placement]("orders.placed")
 
 // Receipt is the payload of SendReceipt.
 type Receipt struct {
-	SKU string
+	SKU string `json:"sku"`
 }
 
 // SendReceipt is declared in the root so the service (or another feature) can dispatch it;
@@ -248,11 +267,16 @@ func NewStore(compose *application.Composer) *Store {
 	return &Store{db: db}
 }
 
-// Create inserts an order. It joins a transaction carried by ctx.
-func (store *Store) Create(ctx context.Context, placement Placement) error {
-	_, err := store.db.Exec(ctx, query.Table("orders", func(statement *query.Builder) {
+// InsertOrder is the statement that stores placement.
+func InsertOrder(placement Placement) query.Query {
+	return query.Table("orders", func(statement *query.Builder) {
 		statement.Insert(map[string]any{"sku": placement.SKU, "total": placement.Total})
-	}))
+	})
+}
+
+// Create stores placement. It joins a transaction carried by ctx.
+func (store *Store) Create(ctx context.Context, placement Placement) error {
+	_, err := store.db.Exec(ctx, InsertOrder(placement))
 
 	return err
 }
@@ -265,7 +289,6 @@ package orders
 
 import (
 	"context"
-	"errors"
 
 	"arkoren.dev/core/application"
 	"arkoren.dev/core/event"
@@ -274,9 +297,6 @@ import (
 	"example.com/shop/internal/bootstrap"
 	"example.com/shop/internal/catalog"
 )
-
-// ErrOutOfStock reports an unavailable SKU.
-var ErrOutOfStock = errors.New("orders: out of stock")
 
 // Availability is what orders needs from another feature; orders defines it.
 type Availability interface {
@@ -301,7 +321,7 @@ func NewService(compose *application.Composer) *Service {
 	return &Service{db: db, store: store, stock: stock, events: events}
 }
 
-// Place stores the order and emits Placed after commit.
+// Place checks stock, then runs Record in one transaction.
 func (service *Service) Place(ctx context.Context, placement Placement) error {
 	available, err := service.stock.Available(ctx, placement.SKU)
 	if err != nil {
@@ -312,17 +332,28 @@ func (service *Service) Place(ctx context.Context, placement Placement) error {
 		return ErrOutOfStock
 	}
 
-	return service.db.WithTransaction(ctx, func(ctx context.Context) error {
+	return service.db.WithTransaction(ctx, service.Record(placement))
+}
+
+// Record is the unit of work Place runs in a transaction: store the order and
+// emit Placed once it commits.
+func (service *Service) Record(placement Placement) func(context.Context) error {
+	return func(ctx context.Context) error {
 		if err := service.store.Create(ctx, placement); err != nil {
 			return err
 		}
 
-		return service.db.AfterCommit(ctx, func(ctx context.Context) error {
-			service.events.Emit(ctx, Placed, placement)
+		return service.db.AfterCommit(ctx, service.Announce(placement))
+	}
+}
 
-			return nil
-		})
-	})
+// Announce emits Placed for placement.
+func (service *Service) Announce(placement Placement) func(context.Context) error {
+	return func(ctx context.Context) error {
+		service.events.Emit(ctx, Placed, placement)
+
+		return nil
+	}
 }
 ```
 
@@ -350,14 +381,14 @@ func NewService(compose *application.Composer) *Service {
 
 // Available reports whether sku is in stock.
 func (service *Service) Available(ctx context.Context, sku string) (bool, error) {
-	return sku != "", nil
+	return sku != "none", nil
 }
 ```
 
 
-## Surfaces
+## Web surface
 
-Each surface exports one registration function. The listener lives in the subscribing feature and is registered by the server, the process that emits `orders.Placed`.
+The surface owns its wire concerns: handlers read with `request.ParseJSON` against a schema in `schemas.go` (invalid input becomes a 422 problem) and write with `response.JSON`; `problems.go` maps the root's plain domain errors to problem details for every route of the group.
 
 `internal/orders/web/routes.go`
 
@@ -365,9 +396,6 @@ Each surface exports one registration function. The listener lives in the subscr
 package web
 
 import (
-	"encoding/json"
-	"net/http"
-
 	"arkoren.dev/core/application"
 	"arkoren.dev/core/http/router"
 
@@ -380,26 +408,102 @@ func Routes(compose *application.Composer) {
 	routes := compose.Use(bootstrap.Router)
 	service := compose.Use(orders.DefaultService)
 
-	routes.Post("/orders", place(service))
+	routes.Group("/orders", func(group *router.Router) {
+		group.Use(Problems)
+		group.Post("/", Place(service))
+	})
 }
+```
 
-func place(service *orders.Service) router.Handler {
-	return func(writer http.ResponseWriter, request *http.Request) error {
-		var placement orders.Placement
-		if err := json.NewDecoder(request.Body).Decode(&placement); err != nil {
+`internal/orders/web/handlers.go`
+
+```go
+package web
+
+import (
+	"net/http"
+
+	"arkoren.dev/core/http/request"
+	"arkoren.dev/core/http/response"
+	"arkoren.dev/core/http/router"
+
+	"example.com/shop/internal/orders"
+)
+
+// Place handles POST /orders. Invalid input becomes a 422 problem through
+// request.ParseJSON; domain errors become problems through Problems.
+func Place(service *orders.Service) router.Handler {
+	return func(writer http.ResponseWriter, r *http.Request) error {
+		placement, err := request.ParseJSON(r, PlacementSchema)
+		if err != nil {
 			return err
 		}
 
-		if err := service.Place(request.Context(), placement); err != nil {
+		if err := service.Place(r.Context(), placement); err != nil {
 			return err
 		}
 
-		writer.WriteHeader(http.StatusCreated)
-
-		return nil
+		return response.JSON(writer, http.StatusCreated, placement)
 	}
 }
 ```
+
+`internal/orders/web/schemas.go`
+
+```go
+package web
+
+import (
+	"arkoren.dev/foundation/validate"
+
+	"example.com/shop/internal/orders"
+)
+
+// PlacementSchema validates and normalizes the POST /orders body.
+var PlacementSchema = validate.Struct(func(object *validate.StructBuilder[orders.Placement]) {
+	object.Field("SKU", func(sku *validate.StringBuilder[string]) {
+		sku.Trim()
+		sku.Required()
+		sku.Max(64)
+	})
+	object.Field("Total", func(total *validate.IntBuilder[int64]) {
+		total.Required()
+		total.Min(1)
+	})
+})
+```
+
+`internal/orders/web/problems.go`
+
+```go
+package web
+
+import (
+	"net/http"
+
+	"arkoren.dev/core/http/middleware/errormap"
+	"arkoren.dev/foundation/problem"
+
+	"example.com/shop/internal/orders"
+)
+
+// OutOfStock is the problem clients receive when a SKU is unavailable.
+var OutOfStock = problem.New(func(details *problem.Builder) {
+	details.Type("https://shop.example/problems/out-of-stock")
+	details.Title("Out of stock")
+	details.Status(http.StatusConflict)
+})
+
+// Problems maps orders domain errors to their problems for every orders route.
+var Problems = errormap.Middleware(
+	errormap.Map(orders.ErrOutOfStock, OutOfStock),
+)
+```
+
+
+## Other surfaces
+
+Each surface exports one registration function. The listener lives in the subscribing feature and is registered by the server, the process that emits `orders.Placed`.
 
 `internal/orders/jobs/handlers.go`
 
@@ -457,7 +561,7 @@ func Listeners(compose *application.Composer) {
 
 ## Processes
 
-Generated `main` functions also load `.env` and apply `bootstrap.Application()` settings; they are trimmed here.
+`main` only builds and runs the application; each process's `Compose` lives in `internal/bootstrap/<process>`, which may import feature surfaces while `internal/bootstrap` itself never does. Generated `main` functions also load `.env` and apply `bootstrap.Application()` settings; they are trimmed here.
 
 `cmd/server/main.go`
 
@@ -470,8 +574,7 @@ import (
 
 	"arkoren.dev/core/application"
 
-	notificationsevents "example.com/shop/internal/notifications/events"
-	ordersweb "example.com/shop/internal/orders/web"
+	"example.com/shop/internal/bootstrap/server"
 )
 
 func main() {
@@ -480,10 +583,23 @@ func main() {
 	ctx, stop := application.NewSignalContext(context.Background())
 	defer stop()
 
-	if app.Run(ctx, Compose) != nil {
+	if app.Run(ctx, server.Compose) != nil {
 		os.Exit(1)
 	}
 }
+```
+
+`internal/bootstrap/server/compose.go`
+
+```go
+package server
+
+import (
+	"arkoren.dev/core/application"
+
+	notificationsevents "example.com/shop/internal/notifications/events"
+	ordersweb "example.com/shop/internal/orders/web"
+)
 
 // Compose is the explicit list of what the server runs.
 func Compose(compose *application.Composer) {
@@ -492,31 +608,17 @@ func Compose(compose *application.Composer) {
 }
 ```
 
-`cmd/worker/main.go`
+`internal/bootstrap/worker/compose.go`
 
 ```go
-package main
+package worker
 
 import (
-	"context"
-	"os"
-
 	"arkoren.dev/core/application"
 
 	"example.com/shop/internal/bootstrap"
 	ordersjobs "example.com/shop/internal/orders/jobs"
 )
-
-func main() {
-	app := application.New()
-
-	ctx, stop := application.NewSignalContext(context.Background())
-	defer stop()
-
-	if app.Run(ctx, Compose) != nil {
-		os.Exit(1)
-	}
-}
 
 // Compose registers job handlers, then runs the consumer.
 func Compose(compose *application.Composer) {
@@ -526,30 +628,16 @@ func Compose(compose *application.Composer) {
 }
 ```
 
-`cmd/migrate/main.go`
+`internal/bootstrap/migrate/compose.go`
 
 ```go
-package main
+package migrate
 
 import (
-	"context"
-	"os"
-
 	"arkoren.dev/core/application"
 
 	"example.com/shop/internal/bootstrap"
 )
-
-func main() {
-	app := application.New()
-
-	ctx, stop := application.NewSignalContext(context.Background())
-	defer stop()
-
-	if app.Run(ctx, Compose) != nil {
-		os.Exit(1)
-	}
-}
 
 // Compose runs pending migrations; the process exits when they finish.
 func Compose(compose *application.Composer) {
@@ -583,6 +671,31 @@ import (
 )
 
 func TestPlaceOrder(t *testing.T) {
+	routes := start(t)
+
+	tests := []struct {
+		name   string
+		body   string
+		status int
+	}{
+		{"created", `{"sku":" tea ","total":300}`, http.StatusCreated},
+		{"invalid", `{"sku":"","total":0}`, http.StatusUnprocessableEntity},
+		{"out of stock", `{"sku":"none","total":300}`, http.StatusConflict},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := routes.Record(httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(test.body)))
+			if response.StatusCode != test.status {
+				t.Fatalf("status = %d, want %d", response.StatusCode, test.status)
+			}
+		})
+	}
+}
+
+// start composes only the registrations under test over an in-memory database.
+func start(t *testing.T) *router.Router {
+	t.Helper()
 	t.Setenv("DATABASE_URL", "file::memory:")
 
 	app := application.New()
@@ -606,10 +719,7 @@ func TestPlaceOrder(t *testing.T) {
 		_ = app.Shutdown(context.Background())
 	})
 
-	response := routes.Record(httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"SKU":"tea","Total":300}`)))
-	if response.StatusCode != http.StatusCreated {
-		t.Fatalf("status = %d", response.StatusCode)
-	}
+	return routes
 }
 ```
 

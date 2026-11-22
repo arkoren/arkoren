@@ -18,7 +18,9 @@ read source with the Go parser, so they need no running application, no network
 and no successful build. Run them in the project root.
 
 A project conforms when it has `go.mod`, at least one `cmd/<process>/main.go`
-and an `internal/bootstrap` directory. In any other directory the commands exit
+and an `internal/bootstrap` directory. Each process's `Compose` lives in
+`internal/bootstrap/<process>`; projects that still declare it in
+`cmd/<process>/main.go` are read the same way. In any other directory the commands exit
 2 and point at the `arkoren-structure` skill; they never search parent
 directories.
 
@@ -71,11 +73,14 @@ ordersjobs.Handlers(compose)
 The calls go after the existing registrations and before the bootstrap tail
 (`bootstrap.Diagnostics` and `bootstrap.Listen`), so routes exist before
 diagnostics list them and the listener serves them. If `Compose` has no such
-tail, the calls are appended. `--process NAME` selects `cmd/NAME` instead of
-`cmd/server`.
+tail, the calls are appended. `--process NAME` selects the `Compose` of
+`internal/bootstrap/NAME` instead of `internal/bootstrap/server`.
 
 The generated files compile and mount a placeholder route, job, workflow, tool
-or schedule entry. Where a working registration needs a choice the project has
+or schedule entry. They follow the `arkoren-structure` code rules: the store
+declares its statement in an exported query-builder function, and the web child
+mounts its routes in a group behind `Problems`, declared in `web/problems.go`,
+which maps the root's `ErrNotFound` to a problem. Where a working registration needs a choice the project has
 not made, such as a queue driver or workflow engine, the registration function
 is empty and its comment says what to add. Search the generated files for
 `TODO` before relying on them.
@@ -94,16 +99,19 @@ arkoren add migration create_orders
 
 | Command | Creates |
 | --- | --- |
-| `add process NAME` | `cmd/NAME/main.go`, which builds the application and runs an empty exported `Compose`. |
+| `add process NAME` | `internal/bootstrap/NAME/compose.go` with an empty exported `Compose`, and `cmd/NAME/main.go`, which builds the application and runs it. Hyphens are dropped from the package name: `admin-tasks` is package `admintasks`. |
 | `add provider NAME` | `internal/bootstrap/NAME.go` with `var <Name> = application.Provide(...)` and a placeholder value to replace. `mail-queue` declares `MailQueue`. |
-| `add migration NAME` | `internal/migrations/NNNN_NAME.go` with a `migrate.NewMigration` that has an empty Up step, and appends it to `All()` in running order. |
+| `add migration NAME` | `internal/migrations/NNNN_NAME.go` with schema-builder operations in exported variables and a `migrate.NewMigration` that runs them, and appends it to `All()` in running order. `create_orders` creates and drops the `orders` table; any other name alters the table named by the words after the first with an empty change. |
 
 `NNNN` is one more than the highest numbered file in `internal/migrations`, so
 files sort in running order. If the directory has no `All` function, the command
 creates `migrations.go` with one. It refuses an existing `migrations.go` that
-declares none, and a migration whose id or identifier already exists. Replace
-the empty Up step before you ship: nothing runs until your migrator adds
-`migrations.All()`.
+declares none, and a migration whose id or identifier already exists. Declare
+the columns or the change before you ship: an empty alteration fails when it
+runs, and nothing runs until your migrator adds `migrations.All()`.
+
+The stubs import foundation modules such as `arkoren.dev/foundation/query`.
+Run `go mod tidy` after `add` so `go.mod` requires them.
 
 ## Preview and Safety
 
@@ -113,7 +121,7 @@ Add `--dry-run` to any `add` command to print the plan and write nothing:
 {
   "dry_run": true,
   "created": ["internal/orders/orders.go", "internal/orders/service.go"],
-  "edited": [{"path": "cmd/server/main.go", "inserted": ["ordersweb.Routes(compose)"]}]
+  "edited": [{"path": "internal/bootstrap/server/compose.go", "inserted": ["ordersweb.Routes(compose)"]}]
 }
 ```
 
@@ -140,8 +148,8 @@ needs the `arkoren` command on `PATH` (override with `make check ARKOREN=...`).
 
 | Rule | Reported when |
 | --- | --- |
-| `bootstrap-imports-feature` | A file in `internal/bootstrap` imports any `internal/<feature>` package. |
-| `surface-imported-outside-cmd` | A non-test file outside `cmd` imports a surface child (`web`, `jobs`, `flow`, `tools`, `events`, `schedules`, `<feature>test`). Test files may import fixtures. |
+| `bootstrap-imports-feature` | A file in the `internal/bootstrap` package imports any `internal/<feature>` package. Process roots below it, `internal/bootstrap/<process>`, may. |
+| `surface-imported-outside-cmd` | A non-test file outside `cmd` and the process roots imports a surface child (`web`, `jobs`, `flow`, `tools`, `events`, `schedules`, `<feature>test`). Test files may import fixtures. |
 | `below-child-imports-feature` | A package below a feature root imports that feature's root or surfaces. |
 | `feature-imports-driver` | A feature or `internal/platform` package imports `arkoren.dev/driver/...` or `arkoren.dev/ark/iam`. Only bootstrap wires them. |
 | `banned-package-name` | A package path contains `util`, `common`, `shared`, `helpers`, `models`, `controllers`, `services`, `handlers` or `repositories`. |

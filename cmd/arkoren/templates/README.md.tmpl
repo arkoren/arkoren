@@ -150,8 +150,8 @@ make the unauthenticated debug endpoint safe to expose publicly.
 
 The executable's `main.go` constructs `app` with
 `application.New(bootstrap.Application())` and service name `{{.Name}}`, then calls
-`app.Run(ctx, Compose)` with a signal context. `Compose` in `cmd/server/main.go`
-constructs dependencies before startup; `app.Run` returns composition, startup,
+`app.Run(ctx, server.Compose)` with a signal context. `Compose` in
+`internal/bootstrap/server/compose.go` constructs dependencies before startup; `app.Run` returns composition, startup,
 serving, or shutdown errors.
 The application reports lifecycle failures before telemetry finalization; failures
 before telemetry starts or during its finalization reach stderr only. The run
@@ -165,7 +165,8 @@ uses JSON. Set a nonempty `NO_COLOR` to disable terminal colors. Both formats
 honor runtime log-level changes through `app.SetLogLevel`.
 
 The process layout follows the `arkoren-structure` skill. `Compose` in
-`cmd/server/main.go` is the explicit list of what this process runs:
+`internal/bootstrap/server/compose.go` is the explicit list of what this
+process runs:
 
 ```go
 welcomeweb.Routes(compose)
@@ -178,7 +179,7 @@ bootstrap.Listen(compose)
 ```
 
 `internal/bootstrap` holds shared providers and settings and never imports a
-feature. `bootstrap.Router` is an `application.Provide` provider: the first
+feature; its `server` subpackage is the process root that may. `bootstrap.Router` is an `application.Provide` provider: the first
 `compose.Use(bootstrap.Router)` builds the shared router with its middleware and
 probes, and later calls return the same router. It mounts no feature routes.
 `internal/welcome/web` is the example feature: `Routes` mounts the welcome page
