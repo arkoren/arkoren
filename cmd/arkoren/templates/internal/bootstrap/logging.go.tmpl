@@ -6,14 +6,18 @@ import (
 
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
+
+	"arkoren.dev/core/application"
 )
 
-// Logger returns the application's log handler factory. Terminal output uses
+// LogHandler is the application's log handler factory, the value each
+// process's App provider passes to Builder.LogHandler. Terminal output uses
 // Tint; redirected output uses JSON. A nonempty NO_COLOR disables ANSI colors
 // without changing the terminal format. The supplied level keeps runtime
-// log-level changes connected to either handler. Application installs this
-// factory during application construction, before composition starts.
-func Logger() func(slog.Leveler) slog.Handler {
+// log-level changes connected to either handler. The environment and terminal
+// state are read when the application creates the handler, not when the
+// provider is built.
+var LogHandler = application.Provide(func(*application.Composer) func(slog.Leveler) slog.Handler {
 	return func(level slog.Leveler) slog.Handler {
 		if !isatty.IsTerminal(os.Stderr.Fd()) {
 			return slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
@@ -25,4 +29,4 @@ func Logger() func(slog.Leveler) slog.Handler {
 			NoColor:   os.Getenv("NO_COLOR") != "",
 		})
 	}
-}
+})

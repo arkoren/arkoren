@@ -3,8 +3,9 @@ package tools
 import (
 	"context"
 
-	"arkoren.dev/core/application"
 	"arkoren.dev/core/mcp"
+
+	"{{.Module}}/internal/{{.Feature}}"
 )
 
 // Status is a placeholder read-only MCP tool for the {{.Feature}} feature.
@@ -15,9 +16,20 @@ var Status = mcp.NewTool("{{.Feature}}_status", func(ctx context.Context, input 
 	action.Description("Report the {{.Feature}} feature status").ReadOnly(true)
 })
 
-// Tools registers the {{.Feature}} MCP tools.
-//
-// TODO: tools are served by an MCP endpoint that the application owns. Obtain
-// the endpoint's builder input in a bootstrap function (see bootstrap.Diagnostics)
-// and pass Status to its Tools method, adding any availability policy there.
-func Tools(compose *application.Composer) {}
+// Catalog is the {{.Feature}} feature's set of MCP tools over its Service.
+// An MCP endpoint is built from tools rather than registered on, so this
+// surface has no Register method: it hands them over with Tools.
+type Catalog struct {
+	service *{{.Feature}}.Service
+}
+
+// NewCatalog builds the catalog over service. It does no I/O.
+func NewCatalog(service *{{.Feature}}.Service) *Catalog {
+	return &Catalog{service: service}
+}
+
+// Tools returns the feature's tools to pass to the MCP endpoint's Tools
+// method. Add any availability policy to copies with Tool.WithAvailability.
+func (catalog *Catalog) Tools() []mcp.Tool {
+	return []mcp.Tool{Status}
+}

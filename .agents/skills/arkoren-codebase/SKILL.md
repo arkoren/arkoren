@@ -607,15 +607,18 @@ positional destination (`arkoren new billing` or `arkoren new .`), with optional
 skills-dir (project-relative, default `.agents/skills`), no-agent-files,
 dry-run, skip-tidy, and yes flags. Bare `new` reports usage with exit 2 without writing; `--folder` is
 removed. Help needs no destination. It writes application files: a cmd executable
-(main.go for infallible application.New construction/identity, signals, logging, exit status and the
-exported `Compose`, the explicit list of what the process runs), internal/bootstrap (app.go for application
-settings, logging.go for log handlers, router.go for the `Router` provider, listener.go for `Listen`, which owns
-listener policy and lifecycle, mcp.go for `Diagnostics`), internal/welcome/web (the example feature, `Routes`
-mounting the welcome page), go.mod, README, Makefile,
+(main.go for signals, exit status and `application.Run(ctx, server.App, server.Compose)`),
+internal/bootstrap (providers only: logging.go for the `LogHandler` provider, router.go for `Router` with the
+welcome route, server.go for `Server`, which owns listener policy and lifecycle, mcp.go for `MCP`),
+internal/bootstrap/server (app.go: the `App` provider with the application settings; compose.go: the explicit
+list of what the process runs), go.mod, README, Makefile,
 Dockerfile, .dockerignore, .gitignore, .editorconfig, .env and .env.example.
-No application tests are generated. `bootstrap.Router` is an `application.Provide` provider; `Listen` and
-`Diagnostics` are plain registration functions that `Use` it, and bootstrap never imports a feature.
-The go.mod template pins `arkoren.dev/core` to the release that ships with the CLI (the Provider API), so bump
+No application tests are generated. Every exported declaration of internal/bootstrap is an `application.Provide`
+variable that returns the component it makes live; `arkoren add feature` writes `internal/bootstrap/<feature>.go`
+with the store, service and surface providers, features never import `application` or bootstrap, and
+`arkoren check` enforces both (`feature-imports-application`, `bootstrap-action-func`).
+The go.mod template pins `arkoren.dev/core` to the release that ships with the CLI (the Provider API and
+`application.Run`), so bump
 it in the same change as any core API the templates need, using the version the release plan proposes
 (`arkoren-ci release plan`). Tests build the scaffold against checkout modules with local replaces because
 that version does not exist on the proxy until the release is published.
@@ -628,20 +631,20 @@ toolkit-contributor rules. Existing instruction and skill
 paths participate in the same no-overwrite preflight as application files.
 Templates mirror the output tree under cmd/arkoren/templates, with .tmpl suffixes and fixed cmd/server for
 the command directory. Rendering discovers files recursively in lexical order; add templates at their
-output-relative paths rather than maintaining a separate file list. bootstrap.Listen reads HTTP_ADDR during
+output-relative paths rather than maintaining a separate file list. bootstrap.Server reads HTTP_ADDR during
 composition; empty/unset preserves :8080. The executable blank-imports
 godotenv/autoload: initialization loads .env, preserves existing environment values,
-and ignores loading errors. bootstrap.Application enables debug only for APP_DEBUG=true.
-Listen owns its Started subscription through MustDefer and unsubscribe cleanup; an inline
+and ignores loading errors. server.App enables debug only for APP_DEBUG=true.
+Server owns its Started subscription through MustDefer and unsubscribe cleanup; an inline
 callback logs Addr as address after `app started` and runner launch. Keep logging separate from Serve and readiness
 transitions; do not format browser URLs or infer schemes, hosts, or public domains.
-Compose selects Diagnostics with `if compose.App().Debug()`. Providers construct and register lifecycle;
-route mutations belong in registration functions called from Compose, ordered routes, diagnostics, then Listen.
-The welcome handler serves embedded, self-contained HTML with documentation links
-at the explicitly registered root route. Full application InfoHandler remains
+Compose selects MCP with `if compose.App().Debug()`. Providers construct the component and make it live; Compose
+is a list of `compose.Use` calls: feature providers, MCP, then Server. The router tools read routes at call time,
+so MCP's position does not matter. The welcome handler serves embedded, self-contained HTML with documentation
+links at the root route registered by the Router provider. Full application InfoHandler remains
 opt-in and unmounted; applications own access controls for its operational data.
 The unauthenticated endpoint selects read-only application, route, and telemetry
-tools. Diagnostics registers `compose.Must(compose.MCPTools("app"))` and
+tools. MCP registers `compose.Must(compose.MCPTools("app"))` and
 `routes.MCPTools("http")` with separate appending `listener.Tools` calls,
 without a redundant read-only filter. Composer.MCPTools attaches bounded
 in-memory capture with no external export. Router registers the application's telemetry
@@ -660,11 +663,11 @@ production and loopback binding for development.
 The generated .env selects loopback and debug, is exclusive-created with mode 0600,
 and is gitignored. The example disables debug. Neither needs secrets; no unused keys
 or tokens are generated. ARKOREN_MCP_URL points the CLI at /mcp on the HTTP listener.
-The starter uses direct constructor calls only: no DI flag, providers, or container
-dependency. app.Run(ctx, bootstrap.Compose) composes and runs the supplied app; MCP
+The starter uses providers and direct constructor calls only: no DI flag or container
+dependency. application.Run builds server.App, composes server.Compose and runs the app; MCP
 construction errors and real lifecycle failures propagate. The application reports
 failures before telemetry finalization; pre-start and finalization errors reach
-the configured handler only. The executable's run helper returns app.Run directly,
+the configured handler only. The executable's run helper returns application.Run directly,
 using application.NewSignalContext(context.Background()) and deferring its stop
 function before main maps failure to exit 1 (0 on clean shutdown). Core owns
 SIGINT/SIGTERM registration through os/signal.NotifyContext; terminal echo is

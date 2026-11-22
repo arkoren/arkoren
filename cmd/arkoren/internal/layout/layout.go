@@ -1,8 +1,9 @@
 // Package layout reads and extends a project that follows the structure
 // described by the arkoren-structure skill: one cmd/<process>/main.go per
-// process with an exported Compose, shared providers in internal/bootstrap,
-// one internal/<feature> directory per feature, internal/migrations and
-// internal/platform.
+// process, run with the App and Compose of its process root
+// internal/bootstrap/<process>; internal/bootstrap holding only providers;
+// one plain-Go internal/<feature> directory per feature, wired by
+// internal/bootstrap/<feature>.go; internal/migrations and internal/platform.
 //
 // The package analyzes source with go/parser only. It never type-checks,
 // builds, or reaches the network, so it works on a project whose dependencies
@@ -37,9 +38,9 @@ import (
 const applicationPackage = "arkoren.dev/core/application"
 
 // Surfaces lists the child packages that sit above a feature root, in the
-// order flags and registration calls are presented. Each imports the root and
-// is imported only by cmd. The `<feature>test` fixtures package is also above
-// the root but is created by hand, not by `arkoren add`.
+// order flags and providers are presented. Each imports the root and is
+// imported only by internal/bootstrap. The `<feature>test` fixtures package is
+// also above the root but is created by hand, not by `arkoren add`.
 var Surfaces = []string{"web", "jobs", "flow", "tools", "events", "schedules"}
 
 // bannedNames are package names the structure skill rejects because they name
@@ -59,8 +60,7 @@ const (
 	// kindBootstrap is the internal/bootstrap package itself.
 	kindBootstrap
 	// kindProcess is a process root, internal/bootstrap/<process> or anything
-	// below it: it exports the process's Compose and is the only internal
-	// package that may import surface children.
+	// below it: it holds the process's App provider and Compose.
 	kindProcess
 	// kindMigrations is internal/migrations.
 	kindMigrations
@@ -364,16 +364,6 @@ func composerParamName(typ *ast.FuncType, app string) string {
 	}
 
 	return ""
-}
-
-// isRegistration reports whether decl is an exported function whose only
-// parameter is a *application.Composer and which returns nothing: the shape
-// of a registration function such as Routes, Listen or Compose.
-func isRegistration(decl *ast.FuncDecl, app string) bool {
-	params := decl.Type.Params.List
-
-	return decl.Recv == nil && decl.Name.IsExported() && decl.Type.Results == nil &&
-		len(params) == 1 && len(params[0].Names) <= 1 && isComposerParam(params[0], app)
 }
 
 // providerVars returns the names of package-level variables initialized with

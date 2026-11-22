@@ -10,15 +10,15 @@ import (
 )
 
 // Map is the compact inventory printed by `arkoren map`: what each process
-// registers, which shared providers and registration functions bootstrap
-// offers, which surfaces and providers each feature has, and the migrations.
-// It lists names only, so an agent can orient itself before searching.
+// uses, which providers bootstrap offers, which constructors and surfaces each
+// feature has, and the migrations. It lists names only, so an agent can orient
+// itself before searching.
 type Map struct {
 	// Module is the module path from go.mod.
 	Module string `json:"module"`
 	// Processes lists cmd/<process> packages in directory order.
 	Processes []Process `json:"processes"`
-	// Bootstrap lists the shared providers and registration functions.
+	// Bootstrap lists the providers of internal/bootstrap.
 	Bootstrap Bootstrap `json:"bootstrap"`
 	// Features lists internal/<feature> packages in directory order.
 	Features []Feature `json:"features,omitzero"`
@@ -30,35 +30,38 @@ type Map struct {
 
 // Process is one cmd/<process> package.
 type Process struct {
-	// Name is the directory name below cmd/.
+	// Name is the directory name below cmd/ and internal/bootstrap/.
 	Name string `json:"name"`
-	// Compose lists the calls of the exported Compose function in source
-	// order, read from the process root internal/bootstrap/<process> (or from
-	// cmd/<process>/main.go in projects that declare Compose there). A call inside an if statement carries the condition, as in
-	// "bootstrap.Diagnostics(compose) [if compose.App().Debug()]".
+	// Compose lists the statements of the exported Compose function of the
+	// process root internal/bootstrap/<process> in source order, such as
+	// "compose.Use(bootstrap.Server)". A statement inside an if carries the
+	// condition, as in "compose.Use(bootstrap.MCP) [if compose.App().Debug()]".
 	Compose []string `json:"compose,omitzero"`
 }
 
 // Bootstrap is the content of internal/bootstrap.
 type Bootstrap struct {
-	// Providers are the package-level application.Provide variables.
-	Providers []string `json:"providers,omitzero"`
-	// Register are the exported functions taking only a *application.Composer.
-	Register []string `json:"register,omitzero"`
+	// Providers are the package-level application.Provide variables, grouped
+	// by the file that declares them.
+	Providers []ProviderFile `json:"providers,omitzero"`
+}
+
+// ProviderFile lists the providers one bootstrap file declares.
+type ProviderFile struct {
+	// File is the file name inside internal/bootstrap.
+	File string `json:"file"`
+	// Names are the provider variables in source order.
+	Names []string `json:"providers"`
 }
 
 // Feature is one internal/<feature> directory.
 type Feature struct {
 	// Name is the directory name below internal/.
 	Name string `json:"name"`
-	// Providers are the application.Provide variables of the root package
-	// (conventionally Default<Type>).
-	Providers []string `json:"providers,omitzero"`
-	// Register are registration functions declared in the root package
-	// itself, for a surface that has not been promoted to a child yet.
-	Register []string `json:"register,omitzero"`
-	// Above are the children that import the root, with their registration
-	// functions.
+	// Constructors are the exported New* functions of the root package, such
+	// as NewStore and NewService.
+	Constructors []string `json:"constructors,omitzero"`
+	// Above are the children that import the root, with their constructors.
 	Above []Surface `json:"above,omitzero"`
 	// Below are the children imported by the root.
 	Below []string `json:"below,omitzero"`
@@ -68,8 +71,8 @@ type Feature struct {
 type Surface struct {
 	// Name is the child directory name, such as web.
 	Name string `json:"name"`
-	// Register are its registration functions.
-	Register []string `json:"register,omitzero"`
+	// Constructors are its exported New* functions, such as NewHandlers.
+	Constructors []string `json:"constructors,omitzero"`
 }
 
 // Migrations describes internal/migrations.
@@ -101,13 +104,12 @@ func (project *Project) Map() Map {
 
 		switch role.kind {
 		case kindCmd:
-			mapProcess(&inventory, path.Base(src.dir), src)
+			mapProcess(&inventory, path.Base(src.dir), nil)
 		case kindProcess:
 			mapProcess(&inventory, strings.Split(src.dir, "/")[2], src)
 		case kindBootstrap:
-			if src.dir == "internal/bootstrap" {
-				inventory.Bootstrap.Providers = append(inventory.Bootstrap.Providers, providerVars(src.file, app)...)
-				inventory.Bootstrap.Register = append(inventory.Bootstrap.Register, registrations(src.file, app)...)
+			if names := providerVars(src.file, app); len(names) > 0 {
+				inventory.Bootstrap.Providers = append(inventory.Bootstrap.Providers, ProviderFile{File: path.Base(src.rel), Names: names})
 			}
 		case kindMigrations:
 			mapMigrations(&inventory.Migrations, src)
@@ -121,7 +123,7 @@ func (project *Project) Map() Map {
 				inventory.Features = append(inventory.Features, Feature{Name: role.feature})
 			}
 
-			mapFeature(features[role.feature], src, role.kind, app)
+			mapFeature(features[role.feature], src, role.kind)
 		}
 	}
 
@@ -132,15 +134,14 @@ func (project *Project) Map() Map {
 	return inventory
 }
 
-// mapFeature records what one file contributes to its feature: providers and
-// registration functions of the root, or the child package it belongs to.
-func mapFeature(feature *Feature, src *source, role kind, app string) {
+// mapFeature records what one file contributes to its feature: the
+// constructors of the root package, or the child package it belongs to.
+func mapFeature(feature *Feature, src *source, role kind) {
 	parts := strings.Split(src.dir, "/")
 
 	switch role {
 	case kindFeature:
-		feature.Providers = append(feature.Providers, providerVars(src.file, app)...)
-		feature.Register = append(feature.Register, registrations(src.file, app)...)
+		feature.Constructors = append(feature.Constructors, constructors(src.file)...)
 	case kindBelow:
 		if !slices.Contains(feature.Below, parts[2]) {
 			feature.Below = append(feature.Below, parts[2])
@@ -154,17 +155,18 @@ func mapFeature(feature *Feature, src *source, role kind, app string) {
 		}
 
 		if len(parts) == 3 {
-			feature.Above[index].Register = append(feature.Above[index].Register, registrations(src.file, app)...)
+			feature.Above[index].Constructors = append(feature.Above[index].Constructors, constructors(src.file)...)
 		}
 	}
 }
 
-// registrations returns the exported registration functions of file.
-func registrations(file *ast.File, app string) []string {
+// constructors returns the exported package-level functions of file whose
+// names start with New.
+func constructors(file *ast.File) []string {
 	var names []string
 
 	for _, decl := range file.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && isRegistration(fn, app) {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.IsExported() && strings.HasPrefix(fn.Name.Name, "New") {
 			names = append(names, fn.Name.Name)
 		}
 	}
@@ -172,8 +174,8 @@ func registrations(file *ast.File, app string) []string {
 	return names
 }
 
-// mapProcess records the Compose calls of a process root file, or of a
-// cmd/<process>/main.go in projects that still declare Compose there.
+// mapProcess records the process name and, when src is a file of the process
+// root, the statements of its Compose.
 func mapProcess(inventory *Map, name string, src *source) {
 	index := slices.IndexFunc(inventory.Processes, func(process Process) bool { return process.Name == name })
 
@@ -182,10 +184,12 @@ func mapProcess(inventory *Map, name string, src *source) {
 		index = len(inventory.Processes) - 1
 	}
 
-	for _, decl := range src.file.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "Compose" && fn.Recv == nil && fn.Body != nil {
-			inventory.Processes[index].Compose = composeCalls(fn.Body.List, "")
-		}
+	if src == nil {
+		return
+	}
+
+	if compose := composeDecl(src.file); compose != nil {
+		inventory.Processes[index].Compose = composeCalls(compose.Body.List, "")
 	}
 }
 
@@ -279,18 +283,18 @@ func (inventory Map) Text() string {
 		line("process "+process.Name+":", process.Compose...)
 	}
 
-	line("bootstrap providers:", inventory.Bootstrap.Providers...)
-	line("bootstrap register:", inventory.Bootstrap.Register...)
+	for _, file := range inventory.Bootstrap.Providers {
+		line("bootstrap "+file.File+":", file.Names...)
+	}
 
 	for _, feature := range inventory.Features {
 		var above []string
 
 		for _, surface := range feature.Above {
-			above = append(above, surface.Name+"("+strings.Join(surface.Register, ", ")+")")
+			above = append(above, surface.Name+"("+strings.Join(surface.Constructors, ", ")+")")
 		}
 
-		line("feature "+feature.Name+" providers:", feature.Providers...)
-		line("feature "+feature.Name+" register:", feature.Register...)
+		line("feature "+feature.Name+" constructors:", feature.Constructors...)
 		line("feature "+feature.Name+" above:", above...)
 		line("feature "+feature.Name+" below:", feature.Below...)
 	}

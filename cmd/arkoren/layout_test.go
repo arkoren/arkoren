@@ -68,7 +68,7 @@ func TestAddFeatureDryRunWritesNothing(t *testing.T) {
 
 	edited := report["edited"].([]any)[0].(map[string]any)
 
-	if edited["path"] != "internal/bootstrap/server/compose.go" || edited["inserted"].([]any)[0] != "ordersweb.Routes(compose)" {
+	if edited["path"] != "internal/bootstrap/server/compose.go" || edited["inserted"].([]any)[0] != "compose.Use(bootstrap.OrdersRoutes)" {
 		t.Fatalf("edited = %v", edited)
 	}
 
@@ -99,7 +99,7 @@ func TestAddFeatureWritesFilesAndRegistration(t *testing.T) {
 
 	compose, _ := os.ReadFile(filepath.Join(env.Dir, "internal/bootstrap/server/compose.go"))
 
-	if !strings.Contains(string(compose), "ordersjobs.Handlers(compose)") {
+	if !strings.Contains(string(compose), "compose.Use(bootstrap.OrdersJobs)") {
 		t.Fatalf("compose.go:\n%s", compose)
 	}
 }

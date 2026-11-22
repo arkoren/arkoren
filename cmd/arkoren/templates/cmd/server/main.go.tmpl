@@ -8,7 +8,6 @@ import (
 
 	"arkoren.dev/core/application"
 
-	"{{.Module}}/internal/bootstrap"
 	"{{.Module}}/internal/bootstrap/server"
 )
 
@@ -21,14 +20,18 @@ func main() {
 	}
 }
 
-// run constructs the application from bootstrap.Application and runs the graph
-// declared by server.Compose, the process root in internal/bootstrap/server. Construction applies settings without starting
-// components; app.Run owns composition, startup, supervised work, and shutdown.
+// run builds the application from server.App and runs the graph declared by
+// server.Compose, both in internal/bootstrap/server. application.Run owns
+// construction, composition, startup, supervised work, and shutdown.
+//
+// The godotenv autoload import reads .env during package initialization;
+// existing environment variables take precedence. Settings callbacks run when
+// Run builds the application, before any component starts.
 //
 // SIGINT or SIGTERM cancels the run context and requests shutdown. Registered
-// component cleanup completes before app.Run returns, and deferred signal
-// cleanup completes before main exits. Keep component cleanup in bootstrap so
-// it also runs when composition or startup fails.
+// component cleanup completes before application.Run returns, and deferred
+// signal cleanup completes before main exits. Keep component cleanup in
+// bootstrap providers so it also runs when composition or startup fails.
 //
 // The application reports lifecycle failures before telemetry stops. Return its
 // error directly; logging after Run would miss telemetry capture and duplicate
@@ -36,13 +39,8 @@ func main() {
 //
 // See https://arkoren.dev/docs/guides/application/lifecycle-and-ownership.
 func run() error {
-	// The godotenv autoload import reads .env during package initialization;
-	// existing environment variables take precedence. Configuration callbacks
-	// run during construction, before any component starts.
-	app := application.New(bootstrap.Application())
-
 	ctx, stop := application.NewSignalContext(context.Background())
 	defer stop()
 
-	return app.Run(ctx, server.Compose)
+	return application.Run(ctx, server.App, server.Compose)
 }
