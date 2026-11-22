@@ -7,10 +7,11 @@ import (
 	"os/exec"
 )
 
-// tidy resolves the generated module independently of any enclosing workspace.
-// Go output is captured so the CLI retains one JSON result or diagnostic.
+// Tidy runs go mod tidy in folder, resolving the module independently of any
+// enclosing workspace. `arkoren new` and `arkoren add` call it after writing
+// files. Go output is captured so the CLI retains one JSON result or diagnostic.
 // Failure preserves the project for an explicit retry rather than deleting it.
-func tidy(ctx context.Context, folder string) error {
+func Tidy(ctx context.Context, folder string) error {
 	command := exec.CommandContext(ctx, "go", "mod", "tidy")
 	command.Dir = folder
 	command.Env = append(os.Environ(), "GOWORK=off")

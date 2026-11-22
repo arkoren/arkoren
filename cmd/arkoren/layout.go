@@ -9,21 +9,24 @@ import (
 	"arkoren.dev/cmd/arkoren/internal/console"
 	"arkoren.dev/cmd/arkoren/internal/files"
 	"arkoren.dev/cmd/arkoren/internal/layout"
+	"arkoren.dev/cmd/arkoren/internal/scaffold"
 )
 
 // addCLICommand declares `arkoren add`, which creates the files of the project
 // layout from the embedded templates and registers them with one-line
-// insertions. Every subcommand takes one NAME and --dry-run, never overwrites
-// an existing file, and reads only the current directory.
+// insertions. Every subcommand takes one NAME, --dry-run and --skip-tidy, never
+// overwrites an existing file, and reads only the current directory. After
+// writing, it runs go mod tidy when a new file imports an unrequired module.
 func addCLICommand(env console.Environment) *cli.Command {
 	dryRun := &cli.BoolFlag{Name: "dry-run", Usage: "Show the files and edits without writing"}
+	skipTidy := &cli.BoolFlag{Name: "skip-tidy", Usage: "Write files offline without running go mod tidy for new imports"}
 
 	subcommand := func(name, usage string, flags []cli.Flag, plan func(*layout.Project, *cli.Command) (*layout.Plan, error)) *cli.Command {
 		return &cli.Command{
 			Name:      name,
 			Usage:     usage,
 			ArgsUsage: "NAME",
-			Flags:     append(flags, dryRun),
+			Flags:     append(flags, dryRun, skipTidy),
 			Action: func(ctx context.Context, command *cli.Command) error {
 				if command.Args().Len() != 1 {
 					return console.UsageError("add %s requires exactly one NAME; usage: arkoren add %s NAME [flags]", name, name)
@@ -41,13 +44,31 @@ func addCLICommand(env console.Environment) *cli.Command {
 					return err
 				}
 
-				if !command.Bool("dry-run") {
-					if err := project.Apply(ctx, changes); err != nil {
-						return err
-					}
+				report := addReport(changes, command.Bool("dry-run"))
+
+				if command.Bool("dry-run") {
+					return env.Result(report)
 				}
 
-				return env.Result(addReport(changes, command.Bool("dry-run")))
+				if err := project.Apply(ctx, changes); err != nil {
+					return err
+				}
+
+				needed, err := project.NeedsTidy(changes)
+
+				if err != nil {
+					return err
+				}
+
+				if needed && !command.Bool("skip-tidy") {
+					if err := scaffold.Tidy(ctx, project.Root); err != nil {
+						return err
+					}
+
+					report["tidied"] = true
+				}
+
+				return env.Result(report)
 			},
 		}
 	}
@@ -63,7 +84,8 @@ func addCLICommand(env console.Environment) *cli.Command {
 		Usage: "Add a feature, process, provider or migration to the project layout",
 		Description: "Creates files from templates and never overwrites one; it edits existing code only by inserting " +
 			"registration lines into Compose or the migrations list. Run it in the project root, which needs " +
-			"cmd/<process>/main.go and internal/bootstrap. Use --dry-run to preview. See the arkoren-structure skill.",
+			"cmd/<process>/main.go and internal/bootstrap. When a new file imports a module go.mod does not require, " +
+			"it runs go mod tidy unless --skip-tidy is set. Use --dry-run to preview. See the arkoren-structure skill.",
 		Commands: []*cli.Command{
 			subcommand("feature", "Create internal/NAME and register its surfaces in a process", featureFlags,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
@@ -93,8 +115,8 @@ func addCLICommand(env console.Environment) *cli.Command {
 	}
 }
 
-// addReport is the JSON result of an add: the files created and the insertions
-// made into existing files. Paths are slash-separated and project-relative.
+// addReport is the JSON result of an add: the files created, the insertions
+// made into existing files, and whether go mod tidy ran (set by the caller). Paths are slash-separated and project-relative.
 func addReport(plan *layout.Plan, dryRun bool) map[string]any {
 	edits := make([]map[string]any, 0, len(plan.Edit))
 
@@ -102,7 +124,7 @@ func addReport(plan *layout.Plan, dryRun bool) map[string]any {
 		edits = append(edits, map[string]any{"path": edit.Path, "inserted": edit.Inserted})
 	}
 
-	return map[string]any{"dry_run": dryRun, "created": files.Paths(plan.Create), "edited": edits}
+	return map[string]any{"dry_run": dryRun, "created": files.Paths(plan.Create), "edited": edits, "tidied": false}
 }
 
 // checkCLICommand declares `arkoren check`: it reports layout rule violations

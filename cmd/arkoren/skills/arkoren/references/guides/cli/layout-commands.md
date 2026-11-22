@@ -110,8 +110,9 @@ declares none, and a migration whose id or identifier already exists. Declare
 the columns or the change before you ship: an empty alteration fails when it
 runs, and nothing runs until your migrator adds `migrations.All()`.
 
-The stubs import foundation modules such as `arkoren.dev/foundation/query`.
-Run `go mod tidy` after `add` so `go.mod` requires them.
+When a created file imports a module that `go.mod` does not require yet, such
+as `arkoren.dev/foundation/query`, `add` runs `go mod tidy` after writing and
+reports `"tidied": true`. Pass `--skip-tidy` to stay offline and tidy later.
 
 ## Preview and Safety
 
@@ -121,7 +122,8 @@ Add `--dry-run` to any `add` command to print the plan and write nothing:
 {
   "dry_run": true,
   "created": ["internal/orders/orders.go", "internal/orders/service.go"],
-  "edited": [{"path": "internal/bootstrap/server/compose.go", "inserted": ["ordersweb.Routes(compose)"]}]
+  "edited": [{"path": "internal/bootstrap/server/compose.go", "inserted": ["ordersweb.Routes(compose)"]}],
+  "tidied": false
 }
 ```
 

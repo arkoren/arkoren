@@ -25,7 +25,7 @@ Verified code for every pattern below is in [references/examples.md](references/
 
 1. Run `arkoren map --text` to see processes, providers, features and migrations.
 2. Choose the location from the table below.
-3. Generate files with `arkoren add` (it never overwrites and supports `--dry-run`), run `go mod tidy` because the stubs import foundation modules, then fill in the code.
+3. Generate files with `arkoren add` (it never overwrites, supports `--dry-run`, and runs `go mod tidy` when a stub imports a module `go.mod` lacks), then fill in the code.
 4. Run `arkoren check` (also part of `make check`) and the tests.
 
 ## Where things go

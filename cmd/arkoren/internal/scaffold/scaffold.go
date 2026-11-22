@@ -98,7 +98,7 @@ func Execute(ctx context.Context, options Options, inventory []files.File, env c
 	}
 
 	if !options.SkipTidy {
-		if err := tidy(ctx, options.Folder); err != nil {
+		if err := Tidy(ctx, options.Folder); err != nil {
 			return err
 		}
 	}
