@@ -45,59 +45,45 @@
 // of the enclosing Go function. MustDefer is composition-only like Must and
 // Require; Defer is also allowed inside executing Startup callbacks.
 //
-// [Factory] is a defined function type that returns a typed dependency from
-// composition. [Action] is a defined function type for composition that returns
-// nothing, such as route registration. [Composer.Use] executes exactly one
-// Factory or Action inline on the same composer. Its result type is inferred
-// from the supplied operation; ordinary typed parameters pass dependencies
-// between operations. Root [ComposerFunc] callbacks remain ordinary void
+// Composition values come in three kinds. A value the process must hold exactly
+// once, such as the router or a database, is a [Provider] declared with
+// [Provide]; [Composer.Use] runs its build function on first use in a
+// composition and returns the cached value afterwards, from any nested provider.
+// Every other value is an ordinary Go constructor. A constructor that acquires
+// resources is an exported New function taking the composer, for example
+// NewWorker(composer, args...), which returns a fresh instance and registers its
+// own lifecycle. Conditional wiring is a plain if on [Application.Debug] or
+// [Application.Environment], reached through [Composer.App]. Use is valid only
+// during composition. Root [ComposerFunc] callbacks remain ordinary void
 // functions accepted directly by Start and Run:
 //
-//	makeRoutes := application.Factory[*router.Router](func(composer *application.Composer) *router.Router {
+//	var Router = application.Provide(func(composer *application.Composer) *router.Router {
 //		return router.New()
 //	})
+//
 //	err := app.Start(ctx, func(composer *application.Composer) {
-//		routes := composer.Use(makeRoutes)
-//		composer.Use(application.Action(func(*application.Composer) {
-//			routes.Get(application.LivePath, app.LiveHandler())
-//		}))
+//		routes := composer.Use(Router)
+//		routes.Get(application.LivePath, app.LiveHandler())
+//		if composer.App().Debug() {
+//			routes.Get("/debug", debugHandler)
+//		}
 //	})
 //	if err != nil {
 //		return err
 //	}
 //	// The owner must eventually call app.Shutdown with a shutdown context.
 //
-// Construct resources inside the operation, not while obtaining it. There is
-// no runtime registry, automatic lifecycle adoption, or memoization: each Use
-// invokes the operation anew. Returning a resource does not start or stop it.
-// Register cleanup once, immediately after acquisition, in its owning factory;
-// consumers borrowing the returned dependency do not register another cleanup.
+// The cache belongs to one Start or Run, so separate applications and
+// compositions never share values. A provider re-entered while it is still
+// building panics with [ErrProviderCycle] naming the chain of value types; a
+// nil build function panics with [ErrNilFunc] at [Provide]. A build that aborts
+// through [Composer.Must] or [Composer.Require] caches nothing. Returning a
+// value does not start or stop it: register cleanup once, immediately after
+// acquisition, in the build function or constructor that owns the resource.
 //
-// [Composer.UseWhen], [Composer.UseDebug], [Composer.UseIn], and [Composer.UseInAny]
-// execute one Factory or Action only when its condition matches. They return a
-// (value, executed) pair: skipped factories yield the result type's zero value
-// and false, while selected factories can legitimately return zero and true.
-// Action callers normally ignore the pair. Constructor failures raised through
-// Must, MustDefer, or Require abort Start or Run; they never become a false presence result.
-// For example, a conditionally created router can be used only when present:
-//
-//	err := app.Start(ctx, func(composer *application.Composer) {
-//		if routes, executed := composer.UseDebug(makeRoutes); executed {
-//			routes.Get(application.LivePath, app.LiveHandler())
-//		}
-//	})
-//	if err != nil {
-//		return err
-//	}
-//
-// All operations share the parent composer, cleanup ownership, and failure
-// handling. UseInAny matches any environment in its slice once; nil or empty
-// slices skip execution. UseDebug tests the configured debug flag independently
-// of environment and runtime log-level changes. These methods are
-// composition-only. Nil operations, including typed nil Factory and Action
-// values, and invalid phases panic even when the condition would skip execution.
-// An untyped nil operation requires an explicit type argument, such as
-// composer.UseWhen[int](false, nil), and still panics with ErrNilFunc.
+// Because Startup hooks run in registration order and Cleanup in reverse, a
+// provider that calls Use on its dependencies before registering its own
+// lifecycle callbacks has its dependencies started first and stopped last.
 //
 // [Composer.Startup] hooks run sequentially in registration order.
 // [Composer.Cleanup] and [Composer.Defer] releases become active at registration and

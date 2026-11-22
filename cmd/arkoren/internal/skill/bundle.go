@@ -19,6 +19,11 @@ import (
 // DefaultSkillsDir is the project-local skills parent, not the skill itself.
 const DefaultSkillsDir = ".agents/skills"
 
+// Names lists the managed skills in installation order. The first is the
+// consumer reference skill; later entries are installed beside it under the
+// same skills parent, each in its own directory with its own manifest.
+var Names = []string{"arkoren", "arkoren-structure"}
+
 // SkillManifestName is reserved for CLI ownership and content hashes.
 const SkillManifestName = ".arkoren-skill.json"
 
@@ -47,13 +52,27 @@ type Bundle struct {
 // independent of where the authored tree lives inside this module.
 // The supplied filesystem contains the authored tree at skills/arkoren/.
 func LoadBundle(ctx context.Context, source fs.FS) (Bundle, error) {
-	source, err := fs.Sub(source, "skills/arkoren")
+	return LoadNamedBundle(ctx, source, Names[0])
+}
+
+// LoadNamedBundle loads the managed skill called name from skills/<name>/ in
+// source. The name must be one of [Names]; it is recorded in the manifest so an
+// installation can never be mistaken for another skill's.
+func LoadNamedBundle(ctx context.Context, source fs.FS, name string) (Bundle, error) {
+	if !slices.Contains(Names, name) {
+		return Bundle{}, fmt.Errorf("unknown bundled skill %q", name)
+	}
+
+	source, err := fs.Sub(source, "skills/"+name)
 
 	if err != nil {
 		return Bundle{}, fmt.Errorf("read bundled skill: %w", err)
 	}
 
-	return LoadSource(ctx, source)
+	bundle, err := LoadSource(ctx, source)
+	bundle.Manifest.Name = name
+
+	return bundle, err
 }
 
 // LoadSource reads a skill-relative filesystem into an immutable bundle.
@@ -143,7 +162,7 @@ func Revision(inventory map[string]string) string {
 
 // ValidateSkillManifest rejects corrupt state before its paths can reach disk.
 func ValidateSkillManifest(manifest Manifest) error {
-	if manifest.Schema != 1 || manifest.Name != "arkoren" || len(manifest.Files) == 0 {
+	if manifest.Schema != 1 || !slices.Contains(Names, manifest.Name) || len(manifest.Files) == 0 {
 		return console.UsageError("invalid or unsupported Arkoren skill manifest")
 	}
 

@@ -26,6 +26,11 @@ type Composer struct {
 	application *Application
 	// scope owns registration permissions and execution-specific aborts.
 	scope *lifecycle.Scope
+	// provided caches provider values by *Provider pointer for this composition.
+	// Composition is synchronous, so it needs no lock.
+	provided map[any]any
+	// building is the stack of providers currently running, for cycle detection.
+	building []providerKey
 }
 
 // ComposerFunc composes concrete application dependencies during Start or Run.
@@ -64,7 +69,9 @@ func (composer *Composer) Must[T any](value T, err error) T {
 }
 
 // App returns the existing application's stable service handles and settings.
-// No dependency lookup or automatic construction occurs here.
+// No dependency lookup or automatic construction occurs here. Conditional
+// wiring is a plain Go if on [Application.Debug] (the construction-time debug
+// flag) or [Application.Environment].
 //
 //	logger := composer.App().Logger()
 //	logger.InfoContext(composer.Context(), "wiring dependencies")

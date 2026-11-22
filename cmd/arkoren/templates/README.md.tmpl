@@ -76,21 +76,21 @@ The executable imports `godotenv/autoload`, which loads `.env` from the working
 directory during initialization. Existing environment variables take precedence;
 loading errors are ignored. The generated `.env` selects
 `HTTP_ADDR=127.0.0.1:8080` and `APP_DEBUG=true` for local development.
-`bootstrap.Server(handler)` reads `HTTP_ADDR` inside its composition callback. An empty
+`bootstrap.Listen` reads `HTTP_ADDR` during composition. An empty
 address uses the server default `:8080` (all interfaces).
 
 After successful startup and runner launch, the starter logs `http server started`
 with an `address` field after `app started`. It reports the bound socket address,
 including the assigned port if `HTTP_ADDR` selects port `0`, without guessing a
-browser URL or public domain. `Server` uses `compose.MustDefer` to register the
+browser URL or public domain. `Listen` uses `compose.MustDefer` to register the
 subscription and own its cleanup, with the log callback inline. Startup failures produce no successful
 HTTP startup log; readiness recovery does not repeat it.
 
 In debug mode, `http://127.0.0.1:8080/mcp` exposes read-only application,
 route, and telemetry diagnostics. The `http.routes` tool lists routes, handler
-names, and source paths; it does not execute HTTP routes. `MCP(routes)` returns a factory that
-constructs and mounts the endpoint. `bootstrap.Compose` selects it through
-`compose.UseDebug(MCP(routes))`. It shares the main listener and inherited middleware. No authentication
+names, and source paths; it does not execute HTTP routes. `bootstrap.Diagnostics`
+constructs and mounts the endpoint, and `Compose` calls it inside
+`if compose.App().Debug()`. It shares the main listener and inherited middleware. No authentication
 is required: anyone who can reach that listener can read logs and telemetry
 attributes as well as route diagnostics. Keep debug
 off in production and bind development listeners to loopback.
@@ -150,7 +150,7 @@ make the unauthenticated debug endpoint safe to expose publicly.
 
 The executable's `main.go` constructs `app` with
 `application.New(bootstrap.Application())` and service name `{{.Name}}`, then calls
-`app.Run(ctx, bootstrap.Compose)` with a signal context. `bootstrap.Compose`
+`app.Run(ctx, Compose)` with a signal context. `Compose` in `cmd/server/main.go`
 constructs dependencies before startup; `app.Run` returns composition, startup,
 serving, or shutdown errors.
 The application reports lifecycle failures before telemetry finalization; failures
@@ -164,30 +164,31 @@ Logs go to stderr: terminals use Tint with source locations; redirected output
 uses JSON. Set a nonempty `NO_COLOR` to disable terminal colors. Both formats
 honor runtime log-level changes through `app.SetLogLevel`.
 
-Bootstrap factories capture explicit dependencies. Their callbacks construct
-resources only when composition invokes them, then return typed handles.
-
-The composition root is `internal/bootstrap`: `bootstrap.go` composes components
-before startup:
+The process layout follows the `arkoren-structure` skill. `Compose` in
+`cmd/server/main.go` is the explicit list of what this process runs:
 
 ```go
-routes := compose.Use(Router())
-compose.UseDebug(MCP(routes))
-compose.Use(Server(routes))
+welcomeweb.Routes(compose)
+
+if compose.App().Debug() {
+	bootstrap.Diagnostics(compose)
+}
+
+bootstrap.Listen(compose)
 ```
 
-`Router` returns `application.Factory[*router.Router]`, so `Use` provides the
-shared router directly to the dependent factories. `MCP` returns the mounted
-`*mcpserver.Server`; `UseDebug` skips construction when debug is disabled. The
-root ignores that optional result. `Server` returns `*server.Server` and owns
-its `Cleanup`, `Startup`, and `Run` registrations and startup-log subscription.
-The root ignores its result; `Use` itself does not
-start the server. Obtaining any factory constructs nothing. `Router` gets
-probes and the welcome handler from `compose.App()`. `app.go` supplies
-`Application()`, `logging.go` supplies the `Logger()` handler factory,
-`router.go` owns routes and middleware, `server.go` owns listener policy and
-lifecycle, and `mcp.go` owns debug diagnostics. No `internal/config` package is
-generated. The starter contains no tests; add them as behavior grows.
+`internal/bootstrap` holds shared providers and settings and never imports a
+feature. `bootstrap.Router` is an `application.Provide` provider: the first
+`compose.Use(bootstrap.Router)` builds the shared router with its middleware and
+probes, and later calls return the same router. It mounts no feature routes.
+`internal/welcome/web` is the example feature: `Routes` mounts the welcome page
+on that router. `Listen` serves the router and owns its `Cleanup`, `Startup`,
+and `Run` registrations and startup-log subscription; `Use` itself does not
+start anything. `app.go` supplies `Application()`, `logging.go` supplies the
+`Logger()` handler factory, `router.go` owns the router provider, `listener.go`
+owns listener policy and lifecycle, and `mcp.go` owns debug diagnostics. No
+`internal/config` package is generated. The starter contains no tests; add them
+as behavior grows.
 
 `.editorconfig` sets UTF-8, LF line endings, final newlines, tabs for Go and
 `go.mod` and Makefile recipes, and two-space indentation elsewhere. Markdown keeps trailing spaces
@@ -196,12 +197,13 @@ the source of truth for Go formatting.
 {{if .AgentFiles}}
 ## Agent instructions
 
-`AGENTS.md` contains editable project defaults and points to the complete Arkoren
-skill in `{{.SkillsDir}}/arkoren/`. Read its `SKILL.md` and the relevant guide/API
-page before changing Arkoren code. Agent discovery varies; configure your agent
+`AGENTS.md` contains editable project notes and points to two skills:
+`{{.SkillsDir}}/arkoren-structure/` (layout and construction rules) and
+`{{.SkillsDir}}/arkoren/` (the complete reference). Read the relevant `SKILL.md`
+and guide/API page before changing Arkoren code. Agent discovery varies; configure your agent
 to read that path if it does not discover the skill automatically.
 
-Commit `AGENTS.md`, the skill directory, and its `.arkoren-skill.json` manifest.
+Commit `AGENTS.md`, the skill directories, and their `.arkoren-skill.json` manifests.
 Skill management works offline and never rewrites `AGENTS.md`:
 
 ```sh

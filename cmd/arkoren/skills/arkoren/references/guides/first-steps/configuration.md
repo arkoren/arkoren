@@ -100,7 +100,7 @@ concurrently with construction.
 ## Environment Settings
 
 Read values beside the code that constructs their consumer. In the generated
-`internal/bootstrap/server.go`, the existing factory callback imports `os` and
+`internal/bootstrap/listener.go`, the existing `Listen` function imports `os` and
 constructs its listener with:
 
 ```go
@@ -109,8 +109,8 @@ listener := server.New(handler, func(listener *server.Builder) {
 })
 ```
 
-The factory reads `HTTP_ADDR` when composition invokes its callback, not when
-`Server(handler)` returns the factory. Empty or unset values preserve `:8080`.
+`Listen` reads `HTTP_ADDR` when composition runs it. Empty or unset values
+preserve `:8080`.
 Later environment changes do not reconfigure that listener.
 
 Core packages do not load your application environment or files. The starter's
