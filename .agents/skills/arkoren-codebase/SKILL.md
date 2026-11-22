@@ -614,7 +614,10 @@ settings and lifecycle, mcp.go for debug diagnostics), go.mod, README, Makefile,
 Dockerfile, .dockerignore, .gitignore, .editorconfig, .env and .env.example.
 No application tests are generated. Bootstrap factories Router, MCP, and Server
 return Factory[T] callbacks with real outputs. The direct void Compose root
-obtains its shared router with compose.Use(Router()).
+obtains its shared router with compose.Use(Router()). (Core now replaces
+Factory/Action/UseWhen/UseDebug with memoized `application.Provide`/`Use` and
+plain `if`; the templates keep the old shape until they move to the released
+core that has it. See the arkoren-go skill's lifecycle rules.)
 By default it also writes user-owned AGENTS.md and a complete managed skill under
 `<skills-dir>/arkoren`, including its manifest. `--no-agent-files` skips both;
 a custom skills-dir and opt-out conflict. AGENTS.md describes consumer conventions

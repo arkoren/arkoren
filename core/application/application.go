@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"runtime/debug"
 	"time"
@@ -364,7 +365,8 @@ func (application *Application) Environment() Environment {
 }
 
 // Debug reports the construction-time debug flag, independently of environment
-// and changes made through SetLogLevel. It controls Composer.UseDebug selection.
+// and changes made through SetLogLevel. Compose debug-only wiring
+// with a plain if: if composer.App().Debug() { ... }.
 //
 // Example: app := application.New(); fmt.Println(app.Debug()) // false
 func (application *Application) Debug() bool {
@@ -373,7 +375,7 @@ func (application *Application) Debug() bool {
 
 // SetLogLevel changes the minimum log level at runtime. It affects
 // every handler built on the application's level variable, without changing
-// Debug or the construction-time decisions made by Composer.UseDebug.
+// Debug or any construction-time decision already made from it.
 //
 // Example: app := application.New(); app.SetLogLevel(slog.LevelWarn)
 func (application *Application) SetLogLevel(level slog.Level) {
@@ -556,4 +558,11 @@ var (
 	//
 	// Example: matched := errors.Is(registrationError, application.ErrDuplicateCheck); fmt.Println(matched)
 	ErrDuplicateCheck = health.ErrDuplicateCheck
+
+	// ErrProviderCycle reports a [Provider] used again while its own build
+	// function was still running. Composer.Use panics with a wrapping error whose
+	// message names the chain of provider value types.
+	//
+	// Example: matched := errors.Is(recoveredPanic, application.ErrProviderCycle); fmt.Println(matched)
+	ErrProviderCycle = errors.New("provider cycle")
 )
