@@ -203,6 +203,14 @@ gains flags. Name packages for their purpose: avoid `util`, `common`, `shared`,
 `helpers`, `models`, `controllers`, `services`, `handlers`, and `repositories`.
 Group a feature's behavior instead of spreading it across global folders by kind.
 
+## Tooling
+
+The CLI works with this layout. `arkoren map` lists processes, providers,
+features and migrations, `arkoren add feature|process|provider|migration`
+creates the files and inserts the registration line, and `arkoren check`
+reports violations of the import and construction rules above. The generated
+`make check` runs it. See [Layout Commands](../cli/layout-commands.md).
+
 ## Testing Features
 
 Test pure rules directly. Test HTTP behavior through the feature's registered

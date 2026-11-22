@@ -23,6 +23,7 @@ Arkoren is a modular Go toolkit: a standard-library core, portable foundation pa
 3. Online reference: use the website's module-level pkg.go.dev catalog to find a module, then select the package and version you need. Guides explain integration and limits; neither the skill nor the website stores API signature snapshots.
 4. Driver selection: [Choosing a driver](references/guides/drivers/choosing-a-driver.md), then its service matrix/provider setup. Qualifications and limits describe Arkoren's behavior, not vendor-wide coordination or durability guarantees.
 5. Before `arkoren new`, read [Creating a Project](references/guides/first-steps/creating-a-project.md) for destination syntax, flags, confirmation, and dependency setup. Preview with `--dry-run`; application files and AGENTS.md remain user-owned.
+   In a project that has `cmd/<process>/main.go` and `internal/bootstrap`, run `arkoren map --text` to orient before searching, create features, processes, providers and migrations with `arkoren add` (preview with `--dry-run`) instead of hand-writing them, and finish with `arkoren check`. Read [Layout Commands](references/guides/cli/layout-commands.md).
 6. Before `arkoren skills install|update|status`, read [Working with Agents](references/guides/agent-skills/working-with-agents.md): the bundle works offline; local edits block updates and AGENTS.md remains user-owned.
 7. Application composition, lifecycle, errors, and health probes: start with [Application Overview](references/guides/application/overview.md), then follow its task links.
 
@@ -436,6 +437,7 @@ opaque to inference.
 - [Waiting and Following](references/guides/cli/waiting-and-following.md): Bound condition waits and follow new records while accounting for cursor gaps and output failures.
 - [CLI Reference](references/guides/cli/reference.md): Look up command forms, reserved flags, input conversion, output contracts, exit codes, and retries.
 - [Key Commands](references/guides/cli/keys.md): Provision purpose-specific keys offline, check stored material, and export public PEM or VAPID values.
+- [Layout Commands](references/guides/cli/layout-commands.md): Orient in a project with map, add features, processes, providers and migrations without hand-writing boilerplate, and enforce the layout rules with check.
 - [Certificate Commands](references/guides/cli/certificates.md): Generate local TLS identities, check file pairs, and explicitly manage exact-root system trust.
 
 #### Testing

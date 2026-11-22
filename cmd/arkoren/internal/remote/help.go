@@ -15,7 +15,7 @@ import (
 )
 
 // localCommandNames supplies typo suggestions; usage lives in the command tree.
-var localCommandNames = []string{"certificate", "key", "new", "skills", "tools", "status"}
+var localCommandNames = []string{"add", "certificate", "check", "key", "map", "new", "skills", "tools", "status"}
 
 // GlobalFlagDef documents one global flag, which is accepted anywhere on the
 // command line and parsed before the operation's own flags.
