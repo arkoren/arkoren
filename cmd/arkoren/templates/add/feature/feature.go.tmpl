@@ -1,0 +1,11 @@
+package {{.Feature}}
+
+import "arkoren.dev/core/application"
+
+// DefaultStore is the process's one {{.Feature}} Store. The first compose.Use of
+// a composition constructs it; later calls return the same value.
+var DefaultStore = application.Provide(NewStore)
+
+// DefaultService is the process's one {{.Feature}} Service. Surfaces and other
+// features obtain it with compose.Use(DefaultService).
+var DefaultService = application.Provide(NewService)

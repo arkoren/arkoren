@@ -40,6 +40,10 @@ application, or [install the bundled skill](../agent-skills/working-with-agents.
 for an agent working in an existing project. These commands use local assets,
 not MCP discovery.
 
+Inside a generated project, [Layout Commands](layout-commands.md) show what the
+project contains, add features and other pieces from templates, and check the
+layout rules from source.
+
 [Key Commands](keys.md) provision application keys without printing private
 material unless you explicitly request an export. [Certificate Commands](certificates.md)
 generate local TLS identities without installing trust. Root trust installation

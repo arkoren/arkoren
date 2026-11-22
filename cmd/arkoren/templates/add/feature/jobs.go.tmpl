@@ -1,0 +1,22 @@
+package jobs
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/queue"
+)
+
+// Payload is the data a Process job carries. Replace it with the job's fields.
+type Payload struct{}
+
+// Process is the {{.Feature}} job definition. Producers dispatch it with their
+// dispatcher; Handlers registers the function that runs it.
+var Process = queue.NewJob[Payload]("{{.Feature}}-process")
+
+// Handlers registers the {{.Feature}} job handlers on the process's queue
+// consumer.
+//
+// TODO: the queue driver is an application choice. Add a bootstrap provider for
+// the consumer, obtain it here with compose.Use, and register the handler:
+//
+//	consumer.Handle(Process, func(ctx context.Context, payload Payload) error { ... })
+func Handlers(compose *application.Composer) {}

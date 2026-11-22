@@ -1,0 +1,29 @@
+package web
+
+import (
+	"net/http"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/router"
+
+	"{{.Module}}/internal/bootstrap"
+	"{{.Module}}/internal/{{.Feature}}"
+)
+
+// Routes mounts the {{.Feature}} routes on the process's shared router. It
+// registers GET /{{.Feature}} as a placeholder; replace it with the feature's
+// real routes. The process's Compose calls Routes before Listen serves the router.
+func Routes(compose *application.Composer) {
+	routes := compose.Use(bootstrap.Router)
+	service := compose.Use({{.Feature}}.DefaultService)
+
+	routes.Get("/{{.Feature}}", list(service))
+}
+
+// list handles GET /{{.Feature}}. Returning nil without writing a response
+// produces 204 No Content until the handler does real work through service.
+func list(service *{{.Feature}}.Service) router.Handler {
+	return func(writer http.ResponseWriter, request *http.Request) error {
+		return nil
+	}
+}

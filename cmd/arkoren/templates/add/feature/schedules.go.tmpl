@@ -1,0 +1,23 @@
+package schedules
+
+import (
+	"context"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/schedule"
+)
+
+// Report is a placeholder daily schedule entry for the {{.Feature}} feature. It
+// runs at 03:00 UTC once added to a scheduler and currently does nothing.
+var Report = schedule.NewEntry("{{.Feature}}-report", func(ctx context.Context) error {
+	return nil
+}, func(entry *schedule.EntryBuilder) {
+	entry.When(schedule.UTC().Hour(3))
+})
+
+// Entries registers the {{.Feature}} schedule entries with the process's
+// scheduler.
+//
+// TODO: the scheduler is an application choice. Add a bootstrap provider for it,
+// obtain it here with compose.Use, and add Report with its Add method.
+func Entries(compose *application.Composer) {}

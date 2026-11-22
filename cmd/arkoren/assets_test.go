@@ -790,7 +790,7 @@ func TestNewMakeCommandsRespectOverrides(t *testing.T) {
 	}
 
 	output, err := runNewMake(t, dir, "check", "build", "run", "test-race", "docker-build", "docker-run",
-		"GO=./record", "DOCKER=./record", "IMAGE=custom:dev", "PORT=9090")
+		"GO=./record", "DOCKER=./record", "ARKOREN=./record", "IMAGE=custom:dev", "PORT=9090")
 
 	if err != nil {
 		t.Fatalf("make: %v\n%s", err, output)
@@ -803,13 +803,25 @@ func TestNewMakeCommandsRespectOverrides(t *testing.T) {
 	}
 
 	contains(t, string(content),
-		"vet ./...|", "test ./...|", "build -o bin/server ./cmd/server|",
+		"vet ./...|", "check|", "test ./...|", "build -o bin/server ./cmd/server|",
 		"test -race ./...|1", "build -t custom:dev .|",
 		"run --rm -p 127.0.0.1:9090:8080 -e HTTP_ADDR=:8080 -e APP_DEBUG=false custom:dev|",
 	)
 
 	if strings.Contains(string(content), "mod tidy") || strings.Contains(string(content), "-count=1") {
 		t.Fatalf("recipes rewrite dependencies or bypass caching:\n%s", content)
+	}
+}
+
+// TestNewMakeLayoutNeedsArkorenCommand explains how to install the missing CLI
+// instead of failing with a shell error.
+func TestNewMakeLayoutNeedsArkorenCommand(t *testing.T) {
+	t.Parallel()
+
+	output, err := runNewMake(t, newMakeDirectory(t), "layout", "ARKOREN=arkoren-not-installed")
+
+	if err == nil || !strings.Contains(string(output), "go install arkoren.dev/cmd/arkoren@latest") {
+		t.Fatalf("layout = %v\n%s", err, output)
 	}
 }
 

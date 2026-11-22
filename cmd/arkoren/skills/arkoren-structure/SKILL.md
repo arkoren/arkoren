@@ -74,3 +74,9 @@ Start flat and promote when grown. Begin a surface as a file in the root (`web.g
 
 - Extract on the third real use; inline a helper again when it gains flags.
 - Name packages for their purpose. Avoid `util`, `common`, `shared`, `helpers`, `models`, `controllers`, `services`, `handlers`, `repositories`.
+
+## Tooling
+
+- Run `arkoren map --text` first to see processes, providers, features and migrations before searching.
+- Prefer `arkoren add feature|process|provider|migration NAME` over hand-writing these files. It creates the files, inserts the registration call into `Compose` (or the migration into `All()`), never overwrites, and previews with `--dry-run`. Surface stubs for jobs, flow, tools, events and schedules leave a `TODO` where the project must choose a driver.
+- `arkoren check` enforces the mechanical rules above (bootstrap never imports a feature, only `cmd` imports surface children, features never import drivers or `ark/iam`, banned package names, `Use` only at composition, `bootstrap.New*` only in bootstrap). Run it before finishing; `make check` includes it.

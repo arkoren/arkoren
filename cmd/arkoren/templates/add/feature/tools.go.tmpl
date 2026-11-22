@@ -1,0 +1,23 @@
+package tools
+
+import (
+	"context"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/mcp"
+)
+
+// Status is a placeholder read-only MCP tool for the {{.Feature}} feature.
+// Replace its handler with one that calls the feature's Service.
+var Status = mcp.NewTool("{{.Feature}}_status", func(ctx context.Context, input mcp.NoInput) (struct{}, error) {
+	return struct{}{}, nil
+}, func(action *mcp.ToolBuilder[mcp.NoInput, struct{}]) {
+	action.Description("Report the {{.Feature}} feature status").ReadOnly(true)
+})
+
+// Tools registers the {{.Feature}} MCP tools.
+//
+// TODO: tools are served by an MCP endpoint that the application owns. Obtain
+// the endpoint's builder input in a bootstrap function (see bootstrap.Diagnostics)
+// and pass Status to its Tools method, adding any availability policy there.
+func Tools(compose *application.Composer) {}

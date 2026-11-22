@@ -25,6 +25,10 @@ Uppercase operands below are values you supply, not literal words.
 | `arkoren`, `arkoren -h`, `arkoren --help` | Offline root help as text; no endpoint configuration is read. |
 | `arkoren --version` | Installed CLI version as JSON, offline. |
 | `arkoren new DIR [flags]` | Create a starter and resolve Go dependencies; `--skip-tidy` creates files offline. Existing files are never overwritten. |
+| `arkoren add feature NAME [--web --jobs --flow --tools --events --schedules] [--process NAME]` | Create `internal/NAME` with the requested surfaces and register them in `cmd/NAME/main.go`'s `Compose`. |
+| `arkoren add process\|provider\|migration NAME` | Create `cmd/NAME`, a bootstrap provider, or a registered migration. All `add` forms accept `--dry-run` and never overwrite. |
+| `arkoren check` | Report layout rule violations with file and line as JSON; exit 1 if there are any. |
+| `arkoren map [--text]` | Print processes, providers, features and migrations from source. |
 | `arkoren skills install\|update\|status [flags]` | Manage the CLI's bundled documentation offline. |
 | `arkoren key generate TYPE --out FILE` | Generate `shared`, `signing`, or `exchange` private material. |
 | `arkoren key check TYPE FILE` | Validate stored key material without exporting it. |
@@ -113,6 +117,11 @@ See [Creating a Project](../first-steps/creating-a-project.md) for filesystem
 safety and dependency setup. A conflicting preview prints one stdout report and
 exits 2. Non-preview conflicts go to stderr with `conflict_count` and
 `destination`; neither path writes files. Add `--verbose` for per-path lists.
+
+`add`, `check` and `map` read the current directory, which must hold the project
+layout; otherwise they exit 2. See [Layout Commands](layout-commands.md) for
+the flags, insertion points and rules. `map --text` prints text lines, the only
+local report that is not JSON.
 
 `skills install`, `skills update`, and `skills status` accept `--dir PATH`
 (default `.agents/skills`, with `arkoren` appended) and `--dry-run`, before or
@@ -239,6 +248,9 @@ Local reports use these fields rather than completion prose:
 | Command | Result fields |
 | --- | --- |
 | `new` | `created`, `destination`, `module`, `file_count`; previews include `dry_run`, `yes`, `conflict_count`. Verbose adds paths and preview conflicts. |
+| `add` | `dry_run`, `created` (paths), `edited` (`path` and `inserted` lines). |
+| `check` | `ok` and `violations`, each with `rule`, `file`, `line`, `message`. |
+| `map` | `module`, `processes`, `bootstrap`, `features`, `migrations`, `platform`; empty groups are omitted. |
 | `skills` | `directory`, `state`, `bundled_revision`, and installed revision/modification count when managed. Install/update add operation, preview state, write/remove/conflict counts; completed writes set `completed`. Verbose adds per-file details. |
 | `key generate` to file | `created`, `category`, absolute `path`; no private contents. |
 | `key check` | `valid`, `category`, absolute `path`. |
@@ -282,7 +294,7 @@ precedence over all other verdicts, including clean follow cancellation.
 | Code | Meaning |
 | --- | --- |
 | `0` | Successful command or clean follow cancellation. A false immediate condition can still be a successful read. |
-| `1` | Connection, protocol, execution, structured tool failure, deadline, file/trust operation, or stdout failure; also a direct health-role report with `status: "failing"`. |
+| `1` | Connection, protocol, execution, structured tool failure, deadline, file/trust operation, or stdout failure; also a direct health-role report with `status: "failing"`, and `check` reporting violations. |
 | `2` | Invalid usage/configuration, unapproved file URL with an inherited token, missing required endpoint, unknown command, or ambiguous alias. |
 | `4` | Actual HTTP 401 authentication failure, not a tool failure with a similarly named code. |
 
