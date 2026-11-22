@@ -350,7 +350,7 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...iam.BuilderF
 		}
 	})
 	web := routes.With(sys.identity.Middleware())
-	sys.identity.Mount(web)
+	web.Group("/", sys.identity.Register)
 	web.Get("/me", func(w http.ResponseWriter, r *http.Request) error {
 		identity, ok := auth.FromContext(r.Context())
 		if !ok {
