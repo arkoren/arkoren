@@ -43,6 +43,12 @@ func Render(ctx context.Context, options Options, templates fs.FS, source fs.FS)
 			return err
 		}
 
+		// templates/add holds the files of `arkoren add`, rendered one at a
+		// time by the layout package; they are not part of a new project.
+		if entry.IsDir() && path == "templates/add" {
+			return fs.SkipDir
+		}
+
 		if entry.IsDir() || !strings.HasSuffix(path, ".tmpl") {
 			return nil
 		}

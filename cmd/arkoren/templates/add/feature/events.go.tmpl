@@ -1,0 +1,13 @@
+package events
+
+import "arkoren.dev/core/application"
+
+// Listeners registers the {{.Feature}} feature's event listeners on the
+// application's event bus.
+//
+// TODO: declare the events this feature reacts to in the publishing feature's
+// root package, then subscribe here:
+//
+//	events := compose.App().Events()
+//	compose.MustDefer(events.Listen(topic, func(ctx context.Context, payload T) error { ... }))
+func Listeners(compose *application.Composer) {}

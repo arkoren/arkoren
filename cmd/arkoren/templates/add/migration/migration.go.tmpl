@@ -1,0 +1,20 @@
+package migrations
+
+import (
+	"context"
+
+	"arkoren.dev/core/service/database"
+	"arkoren.dev/core/service/database/migrate"
+)
+
+// {{.Name}} is the "{{.ID}}" migration. All lists it in the order migrations run.
+//
+// TODO: replace the empty Up step with the schema change (migrate.Schema with
+// foundation/query/schema operations, never dialect SQL) and add a Down step
+// if the change can be undone. The application's migrator is the only code
+// that executes it.
+var {{.Name}} = migrate.NewMigration("{{.ID}}", func(migration *migrate.MigrationBuilder) {
+	migration.Up(func(ctx context.Context, db *database.Database) error {
+		return nil
+	})
+})

@@ -190,5 +190,6 @@ Application files and `AGENTS.md` remain yours.
 [`arkoren skills update`](../agent-skills/working-with-agents.md#updating-skills)
 manages only the skill directories and rejects modified managed files. There is
 no application regeneration or upgrade step. Grow the code using
-[Project Layout](project-layout.md), and use [Deployment](deploying.md) when
+[Project Layout](project-layout.md), add features with
+[`arkoren add`](../cli/layout-commands.md), and use [Deployment](deploying.md) when
 you are ready to build an image or binary.

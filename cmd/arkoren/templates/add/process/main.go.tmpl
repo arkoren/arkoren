@@ -1,0 +1,38 @@
+package main
+
+import (
+	"context"
+	"os"
+
+	_ "github.com/joho/godotenv/autoload"
+
+	"arkoren.dev/core/application"
+
+	"{{.Module}}/internal/bootstrap"
+)
+
+// main maps run's error to process exit status after cleanup finishes.
+func main() {
+	if run() != nil {
+		os.Exit(1)
+	}
+}
+
+// run constructs the application from bootstrap.Application and runs the graph
+// declared by Compose. SIGINT or SIGTERM requests shutdown; registered cleanup
+// completes before app.Run returns. Return its error directly: the application
+// has already reported lifecycle failures before telemetry stopped.
+func run() error {
+	app := application.New(bootstrap.Application())
+
+	ctx, stop := application.NewSignalContext(context.Background())
+	defer stop()
+
+	return app.Run(ctx, Compose)
+}
+
+// Compose is the explicit list of what the {{.Process}} process runs. Add a
+// feature with `arkoren add feature NAME --process {{.Process}}`, or call a
+// registration function by hand. compose.Use obtains shared providers only;
+// registration is plain calls, and conditions are plain if statements.
+func Compose(compose *application.Composer) {}

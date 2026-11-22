@@ -26,7 +26,8 @@ func rootCLICommand(env console.Environment, flags console.Globals) *cli.Command
 		Writer:          env.Stdout,
 		ErrWriter:       env.Stderr,
 		Commands: []*cli.Command{
-			newCLICommand(env), skillsCLICommand(env), keyCLICommand(env), certificateCLICommand(env),
+			newCLICommand(env), addCLICommand(env), checkCLICommand(env), mapCLICommand(env),
+			skillsCLICommand(env), keyCLICommand(env), certificateCLICommand(env),
 			toolsCLICommand(env, flags),
 			statusCLICommand(env, flags),
 		},
