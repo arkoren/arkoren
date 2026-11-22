@@ -1,11 +1,13 @@
 ---
 name: arkoren-structure
 description: >
-  Project structure and construction rules for Arkoren services: where code
-  lives (cmd, internal/bootstrap, internal/<feature>, platform), how features
-  are laid out, and how Provide, Use and New* wire them. Use when adding or
-  moving a feature, process, provider, route, job, migration or shared package
-  in a project that imports arkoren.dev, or when reviewing its layout.
+  Where code goes in an Arkoren service and how it is wired: processes in cmd/,
+  shared resources in internal/bootstrap, one package per feature with web,
+  jobs, events and workflow surfaces, migrations and shared packages. Use
+  whenever you add, move, split or review code in a project that imports
+  arkoren.dev (an endpoint, background job, event listener, workflow, database
+  or third-party client, migration, process or helper) or need to decide where
+  something belongs. Pair with the arkoren skill for API details.
 license: MIT
 metadata:
   go: "1.27"
@@ -14,69 +16,95 @@ metadata:
 
 # Arkoren project structure
 
-Follow this layout in projects created with `arkoren new`. Preserve the layout of an existing project that does not follow it; apply only the construction rules below to new code.
+A project follows this layout when it has `cmd/<process>/main.go` files exporting `Compose` and an `internal/bootstrap` package; `arkoren new` creates it. In any other project, keep its existing layout and patterns; do not migrate it unless asked.
+
+Verified code for every pattern below is in [references/examples.md](references/examples.md). Read it before writing a provider, feature, surface or process by hand.
+
+## Workflow
+
+1. Run `arkoren map --text` to see processes, providers, features and migrations.
+2. Choose the location from the table below.
+3. Generate files with `arkoren add` (it never overwrites and supports `--dry-run`), then fill in the code.
+4. Run `arkoren check` (also part of `make check`) and the tests.
+
+## Where things go
+
+| Adding | Location | Command |
+|---|---|---|
+| HTTP endpoints for a feature | `internal/<feature>/web/`, called from the server's `Compose` | `arkoren add feature <name> --web` |
+| A background job handler | `internal/<feature>/jobs/`, called from the worker's `Compose`; declare the job in the feature root | `--jobs --process worker` |
+| A listener for another feature's event | `internal/<listener>/events/`, called from the `Compose` of the process that emits the event | `--events` |
+| A workflow, MCP tool or schedule | `flow/`, `tools/`, `schedules/` children of the feature | `--flow`, `--tools`, `--schedules` |
+| Domain types, rules, a service or queries | the feature root: `<feature>.go`, `service.go`, `store.go` | `arkoren add feature <name>` |
+| A database, cache, queue, secret store or SDK client shared by features | `internal/bootstrap/<name>.go` provider | `arkoren add provider <name>` |
+| An outbound API client used by one feature | a child below that feature, such as `internal/<feature>/carrier/` | — |
+| The same client needed by a second feature | promote it to its own feature that exposes a `Service` | — |
+| A schema change | `internal/migrations/`, listed in `All()` | `arkoren add migration <name>` |
+| A separate binary (worker, migrate, admin) | `cmd/<process>/main.go` with its own `Compose` | `arkoren add process <name>` |
+| Code needed by three or more features, with no I/O | `internal/platform/<purpose>/` | — |
+| Templates and static files | embedded in the feature's `web/`; shared layouts in `internal/platform/ui` | — |
 
 ## Layout
 
 ```
-cmd/<process>/main.go      one directory per process: server, worker, migrate
-internal/bootstrap/        shared providers and application settings
-internal/migrations/       the application's own ordered migrations
-internal/<feature>/        one directory per feature
+cmd/<process>/main.go          Compose: the explicit list of what this process runs
+internal/bootstrap/            shared providers, settings and process-level registration
+internal/migrations/           the application's ordered migrations
+internal/<feature>/            one package per feature, with child packages for surfaces
 internal/platform/<purpose>/   shared code without external systems or feature knowledge
 ```
 
-- `cmd/<process>/main.go` builds the application and runs an exported `Compose(compose *application.Composer)`. `Compose` is the explicit list of what this process runs: route registrars, `if compose.App().Debug() { ... }` diagnostics, then `bootstrap.Listen(compose)`. One binary may run several surfaces; add a directory per distinct process.
-- `internal/bootstrap` holds providers for shared resources (`Router`, `Database`, `Migrator`), application settings, logging, and plain registration functions (`Listen`, `Diagnostics`). Bootstrap never imports a feature.
-- `internal/migrations` exports `func All() []migrate.Definition`. A bootstrap `Migrator` provider adds `All()` and each ark's `Migrations()`. `cmd/migrate` registers one `compose.Run` that calls Up and returns; `Application.Run` then shuts down cleanly.
-- `internal/platform/<purpose>` is shared code with no external systems and no feature knowledge. Compiled-in assets belong here (`platform/ui` layouts).
+- `Compose` calls registration functions in order: feature surfaces first, then process-level runners: the generated `bootstrap.Listen` serves HTTP, and a worker ends with a consumer runner such as `bootstrap.Work` in the examples. Each process registers only what it runs; a worker has no listener.
+- `internal/bootstrap` never imports a feature. Features import bootstrap to use shared providers, so the reverse import would be a cycle.
+- `internal/migrations` exports `All() []migrate.Definition`. A bootstrap `Migrator` provider adds `All()` and each ark's `Migrations()`; `cmd/migrate` calls a registration function that runs `Up` with `compose.Run`, and the process exits when it returns.
 
-## Feature layout
+## Feature packages
 
-A feature root package holds:
+The feature root package holds the parts other code depends on:
 
-- `<feature>.go`: domain types and pure rules.
-- `service.go`: `Service`, the feature's API.
-- `store.go`: a concrete `Store` over core database and query packages. Define no repository interface; transactions travel in the context through `db.WithTransaction`.
-- `feature.go`: the exported `Default<Type>` providers, for example `var DefaultService = application.Provide(NewService)`.
+- `<feature>.go`: domain types, pure rules, and the event topics and jobs the feature emits or dispatches. Declare them here because the root cannot import its own children.
+- `service.go`: `Service`, the feature's API, built by `NewService(compose)`.
+- `store.go`: a concrete `Store` over the core database and query packages. Add no repository interface: transactions travel in the context through `db.WithTransaction`, so stores compose without one.
+- `feature.go`: the `Default<Type>` providers, such as `var DefaultService = application.Provide(NewService)`.
 
-The root imports bootstrap, platform, core, its children below, and other feature roots only in `feature.go`, to `Use` their provider. Service code depends on interfaces its own package defines.
+Children **above** the root import it and are imported only by `cmd`, so each process chooses which surfaces it runs. `cmd` aliases them `<feature><surface>`, such as `ordersweb`. Each exports plain registration functions taking the composer: `Routes`, `Handlers`, `Listeners`. Inside them, file names are free.
 
-Children above the root import the root, and only `cmd` imports them. Alias them `<feature><surface>` in `cmd` (`welcomeweb`):
+Children **below** the root are imported by the root and import nothing from the feature or bootstrap: outbound clients, generated code, wire types. That keeps them reusable when the client is later promoted.
 
-- `web/` routes, `jobs/` queue handlers, `flow/` workflows (deterministic isolation), `tools/` MCP tools, `events/` listeners, `schedules/`, `<feature>test/` fakes and fixtures.
-- Each exports plain registration functions that take the composer, such as `func Routes(compose *application.Composer)`. File names inside are free.
-
-Children below the root are imported by the root and import nothing from the feature: outbound clients (`carrier/`), generated code, shared wire types.
-
-Start flat and promote when grown. Begin a surface as a file in the root (`web.go` with `Routes`); move it to a child package when it outgrows a file or needs import isolation.
+Start flat: a small surface may begin as a file in the root (`web.go` exporting `Routes`) and moves to a child when it outgrows a file or needs import isolation, such as deterministic workflow code.
 
 ## Construction
 
-- Use `application.Provide` only for a value that exists exactly once per process. `compose.Use(provider)` builds it on first use and returns the same value afterwards.
-- Write ordinary constructors for everything else. A fresh instance that owns lifecycle is an exported `New*(compose, args...)` that registers Startup, Cleanup, Run or Check.
-- Name feature providers `Default<Type>` and bootstrap providers for their resource (`Router`, `Database`). For several singletons of one kind, declare separate provider variables that share one constructor.
-- Give providers no parameters. Read settings (environment variables) inside the provider that uses them; keep no config package.
-- Call `Use` on dependencies at the top of a provider, then a blank line, then construct and register lifecycle. Dependencies then start first and stop last.
-- Make providers construct and register lifecycle only. Mount routes, listeners and handlers through registration functions called from `Compose`.
-- Point dependencies downward and let dependents mount. Call `Use` during composition only, never inside services or handlers.
-- Call lifecycle-owning bootstrap `New*` functions only from bootstrap.
-- Express conditions as a plain `if`.
+- `application.Provide` is for values that exist exactly once per process: shared resources, stores and services. `compose.Use(provider)` builds the value on first use and returns it unchanged afterwards, so never use `Provide` for something each caller needs fresh.
+- Provider build functions are exported constructors, `func New<Type>(compose *application.Composer) *<Type>`, that call `compose.Use` on their dependencies first, then a blank line, then construct and register lifecycle (`Cleanup`, `Startup`, `Run`, `Check`). Dependencies therefore start first and stop last.
+- Providers take no parameters. For several singletons of one kind, declare one provider variable each and share a constructor such as `NewDatabase(compose, "REPORTING_DATABASE_URL")`; call such lifecycle-owning constructors only from bootstrap providers, because each call opens a new resource.
+- Name bootstrap providers for their resource (`Database`, `Router`) and feature providers `Default<Type>`.
+- Read settings with `os.Getenv` inside the provider that needs them; there is no config package.
+- Providers construct and register lifecycle only. Routes, handlers and listeners are mounted by registration functions called from `Compose`.
+- Call `compose.Use` only while composing: in providers and registration functions, never in handlers or service methods. Express conditions as a plain `if`, such as `if compose.App().Debug()`.
 
 ## Across features
 
-- Questions: the asking feature defines a small interface; `feature.go` wires the other feature's service into it.
-- Side effects: declare the event in the publishing root; listen from the subscriber's `events/` child. Use a queue when the work must survive restarts.
-- A compile cycle between features means they are one feature; merge them.
-- The current user comes from `core/auth` (`request.Identity`, `request.User[T]`). Only bootstrap imports `ark/iam`.
+- To ask another feature something, define a small interface in your feature, store the other feature's service in a field of that type, and obtain it with `compose.Use(other.DefaultService)` in your constructor.
+- To react to something, emit a topic declared in the publishing root, after commit (`db.AfterCommit`), with `events.Emit`. Subscribers listen from their `events/` child. The application event bus is in-process: register listeners in the process that emits, and hand durable or slow work to a queue job.
+- A compile cycle between two features means they are one feature; merge them.
+- Read the current user through `core/auth` (`request.Identity`, `request.User[T]`); only bootstrap imports `ark/iam`.
 
-## Shared code
+## Testing
 
-- Extract on the third real use; inline a helper again when it gains flags.
-- Name packages for their purpose. Avoid `util`, `common`, `shared`, `helpers`, `models`, `controllers`, `services`, `handlers`, `repositories`.
+- Test pure rules in `<feature>.go` directly.
+- Test a surface by starting an application with only the registration functions you need, then calling `routes.Record(request)` on `compose.Use(bootstrap.Router)`. Point providers at local drivers through the environment (`DATABASE_URL=file::memory:` for SQLite) and run `compose.Use(bootstrap.Migrator)`'s `Up` in a `Startup` callback.
+- Put fakes shared by other packages' tests in `internal/<feature>/<feature>test/`.
 
-## Tooling
+## Common mistakes
 
-- Run `arkoren map --text` first to see processes, providers, features and migrations before searching.
-- Prefer `arkoren add feature|process|provider|migration NAME` over hand-writing these files. It creates the files, inserts the registration call into `Compose` (or the migration into `All()`), never overwrites, and previews with `--dry-run`. Surface stubs for jobs, flow, tools, events and schedules leave a `TODO` where the project must choose a driver.
-- `arkoren check` enforces the mechanical rules above (bootstrap never imports a feature, only `cmd` imports surface children, features never import drivers or `ark/iam`, banned package names, `Use` only at composition, `bootstrap.New*` only in bootstrap). Run it before finishing; `make check` includes it.
+- Feature routes, handlers or services inside `internal/bootstrap`: move them to the feature.
+- A struct collecting every resource or service: use one provider per value instead.
+- A provider with parameters, or one parameterized provider for several instances: declare separate provider variables.
+- `compose.Use` in a handler or service method: obtain the value in the constructor.
+- A job or topic declared in a `jobs/` or `events/` child while the root dispatches it: move the declaration to the root.
+- A listener registered only in a process that never emits the event.
+- Packages named `util`, `common`, `shared`, `helpers`, `models`, `controllers`, `services`, `handlers` or `repositories`: name packages for their purpose, extract shared code on its third real use, and inline a helper again once it grows flags.
+- One feature importing another feature's `web/` or `jobs/` child, or any feature importing `arkoren.dev/driver/...`: depend on the other feature's root, and on drivers only through bootstrap providers.
+
+`arkoren check` enforces the mechanical rules (bootstrap imports, surface imports, driver and `ark/iam` imports in features, banned names, `compose.Use` placement, `bootstrap.New*` calls outside bootstrap). It has no exceptions; if a rule blocks something intentional, explain the case to the user instead of working around it.
