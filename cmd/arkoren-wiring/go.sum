@@ -1,5 +1,7 @@
 arkoren.dev/ark/iam v0.1.0 h1:4CO38Dj4TBxlXAFzNJPis7L1pAckmYgpZC9GxxrdhMQ=
 arkoren.dev/ark/iam v0.1.0/go.mod h1:/YhFSZUQFC21EBJ3GdXCF8mBgu3Kivbdr7K2b6TO59s=
+arkoren.dev/ark/iam v0.4.0 h1:+zS5juLD5KEL3KmI00hZgNsllWKxx/SyCzNaZt9udug=
+arkoren.dev/ark/iam v0.4.0/go.mod h1:saT7MaXZbgiPWIqt/sHvzaeWBTlb9gS5OJpFUTtnM9Y=
 arkoren.dev/ark/oauth v0.3.0 h1:pbULSzcMkdkH2dyexOZCe/GoYEaTlBhH0orLrYFFkX4=
 arkoren.dev/ark/oauth v0.3.0/go.mod h1:MZOlcxYJssFjE9J7rWt1H3vUukkZp3S89FsD9flNtDg=
 arkoren.dev/core v0.14.0 h1:4TfXCPsneTlUipSSmP0GbEB2KgkofzAViNpCiOu4geg=
