@@ -16,56 +16,116 @@ import (
 type Options struct {
 	// Operation is install, update, or status.
 	Operation string
-	// Dir names the parent directory into which arkoren is installed.
+	// Dir names the parent directory into which every managed skill is installed.
 	Dir string
 	// DryRun previews change/conflict counts without writes; verbose lists paths.
 	DryRun bool
 }
 
+// target is one managed skill's destination, bundle, inspected state and plan.
+type target struct {
+	// name is the skill's directory name under the skills parent.
+	name string
+	// folder is the skill's absolute installation directory.
+	folder string
+	// bundle is the embedded skill content and its manifest.
+	bundle Bundle
+	// installed is the inspected state of folder.
+	installed Installation
+	// report is the skill's own result document.
+	report map[string]any
+	// plan is the write plan, set for install and update only.
+	plan Plan
+}
+
 // Manage operates exclusively on bundled documentation and local files.
 // The CLI tree supplies a known operation and parsed options; all ownership,
 // collision, and manifest-last guarantees remain in the existing skill planner.
+//
+// Every skill in [Names] is handled in one operation. All plans are built and
+// checked first, so a conflict in any skill blocks every write. The result
+// document describes the first skill (arkoren) at the top level and each other
+// skill under "related_skills", keyed by name.
 func Manage(ctx context.Context, options Options, env console.Environment, source fs.FS) error {
-	folder, err := resolveSkillsDir(env.Dir, options.Dir)
+	parent, err := resolveSkillsDir(env.Dir, options.Dir)
 
 	if err != nil {
 		return err
 	}
 
-	bundle, err := LoadBundle(ctx, source)
+	targets := make([]*target, 0, len(Names))
 
-	if err != nil {
-		return err
+	for _, name := range Names {
+		bundle, err := LoadNamedBundle(ctx, source, name)
+
+		if err != nil {
+			return err
+		}
+
+		folder := filepath.Join(parent, name)
+		installed, err := Inspect(ctx, folder)
+
+		if err != nil {
+			return err
+		}
+
+		targets = append(targets, &target{
+			name: name, folder: folder, bundle: bundle, installed: installed,
+			report: skillReport(folder, bundle, installed, env.Presentation.Verbose),
+		})
 	}
 
-	installed, err := Inspect(ctx, folder)
+	report := targets[0].report
+	related := make(map[string]any, len(targets)-1)
 
-	if err != nil {
-		return err
+	for _, other := range targets[1:] {
+		related[other.name] = other.report
 	}
 
-	report := skillReport(folder, bundle, installed, env.Presentation.Verbose)
+	report["related_skills"] = related
 
 	if options.Operation == "status" {
 		return env.Result(report)
 	}
 
-	plan, err := NewPlan(ctx, folder, options.Operation, bundle, installed)
+	var conflicts []string
 
-	if err != nil {
-		return err
+	for _, current := range targets {
+		operation := options.Operation
+
+		// A skill added after the project's first install is absent from older
+		// projects: update installs it beside the managed primary skill, while
+		// the primary skill still requires an existing managed installation.
+		if current != targets[0] && operation == "update" && current.installed.Manifest == nil && !current.installed.unmanaged {
+			operation = "install"
+		}
+
+		current.plan, err = NewPlan(ctx, current.folder, operation, current.bundle, current.installed)
+
+		if err != nil {
+			return err
+		}
+
+		current.report["written_files"], current.report["removed_files"] = skillChangeCounts(current.plan)
+		current.report["conflict_count"] = len(current.plan.Conflicts)
+
+		if env.Presentation.Verbose {
+			current.report["changes"], current.report["conflicts"] = skillChanges(current.plan), current.plan.Conflicts
+		}
+
+		for _, conflict := range current.plan.Conflicts {
+			if current != targets[0] {
+				conflict = current.name + ": " + conflict
+			}
+
+			conflicts = append(conflicts, conflict)
+		}
 	}
 
 	report["operation"] = options.Operation
 	report["dry_run"] = options.DryRun
-	report["written_files"], report["removed_files"] = skillChangeCounts(plan)
-	report["conflict_count"] = len(plan.Conflicts)
 
-	if env.Presentation.Verbose {
-		report["changes"], report["conflicts"] = skillChanges(plan), plan.Conflicts
-	}
-
-	if len(plan.Conflicts) != 0 {
+	if len(conflicts) != 0 {
 		if options.DryRun {
 			if err := env.Result(report); err != nil {
 				return err
@@ -74,27 +134,29 @@ func Manage(ctx context.Context, options Options, env console.Environment, sourc
 			return &console.ExitError{Code: console.ExitUsage}
 		}
 
-		return console.ConflictingPaths(options.Operation+" skill", folder, plan.Conflicts)
+		return console.ConflictingPaths(options.Operation+" skill", targets[0].folder, conflicts)
 	}
 
 	if options.DryRun {
 		return env.Result(report)
 	}
 
-	if err := Write(ctx, folder, plan); err != nil {
-		return err
+	for _, current := range targets {
+		if err := Write(ctx, current.folder, current.plan); err != nil {
+			return err
+		}
+
+		current.report["installed_revision"] = current.bundle.Manifest.Revision
+		current.report["modified_file_count"] = 0
+
+		if env.Presentation.Verbose {
+			current.report["modified_files"] = []string{}
+		}
+
+		current.report["state"] = "installed"
 	}
 
-	report["installed_revision"] = bundle.Manifest.Revision
-	report["modified_file_count"] = 0
-
-	if env.Presentation.Verbose {
-		report["modified_files"] = []string{}
-	}
-
-	report["state"] = "installed"
 	report["completed"] = true
-	report["written_files"], report["removed_files"] = skillChangeCounts(plan)
 
 	return env.Result(report)
 }
@@ -114,7 +176,8 @@ func skillChangeCounts(plan Plan) (written, removed int) {
 	return written, removed
 }
 
-// resolveSkillsDir anchors relative destinations to the supplied working directory.
+// resolveSkillsDir returns the skills parent, anchoring a relative one to the
+// supplied working directory; each skill lives in its own child directory.
 // Only the working directory's system aliases are resolved; chosen links fail.
 func resolveSkillsDir(dir, parent string) (string, error) {
 	if parent == "" {
@@ -137,7 +200,7 @@ func resolveSkillsDir(dir, parent string) (string, error) {
 		parent = filepath.Join(base, parent)
 	}
 
-	return filepath.Join(parent, "arkoren"), nil
+	return parent, nil
 }
 
 // skillReport describes installed provenance without implying API compatibility.

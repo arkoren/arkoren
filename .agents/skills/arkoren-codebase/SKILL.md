@@ -607,44 +607,41 @@ positional destination (`arkoren new billing` or `arkoren new .`), with optional
 skills-dir (project-relative, default `.agents/skills`), no-agent-files,
 dry-run, skip-tidy, and yes flags. Bare `new` reports usage with exit 2 without writing; `--folder` is
 removed. Help needs no destination. It writes application files: a cmd executable
-(main.go for infallible application.New construction/identity, signals, logging, and exit status),
-internal/bootstrap (bootstrap.go for composition/lifecycle, app.go for application
-settings, logging.go for log handlers, router.go for routes, server.go for server
-settings and lifecycle, mcp.go for debug diagnostics), go.mod, README, Makefile,
+(main.go for infallible application.New construction/identity, signals, logging, exit status and the
+exported `Compose`, the explicit list of what the process runs), internal/bootstrap (app.go for application
+settings, logging.go for log handlers, router.go for the `Router` provider, listener.go for `Listen`, which owns
+listener policy and lifecycle, mcp.go for `Diagnostics`), internal/welcome/web (the example feature, `Routes`
+mounting the welcome page), go.mod, README, Makefile,
 Dockerfile, .dockerignore, .gitignore, .editorconfig, .env and .env.example.
-No application tests are generated. Bootstrap factories Router, MCP, and Server
-return Factory[T] callbacks with real outputs. The direct void Compose root
-obtains its shared router with compose.Use(Router()). (Core now replaces
-Factory/Action/UseWhen/UseDebug with memoized `application.Provide`/`Use` and
-plain `if`; the templates keep the old shape until they move to the released
-core that has it. See the arkoren-go skill's lifecycle rules.)
-By default it also writes user-owned AGENTS.md and a complete managed skill under
-`<skills-dir>/arkoren`, including its manifest. `--no-agent-files` skips both;
-a custom skills-dir and opt-out conflict. AGENTS.md describes consumer conventions
-and direct composition, not toolkit-contributor rules. Existing instruction and skill
+No application tests are generated. `bootstrap.Router` is an `application.Provide` provider; `Listen` and
+`Diagnostics` are plain registration functions that `Use` it, and bootstrap never imports a feature.
+The go.mod template pins `arkoren.dev/core` to the release that ships with the CLI (the Provider API), so bump
+it in the same change as any core API the templates need, using the version the release plan proposes
+(`arkoren-ci release plan`). Tests build the scaffold against checkout modules with local replaces because
+that version does not exist on the proxy until the release is published.
+By default it also writes user-owned AGENTS.md and the managed skills (`arkoren` and `arkoren-structure`) under
+`<skills-dir>/<name>`, each with its own manifest; `skill.Names` lists them and `skills install|update|status`
+handle them together (the first is the result's top level, the rest are under `related_skills`; a conflict in
+any skill blocks all writes; `update` installs a skill missing from an older project). `--no-agent-files` skips both;
+a custom skills-dir and opt-out conflict. AGENTS.md is project notes plus pointers to both skills, not
+toolkit-contributor rules. Existing instruction and skill
 paths participate in the same no-overwrite preflight as application files.
 Templates mirror the output tree under cmd/arkoren/templates, with .tmpl suffixes and fixed cmd/server for
 the command directory. Rendering discovers files recursively in lexical order; add templates at their
-output-relative paths rather than maintaining a separate file list. bootstrap.Server reads HTTP_ADDR inside its builder
-callback; empty/unset preserves :8080. The executable blank-imports
+output-relative paths rather than maintaining a separate file list. bootstrap.Listen reads HTTP_ADDR during
+composition; empty/unset preserves :8080. The executable blank-imports
 godotenv/autoload: initialization loads .env, preserves existing environment values,
 and ignores loading errors. bootstrap.Application enables debug only for APP_DEBUG=true.
-Router(), MCP(routes), and Server(handler) only capture explicit dependencies.
-Their returned callbacks create the router with probes and app.WelcomeHandler(), construct and
-mount diagnostics, and construct the listener with Startup/Cleanup/Run bindings.
-Each returns its actual constructed handle through typed Use. Server owns its
-Started subscription through MustDefer and unsubscribe cleanup; an inline
-callback logs Addr as address after `app started` and runner launch. Compose
-ignores the server result. Keep logging separate from Serve and readiness
+Listen owns its Started subscription through MustDefer and unsubscribe cleanup; an inline
+callback logs Addr as address after `app started` and runner launch. Keep logging separate from Serve and readiness
 transitions; do not format browser URLs or infer schemes, hosts, or public domains.
-Compose selects MCP through UseDebug; skipped output is explicitly absent as (zero, false).
-Constructors, environment reads, and route mutations belong inside callbacks;
-obtaining a factory must not acquire a resource or expose an endpoint.
+Compose selects Diagnostics with `if compose.App().Debug()`. Providers construct and register lifecycle;
+route mutations belong in registration functions called from Compose, ordered routes, diagnostics, then Listen.
 The welcome handler serves embedded, self-contained HTML with documentation links
 at the explicitly registered root route. Full application InfoHandler remains
 opt-in and unmounted; applications own access controls for its operational data.
 The unauthenticated endpoint selects read-only application, route, and telemetry
-tools. Its factory registers `compose.Must(compose.MCPTools("app"))` and
+tools. Diagnostics registers `compose.Must(compose.MCPTools("app"))` and
 `routes.MCPTools("http")` with separate appending `listener.Tools` calls,
 without a redundant read-only filter. Composer.MCPTools attaches bounded
 in-memory capture with no external export. Router registers the application's telemetry
