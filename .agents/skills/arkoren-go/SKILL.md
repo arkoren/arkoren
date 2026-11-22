@@ -675,27 +675,25 @@ delivery, and lifecycle protocols explicit.
   before user Startup callbacks. Listeners registered during composition can
   log through active application telemetry. Composition/telemetry-start failures
   dispatch Failed without Starting. There is no built-in app starting log.
-- Child composers use defined function types `Factory[T] func(*Composer) T`
-  and `Action func(*Composer)`. Their private methods implement one typed
-  execution protocol. These types intentionally are not aliases: their methods
-  enable inference without reflection or accepting arbitrary `any` values.
-  Root `ComposerFunc = func(*Composer)` remains an alias for `Start`/`Run`.
-- `Composer.Use(operation)` invokes one Factory or Action inline, sharing context,
-  cleanup ownership, and errors. A Factory returns its ordinary typed value;
-  an Action has a void body and its internal empty completion result is normally
-  ignored. Raw inline void callbacks need `application.Action(...)`; typed inline
-  callbacks need `application.Factory[T](...)`. Use has no variadic or batch form.
-  Bootstrap factories capture dependencies only; acquire resources and mutate
-  routes inside callbacks, so skipped features acquire nothing. Returned values
-  are constructed, not necessarily started. Returning them transfers no ownership
-  and memoizes nothing. Use typed module-owned structs for related outputs.
-- `UseWhen`, `UseDebug`, `UseIn`, and `UseInAny` accept either kind and return
-  `(value, executed)`. Selected callbacks run in the same scope; skipped callbacks
-  return zero and false without construction. A legitimate zero output still
-  returns true. Errors abort through Must/MustDefer/Require, never masquerade as false.
-  Nil interfaces, typed nil functions, recorded failures, and invalid phases are
-  checked even on skipped branches. Environment matching is exact; UseDebug uses
-  the construction flag, independently of environment or runtime log level.
+- `application.Provide(build func(*Composer) T) *Provider[T]` declares a value the
+  process holds exactly once (router, database). `Composer.Use(provider)` accepts
+  only a `*Provider[T]`, runs `build` on first use in a composition and returns
+  the cached value afterwards, keyed by the provider pointer and scoped to one
+  `Start`/`Run`, so applications never share values. Everything else is an
+  ordinary constructor; one that registers lifecycle is an exported
+  `New<Thing>(composer, args...)` returning a fresh instance. A provider calls
+  `Use` on its dependencies before registering its own Startup/Cleanup, so
+  dependencies start first and stop last. Re-entering a provider that is still
+  building panics with `ErrProviderCycle` naming the type chain; a nil build
+  panics with `ErrNilFunc` at `Provide`; a failed build (Must/Require abort) is
+  never cached. Use is composition-only (`ErrInvalidPhase` otherwise). Root
+  `ComposerFunc = func(*Composer)` remains an alias for `Start`/`Run`.
+- Conditional wiring is a plain Go `if` on `composer.App().Debug()` (the
+  construction-time flag, independent of environment or log level) or
+  `composer.App().Environment()` (exact match). There are no `UseWhen`,
+  `UseIn`, `UseInAny` or `UseDebug`, no `Factory` or `Action`. Errors abort
+  through Must/MustDefer/Require. A `Run` whose only runner returns nil ends the
+  application cleanly, which one-shot commands such as migrate rely on.
 - `Composer.Must`, `MustDefer`, and `Require` abort synchronous composition with a private,
   execution-specific panic recovered into the original error by `Start`/`Run`.
   This is the explicit exception to ordinary returned-error handling. Do not use

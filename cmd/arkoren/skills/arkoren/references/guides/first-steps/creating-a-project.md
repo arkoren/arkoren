@@ -122,10 +122,13 @@ your first endpoint.
 ## Starter Defaults
 
 `cmd/server/main.go` creates the application and calls
-`app.Run(ctx, bootstrap.Compose)`. Files in `internal/bootstrap` construct the
-router, optional diagnostics endpoint, and server. Typed factories return
-constructed values; the application starts components only after composition
-succeeds. The generated signal context requests shutdown on Ctrl+C or `SIGTERM`.
+`app.Run(ctx, Compose)`. `Compose` is the explicit list of what the process runs:
+the welcome feature's routes, the diagnostics endpoint when debug is on, and
+the HTTP listener. `internal/bootstrap` holds the shared router provider and the
+`Listen` and `Diagnostics` registration functions, and
+`internal/welcome/web` mounts the welcome page. The application starts
+components only after composition succeeds. The generated signal context requests
+shutdown on Ctrl+C or `SIGTERM`.
 
 The router serves a welcome page at `/` and probes at `/livez`, `/readyz`, and
 `/startupz`. It applies security headers, request telemetry, panic recovery, and
@@ -162,9 +165,10 @@ alone selects the starter's log format.
 
 ## Agent Files
 
-By default, generation includes `AGENTS.md` and the bundled documentation skill
-under `.agents/skills/arkoren/`, including its installation manifest. Commit them
-if you use them. Agent discovery varies; configure your agent to read the
+By default, generation includes `AGENTS.md` and two bundled skills under
+`.agents/skills/`: `arkoren` (the reference documentation) and
+`arkoren-structure` (project layout and construction rules), each with its
+installation manifest. Commit them if you use them. Agent discovery varies; configure your agent to read the
 generated instructions when needed.
 
 If your agent needs a different skills parent, choose it during generation
@@ -174,7 +178,7 @@ instead of the earlier invocation:
 arkoren new hello --module example.com/hello --skills-dir .claude/skills
 ```
 
-The CLI appends `arkoren` and updates the generated pointers. The parent must be
+The CLI appends each skill's name and updates the generated pointers. The parent must be
 a project-relative slash-separated path using letters, digits, dots, underscores,
 or hyphens, without `..` components. File/directory conflicts still block writes.
 
@@ -184,7 +188,7 @@ collisions are not merged or overwritten.
 
 Application files and `AGENTS.md` remain yours.
 [`arkoren skills update`](../agent-skills/working-with-agents.md#updating-skills)
-manages only the skill directory and rejects modified managed files. There is
+manages only the skill directories and rejects modified managed files. There is
 no application regeneration or upgrade step. Grow the code using
 [Project Layout](project-layout.md), and use [Deployment](deploying.md) when
 you are ready to build an image or binary.

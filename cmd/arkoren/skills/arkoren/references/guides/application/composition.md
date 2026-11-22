@@ -1,13 +1,13 @@
 ---
 title: Application Composition
 nav: Composition
-description: Construct typed dependencies once, keep ownership explicit, and select optional features before startup.
+description: Construct typed dependencies, share one-per-process values with providers, and select optional features before startup.
 order: 20
 summary:
   - Share concrete typed dependencies while keeping construction and cleanup under one owner.
-  - Extract factories and actions without introducing a registry or automatic lifecycle adoption.
+  - Declare values that must exist once per process as memoized providers, and write ordinary constructors for everything else.
   - Abort failed construction and own subscriptions before later setup can fail.
-  - Skip optional acquisition and routes using explicit feature, debug, or environment decisions.
+  - Skip optional acquisition and routes with a plain Go if on configuration, debug, or environment.
 ---
 
 # Application Composition
@@ -85,47 +85,87 @@ Use `composer.Context()` if synchronous construction needs the startup context.
 `Must`, `MustDefer`, and `Require` are valid only during synchronous composition,
 even for successful results. Return ordinary errors from startup, runners, and
 cleanup. Do not recover their private abort: the first failure stays recorded,
-and a factory cannot publish a result after swallowing it. Unrelated composition
+and a provider cannot cache a result after swallowing it. Unrelated composition
 panics remain programmer failures and re-panic unchanged after cleanup.
 
-## Extract Owned Construction
+## Share One Value
 
-If multiple executables need the same database setup, extract construction and
-its lifecycle registrations together. A `Factory[T]` is a defined callback type
-that publishes one typed result:
+If the process must hold exactly one database, declare it as a provider. A
+provider is a package-level value created with `application.Provide`; its build
+function constructs the value and registers its lifecycle:
 
 ```go
-func InventoryDatabase(dsn string) application.Factory[*database.Database] {
-	return func(composer *application.Composer) *database.Database {
-		connection := composer.Must(postgresdatabase.New(dsn))
-		composer.Cleanup(connection.Stop)
-		composer.Startup(connection.Start)
+var InventoryDatabase = application.Provide(func(composer *application.Composer) *database.Database {
+	connection := composer.Must(postgresdatabase.New(os.Getenv("INVENTORY_DSN")))
+	composer.Cleanup(connection.Stop)
+	composer.Startup(connection.Start)
 
-		return database.New(connection)
-	}
-}
+	return database.New(connection)
+})
 ```
 
-The helper captures configuration; acquisition happens inside the returned
-callback. Replace the direct construction with one invocation:
+Replace the direct construction with one `Use`:
 
 ```go
-db := composer.Use(InventoryDatabase(dsn))
+db := composer.Use(InventoryDatabase)
 
 mountCatalog(routes, db)
 mountStock(routes, db)
 ```
 
-`Use` invokes the callback synchronously and returns its result unchanged.
-Calling it again creates another driver: there is no cache, cloning, registry,
-or automatic lifecycle adoption. Nested factories share the enclosing context
-and cleanup stack, not a separate lifecycle.
+The first `Use` in a composition runs the build function synchronously and caches
+the result. Later `Use` calls, including from other providers, return that same
+value, so two features that both ask for `InventoryDatabase` share one pool and
+one cleanup registration. The cache belongs to one `Start` or `Run`: separate
+applications never share values. Declare a provider with no parameters and read
+settings inside its build function, because the provider is built once.
 
-For several related outputs, return a small named struct and pass individual
-fields to consumers. Avoid a global bundle of every dependency: it hides what
-each consumer needs. If you use a dependency-injection container, resolve typed
-values during composition and choose either the container or the application
-to own each resource's startup and release—never both.
+A provider that uses other providers calls `Use` on them first, then registers
+its own lifecycle. Startup runs in registration order and cleanup in reverse, so
+dependencies start first and stop last:
+
+```go
+var Inventory = application.Provide(func(composer *application.Composer) *inventory.Service {
+	db := composer.Use(InventoryDatabase)
+
+	composer.Startup(warmCache)
+
+	return inventory.NewService(db)
+})
+```
+
+A provider that is used again while it is still building panics with
+`ErrProviderCycle`, naming the chain of value types. Break the cycle by moving
+the shared piece into a third provider. A nil build function panics with
+`ErrNilFunc` at `Provide`. A build that aborts through `Must` or `Require` fails
+composition and caches nothing.
+
+## Construct Everything Else
+
+Use `Provide` only for values that must exist once. For anything else, write an
+ordinary Go constructor. A constructor that acquires resources takes the composer,
+registers its lifecycle, and returns a fresh instance each time; name it
+`New<Thing>(composer, args...)`:
+
+```go
+func NewWorker(composer *application.Composer, queue string) *Worker {
+	worker := &Worker{queue: queue}
+
+	composer.Startup(worker.Start)
+	composer.Cleanup(worker.Stop)
+
+	return worker
+}
+```
+
+Calling `NewWorker` twice creates two workers with two lifecycles. Values that
+need no lifecycle are plain constructors without the composer. For several
+named singletons of one kind, declare separate providers that share one
+constructor. For related outputs, return a small named struct and pass
+individual fields to consumers; avoid a global bundle of every dependency. If
+you use a dependency-injection container, resolve typed values during
+composition and choose either the container or the application to own each
+resource's startup and release, never both.
 
 ## Own Subscriptions
 
@@ -159,30 +199,29 @@ callback; `MustDefer` cannot.
 
 ## Package Registration
 
-Use an `Action` when a helper registers work without producing a value. Given an
-existing `listener *server.Server` from `arkoren.dev/core/http/server`, whose
-acquiring owner already registered `listener.Stop`, this helper borrows it:
+A package that adds routes or background work exposes a plain function that
+takes the composer. It obtains the shared providers it needs with `Use` and
+registers its work. Given an existing `listener *server.Server` from
+`arkoren.dev/core/http/server`, whose acquiring owner already registered
+`listener.Stop`, this function borrows it:
 
 ```go
-func ServeInventory(listener *server.Server) application.Action {
-	return func(composer *application.Composer) {
-		composer.Startup(listener.Start)
-		composer.Run(listener.Serve)
-	}
+func ServeInventory(composer *application.Composer, listener *server.Server) {
+	composer.Startup(listener.Start)
+	composer.Run(listener.Serve)
 }
 ```
 
-Invoke `composer.Use(ServeInventory(listener))` after wiring routes. The action
-adds startup and supervised serving, not a second cleanup owner. It returns no
-application value; call `Use` as a statement and ignore its empty completion
-result. Root callbacks passed directly to application `Start` or `Run` remain
-ordinary `func(*application.Composer)` functions.
+Call `ServeInventory(composer, listener)` after wiring routes. It adds startup
+and supervised serving, not a second cleanup owner. Root callbacks passed
+directly to application `Start` or `Run` are ordinary `func(*application.Composer)`
+functions, so a registration function with only the composer parameter can be
+passed to them as is.
 
 ## Select Optional Features
 
-If a catalog is disabled, skip its dependency and its routes together. As an
-alternative to the always-on database above, assume validated configuration with
-these typed fields:
+If a catalog is disabled, skip its dependency and its routes together with an
+ordinary `if`. Assume validated configuration with these typed fields:
 
 ```go
 type CatalogSettings struct {
@@ -194,48 +233,47 @@ type CatalogSettings struct {
 With `catalog CatalogSettings`, construct only when selected:
 
 ```go
-db, selected := composer.UseWhen(catalog.Enabled, InventoryDatabase(catalog.DSN))
-if selected {
+if catalog.Enabled {
+	db := composer.Use(InventoryDatabase)
+
 	mountCatalog(routes, db)
 }
 ```
 
-When disabled, the callback never runs: no pool, cleanup, or catalog routes are
-created. Keep acquisition inside the callback. Go evaluates helper arguments
-before selection, so passing an already opened resource does not defer acquisition.
-
-Selectors return `(T, bool)`. A skipped factory returns zero and false; a selected
-factory returns its value and true, even when zero or nil is legitimate. Test
-the boolean for presence, not success. Construction errors abort composition;
-they never become false. Selectors also accept actions; their result pair can
-be ignored when no later branch needs it.
+When disabled, `Use` never runs: no pool, cleanup, or catalog routes are created.
+Keep acquisition inside the branch. Go evaluates arguments before the call, so
+passing an already opened resource does not defer acquisition. Construction
+errors raised through `Must` or `Require` abort composition.
 
 ### Choose Selection Policy
 
 Use a configuration boolean for a product feature. For a developer aid, choose
 debug selection when operators opt in independently of deployment, or environment
-selection when deployment determines policy. Given an existing
-`diagnostics application.Action`, choose one of these alternatives:
+selection when deployment determines policy. Read both from the application:
 
 ```go
-composer.UseDebug(diagnostics)
-composer.UseIn(application.Development, diagnostics)
-composer.UseInAny([]application.Environment{application.Development, application.Staging}, diagnostics)
+app := composer.App()
+
+if app.Debug() {
+	diagnostics(composer)
+}
+
+if app.Environment() == application.Development {
+	devTools(composer)
+}
 ```
 
-`UseDebug` reads the construction-time `Debug` flag, which defaults to false;
-environment and runtime log-level changes do not alter it. `UseIn` and `UseInAny`
-match the single application environment exactly, including custom values.
-`UseInAny` runs at most once; duplicate matches do not repeat it, and an empty
-slice skips it. See [environment settings](../first-steps/configuration.md#environment-settings)
+`Debug` is the construction-time flag, which defaults to false; environment and
+runtime log-level changes do not alter it. `Environment` returns the single
+deployment name, and custom values compare exactly. See
+[environment settings](../first-steps/configuration.md#environment-settings)
 for configuration. Selection is not access control: protect
 [diagnostic endpoints](../diagnostics/capture-setup.md) separately.
 
-Call `Use` and its selectors only during synchronous composition, never from
-startup, runners, cleanup, or spawned goroutines. Invalid phases panic with
-`ErrInvalidPhase`. Nil or typed-nil operations panic with `ErrNilFunc` even on
-skipped branches; skipping also cannot erase a recorded composition failure.
-Do not retain the composer for later container callbacks.
+Call `Use` only during synchronous composition, never from startup, runners,
+cleanup, services, handlers, or spawned goroutines. Invalid phases panic with
+`ErrInvalidPhase`; a nil provider panics with `ErrNilFunc`. Do not retain the
+composer for later container callbacks.
 
 For every composition method, see the
 [`application` API reference](https://pkg.go.dev/arkoren.dev/core/application).

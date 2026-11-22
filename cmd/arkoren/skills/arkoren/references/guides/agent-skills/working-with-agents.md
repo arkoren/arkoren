@@ -15,7 +15,9 @@ When a coding agent works on your application, give it Arkoren's integration
 guides rather than relying on its training data. The `arkoren` **skill** is a
 folder containing an entry file, `SKILL.md`, and reference pages that the agent
 reads as needed. It includes the same authored guides as the website, packaged
-as a fixed snapshot in the Arkoren CLI.
+as a fixed snapshot in the Arkoren CLI. A companion skill, `arkoren-structure`,
+carries the project layout and construction rules; the CLI installs both side
+by side, each in its own folder with its own manifest.
 
 You can install the skill in an existing application without generating a new
 project or changing its Go dependencies. For adopting Arkoren packages while
@@ -45,7 +47,8 @@ arkoren skills install --dry-run
 ```
 
 The JSON report names the destination ending in `.agents/skills/arkoren`, with
-planned write, removal, and conflict counts. The preview creates no files or
+planned write, removal, and conflict counts, and describes `arkoren-structure`
+under `related_skills`. A conflict in either skill blocks both. The preview creates no files or
 directories. Add `--verbose` when you need individual paths. If the destination
 is the one you intended and there are no conflicts, install the bundle:
 
@@ -70,7 +73,7 @@ After reviewing the preview, run the same command without `--dry-run`. The skill
 lands at `.claude/skills/arkoren/SKILL.md`. Choose one location for the client you
 use; these commands are alternatives, not required duplicate installations.
 
-`--dir` always names the **parent** skills directory; Arkoren appends `arkoren`.
+`--dir` always names the **parent** skills directory; Arkoren appends each skill's name.
 Relative paths start at the current working directory. The CLI does not search
 parent directories for a project or an installed skill. Use the same `--dir`
 with later status and update commands. For other clients, check their documented
@@ -159,7 +162,8 @@ apply it:
 arkoren skills update
 ```
 
-Neither command downloads documentation or looks up the latest release.
+If your installation predates `arkoren-structure`, `update` adds it beside the
+managed `arkoren` skill. Neither command downloads documentation or looks up the latest release.
 `update` means “match this CLI's bundle”; running an older CLI can therefore
 replace your documentation with an older snapshot. For a custom installation,
 include its parent directory, such as `--dir .claude/skills`, in each command.
@@ -199,8 +203,8 @@ preserve local work, move the partial directory aside, and install again.
 There is no `arkoren skills uninstall` or `remove` command. To uninstall a
 CLI-managed copy, first run `status --verbose` with the same `--dir` used at
 installation and review the reported directory. Preserve any local edits or
-unrelated files inside it, then remove only that installation's `arkoren`
-directory, including its manifest. Do not remove the parent `.agents/skills`
+unrelated files inside it, then remove only that installation's `arkoren` and
+`arkoren-structure` directories, including their manifests. Do not remove the parent `.agents/skills`
 or `.claude/skills` directory, which can contain other skills.
 
 Remove any pointers to that copy from your own project instructions. If the
