@@ -62,7 +62,7 @@ func TestAddFeatureDryRunWritesNothing(t *testing.T) {
 
 	report, err := runLayout(t, env, "add", "feature", "orders", "--web", "--dry-run")
 
-	if err != nil || report["dry_run"] != true || len(report["created"].([]any)) != 5 {
+	if err != nil || report["dry_run"] != true || len(report["created"].([]any)) != 6 {
 		t.Fatalf("report = %v, err = %v", report, err)
 	}
 

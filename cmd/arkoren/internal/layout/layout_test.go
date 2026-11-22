@@ -195,7 +195,7 @@ func TestAddFeatureRegistersSurfacesBeforeBootstrapTail(t *testing.T) {
 		}
 	}
 
-	if len(plan.Create) != 6 || len(plan.Edit) != 1 || plan.Edit[0].Path != "internal/bootstrap/server/compose.go" {
+	if len(plan.Create) != 7 || len(plan.Edit) != 1 || plan.Edit[0].Path != "internal/bootstrap/server/compose.go" {
 		t.Fatalf("plan = %+v", plan)
 	}
 }

@@ -1,6 +1,9 @@
 package {{.Feature}}
 
-import "arkoren.dev/core/application"
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/foundation/query"
+)
 
 // Store persists the {{.Feature}} feature's data. It is a concrete type over the
 // core database and query packages: define no repository interface, and run
@@ -14,4 +17,14 @@ type Store struct{}
 // DefaultStore memoizes it once per process.
 func NewStore(compose *application.Composer) *Store {
 	return &Store{}
+}
+
+// SelectAll is the statement that lists the {{.Feature}} rows, newest first.
+// Build every statement with the query builder in an exported func like this
+// one (or a var when it takes no input). Store methods only run it with the
+// database's Query or Exec, and tests can assert the statement on its own.
+func SelectAll() query.Query {
+	return query.Table("{{.Feature}}", func(statement *query.Builder) {
+		statement.Select("id").OrderByDesc("id")
+	})
 }
