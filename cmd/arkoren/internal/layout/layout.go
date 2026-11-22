@@ -56,8 +56,12 @@ const (
 	_ kind = iota
 	// kindCmd is a package below cmd/.
 	kindCmd
-	// kindBootstrap is internal/bootstrap and anything below it.
+	// kindBootstrap is the internal/bootstrap package itself.
 	kindBootstrap
+	// kindProcess is a process root, internal/bootstrap/<process> or anything
+	// below it: it exports the process's Compose and is the only internal
+	// package that may import surface children.
+	kindProcess
 	// kindMigrations is internal/migrations.
 	kindMigrations
 	// kindPlatform is internal/platform and anything below it.
@@ -93,6 +97,10 @@ func classify(dir string) class {
 
 	switch parts[1] {
 	case "bootstrap":
+		if len(parts) > 2 {
+			return class{kind: kindProcess}
+		}
+
 		return class{kind: kindBootstrap}
 	case "migrations":
 		return class{kind: kindMigrations}

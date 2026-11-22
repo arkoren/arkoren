@@ -54,7 +54,7 @@ func TestAddFeatureDryRunWritesNothing(t *testing.T) {
 	t.Parallel()
 
 	env := scaffoldedProject(t)
-	before, err := os.ReadFile(filepath.Join(env.Dir, "cmd/server/main.go"))
+	before, err := os.ReadFile(filepath.Join(env.Dir, "internal/bootstrap/server/compose.go"))
 
 	if err != nil {
 		t.Fatal(err)
@@ -68,11 +68,11 @@ func TestAddFeatureDryRunWritesNothing(t *testing.T) {
 
 	edited := report["edited"].([]any)[0].(map[string]any)
 
-	if edited["path"] != "cmd/server/main.go" || edited["inserted"].([]any)[0] != "ordersweb.Routes(compose)" {
+	if edited["path"] != "internal/bootstrap/server/compose.go" || edited["inserted"].([]any)[0] != "ordersweb.Routes(compose)" {
 		t.Fatalf("edited = %v", edited)
 	}
 
-	after, _ := os.ReadFile(filepath.Join(env.Dir, "cmd/server/main.go"))
+	after, _ := os.ReadFile(filepath.Join(env.Dir, "internal/bootstrap/server/compose.go"))
 
 	if _, err := os.Stat(filepath.Join(env.Dir, "internal/orders")); !errors.Is(err, os.ErrNotExist) || !bytes.Equal(before, after) {
 		t.Fatalf("dry run changed the project: %v", err)
@@ -95,10 +95,10 @@ func TestAddFeatureWritesFilesAndRegistration(t *testing.T) {
 		}
 	}
 
-	main, _ := os.ReadFile(filepath.Join(env.Dir, "cmd/server/main.go"))
+	compose, _ := os.ReadFile(filepath.Join(env.Dir, "internal/bootstrap/server/compose.go"))
 
-	if !strings.Contains(string(main), "ordersjobs.Handlers(compose)") {
-		t.Fatalf("main.go:\n%s", main)
+	if !strings.Contains(string(compose), "ordersjobs.Handlers(compose)") {
+		t.Fatalf("compose.go:\n%s", compose)
 	}
 }
 

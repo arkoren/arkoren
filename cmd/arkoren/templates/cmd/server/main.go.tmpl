@@ -9,7 +9,7 @@ import (
 	"arkoren.dev/core/application"
 
 	"{{.Module}}/internal/bootstrap"
-	welcomeweb "{{.Module}}/internal/welcome/web"
+	"{{.Module}}/internal/bootstrap/server"
 )
 
 // main maps run's error to process exit status after cleanup finishes.
@@ -22,7 +22,7 @@ func main() {
 }
 
 // run constructs the application from bootstrap.Application and runs the graph
-// declared by Compose. Construction applies settings without starting
+// declared by server.Compose, the process root in internal/bootstrap/server. Construction applies settings without starting
 // components; app.Run owns composition, startup, supervised work, and shutdown.
 //
 // SIGINT or SIGTERM cancels the run context and requests shutdown. Registered
@@ -44,29 +44,5 @@ func run() error {
 	ctx, stop := application.NewSignalContext(context.Background())
 	defer stop()
 
-	return app.Run(ctx, Compose)
-}
-
-// Compose is the explicit list of what this process runs. The executable passes
-// it to app.Run; every call finishes composition before any registered startup
-// callback runs.
-//
-// Registration functions mount routes on the shared router, so they come first.
-// Diagnostics is registered only when application debug is enabled. Listen comes
-// last: it serves the router after every route is mounted. compose.Use obtains
-// shared providers such as bootstrap.Router; it constructs a value, not a
-// started service. If composition fails, app.Run cleans up acquired resources
-// and returns the error; startup does not begin.
-//
-// Add a feature by importing its registration package and calling it here. See
-// https://arkoren.dev/docs/guides/application/composition and
-// https://arkoren.dev/docs/guides/first-steps/project-layout.
-func Compose(compose *application.Composer) {
-	welcomeweb.Routes(compose)
-
-	if compose.App().Debug() {
-		bootstrap.Diagnostics(compose)
-	}
-
-	bootstrap.Listen(compose)
+	return app.Run(ctx, server.Compose)
 }

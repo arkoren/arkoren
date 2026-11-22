@@ -183,19 +183,19 @@ func TestAddFeatureRegistersSurfacesBeforeBootstrapTail(t *testing.T) {
 	plan, err := project.AddFeature(layout.FeatureOptions{Name: "orders", Surfaces: []string{"web", "events"}}, templates)
 	apply(t, project, plan, err)
 
-	main := read(t, root, "cmd/server/main.go")
+	compose := read(t, root, "internal/bootstrap/server/compose.go")
 
 	for _, want := range []string{
 		"\tordersevents \"example.com/shop/internal/orders/events\"\n",
 		"\tordersweb \"example.com/shop/internal/orders/web\"\n",
 		"\twelcomeweb.Routes(compose)\n\tordersweb.Routes(compose)\n\tordersevents.Listeners(compose)\n\n\tif compose.App().Debug() {",
 	} {
-		if !strings.Contains(main, want) {
-			t.Fatalf("main.go missing %q:\n%s", want, main)
+		if !strings.Contains(compose, want) {
+			t.Fatalf("compose.go missing %q:\n%s", want, compose)
 		}
 	}
 
-	if len(plan.Create) != 6 || len(plan.Edit) != 1 || plan.Edit[0].Path != "cmd/server/main.go" {
+	if len(plan.Create) != 6 || len(plan.Edit) != 1 || plan.Edit[0].Path != "internal/bootstrap/server/compose.go" {
 		t.Fatalf("plan = %+v", plan)
 	}
 }
@@ -246,7 +246,7 @@ func TestAddFeatureRefusesUnknownProcess(t *testing.T) {
 	project := load(t, scaffoldProject(t))
 	_, err := project.AddFeature(layout.FeatureOptions{Name: "orders", Surfaces: []string{"web"}, Process: "worker"}, templates)
 
-	requireUsage(t, err, "cmd/worker/main.go")
+	requireUsage(t, err, "internal/bootstrap/worker")
 }
 
 // TestAddFeatureRefusesMissingCompose explains what edit it needs.
@@ -254,11 +254,11 @@ func TestAddFeatureRefusesMissingCompose(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldProject(t)
-	writeFile(t, root, "cmd/server/main.go", "package main\n\nfunc main() {}\n")
+	writeFile(t, root, "internal/bootstrap/server/compose.go", "package server\n")
 
 	_, err := load(t, root).AddFeature(layout.FeatureOptions{Name: "orders", Surfaces: []string{"web"}}, templates)
 
-	requireUsage(t, err, "func Compose")
+	requireUsage(t, err, "no Compose in internal/bootstrap/server")
 }
 
 // TestAddFeatureAppendsWithoutBootstrapTail appends to an unusual Compose.
@@ -266,6 +266,39 @@ func TestAddFeatureAppendsWithoutBootstrapTail(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldProject(t)
+	writeFile(t, root, "internal/bootstrap/server/compose.go", `package server
+
+import (
+	"arkoren.dev/core/application"
+)
+
+// Compose registers nothing yet.
+func Compose(compose *application.Composer) {}
+`)
+
+	project := load(t, root)
+	plan, err := project.AddFeature(layout.FeatureOptions{Name: "orders", Surfaces: []string{"web"}}, templates)
+	apply(t, project, plan, err)
+
+	compose := read(t, root, "internal/bootstrap/server/compose.go")
+
+	if !strings.Contains(compose, "func Compose(compose *application.Composer) {\n\tordersweb.Routes(compose)\n}") ||
+		!strings.Contains(compose, "\tordersweb \"example.com/shop/internal/orders/web\"\n") {
+		t.Fatalf("compose.go:\n%s", compose)
+	}
+}
+
+// TestAddFeatureEditsComposeInMain supports projects that still declare
+// Compose in cmd/<process>/main.go and have no process root.
+func TestAddFeatureEditsComposeInMain(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+
+	if err := os.RemoveAll(filepath.Join(root, "internal/bootstrap/server")); err != nil {
+		t.Fatal(err)
+	}
+
 	writeFile(t, root, "cmd/server/main.go", `package main
 
 import (
@@ -282,15 +315,13 @@ func Compose(compose *application.Composer) {}
 	plan, err := project.AddFeature(layout.FeatureOptions{Name: "orders", Surfaces: []string{"web"}}, templates)
 	apply(t, project, plan, err)
 
-	main := read(t, root, "cmd/server/main.go")
-
-	if !strings.Contains(main, "func Compose(compose *application.Composer) {\n\tordersweb.Routes(compose)\n}") ||
-		!strings.Contains(main, "\tordersweb \"example.com/shop/internal/orders/web\"\n") {
+	if main := read(t, root, "cmd/server/main.go"); !strings.Contains(main, "func Compose(compose *application.Composer) {\n\tordersweb.Routes(compose)\n}") {
 		t.Fatalf("main.go:\n%s", main)
 	}
 }
 
-// TestAddProcessCreatesEmptyCompose generates a runnable main package.
+// TestAddProcessCreatesEmptyCompose generates a process root and a main
+// package that runs it; hyphens are dropped from the package name.
 func TestAddProcessCreatesEmptyCompose(t *testing.T) {
 	t.Parallel()
 
@@ -299,10 +330,23 @@ func TestAddProcessCreatesEmptyCompose(t *testing.T) {
 	plan, err := project.AddProcess("worker", templates)
 	apply(t, project, plan, err)
 
+	compose := read(t, root, "internal/bootstrap/worker/compose.go")
 	main := read(t, root, "cmd/worker/main.go")
 
-	if !strings.Contains(main, "func Compose(compose *application.Composer) {}") || !strings.Contains(main, "example.com/shop/internal/bootstrap") {
+	if !strings.Contains(compose, "package worker\n") || !strings.Contains(compose, "func Compose(compose *application.Composer) {}") {
+		t.Fatalf("compose.go:\n%s", compose)
+	}
+
+	if !strings.Contains(main, "\t\"example.com/shop/internal/bootstrap/worker\"\n") || !strings.Contains(main, "app.Run(ctx, worker.Compose)") ||
+		strings.Contains(main, "func Compose") {
 		t.Fatalf("main.go:\n%s", main)
+	}
+
+	plan, err = load(t, root).AddProcess("admin-tasks", templates)
+	apply(t, project, plan, err)
+
+	if main := read(t, root, "cmd/admin-tasks/main.go"); !strings.Contains(main, "\tadmintasks \"example.com/shop/internal/bootstrap/admin-tasks\"\n") {
+		t.Fatalf("hyphenated main.go:\n%s", main)
 	}
 
 	if _, err := load(t, root).AddProcess("worker", templates); err == nil {
@@ -398,7 +442,7 @@ func TestApplyRefusesChangedEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writeFile(t, root, "cmd/server/main.go", read(t, root, "cmd/server/main.go")+"\n// changed\n")
+	writeFile(t, root, "internal/bootstrap/server/compose.go", read(t, root, "internal/bootstrap/server/compose.go")+"\n// changed\n")
 
 	requireUsage(t, project.Apply(t.Context(), plan), "changed while")
 }

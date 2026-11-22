@@ -76,6 +76,23 @@ func TestCheckBootstrapImportsFeature(t *testing.T) {
 	requireViolation(t, found, layout.RuleBootstrapImport, "internal/bootstrap/orders.go", 3)
 }
 
+// TestCheckProcessRootMayImportFeatures allows internal/bootstrap/<process> to
+// import feature roots and surfaces, while the bootstrap package stays clean.
+func TestCheckProcessRootMayImportFeatures(t *testing.T) {
+	t.Parallel()
+
+	found := violations(t, map[string]string{
+		"internal/orders/orders.go":  "package orders\n",
+		"internal/orders/web/web.go": "package web\n",
+		"internal/bootstrap/worker/compose.go": "package worker\n\nimport (\n\t_ \"example.com/shop/internal/orders\"\n" +
+			"\t_ \"example.com/shop/internal/orders/web\"\n)\n",
+	})
+
+	if len(found) != 0 {
+		t.Fatalf("violations = %+v", found)
+	}
+}
+
 // TestCheckSurfaceImportedOutsideCmd flags a surface child imported by another feature.
 func TestCheckSurfaceImportedOutsideCmd(t *testing.T) {
 	t.Parallel()
