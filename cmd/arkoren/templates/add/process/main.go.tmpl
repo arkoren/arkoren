@@ -8,7 +8,6 @@ import (
 
 	"arkoren.dev/core/application"
 
-	"{{.Module}}/internal/bootstrap"
 	{{if ne .Package .Process}}{{.Package}} {{end}}"{{.Module}}/internal/bootstrap/{{.Process}}"
 )
 
@@ -19,16 +18,13 @@ func main() {
 	}
 }
 
-// run constructs the application from bootstrap.Application and runs the graph
-// declared by {{.Package}}.Compose. SIGINT or SIGTERM requests shutdown;
-// registered cleanup completes before app.Run returns. Return its error
-// directly: the application has already reported lifecycle failures before
-// telemetry stopped.
+// run builds the application from {{.Package}}.App and runs the graph declared by
+// {{.Package}}.Compose. SIGINT or SIGTERM requests shutdown; registered cleanup
+// completes before application.Run returns. Return its error directly: the
+// application has already reported lifecycle failures before telemetry stopped.
 func run() error {
-	app := application.New(bootstrap.Application())
-
 	ctx, stop := application.NewSignalContext(context.Background())
 	defer stop()
 
-	return app.Run(ctx, {{.Package}}.Compose)
+	return application.Run(ctx, {{.Package}}.App, {{.Package}}.Compose)
 }

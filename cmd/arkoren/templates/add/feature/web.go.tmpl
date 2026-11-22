@@ -3,34 +3,41 @@ package web
 import (
 	"net/http"
 
-	"arkoren.dev/core/application"
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
 
-	"{{.Module}}/internal/bootstrap"
 	"{{.Module}}/internal/{{.Feature}}"
 )
 
-// Routes mounts the {{.Feature}} routes on the process's shared router, behind
-// the Problems middleware so domain errors become problem responses. It
-// registers GET /{{.Feature}} as a placeholder; replace it with the feature's
-// real routes. The process's Compose calls Routes before Listen serves the router.
-func Routes(compose *application.Composer) {
-	routes := compose.Use(bootstrap.Router)
-	service := compose.Use({{.Feature}}.DefaultService)
-
-	routes.Group("/{{.Feature}}", func(group *router.Router) {
-		group.Use(Problems)
-		group.Get("/", List(service))
-	})
+// Handlers serves the {{.Feature}} feature's HTTP routes over its Service. It
+// knows no path prefix: the provider in internal/bootstrap/{{.Feature}}.go
+// registers it on a router prefixed with the feature's path.
+type Handlers struct {
+	service *{{.Feature}}.Service
 }
 
-// List handles GET /{{.Feature}}. It responds with an empty JSON list until it
-// calls service. Handlers read input with the request package (a body through
-// request.ParseJSON against a validate schema declared in schemas.go), write
-// with the response package, and return domain errors for Problems to map.
-func List(service *{{.Feature}}.Service) router.Handler {
-	return func(writer http.ResponseWriter, r *http.Request) error {
-		return response.JSON(writer, http.StatusOK, []any{})
-	}
+// NewHandlers builds the handlers over service. It does no I/O and registers
+// nothing; call Register to mount the routes.
+func NewHandlers(service *{{.Feature}}.Service) *Handlers {
+	return &Handlers{service: service}
+}
+
+// Register mounts the {{.Feature}} routes on routes, behind the Problems
+// middleware so domain errors become problem responses. Paths are relative:
+// the caller passes a router that already carries the feature's prefix, so a
+// handler never hard-codes it. It registers GET / as a placeholder; replace it
+// with the feature's real routes.
+func (handlers *Handlers) Register(routes *router.Router) {
+	routes.Use(Problems)
+
+	routes.Get("/", handlers.List)
+}
+
+// List handles the feature's collection route. It responds with an empty JSON
+// list until it calls the Service. Handlers read input with the request package
+// (a body through request.ParseJSON against a validate schema declared in
+// schemas.go), write with the response package, and return domain errors for
+// Problems to map.
+func (handlers *Handlers) List(writer http.ResponseWriter, r *http.Request) error {
+	return response.JSON(writer, http.StatusOK, []any{})
 }

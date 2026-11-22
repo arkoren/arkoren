@@ -9,10 +9,10 @@ import (
 	"arkoren.dev/core/http/server"
 )
 
-// Listen serves the shared router over HTTP. It reads HTTP_ADDR, constructs the
+// Server serves the shared router over HTTP. It reads HTTP_ADDR, constructs the
 // server, and registers its lifecycle during composition without opening a
-// network listener. Call it last in Compose, after every registration function
-// has mounted its routes.
+// network listener. List it last in Compose, after every provider that mounts
+// routes.
 //
 // An empty or unset HTTP_ADDR preserves :8080, listening on all interfaces.
 // The development .env selects loopback instead. Keep local diagnostics on
@@ -21,7 +21,7 @@ import (
 // Environment changes after composition do not reconfigure the server.
 //
 // Startup opens the listener, Run serves after successful startup, and Cleanup
-// stops it on shutdown or lifecycle failure. Listen owns that cleanup once.
+// stops it on shutdown or lifecycle failure. Server owns that cleanup once.
 // Addr reports the configured address until startup; observe it afterwards
 // for the actual bound port. Add timeout or TLS policy in the builder below.
 // The Started observer logs that bound address after successful application
@@ -29,7 +29,7 @@ import (
 //
 // See https://arkoren.dev/docs/guides/http-networking/server and
 // https://arkoren.dev/docs/guides/application/lifecycle-and-ownership.
-func Listen(compose *application.Composer) {
+var Server = application.Provide(func(compose *application.Composer) *server.Server {
 	events := compose.App().Events()
 	logger := compose.App().Logger()
 	routes := compose.Use(Router)
@@ -47,4 +47,6 @@ func Listen(compose *application.Composer) {
 
 		return nil
 	}))
-}
+
+	return listener
+})

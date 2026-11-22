@@ -1,20 +1,145 @@
 # Examples
 
-A small shop service shaped by the arkoren-structure rules: a `server` with HTTP routes and an event listener, a `worker` consuming jobs, and a `migrate` one-shot. Every file compiles and passes `go vet` and `arkoren check` against `arkoren.dev/core` v0.17.0, and the test at the end passes. Drivers are SQLite and the memory queue; swap them inside the bootstrap providers without touching features.
+A small shop service shaped by the arkoren-structure rules: a `server` with HTTP routes and an event listener, a `worker` consuming jobs, and a `migrate` one-shot. Every file compiles and passes `go vet` and `arkoren check` against `arkoren.dev/core` v0.18.0, and both tests at the end pass. Drivers are SQLite and the memory queue; swap them inside the bootstrap providers without touching features. Generated files keep their long doc comments in a real project; they are shortened here.
 
 ## Contents
 
-- Bootstrap providers: database (two singletons, one constructor), queue (driver, dispatcher, consumer, runner), router, migrator
+- Processes: thin `main`, the `App` provider and the `Compose` of each process
+- Bootstrap providers: database (two singletons, one constructor), queue, migrator, router
+- Feature wiring: the providers in `internal/bootstrap/<feature>.go` that build each feature and make its surfaces live
 - Migrations: schema-builder operations extracted into exported variables
-- Feature root: declarations, providers, a store with exported query functions, a service with an extracted transaction body and an after-commit event
-- Web surface: routes, handlers using the request and response helpers, a validation schema, problems
+- Feature roots: plain Go with dependencies as constructor arguments, a store with exported query functions, a service with an extracted transaction body and an after-commit event, a cross-feature interface
+- Web surface: handlers using the request and response helpers, a validation schema, problems
 - Other surfaces: job handlers, an event listener in another feature
-- Processes: thin `main` functions and the `Compose` of each process in `internal/bootstrap/<process>`
-- Test: composing surfaces and recording a request
+- Tests: a handler test with no composer, and the whole process started with `application.Start`
+
+## Processes
+
+`main` only runs `application.Run` with the process root's `App` and `Compose`. `App` is a provider holding the application's settings, so the log handler comes from `bootstrap.LogHandler` like any other shared value. `Compose` is the explicit list of what the process runs: each `compose.Use` builds a provider, and each provider makes its component live (mounts routes, subscribes listeners, registers lifecycle). `arkoren add process worker` generates the `worker` and `migrate` roots with the same `App` shape and the service names `shop-worker` and `shop-migrate`.
+
+`cmd/server/main.go`
+
+```go
+package main
+
+import (
+	"context"
+	"os"
+
+	_ "github.com/joho/godotenv/autoload"
+
+	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/bootstrap/server"
+)
+
+// main maps run's error to the exit status after cleanup finishes.
+func main() {
+	if run() != nil {
+		os.Exit(1)
+	}
+}
+
+// run builds the application from server.App and runs server.Compose.
+// application.Run owns construction, composition, startup and shutdown, and
+// reports lifecycle failures itself, so run returns its error unchanged.
+func run() error {
+	ctx, stop := application.NewSignalContext(context.Background())
+	defer stop()
+
+	return application.Run(ctx, server.App, server.Compose)
+}
+```
+
+`internal/bootstrap/server/app.go`
+
+```go
+package server
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/bootstrap"
+)
+
+// App is the server process's application: its settings, built by the first
+// application.Run or application.Start that receives it. Debug is enabled only
+// when APP_DEBUG is exactly "true".
+var App = application.Provide(func(compose *application.Composer) *application.Application {
+	return application.New(func(app *application.Builder) {
+		app.Name("shop")
+		app.Debug(os.Getenv("APP_DEBUG") == "true")
+		app.LogHandler(compose.Use(bootstrap.LogHandler))
+	})
+})
+```
+
+`internal/bootstrap/server/compose.go`
+
+```go
+package server
+
+import (
+	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/bootstrap"
+)
+
+// Compose is the explicit list of what the server process runs: feature
+// providers first, diagnostics only in debug, and the HTTP server last.
+func Compose(compose *application.Composer) {
+	compose.Use(bootstrap.OrdersRoutes)
+	compose.Use(bootstrap.NotificationsListeners)
+
+	if compose.App().Debug() {
+		compose.Use(bootstrap.MCP)
+	}
+
+	compose.Use(bootstrap.Server)
+}
+```
+
+`internal/bootstrap/worker/compose.go`
+
+```go
+package worker
+
+import (
+	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/bootstrap"
+)
+
+// Compose is the explicit list of what the worker process runs: the job
+// handlers, then the consumer that runs them. A worker has no HTTP server.
+func Compose(compose *application.Composer) {
+	compose.Use(bootstrap.OrdersJobs)
+	compose.Use(bootstrap.Work)
+}
+```
+
+`internal/bootstrap/migrate/compose.go`
+
+```go
+package migrate
+
+import (
+	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/bootstrap"
+)
+
+// Compose runs pending migrations once. The process ends when they finish.
+func Compose(compose *application.Composer) {
+	compose.Use(bootstrap.Migrate)
+}
+```
 
 ## Bootstrap providers
 
-Providers `Use` their dependencies first, then construct and register lifecycle. `NewDatabase` opens a new pool on every call, so only providers call it. The generated `Router` also registers security headers, telemetry, CSRF and probes; it is trimmed here.
+Every exported declaration of `internal/bootstrap` is a provider variable that returns the component it makes live. A provider `Use`s its dependencies first, then constructs and registers lifecycle. `NewDatabase` is the one allowed exception: a value-returning constructor that opens a new pool on every call, so only providers call it. `Work` and `Migrate` register a runner and return the component, so `Compose` stays a list of `Use` calls. The generated `Router` also mounts the welcome page; it is trimmed here.
 
 `internal/bootstrap/database.go`
 
@@ -29,20 +154,22 @@ import (
 	"arkoren.dev/driver/sqlite/sqlitedatabase"
 )
 
-// Database is the process's primary database.
+// Database is the process's primary database, opened from DATABASE_URL.
 var Database = application.Provide(func(compose *application.Composer) *database.Database {
 	return NewDatabase(compose, "DATABASE_URL")
 })
 
-// ReportingDatabase is a second singleton of the same kind, sharing NewDatabase.
+// ReportingDatabase is a second singleton of the same kind, opened from
+// REPORTING_DATABASE_URL and sharing NewDatabase.
 var ReportingDatabase = application.Provide(func(compose *application.Composer) *database.Database {
 	return NewDatabase(compose, "REPORTING_DATABASE_URL")
 })
 
-// NewDatabase opens a new pool from the named variable and registers its lifecycle.
-// Each call is a separate pool; call it only from providers.
-func NewDatabase(compose *application.Composer, variable string) *database.Database {
-	driver := compose.Must(sqlitedatabase.New(os.Getenv(variable)))
+// NewDatabase opens a new pool from the environment variable envKey and
+// registers its lifecycle: the pool starts with the application and stops when
+// it shuts down. Each call opens a separate pool, so only providers call it.
+func NewDatabase(compose *application.Composer, envKey string) *database.Database {
+	driver := compose.Must(sqlitedatabase.New(os.Getenv(envKey)))
 	compose.Cleanup(driver.Stop)
 	compose.Startup(driver.Start)
 
@@ -61,7 +188,8 @@ import (
 	"arkoren.dev/core/service/queue/memoryqueue"
 )
 
-// Queue is the process's queue driver.
+// Queue is the process's queue driver. The memory driver keeps jobs in this
+// process only; swap in a networked driver here without touching features.
 var Queue = application.Provide(func(compose *application.Composer) *memoryqueue.Driver {
 	driver := memoryqueue.New()
 	compose.Cleanup(driver.Stop)
@@ -72,42 +200,23 @@ var Queue = application.Provide(func(compose *application.Composer) *memoryqueue
 
 // Dispatcher sends jobs through Queue.
 var Dispatcher = application.Provide(func(compose *application.Composer) *queue.Dispatcher {
-	driver := compose.Use(Queue)
-
-	return queue.NewDispatcher(driver)
+	return queue.NewDispatcher(compose.Use(Queue))
 })
 
-// Consumer receives jobs from Queue. Feature jobs packages register handlers on it.
+// Consumer receives jobs from Queue. Job providers such as OrdersJobs register
+// their handlers on it.
 var Consumer = application.Provide(func(compose *application.Composer) *queue.Consumer {
-	driver := compose.Use(Queue)
-
-	return queue.NewConsumer(driver)
+	return queue.NewConsumer(compose.Use(Queue))
 })
 
-// Work runs Consumer. Call it last in a worker's Compose, after every handler is registered.
-func Work(compose *application.Composer) {
+// Work runs the consumer as a supervised runner and returns it. List it last in
+// a worker's Compose, after every provider that registers handlers.
+var Work = application.Provide(func(compose *application.Composer) *queue.Consumer {
 	consumer := compose.Use(Consumer)
 
 	compose.Run(consumer.Run)
-}
-```
 
-`internal/bootstrap/router.go`
-
-```go
-package bootstrap
-
-import (
-	"arkoren.dev/core/application"
-	"arkoren.dev/core/http/router"
-)
-
-// Router is the process's shared router.
-var Router = application.Provide(func(compose *application.Composer) *router.Router {
-	routes := router.New()
-	routes.Use(router.Recover())
-
-	return routes
+	return consumer
 })
 ```
 
@@ -123,24 +232,164 @@ import (
 	"example.com/shop/internal/migrations"
 )
 
-// Migrator registers the application's migrations (and each ark's Migrations()).
+// Migrator holds the application's migrations (add each ark's Migrations()
+// here too).
 var Migrator = application.Provide(func(compose *application.Composer) *migrate.Migrator {
-	db := compose.Use(Database)
-
-	migrator := migrate.New(db)
+	migrator := migrate.New(compose.Use(Database))
 	compose.Require(migrator.Add(migrations.All()...))
 
 	return migrator
 })
 
-// Migrate runs pending migrations once; the process ends when Up returns.
-func Migrate(compose *application.Composer) {
+// Migrate runs pending migrations as a supervised runner and returns the
+// migrator. The migrate process ends when Up returns.
+var Migrate = application.Provide(func(compose *application.Composer) *migrate.Migrator {
 	migrator := compose.Use(Migrator)
 
 	compose.Run(migrator.Up)
-}
+
+	return migrator
+})
 ```
 
+`internal/bootstrap/router.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/middleware/csrf"
+	"arkoren.dev/core/http/middleware/secureheaders"
+	"arkoren.dev/core/http/router"
+)
+
+// Router is the process's one shared HTTP router, built by the first
+// compose.Use(Router) of a composition. It holds the shared middleware and the
+// health probes; feature providers such as OrdersRoutes add their routes to it
+// and Server serves it.
+var Router = application.Provide(func(compose *application.Composer) *router.Router {
+	telemetry := compose.App().Telemetry()
+	app := compose.App()
+
+	routes := router.New()
+
+	routes.Use(secureheaders.Middleware())
+	routes.Use(telemetry.Middleware())
+	routes.Use(router.Recover())
+	routes.Use(csrf.Middleware())
+
+	routes.Get(application.LivePath, app.LiveHandler(), application.LiveOperation)
+	routes.Get(application.ReadyPath, app.ReadyHandler(), application.ReadyOperation)
+	routes.Get(application.StartupPath, app.StartupHandler(), application.StartupOperation)
+
+	return routes
+})
+```
+
+## Feature wiring
+
+Each feature has one file in `internal/bootstrap` with a store provider, a service provider and one provider per surface. Bootstrap imports features; features never import bootstrap. A surface provider builds the surface from its dependencies and registers it on its target: the web provider mounts handlers on the router under the feature's prefix, the jobs provider registers handlers on the consumer, and the events provider subscribes listeners and defers the unsubscribe. A cross-feature dependency is passed here: `OrdersService` hands the catalog service to the interface `orders` defines.
+
+`internal/bootstrap/orders.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/orders"
+	ordersjobs "example.com/shop/internal/orders/jobs"
+	ordersweb "example.com/shop/internal/orders/web"
+)
+
+// OrdersStore is the process's one orders Store over the primary database.
+var OrdersStore = application.Provide(func(compose *application.Composer) *orders.Store {
+	return orders.NewStore(compose.Use(Database))
+})
+
+// OrdersService is the process's one orders Service. It checks stock through
+// the catalog service and emits orders.Placed on the application's event bus.
+var OrdersService = application.Provide(func(compose *application.Composer) *orders.Service {
+	events := compose.App().Events()
+
+	return orders.NewService(compose.Use(Database), compose.Use(OrdersStore), compose.Use(CatalogService), events)
+})
+
+// OrdersRoutes mounts the orders routes under /orders on the shared router and
+// returns the handlers. Use it from the Compose of every process that serves HTTP.
+var OrdersRoutes = application.Provide(func(compose *application.Composer) *ordersweb.Handlers {
+	routes := compose.Use(Router)
+
+	handlers := ordersweb.NewHandlers(compose.Use(OrdersService))
+	handlers.Register(routes.Prefix("/orders"))
+
+	return handlers
+})
+
+// OrdersJobs registers the orders job handlers on the shared consumer and
+// returns them. Use it from the Compose of every process that consumes jobs.
+var OrdersJobs = application.Provide(func(compose *application.Composer) *ordersjobs.Handlers {
+	logger := compose.App().Logger()
+
+	handlers := ordersjobs.NewHandlers(compose.Use(OrdersService), logger)
+	compose.Require(handlers.Register(compose.Use(Consumer)))
+
+	return handlers
+})
+```
+
+`internal/bootstrap/catalog.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/catalog"
+)
+
+// CatalogService is the process's one catalog Service. Other features' providers
+// obtain it with compose.Use(CatalogService) and pass it where they need the
+// small interface they define.
+var CatalogService = application.Provide(func(*application.Composer) *catalog.Service {
+	return catalog.NewService()
+})
+```
+
+`internal/bootstrap/notifications.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/notifications"
+	notificationsevents "example.com/shop/internal/notifications/events"
+)
+
+// NotificationsService is the process's one notifications Service. It hands
+// receipts to the queue through the shared dispatcher.
+var NotificationsService = application.Provide(func(compose *application.Composer) *notifications.Service {
+	return notifications.NewService(compose.Use(Dispatcher))
+})
+
+// NotificationsListeners subscribes the notifications listeners on the
+// application's event bus and returns them. Unsubscribing is registered for
+// shutdown. Use it from the Compose of the process that emits the events it
+// listens to: the bus is in-process.
+var NotificationsListeners = application.Provide(func(compose *application.Composer) *notificationsevents.Listeners {
+	events := compose.App().Events()
+
+	listeners := notificationsevents.NewListeners(compose.Use(NotificationsService))
+	compose.MustDefer(listeners.Register(events))
+
+	return listeners
+})
+```
 
 ## Migrations
 
@@ -153,9 +402,14 @@ package migrations
 
 import "arkoren.dev/core/service/database/migrate"
 
-// All returns the application's migrations in order.
+// All returns the application's own migrations in the order they run. A
+// bootstrap Migrator provider adds All() together with each ark's Migrations().
+// Append new migrations at the end; reordering or removing a shipped migration
+// breaks databases that already applied it.
 func All() []migrate.Definition {
-	return []migrate.Definition{CreateOrders}
+	return []migrate.Definition{
+		CreateOrders,
+	}
 }
 ```
 
@@ -169,28 +423,28 @@ import (
 	"arkoren.dev/foundation/query/schema"
 )
 
-// OrdersTable creates the orders table.
-var OrdersTable = schema.Create("orders", func(table *schema.Table) {
+// CreateOrdersUp creates the orders table.
+var CreateOrdersUp = schema.Create("orders", func(table *schema.Table) {
 	table.ID()
 	table.String("sku", 64)
 	table.BigInteger("total")
 	table.Timestamps()
 })
 
-// DropOrdersTable reverses OrdersTable and destroys its data.
-var DropOrdersTable = schema.Drop("orders")
+// CreateOrdersDown reverses CreateOrdersUp and destroys the table's data.
+var CreateOrdersDown = schema.Drop("orders")
 
-// CreateOrders applies OrdersTable.
+// CreateOrders is the "create-orders" migration. All lists it in the order
+// migrations run; the application's migrator is the only code that executes it.
 var CreateOrders = migrate.NewMigration("create-orders", func(migration *migrate.MigrationBuilder) {
-	migration.Up(migrate.Schema(OrdersTable))
-	migration.Down(migrate.Schema(DropOrdersTable))
+	migration.Up(migrate.Schema(CreateOrdersUp))
+	migration.Down(migrate.Schema(CreateOrdersDown))
 })
 ```
 
+## Feature roots
 
-## Feature root
-
-The root declares what others listen to or dispatch, because the root cannot import its own children. Statements are built by exported query functions that Store methods only run; the function passed to `WithTransaction` is an exported method too. `catalog` is a second feature whose service satisfies the interface `orders` defines.
+The root is plain Go: it imports neither `application` nor `internal/bootstrap`, and its constructors take what they use. It declares what others listen to or dispatch, because the root cannot import its own children. Statements are built by exported query functions that `Store` methods only run; the function passed to `WithTransaction` is an exported method too. `catalog` is a second feature whose service satisfies the interface `orders` defines.
 
 `internal/orders/orders.go`
 
@@ -210,10 +464,12 @@ type Placement struct {
 	Total int64  `json:"total"`
 }
 
-// ErrOutOfStock reports an unavailable SKU. Surfaces map it to their own errors.
+// ErrOutOfStock reports an unavailable SKU. It is a plain domain error: each
+// surface maps it to its own wire form.
 var ErrOutOfStock = errors.New("orders: out of stock")
 
-// Placed is emitted after an order commits. Declared in the root so any package may listen.
+// Placed is emitted after an order commits. It is declared in the root so any
+// package may listen to it, and the root cannot import its own children.
 var Placed = event.NewTopic[Placement]("orders.placed")
 
 // Receipt is the payload of SendReceipt.
@@ -221,23 +477,9 @@ type Receipt struct {
 	SKU string `json:"sku"`
 }
 
-// SendReceipt is declared in the root so the service (or another feature) can dispatch it;
-// the jobs child only handles it.
-var SendReceipt = queue.NewJob[Receipt]("orders.send-receipt")
-```
-
-`internal/orders/feature.go`
-
-```go
-package orders
-
-import "arkoren.dev/core/application"
-
-// DefaultStore is the process's orders store.
-var DefaultStore = application.Provide(NewStore)
-
-// DefaultService is the process's orders service.
-var DefaultService = application.Provide(NewService)
+// SendReceipt is the job that sends a receipt. It is declared in the root so
+// other features can dispatch it; the jobs child only handles it.
+var SendReceipt = queue.NewJob[Receipt]("orders-send-receipt")
 ```
 
 `internal/orders/store.go`
@@ -248,22 +490,17 @@ package orders
 import (
 	"context"
 
-	"arkoren.dev/core/application"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/foundation/query"
-
-	"example.com/shop/internal/bootstrap"
 )
 
-// Store persists orders.
+// Store persists orders over the database it is given.
 type Store struct {
 	db *database.Database
 }
 
-// NewStore builds the store over the shared database.
-func NewStore(compose *application.Composer) *Store {
-	db := compose.Use(bootstrap.Database)
-
+// NewStore builds the store over db. It does no I/O.
+func NewStore(db *database.Database) *Store {
 	return &Store{db: db}
 }
 
@@ -290,15 +527,12 @@ package orders
 import (
 	"context"
 
-	"arkoren.dev/core/application"
 	"arkoren.dev/core/event"
 	"arkoren.dev/core/service/database"
-
-	"example.com/shop/internal/bootstrap"
-	"example.com/shop/internal/catalog"
 )
 
-// Availability is what orders needs from another feature; orders defines it.
+// Availability is what orders needs from another feature. orders defines it;
+// the catalog service satisfies it and a bootstrap provider passes it in.
 type Availability interface {
 	Available(ctx context.Context, sku string) (bool, error)
 }
@@ -311,13 +545,8 @@ type Service struct {
 	events *event.Bus
 }
 
-// NewService wires the service from providers during composition.
-func NewService(compose *application.Composer) *Service {
-	db := compose.Use(bootstrap.Database)
-	store := compose.Use(DefaultStore)
-	stock := compose.Use(catalog.DefaultService)
-	events := compose.App().Events()
-
+// NewService builds the service from the values it uses. It does no I/O.
+func NewService(db *database.Database, store *Store, stock Availability, events *event.Bus) *Service {
 	return &Service{db: db, store: store, stock: stock, events: events}
 }
 
@@ -362,20 +591,13 @@ func (service *Service) Announce(placement Placement) func(context.Context) erro
 ```go
 package catalog
 
-import (
-	"context"
-
-	"arkoren.dev/core/application"
-)
-
-// DefaultService is the process's catalog service.
-var DefaultService = application.Provide(NewService)
+import "context"
 
 // Service answers stock questions.
 type Service struct{}
 
 // NewService builds the catalog service.
-func NewService(compose *application.Composer) *Service {
+func NewService() *Service {
 	return &Service{}
 }
 
@@ -385,42 +607,17 @@ func (service *Service) Available(ctx context.Context, sku string) (bool, error)
 }
 ```
 
-
 ## Web surface
 
-The surface owns its wire concerns: handlers read with `request.ParseJSON` against a schema in `schemas.go` (invalid input becomes a 422 problem) and write with `response.JSON`; `problems.go` maps the root's plain domain errors to problem details for every route of the group.
+A surface is a struct built by a `New` constructor with a `Register` method for its target. `Register` uses relative paths, so the provider decides the prefix. Handlers are methods that read with `request.ParseJSON` against a schema in `schemas.go` (invalid input becomes a 422 problem) and write with `response.JSON`; `problems.go` maps the root's plain domain errors to problem details for every route. The handlers take a small interface the surface defines, so a test needs no database.
 
-`internal/orders/web/routes.go`
-
-```go
-package web
-
-import (
-	"arkoren.dev/core/application"
-	"arkoren.dev/core/http/router"
-
-	"example.com/shop/internal/bootstrap"
-	"example.com/shop/internal/orders"
-)
-
-// Routes mounts the orders endpoints on the shared router.
-func Routes(compose *application.Composer) {
-	routes := compose.Use(bootstrap.Router)
-	service := compose.Use(orders.DefaultService)
-
-	routes.Group("/orders", func(group *router.Router) {
-		group.Use(Problems)
-		group.Post("/", Place(service))
-	})
-}
-```
-
-`internal/orders/web/handlers.go`
+`internal/orders/web/web.go`
 
 ```go
 package web
 
 import (
+	"context"
 	"net/http"
 
 	"arkoren.dev/core/http/request"
@@ -430,21 +627,45 @@ import (
 	"example.com/shop/internal/orders"
 )
 
-// Place handles POST /orders. Invalid input becomes a 422 problem through
+// Placer is what the handlers need from the orders service. The web surface
+// defines it so handlers can be tested without a database.
+type Placer interface {
+	Place(ctx context.Context, placement orders.Placement) error
+}
+
+// Handlers serves the orders HTTP routes. It knows no path prefix: the provider
+// in internal/bootstrap/orders.go registers it on a router prefixed /orders.
+type Handlers struct {
+	placer Placer
+}
+
+// NewHandlers builds the handlers over placer. It does no I/O and registers nothing.
+func NewHandlers(placer Placer) *Handlers {
+	return &Handlers{placer: placer}
+}
+
+// Register mounts the routes on routes behind the Problems middleware, so
+// domain errors become problem responses. Paths are relative to the router's
+// prefix.
+func (handlers *Handlers) Register(routes *router.Router) {
+	routes.Use(Problems)
+
+	routes.Post("/", handlers.Place)
+}
+
+// Place handles POST /. Invalid input becomes a 422 problem through
 // request.ParseJSON; domain errors become problems through Problems.
-func Place(service *orders.Service) router.Handler {
-	return func(writer http.ResponseWriter, r *http.Request) error {
-		placement, err := request.ParseJSON(r, PlacementSchema)
-		if err != nil {
-			return err
-		}
-
-		if err := service.Place(r.Context(), placement); err != nil {
-			return err
-		}
-
-		return response.JSON(writer, http.StatusCreated, placement)
+func (handlers *Handlers) Place(writer http.ResponseWriter, r *http.Request) error {
+	placement, err := request.ParseJSON(r, PlacementSchema)
+	if err != nil {
+		return err
 	}
+
+	if err := handlers.placer.Place(r.Context(), placement); err != nil {
+		return err
+	}
+
+	return response.JSON(writer, http.StatusCreated, placement)
 }
 ```
 
@@ -459,7 +680,7 @@ import (
 	"example.com/shop/internal/orders"
 )
 
-// PlacementSchema validates and normalizes the POST /orders body.
+// PlacementSchema validates and normalizes the POST body.
 var PlacementSchema = validate.Struct(func(object *validate.StructBuilder[orders.Placement]) {
 	object.Field("SKU", func(sku *validate.StringBuilder[string]) {
 		sku.Trim()
@@ -494,45 +715,87 @@ var OutOfStock = problem.New(func(details *problem.Builder) {
 	details.Status(http.StatusConflict)
 })
 
-// Problems maps orders domain errors to their problems for every orders route.
+// Problems maps the orders domain errors to their problems for every orders route.
 var Problems = errormap.Middleware(
 	errormap.Map(orders.ErrOutOfStock, OutOfStock),
 )
 ```
 
-
 ## Other surfaces
 
-Each surface exports one registration function. The listener lives in the subscribing feature and is registered by the server, the process that emits `orders.Placed`.
+The jobs surface registers handlers on a `*queue.Consumer`, the events surface on the `*event.Bus`. The listener lives in the subscribing feature and is used by the `server` process, the process that emits `orders.Placed`; the bus is in-process.
 
-`internal/orders/jobs/handlers.go`
+`internal/orders/jobs/jobs.go`
 
 ```go
 package jobs
 
 import (
 	"context"
+	"log/slog"
 
-	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/queue"
 
-	"example.com/shop/internal/bootstrap"
 	"example.com/shop/internal/orders"
 )
 
-// Handlers registers the orders job handlers on the shared consumer.
-func Handlers(compose *application.Composer) {
-	consumer := compose.Use(bootstrap.Consumer)
-	logger := compose.App().Logger()
+// Handlers runs the orders queue jobs over the orders Service.
+type Handlers struct {
+	service *orders.Service
+	logger  *slog.Logger
+}
 
-	compose.Require(consumer.Handle(orders.SendReceipt, func(ctx context.Context, receipt orders.Receipt) error {
-		logger.InfoContext(ctx, "receipt sent", "sku", receipt.SKU)
+// NewHandlers builds the handlers. It does no I/O and registers nothing; call
+// Register to attach them to a consumer.
+func NewHandlers(service *orders.Service, logger *slog.Logger) *Handlers {
+	return &Handlers{service: service, logger: logger}
+}
 
-		return nil
-	}))
+// Register attaches the job handlers to consumer. It returns the consumer's
+// error for a duplicate or invalid registration.
+func (handlers *Handlers) Register(consumer *queue.Consumer) error {
+	return consumer.Handle(orders.SendReceipt, handlers.SendReceipt)
+}
+
+// SendReceipt runs one orders.SendReceipt job.
+func (handlers *Handlers) SendReceipt(ctx context.Context, receipt orders.Receipt) error {
+	handlers.logger.InfoContext(ctx, "receipt sent", "sku", receipt.SKU)
+
+	return nil
 }
 ```
 
-`internal/notifications/events/listeners.go`
+`internal/notifications/notifications.go`
+
+```go
+package notifications
+
+import (
+	"context"
+
+	"arkoren.dev/core/service/queue"
+
+	"example.com/shop/internal/orders"
+)
+
+// Service sends notifications. It depends on orders only through the root's
+// exported job and payload types.
+type Service struct {
+	dispatcher *queue.Dispatcher
+}
+
+// NewService builds the service over dispatcher. It does no I/O.
+func NewService(dispatcher *queue.Dispatcher) *Service {
+	return &Service{dispatcher: dispatcher}
+}
+
+// Receipt queues the receipt for placement.
+func (service *Service) Receipt(ctx context.Context, placement orders.Placement) error {
+	return service.dispatcher.Dispatch(ctx, orders.SendReceipt, orders.Receipt{SKU: placement.SKU})
+}
+```
+
+`internal/notifications/events/events.go`
 
 ```go
 package events
@@ -540,117 +803,41 @@ package events
 import (
 	"context"
 
-	"arkoren.dev/core/application"
+	"arkoren.dev/core/event"
 
-	"example.com/shop/internal/bootstrap"
+	"example.com/shop/internal/notifications"
 	"example.com/shop/internal/orders"
 )
 
-// Listeners subscribes notifications to other features' events. The bus is
-// in-process: call it from the Compose of the process that emits the event.
-func Listeners(compose *application.Composer) {
-	events := compose.App().Events()
-	dispatcher := compose.Use(bootstrap.Dispatcher)
+// Listeners reacts to events of other features over the notifications Service.
+type Listeners struct {
+	service *notifications.Service
+}
 
-	compose.MustDefer(events.Listen(orders.Placed, func(ctx context.Context, placement orders.Placement) error {
-		return dispatcher.Dispatch(ctx, orders.SendReceipt, orders.Receipt{SKU: placement.SKU})
-	}))
+// NewListeners builds the listeners over service. It subscribes to nothing;
+// call Register to subscribe them.
+func NewListeners(service *notifications.Service) *Listeners {
+	return &Listeners{service: service}
+}
+
+// Register subscribes the listeners on bus and returns the function that
+// removes the subscription. The provider passes it to compose.MustDefer, so
+// shutdown unsubscribes once.
+func (listeners *Listeners) Register(bus *event.Bus) (event.Unsubscribe, error) {
+	return bus.Listen(orders.Placed, listeners.Placed)
+}
+
+// Placed queues a receipt for a placed order.
+func (listeners *Listeners) Placed(ctx context.Context, placement orders.Placement) error {
+	return listeners.service.Receipt(ctx, placement)
 }
 ```
 
+## Tests
 
-## Processes
+A handler test builds the surface with a fake and records a request on a plain router: no composer, no application. The process test starts the real `server.App` and `server.Compose` with `application.Start`, points the database at memory through the environment, runs the migrator in a `Startup` callback, and records a request on the shared router.
 
-`main` only builds and runs the application; each process's `Compose` lives in `internal/bootstrap/<process>`, which may import feature surfaces while `internal/bootstrap` itself never does. Generated `main` functions also load `.env` and apply `bootstrap.Application()` settings; they are trimmed here.
-
-`cmd/server/main.go`
-
-```go
-package main
-
-import (
-	"context"
-	"os"
-
-	"arkoren.dev/core/application"
-
-	"example.com/shop/internal/bootstrap/server"
-)
-
-func main() {
-	app := application.New()
-
-	ctx, stop := application.NewSignalContext(context.Background())
-	defer stop()
-
-	if app.Run(ctx, server.Compose) != nil {
-		os.Exit(1)
-	}
-}
-```
-
-`internal/bootstrap/server/compose.go`
-
-```go
-package server
-
-import (
-	"arkoren.dev/core/application"
-
-	notificationsevents "example.com/shop/internal/notifications/events"
-	ordersweb "example.com/shop/internal/orders/web"
-)
-
-// Compose is the explicit list of what the server runs.
-func Compose(compose *application.Composer) {
-	ordersweb.Routes(compose)
-	notificationsevents.Listeners(compose)
-}
-```
-
-`internal/bootstrap/worker/compose.go`
-
-```go
-package worker
-
-import (
-	"arkoren.dev/core/application"
-
-	"example.com/shop/internal/bootstrap"
-	ordersjobs "example.com/shop/internal/orders/jobs"
-)
-
-// Compose registers job handlers, then runs the consumer.
-func Compose(compose *application.Composer) {
-	ordersjobs.Handlers(compose)
-
-	bootstrap.Work(compose)
-}
-```
-
-`internal/bootstrap/migrate/compose.go`
-
-```go
-package migrate
-
-import (
-	"arkoren.dev/core/application"
-
-	"example.com/shop/internal/bootstrap"
-)
-
-// Compose runs pending migrations; the process exits when they finish.
-func Compose(compose *application.Composer) {
-	bootstrap.Migrate(compose)
-}
-```
-
-
-## Test
-
-Start only the registration functions under test, migrate an in-memory database in a `Startup` callback, and record requests on the shared router.
-
-`internal/orders/web/routes_test.go`
+`internal/orders/web/web_test.go`
 
 ```go
 package web_test
@@ -662,16 +849,26 @@ import (
 	"strings"
 	"testing"
 
-	"arkoren.dev/core/application"
 	"arkoren.dev/core/http/router"
 
-	"example.com/shop/internal/bootstrap"
-	notificationsevents "example.com/shop/internal/notifications/events"
+	"example.com/shop/internal/orders"
 	ordersweb "example.com/shop/internal/orders/web"
 )
 
-func TestPlaceOrder(t *testing.T) {
-	routes := start(t)
+// fakePlacer places nothing and fails for the SKU "none".
+type fakePlacer struct{}
+
+func (fakePlacer) Place(ctx context.Context, placement orders.Placement) error {
+	if placement.SKU == "none" {
+		return orders.ErrOutOfStock
+	}
+
+	return nil
+}
+
+func TestPlaceHandler(t *testing.T) {
+	routes := router.New()
+	ordersweb.NewHandlers(fakePlacer{}).Register(routes.Prefix("/orders"))
 
 	tests := []struct {
 		name   string
@@ -692,34 +889,51 @@ func TestPlaceOrder(t *testing.T) {
 		})
 	}
 }
+```
 
-// start composes only the registrations under test over an in-memory database.
-func start(t *testing.T) *router.Router {
-	t.Helper()
+`internal/bootstrap/server/server_test.go`
+
+```go
+package server_test
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/router"
+
+	"example.com/shop/internal/bootstrap"
+	"example.com/shop/internal/bootstrap/server"
+)
+
+func TestPlaceOrder(t *testing.T) {
 	t.Setenv("DATABASE_URL", "file::memory:")
-
-	app := application.New()
+	t.Setenv("HTTP_ADDR", "127.0.0.1:0")
 
 	var routes *router.Router
 
-	err := app.Start(t.Context(), func(compose *application.Composer) {
-		ordersweb.Routes(compose)
-		notificationsevents.Listeners(compose)
-
+	app, err := application.Start(t.Context(), server.App, server.Compose, func(compose *application.Composer) {
 		routes = compose.Use(bootstrap.Router)
-		migrator := compose.Use(bootstrap.Migrator)
 
-		compose.Startup(migrator.Up)
+		compose.Startup(compose.Use(bootstrap.Migrator).Up)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	t.Cleanup(func() {
-		_ = app.Shutdown(context.Background())
+		if err := app.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
 	})
 
-	return routes
+	response := routes.Record(httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"sku":"tea","total":300}`)))
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusCreated)
+	}
 }
 ```
-

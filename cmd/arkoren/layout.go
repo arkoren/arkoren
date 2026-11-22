@@ -73,7 +73,7 @@ func addCLICommand(env console.Environment) *cli.Command {
 		}
 	}
 
-	featureFlags := []cli.Flag{&cli.StringFlag{Name: "process", Value: "server", Usage: "Process whose Compose registers the surfaces (cmd/NAME)"}}
+	featureFlags := []cli.Flag{&cli.StringFlag{Name: "process", Value: "server", Usage: "Process root (internal/bootstrap/NAME) whose Compose uses the surface providers"}}
 
 	for _, surface := range layout.Surfaces {
 		featureFlags = append(featureFlags, &cli.BoolFlag{Name: surface, Usage: "Create the " + surface + " surface and register it"})
@@ -83,11 +83,11 @@ func addCLICommand(env console.Environment) *cli.Command {
 		Name:  "add",
 		Usage: "Add a feature, process, provider or migration to the project layout",
 		Description: "Creates files from templates and never overwrites one; it edits existing code only by inserting " +
-			"registration lines into Compose or the migrations list. Run it in the project root, which needs " +
+			"compose.Use lines into a process root's Compose or the migrations list. Run it in the project root, which needs " +
 			"cmd/<process>/main.go and internal/bootstrap. When a new file imports a module go.mod does not require, " +
 			"it runs go mod tidy unless --skip-tidy is set. Use --dry-run to preview. See the arkoren-structure skill.",
 		Commands: []*cli.Command{
-			subcommand("feature", "Create internal/NAME and register its surfaces in a process", featureFlags,
+			subcommand("feature", "Create internal/NAME with its bootstrap providers, used from a process's Compose", featureFlags,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					options := layout.FeatureOptions{Name: command.Args().First(), Process: command.String("process")}
 
@@ -99,7 +99,7 @@ func addCLICommand(env console.Environment) *cli.Command {
 
 					return project.AddFeature(options, newTemplates)
 				}),
-			subcommand("process", "Create cmd/NAME with an empty Compose", nil,
+			subcommand("process", "Create cmd/NAME and its process root with App and an empty Compose", nil,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					return project.AddProcess(command.Args().First(), newTemplates)
 				}),
@@ -133,7 +133,7 @@ func checkCLICommand(env console.Environment) *cli.Command {
 	return &cli.Command{
 		Name:  "check",
 		Usage: "Check the project against the layout rules",
-		Description: "Reports import-direction, naming and Composer.Use violations with file:line as JSON, and exits 1 " +
+		Description: "Reports import-direction, bootstrap-shape, naming and Composer.Use violations with file:line as JSON, and exits 1 " +
 			"if there are any. Works from source without building. Run it in the project root. " +
 			"See the arkoren-structure skill for the rules.",
 		Action: func(ctx context.Context, command *cli.Command) error {
@@ -172,8 +172,8 @@ func mapCLICommand(env console.Environment) *cli.Command {
 	return &cli.Command{
 		Name:  "map",
 		Usage: "List processes, providers, features and migrations",
-		Description: "Prints what each process registers, the bootstrap providers and registration functions, the " +
-			"features with their surfaces, and the migrations, from source. Read it before searching the code. " +
+		Description: "Prints what each process uses in Compose, the bootstrap providers by file, the " +
+			"features with their constructors and surfaces, and the migrations, from source. Read it before searching the code. " +
 			"Run it in the project root.",
 		Flags: []cli.Flag{&cli.BoolFlag{Name: "text", Usage: "Print compact text lines instead of JSON"}},
 		Action: func(ctx context.Context, command *cli.Command) error {

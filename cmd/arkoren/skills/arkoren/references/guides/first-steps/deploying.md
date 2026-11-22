@@ -65,17 +65,14 @@ needs `:8080` inside its network namespace, while a host-local reverse proxy can
 use loopback. Empty `HTTP_ADDR` selects `:8080` on all interfaces.
 
 Set the application environment in code if you want production metadata. In
-`cmd/server/main.go`'s existing `run` helper, replace its construction statement
-with the following, preserving signal setup and the call to `app.Run`:
+`internal/bootstrap/server/app.go`, add a line to the settings callback of the
+`App` provider:
 
 ```go
-app := application.New(bootstrap.Application(), func(app *application.Builder) {
-	app.Environment(application.Production)
-})
+app.Environment(application.Production)
 ```
 
-The later callback overrides environment while retaining the starter's name and
-logger policy. `APP_ENV` is not a built-in loader. The starter's custom logger
+The callback keeps the starter's name and logger policy. `APP_ENV` is not a built-in loader. The starter's custom logger
 uses JSON when stderr is not a terminal and Tint otherwise; changing environment
 does not replace that policy. Without a custom log handler, the application's
 default selects source-enabled text for development and JSON otherwise.

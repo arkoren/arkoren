@@ -127,7 +127,7 @@ func TestLoadReportsSyntaxError(t *testing.T) {
 	}
 }
 
-// TestMapScaffold lists the generated process, providers and welcome feature.
+// TestMapScaffold lists the generated process, providers and routing.
 func TestMapScaffold(t *testing.T) {
 	t.Parallel()
 
@@ -135,18 +135,24 @@ func TestMapScaffold(t *testing.T) {
 
 	for _, want := range []string{
 		"module example.com/shop\n",
-		"process server: welcomeweb.Routes(compose); bootstrap.Diagnostics(compose) [if compose.App().Debug()]; bootstrap.Listen(compose)\n",
-		"bootstrap providers: Router\n",
-		"bootstrap register: Listen; Diagnostics\n",
-		"feature welcome above: web(Routes)\n",
+		"process server: compose.Use(bootstrap.MCP) [if compose.App().Debug()]; compose.Use(bootstrap.Server)\n",
+		"bootstrap logging.go: LogHandler\n",
+		"bootstrap mcp.go: MCP\n",
+		"bootstrap router.go: Router\n",
+		"bootstrap server.go: Server\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("map text missing %q:\n%s", want, text)
 		}
 	}
+
+	if strings.Contains(text, "feature ") {
+		t.Fatalf("scaffold lists a feature:\n%s", text)
+	}
 }
 
-// TestMapShowsAddedFeatureAndMigrations covers providers, surfaces and ids.
+// TestMapShowsAddedFeatureAndMigrations covers providers, constructors,
+// surfaces and ids.
 func TestMapShowsAddedFeatureAndMigrations(t *testing.T) {
 	t.Parallel()
 
@@ -162,10 +168,11 @@ func TestMapShowsAddedFeatureAndMigrations(t *testing.T) {
 	text := load(t, root).Map().Text()
 
 	for _, want := range []string{
-		"feature orders providers: DefaultStore; DefaultService\n",
-		"feature orders above: jobs(Handlers); web(Routes)\n",
+		"bootstrap orders.go: OrdersStore; OrdersService; OrdersRoutes; OrdersJobs\n",
+		"feature orders constructors: NewService; NewStore\n",
+		"feature orders above: jobs(NewHandlers); web(NewHandlers)\n",
 		"migrations: All\nmigration ids: create-orders\n",
-		"ordersweb.Routes(compose); ordersjobs.Handlers(compose); bootstrap.Diagnostics",
+		"compose.Use(bootstrap.OrdersRoutes); compose.Use(bootstrap.OrdersJobs); compose.Use(bootstrap.MCP) [if compose.App().Debug()]",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("map text missing %q:\n%s", want, text)
@@ -173,9 +180,21 @@ func TestMapShowsAddedFeatureAndMigrations(t *testing.T) {
 	}
 }
 
-// TestAddFeatureRegistersSurfacesBeforeBootstrapTail inserts after existing
-// routes and before diagnostics, with aliased imports in the module group.
-func TestAddFeatureRegistersSurfacesBeforeBootstrapTail(t *testing.T) {
+// TestMapJSONGroupsProvidersByFile keeps the machine-readable shape.
+func TestMapJSONGroupsProvidersByFile(t *testing.T) {
+	t.Parallel()
+
+	inventory := load(t, scaffoldProject(t)).Map()
+
+	if len(inventory.Bootstrap.Providers) != 4 || inventory.Bootstrap.Providers[0].File != "logging.go" ||
+		inventory.Bootstrap.Providers[0].Names[0] != "LogHandler" {
+		t.Fatalf("providers = %+v", inventory.Bootstrap.Providers)
+	}
+}
+
+// TestAddFeatureUsesProvidersBeforeServerTail inserts the compose.Use lines
+// before the debug condition, and writes the wiring in internal/bootstrap.
+func TestAddFeatureUsesProvidersBeforeServerTail(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldProject(t)
@@ -185,13 +204,29 @@ func TestAddFeatureRegistersSurfacesBeforeBootstrapTail(t *testing.T) {
 
 	compose := read(t, root, "internal/bootstrap/server/compose.go")
 
+	if !strings.Contains(compose, "func Compose(compose *application.Composer) {\n\tcompose.Use(bootstrap.OrdersRoutes)\n"+
+		"\tcompose.Use(bootstrap.OrdersListeners)\n\n\tif compose.App().Debug() {") {
+		t.Fatalf("compose.go:\n%s", compose)
+	}
+
+	wiring := read(t, root, "internal/bootstrap/orders.go")
+
 	for _, want := range []string{
 		"\tordersevents \"example.com/shop/internal/orders/events\"\n",
 		"\tordersweb \"example.com/shop/internal/orders/web\"\n",
-		"\twelcomeweb.Routes(compose)\n\tordersweb.Routes(compose)\n\tordersevents.Listeners(compose)\n\n\tif compose.App().Debug() {",
+		"var OrdersStore = application.Provide(",
+		"var OrdersService = application.Provide(",
+		"handlers.Register(routes.Prefix(\"/orders\"))",
+		"compose.MustDefer(listeners.Register(events))",
 	} {
-		if !strings.Contains(compose, want) {
-			t.Fatalf("compose.go missing %q:\n%s", want, compose)
+		if !strings.Contains(wiring, want) {
+			t.Fatalf("orders.go missing %q:\n%s", want, wiring)
+		}
+	}
+
+	for _, path := range []string{"internal/orders/orders.go", "internal/orders/service.go", "internal/orders/store.go"} {
+		if strings.Contains(read(t, root, path), "core/application") {
+			t.Fatalf("%s imports the application package", path)
 		}
 	}
 
@@ -200,7 +235,8 @@ func TestAddFeatureRegistersSurfacesBeforeBootstrapTail(t *testing.T) {
 	}
 }
 
-// TestAddFeatureWithoutSurfacesEditsNothing creates only the root files.
+// TestAddFeatureWithoutSurfacesEditsNothing creates the root files and the
+// store and service providers, and edits no process.
 func TestAddFeatureWithoutSurfacesEditsNothing(t *testing.T) {
 	t.Parallel()
 
@@ -224,6 +260,19 @@ func TestAddFeatureRefusesExistingDirectory(t *testing.T) {
 	_, err = load(t, root).AddFeature(layout.FeatureOptions{Name: "orders"}, templates)
 
 	requireUsage(t, err, "already exists")
+}
+
+// TestAddFeatureRefusesDeclaredProvider reports a bootstrap name clash before
+// writing the feature.
+func TestAddFeatureRefusesDeclaredProvider(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	writeFile(t, root, "internal/bootstrap/legacy.go", "package bootstrap\n\nvar OrdersStore = 1\n")
+
+	_, err := load(t, root).AddFeature(layout.FeatureOptions{Name: "orders"}, templates)
+
+	requireUsage(t, err, "already declares OrdersStore")
 }
 
 // TestAddFeatureRejectsInvalidNames covers syntax, keywords, reserved and banned names.
@@ -261,8 +310,31 @@ func TestAddFeatureRefusesMissingCompose(t *testing.T) {
 	requireUsage(t, err, "no Compose in internal/bootstrap/server")
 }
 
-// TestAddFeatureAppendsWithoutBootstrapTail appends to an unusual Compose.
-func TestAddFeatureAppendsWithoutBootstrapTail(t *testing.T) {
+// TestAddFeatureAppendsToEmptyCompose fills an empty Compose and adds the
+// bootstrap import as its own group.
+func TestAddFeatureAppendsToEmptyCompose(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	project := load(t, root)
+	plan, err := project.AddProcess("worker", templates)
+	apply(t, project, plan, err)
+
+	project = load(t, root)
+	plan, err = project.AddFeature(layout.FeatureOptions{Name: "orders", Surfaces: []string{"jobs"}, Process: "worker"}, templates)
+	apply(t, project, plan, err)
+
+	compose := read(t, root, "internal/bootstrap/worker/compose.go")
+
+	if !strings.Contains(compose, "func Compose(compose *application.Composer) {\n\tcompose.Use(bootstrap.OrdersJobs)\n}") ||
+		!strings.Contains(compose, "\t\"arkoren.dev/core/application\"\n\n\t\"example.com/shop/internal/bootstrap\"\n") {
+		t.Fatalf("compose.go:\n%s", compose)
+	}
+}
+
+// TestAddFeatureAppendsWithoutServerTail appends after the last statement of a
+// Compose with no condition and no server.
+func TestAddFeatureAppendsWithoutServerTail(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldProject(t)
@@ -270,10 +342,14 @@ func TestAddFeatureAppendsWithoutBootstrapTail(t *testing.T) {
 
 import (
 	"arkoren.dev/core/application"
+
+	"example.com/shop/internal/bootstrap"
 )
 
-// Compose registers nothing yet.
-func Compose(compose *application.Composer) {}
+// Compose uses the router only.
+func Compose(compose *application.Composer) {
+	compose.Use(bootstrap.Router)
+}
 `)
 
 	project := load(t, root)
@@ -282,15 +358,14 @@ func Compose(compose *application.Composer) {}
 
 	compose := read(t, root, "internal/bootstrap/server/compose.go")
 
-	if !strings.Contains(compose, "func Compose(compose *application.Composer) {\n\tordersweb.Routes(compose)\n}") ||
-		!strings.Contains(compose, "\tordersweb \"example.com/shop/internal/orders/web\"\n") {
+	if !strings.Contains(compose, "\tcompose.Use(bootstrap.Router)\n\tcompose.Use(bootstrap.OrdersRoutes)\n}") {
 		t.Fatalf("compose.go:\n%s", compose)
 	}
 }
 
-// TestAddFeatureEditsComposeInMain supports projects that still declare
-// Compose in cmd/<process>/main.go and have no process root.
-func TestAddFeatureEditsComposeInMain(t *testing.T) {
+// TestAddFeatureRefusesLegacyComposeInMain no longer edits a Compose that
+// lives in cmd/<process>/main.go.
+func TestAddFeatureRefusesLegacyComposeInMain(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldProject(t)
@@ -299,30 +374,18 @@ func TestAddFeatureEditsComposeInMain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writeFile(t, root, "cmd/server/main.go", `package main
+	writeFile(t, root, "cmd/server/main.go", "package main\n\nimport (\n\t\"arkoren.dev/core/application\"\n)\n\n"+
+		"func main() {}\n\nfunc Compose(compose *application.Composer) {}\n")
 
-import (
-	"arkoren.dev/core/application"
-)
+	_, err := load(t, root).AddFeature(layout.FeatureOptions{Name: "orders", Surfaces: []string{"web"}}, templates)
 
-func main() {}
-
-// Compose registers nothing yet.
-func Compose(compose *application.Composer) {}
-`)
-
-	project := load(t, root)
-	plan, err := project.AddFeature(layout.FeatureOptions{Name: "orders", Surfaces: []string{"web"}}, templates)
-	apply(t, project, plan, err)
-
-	if main := read(t, root, "cmd/server/main.go"); !strings.Contains(main, "func Compose(compose *application.Composer) {\n\tordersweb.Routes(compose)\n}") {
-		t.Fatalf("main.go:\n%s", main)
-	}
+	requireUsage(t, err, "no Compose in internal/bootstrap/server")
 }
 
-// TestAddProcessCreatesEmptyCompose generates a process root and a main
-// package that runs it; hyphens are dropped from the package name.
-func TestAddProcessCreatesEmptyCompose(t *testing.T) {
+// TestAddProcessCreatesAppAndEmptyCompose generates a process root with App and
+// Compose and a main package that runs them; hyphens are dropped from the
+// package name and the service name is the module's last element plus the process.
+func TestAddProcessCreatesAppAndEmptyCompose(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldProject(t)
@@ -331,14 +394,20 @@ func TestAddProcessCreatesEmptyCompose(t *testing.T) {
 	apply(t, project, plan, err)
 
 	compose := read(t, root, "internal/bootstrap/worker/compose.go")
+	app := read(t, root, "internal/bootstrap/worker/app.go")
 	main := read(t, root, "cmd/worker/main.go")
 
 	if !strings.Contains(compose, "package worker\n") || !strings.Contains(compose, "func Compose(compose *application.Composer) {}") {
 		t.Fatalf("compose.go:\n%s", compose)
 	}
 
-	if !strings.Contains(main, "\t\"example.com/shop/internal/bootstrap/worker\"\n") || !strings.Contains(main, "app.Run(ctx, worker.Compose)") ||
-		strings.Contains(main, "func Compose") {
+	if !strings.Contains(app, "var App = application.Provide(") || !strings.Contains(app, `app.Name("shop-worker")`) ||
+		!strings.Contains(app, "app.LogHandler(compose.Use(bootstrap.LogHandler))") {
+		t.Fatalf("app.go:\n%s", app)
+	}
+
+	if !strings.Contains(main, "\t\"example.com/shop/internal/bootstrap/worker\"\n") ||
+		!strings.Contains(main, "application.Run(ctx, worker.App, worker.Compose)") || strings.Contains(main, "func Compose") {
 		t.Fatalf("main.go:\n%s", main)
 	}
 
@@ -352,6 +421,37 @@ func TestAddProcessCreatesEmptyCompose(t *testing.T) {
 	if _, err := load(t, root).AddProcess("worker", templates); err == nil {
 		t.Fatal("existing process accepted")
 	}
+}
+
+// TestAddProcessNamesServiceFromModuleBase skips a trailing major version.
+func TestAddProcessNamesServiceFromModuleBase(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	writeFile(t, root, "go.mod", "module example.com/shop/v2\n\ngo 1.27\n")
+
+	project := load(t, root)
+	plan, err := project.AddProcess("worker", templates)
+	apply(t, project, plan, err)
+
+	if app := read(t, root, "internal/bootstrap/worker/app.go"); !strings.Contains(app, `app.Name("shop-worker")`) {
+		t.Fatalf("app.go:\n%s", app)
+	}
+}
+
+// TestAddProcessRefusesWithoutLogHandler explains what the new App needs.
+func TestAddProcessRefusesWithoutLogHandler(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+
+	if err := os.Remove(filepath.Join(root, "internal/bootstrap/logging.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := load(t, root).AddProcess("worker", templates)
+
+	requireUsage(t, err, "LogHandler")
 }
 
 // TestAddProviderDeclaresResourceNamedProvider derives the identifier and

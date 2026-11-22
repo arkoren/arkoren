@@ -1,21 +1,20 @@
 package {{.Feature}}
 
-import (
-	"arkoren.dev/core/application"
-	"arkoren.dev/foundation/query"
-)
+import "arkoren.dev/foundation/query"
 
 // Store persists the {{.Feature}} feature's data. It is a concrete type over the
 // core database and query packages: define no repository interface, and run
 // queries with the context the Service receives so transactions travel with it.
-// The skeleton holds no database yet; add a bootstrap Database provider, Use it
-// in NewStore, and keep it in a field.
+// The skeleton holds no database yet. Once a bootstrap Database provider
+// exists, add a *database.Database parameter to NewStore, keep it in a field,
+// and pass compose.Use(Database) in the Store provider in
+// internal/bootstrap/{{.Feature}}.go.
 type Store struct{}
 
-// NewStore builds the Store. It registers no lifecycle: the database that a
-// real Store needs is acquired and cleaned up by its bootstrap provider.
-// DefaultStore memoizes it once per process.
-func NewStore(compose *application.Composer) *Store {
+// NewStore builds the Store. It does no I/O and registers no lifecycle: the
+// database a real Store needs is acquired and cleaned up by its bootstrap
+// provider and handed in as an argument.
+func NewStore() *Store {
 	return &Store{}
 }
 

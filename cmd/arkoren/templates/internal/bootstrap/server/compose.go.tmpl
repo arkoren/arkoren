@@ -4,31 +4,29 @@ import (
 	"arkoren.dev/core/application"
 
 	"{{.Module}}/internal/bootstrap"
-	welcomeweb "{{.Module}}/internal/welcome/web"
 )
 
 // Compose is the explicit list of what the server process runs. cmd/server
-// passes it to app.Run; every call finishes composition before any registered
-// startup callback runs. This process root may import feature surfaces; the
-// internal/bootstrap package itself never does, because features import it.
+// passes it to application.Run together with App; every call finishes
+// composition before any registered startup callback runs.
 //
-// Registration functions mount routes on the shared router, so they come first.
-// Diagnostics is registered only when application debug is enabled. Listen comes
-// last: it serves the router after every route is mounted. compose.Use obtains
-// shared providers such as bootstrap.Router; it constructs a value, not a
-// started service. If composition fails, app.Run cleans up acquired resources
-// and returns the error; startup does not begin.
+// compose.Use builds a provider on first use and returns its cached value
+// afterwards. Each provider makes its component live: Router mounts its probes,
+// MCP mounts itself on the router, and Server registers the listener's
+// lifecycle. Features add their routes through providers such as
+// bootstrap.OrdersRoutes. List feature providers first so their routes exist,
+// MCP only when application debug is enabled, and Server last so it serves the
+// router after every route is mounted. If composition fails, application.Run
+// cleans up acquired resources and returns the error; startup does not begin.
 //
-// Add a feature with `arkoren add feature NAME --web`, or import its
-// registration package and call it here. See
+// Add a feature with `arkoren add feature NAME --web`, which also adds its
+// compose.Use line here. See
 // https://arkoren.dev/docs/guides/application/composition and
 // https://arkoren.dev/docs/guides/first-steps/project-layout.
 func Compose(compose *application.Composer) {
-	welcomeweb.Routes(compose)
-
 	if compose.App().Debug() {
-		bootstrap.Diagnostics(compose)
+		compose.Use(bootstrap.MCP)
 	}
 
-	bootstrap.Listen(compose)
+	compose.Use(bootstrap.Server)
 }

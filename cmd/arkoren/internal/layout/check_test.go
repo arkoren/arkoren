@@ -64,26 +64,16 @@ func TestCheckScaffoldIsClean(t *testing.T) {
 	}
 }
 
-// TestCheckBootstrapImportsFeature flags bootstrap reaching into a feature.
-func TestCheckBootstrapImportsFeature(t *testing.T) {
-	t.Parallel()
-
-	found := violations(t, map[string]string{
-		"internal/orders/orders.go":    "package orders\n",
-		"internal/bootstrap/orders.go": "package bootstrap\n\nimport _ \"example.com/shop/internal/orders\"\n",
-	})
-
-	requireViolation(t, found, layout.RuleBootstrapImport, "internal/bootstrap/orders.go", 3)
-}
-
-// TestCheckProcessRootMayImportFeatures allows internal/bootstrap/<process> to
-// import feature roots and surfaces, while the bootstrap package stays clean.
-func TestCheckProcessRootMayImportFeatures(t *testing.T) {
+// TestCheckBootstrapMayImportFeatures allows the bootstrap package and the
+// process roots to import feature roots and surfaces: bootstrap wires features.
+func TestCheckBootstrapMayImportFeatures(t *testing.T) {
 	t.Parallel()
 
 	found := violations(t, map[string]string{
 		"internal/orders/orders.go":  "package orders\n",
 		"internal/orders/web/web.go": "package web\n",
+		"internal/bootstrap/orders.go": "package bootstrap\n\nimport (\n\t_ \"example.com/shop/internal/orders\"\n" +
+			"\t_ \"example.com/shop/internal/orders/web\"\n)\n",
 		"internal/bootstrap/worker/compose.go": "package worker\n\nimport (\n\t_ \"example.com/shop/internal/orders\"\n" +
 			"\t_ \"example.com/shop/internal/orders/web\"\n)\n",
 	})
@@ -93,8 +83,75 @@ func TestCheckProcessRootMayImportFeatures(t *testing.T) {
 	}
 }
 
-// TestCheckSurfaceImportedOutsideCmd flags a surface child imported by another feature.
-func TestCheckSurfaceImportedOutsideCmd(t *testing.T) {
+// TestCheckFeatureImportsApplication flags feature roots, children and
+// platform code importing the application package or internal/bootstrap.
+func TestCheckFeatureImportsApplication(t *testing.T) {
+	t.Parallel()
+
+	found := violations(t, map[string]string{
+		"internal/orders/orders.go":       "package orders\n\nimport _ \"arkoren.dev/core/application\"\n",
+		"internal/orders/web/web.go":      "package web\n\nimport _ \"example.com/shop/internal/bootstrap\"\n",
+		"internal/platform/ui/ui.go":      "package ui\n\nimport _ \"example.com/shop/internal/bootstrap/server\"\n",
+		"internal/orders/carrier/send.go": "package carrier\n\nimport _ \"arkoren.dev/core/application\"\n",
+	})
+
+	if len(found) != 4 {
+		t.Fatalf("violations = %+v", found)
+	}
+
+	for _, violation := range found {
+		if violation.Rule != layout.RuleFeatureApplication || violation.Line != 3 {
+			t.Fatalf("violation = %+v", violation)
+		}
+	}
+}
+
+// TestCheckFeatureTestImportsApplication applies the rule to test files too.
+func TestCheckFeatureTestImportsApplication(t *testing.T) {
+	t.Parallel()
+
+	found := violations(t, map[string]string{
+		"internal/orders/orders_test.go": "package orders_test\n\nimport _ \"arkoren.dev/core/application\"\n",
+	})
+
+	requireViolation(t, found, layout.RuleFeatureApplication, "internal/orders/orders_test.go", 3)
+}
+
+// TestCheckBootstrapActionFunc flags an exported bootstrap function that takes
+// a Composer and returns nothing, while providers and value-returning
+// constructors pass, as do process roots.
+func TestCheckBootstrapActionFunc(t *testing.T) {
+	t.Parallel()
+
+	found := violations(t, map[string]string{
+		"internal/bootstrap/listen.go": "package bootstrap\n\nimport \"arkoren.dev/core/application\"\n\n" +
+			"func Listen(compose *application.Composer) {}\n\n" +
+			"func NewThing(compose *application.Composer) int { return 1 }\n\n" +
+			"func helper(compose *application.Composer) {}\n\n" +
+			"var Thing = application.Provide(func(compose *application.Composer) int { return 1 })\n",
+		"internal/bootstrap/worker/compose.go": "package worker\n\nimport \"arkoren.dev/core/application\"\n\n" +
+			"func Compose(compose *application.Composer) {}\n",
+	})
+
+	requireViolation(t, found, layout.RuleBootstrapAction, "internal/bootstrap/listen.go", 5)
+}
+
+// TestCheckSurfaceImportedByBootstrap allows bootstrap providers to import surfaces.
+func TestCheckSurfaceImportedByBootstrap(t *testing.T) {
+	t.Parallel()
+
+	found := violations(t, map[string]string{
+		"internal/orders/web/web.go":   "package web\n",
+		"internal/bootstrap/orders.go": "package bootstrap\n\nimport _ \"example.com/shop/internal/orders/web\"\n",
+	})
+
+	if len(found) != 0 {
+		t.Fatalf("violations = %+v", found)
+	}
+}
+
+// TestCheckSurfaceImportedOutsideBootstrap flags a surface child imported by another feature.
+func TestCheckSurfaceImportedOutsideBootstrap(t *testing.T) {
 	t.Parallel()
 
 	found := violations(t, map[string]string{
@@ -166,10 +223,10 @@ func TestCheckBannedPackageName(t *testing.T) {
 	requireViolation(t, found, layout.RuleBannedName, "internal/platform/util/strings.go", 1)
 }
 
-// composerFile builds a file in the orders feature with the given declarations.
+// composerFile builds a file in internal/bootstrap with the given declarations.
 func composerFile(declarations string) map[string]string {
 	return map[string]string{
-		"internal/orders/orders.go": "package orders\n\nimport (\n\t\"net/http\"\n\n\t\"arkoren.dev/core/application\"\n)\n\nvar _ http.Handler\n\n" +
+		"internal/bootstrap/orders.go": "package bootstrap\n\nimport (\n\t\"net/http\"\n\n\t\"arkoren.dev/core/application\"\n)\n\nvar _ http.Handler\n\n" +
 			declarations,
 	}
 }
@@ -178,15 +235,17 @@ func composerFile(declarations string) map[string]string {
 func TestCheckUseInsideClosure(t *testing.T) {
 	t.Parallel()
 
-	found := violations(t, composerFile(`func Routes(compose *application.Composer) {
+	found := violations(t, composerFile(`func NewRoutes(compose *application.Composer) int {
 	compose.Startup(func(ctx context.Context) error {
 		compose.Use(Default)
 		return nil
 	})
+
+	return 1
 }
 `))
 
-	requireViolation(t, found, layout.RuleComposerUse, "internal/orders/orders.go", 13)
+	requireViolation(t, found, layout.RuleComposerUse, "internal/bootstrap/orders.go", 13)
 }
 
 // TestCheckUseInsideMethod flags Use called from a method on a service.
@@ -200,12 +259,12 @@ func (service *Service) Load(compose *application.Composer) {
 }
 `))
 
-	requireViolation(t, found, layout.RuleComposerUse, "internal/orders/orders.go", 14)
+	requireViolation(t, found, layout.RuleComposerUse, "internal/bootstrap/orders.go", 14)
 }
 
-// TestCheckUseInProviderAndRegistration allows Use at the top of provider
-// builds, Action literals and registration functions.
-func TestCheckUseInProviderAndRegistration(t *testing.T) {
+// TestCheckUseInProviderAndConstructor allows Use at the top of provider
+// builds and New* constructors.
+func TestCheckUseInProviderAndConstructor(t *testing.T) {
 	t.Parallel()
 
 	found := violations(t, composerFile(`var Default = application.Provide(func(compose *application.Composer) int {
@@ -222,8 +281,8 @@ func NewOther(compose *application.Composer) int {
 	return 2
 }
 
-func Routes(compose *application.Composer) {
-	compose.Use(Default)
+func NewRoutes(compose *application.Composer) int {
+	return compose.Use(Default)
 }
 `))
 
@@ -236,8 +295,10 @@ func Routes(compose *application.Composer) {
 func TestCheckUseIgnoresOtherReceivers(t *testing.T) {
 	t.Parallel()
 
-	found := violations(t, composerFile(`func Routes(compose *application.Composer, routes interface{ Use(int) }) {
+	found := violations(t, composerFile(`func NewRoutes(compose *application.Composer, routes interface{ Use(int) }) int {
 	routes.Use(1)
+
+	return 1
 }
 `))
 
@@ -246,16 +307,16 @@ func TestCheckUseIgnoresOtherReceivers(t *testing.T) {
 	}
 }
 
-// TestCheckBootstrapNewOutsideBootstrap flags lifecycle constructors called by features.
+// TestCheckBootstrapNewOutsideBootstrap flags lifecycle constructors called outside the bootstrap package.
 func TestCheckBootstrapNewOutsideBootstrap(t *testing.T) {
 	t.Parallel()
 
 	found := violations(t, map[string]string{
-		"internal/bootstrap/database.go": "package bootstrap\n\nfunc NewDatabase() {}\n",
-		"internal/orders/orders.go":      "package orders\n\nimport \"example.com/shop/internal/bootstrap\"\n\nfunc init() {\n\tbootstrap.NewDatabase()\n}\n",
+		"internal/bootstrap/database.go":       "package bootstrap\n\nfunc NewDatabase() {}\n",
+		"internal/bootstrap/worker/compose.go": "package worker\n\nimport \"example.com/shop/internal/bootstrap\"\n\nfunc init() {\n\tbootstrap.NewDatabase()\n}\n",
 	})
 
-	requireViolation(t, found, layout.RuleBootstrapNew, "internal/orders/orders.go", 6)
+	requireViolation(t, found, layout.RuleBootstrapNew, "internal/bootstrap/worker/compose.go", 6)
 
 	if !strings.Contains(found[0].Message, "bootstrap.NewDatabase") {
 		t.Fatalf("message = %q", found[0].Message)

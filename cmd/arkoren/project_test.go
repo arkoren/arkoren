@@ -326,14 +326,14 @@ func TestNewDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(module) != "module "+name+"\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.17.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
+	if string(module) != "module "+name+"\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.18.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
 		t.Fatalf("go.mod = %q", module)
 	}
 
 	inventory := []string{
-		"cmd/server/main.go", "internal/bootstrap/server/compose.go", "internal/bootstrap/listener.go", "internal/bootstrap/mcp.go",
-		"internal/bootstrap/router.go", "internal/welcome/web/routes.go",
-		"internal/bootstrap/app.go", "internal/bootstrap/logging.go", ".env", ".env.example", "go.mod", "README.md",
+		"cmd/server/main.go", "internal/bootstrap/server/app.go", "internal/bootstrap/server/compose.go", "internal/bootstrap/server.go", "internal/bootstrap/mcp.go",
+		"internal/bootstrap/router.go",
+		"internal/bootstrap/logging.go", ".env", ".env.example", "go.mod", "README.md",
 		"Dockerfile", "Makefile", ".dockerignore", ".gitignore", ".editorconfig",
 	}
 
@@ -491,7 +491,7 @@ func TestNewNamedDestinationDefaultsModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(content) != "module momentum\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.17.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
+	if string(content) != "module momentum\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.18.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
 		t.Fatalf("go.mod = %q", content)
 	}
 }
@@ -582,11 +582,11 @@ func TestNewCustomFolderAndModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(content), `"example.com/team/service/v2/internal/bootstrap"`) {
+	if !strings.Contains(string(content), `"example.com/team/service/v2/internal/bootstrap/server"`) {
 		t.Fatalf("wrong imports: %s", content)
 	}
 
-	content, err = os.ReadFile(filepath.Join(env.Dir, "nested/my-api/internal/bootstrap/app.go"))
+	content, err = os.ReadFile(filepath.Join(env.Dir, "nested/my-api/internal/bootstrap/server/app.go"))
 
 	if err != nil {
 		t.Fatal(err)
@@ -1240,7 +1240,7 @@ func TestScaffoldPlanExecutionRejectsNestedFileParent(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	err := runNew(t.Context(), []string{".", "--skills-dir", "internal/bootstrap/app.go", "--yes"}, env)
+	err := runNew(t.Context(), []string{".", "--skills-dir", "internal/bootstrap/logging.go", "--yes"}, env)
 
 	requireNewUsage(t, err)
 
@@ -1285,7 +1285,7 @@ func TestScaffoldPlanExecutionRejectsCaseFoldedNestedParent(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	err := runNew(t.Context(), []string{"hello", "--skills-dir", "INTERNAL/BOOTSTRAP/APP.GO", "--yes"}, env)
+	err := runNew(t.Context(), []string{"hello", "--skills-dir", "INTERNAL/BOOTSTRAP/LOGGING.GO", "--yes"}, env)
 
 	requireNewUsage(t, err)
 
@@ -1307,7 +1307,7 @@ func TestScaffoldPlanAllowsSharedDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, path := range []string{"internal/bootstrap/app.go", "internal/bootstrap/arkoren/SKILL.md"} {
+	for _, path := range []string{"internal/bootstrap/logging.go", "internal/bootstrap/arkoren/SKILL.md"} {
 		if _, err := os.Stat(filepath.Join(env.Dir, "hello", filepath.FromSlash(path))); err != nil {
 			t.Fatal(err)
 		}
