@@ -653,6 +653,12 @@ delivery, and lifecycle protocols explicit.
   accept ordered `ComposerFunc` callbacks. Composition completes before startup
   callbacks, then supervised runners and background checks launch. Only composers
   register lifecycle work; applications expose control and observation.
+  `application.Run(ctx, app, compose...)` and `application.Start` build the
+  application from a root `*Provider[*Application]` on one composer: providers
+  its settings use are ordinary providers whose cleanup the application owns,
+  and `compose.App()` while it is still being built panics with
+  `ErrProviderCycle`. Nil provider panics `ErrNilFunc`; a nil result returns
+  `ErrNilApplication`; build failures report once on stderr.
 - Compose modules with typed function arguments and return values. Register
   cleanup once at the acquiring owner, immediately after acquisition. Cleanup
   runs in reverse order on composition failure, startup failure, and shutdown,

@@ -34,11 +34,18 @@ from another trace source.
 
 For all following alternatives, import `application` from
 `arkoren.dev/core/application` and `telemetry` from
-`arkoren.dev/core/service/telemetry`. Give your chosen `driver` to the application:
+`arkoren.dev/core/service/telemetry`. Give your chosen `driver` to the application
+through a provider, run with `application.Run(ctx, App, Compose)`:
 
 ```go
-app := application.New(func(app *application.Builder) {
-	app.Telemetry(telemetry.New(driver))
+var Telemetry = application.Provide(func(compose *application.Composer) *telemetry.Telemetry {
+	return telemetry.New(driver)
+})
+
+var App = application.Provide(func(compose *application.Composer) *application.Application {
+	return application.New(func(app *application.Builder) {
+		app.Telemetry(compose.Use(Telemetry))
+	})
 })
 ```
 

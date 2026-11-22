@@ -23,15 +23,24 @@ when individual actions need a durable record.
 
 ## Shared Handle
 
-With your selected `driver`, give the handle to the application. Import
-`application` from `arkoren.dev/core/application` and `telemetry` from
-`arkoren.dev/core/service/telemetry`:
+With your selected `driver`, declare the handle as a provider and give it to the
+application. Import `application` from `arkoren.dev/core/application` and
+`telemetry` from `arkoren.dev/core/service/telemetry`:
 
 ```go
-app := application.New(func(app *application.Builder) {
-	app.Telemetry(telemetry.New(driver))
+var Telemetry = application.Provide(func(compose *application.Composer) *telemetry.Telemetry {
+	return telemetry.New(driver)
+})
+
+var App = application.Provide(func(compose *application.Composer) *application.Application {
+	return application.New(func(app *application.Builder) {
+		app.Telemetry(compose.Use(Telemetry))
+	})
 })
 ```
+
+The process entry point runs it with `application.Run(ctx, App, Compose)`; see
+[Composition](../application/composition.md#build-the-application-from-a-provider).
 
 Construction performs no I/O. After composition succeeds, the application starts
 telemetry before user startup callbacks and stops it after cleanup and the final

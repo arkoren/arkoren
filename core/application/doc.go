@@ -14,6 +14,25 @@
 //		return err
 //	}
 //
+// A process entry point can build the application from the composition graph
+// instead. The application is a [Provider], so its settings take handles such
+// as a log handler or telemetry from ordinary providers, and [Run] (or [Start],
+// which returns the started application) builds it, composes the process on the
+// same composer and runs it:
+//
+//	var App = application.Provide(func(compose *application.Composer) *application.Application {
+//		return application.New(func(app *application.Builder) {
+//			app.Telemetry(compose.Use(Telemetry))
+//		})
+//	})
+//
+//	err := application.Run(ctx, App, Compose)
+//
+// Cleanup registered by providers while the application is built is owned by
+// the application. [Composer.App] panics with [ErrProviderCycle] until the
+// build finishes; a failed build is reported once on stderr, since no
+// application logger exists yet.
+//
 // An [Application] is optional: the router, server, and services work
 // without one.
 // At the process entry point, [NewSignalContext] requests graceful shutdown on
