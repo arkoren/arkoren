@@ -34,6 +34,9 @@ app := application.New(func(app *application.Builder) {
 ```
 
 This resolves construction settings but starts no resources or listeners.
+A process entry point usually declares the application as a provider instead and
+calls `application.Run(ctx, App, Compose)`; see
+[Composition](composition.md#build-the-application-from-a-provider).
 Choose [component settings](../first-steps/configuration.md#component-construction)
 when constructing the application; its builder is not a runtime control handle.
 

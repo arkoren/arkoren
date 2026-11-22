@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"time"
@@ -477,7 +478,14 @@ func (application *Application) Run(ctx context.Context, compose ...ComposerFunc
 
 // composers adapts callbacks while retaining one public composer per execution.
 func (application *Application) composers(compose []ComposerFunc) []lifecycle.ScopeFunc {
-	composer := &Composer{application: application}
+	return scopeFuncs(&Composer{application: application}, compose)
+}
+
+// scopeFuncs binds each callback to composer, pointing it at the execution
+// scope the callback runs in. The method forms and the root forms [Run] and
+// [Start] share it, so one composer, with one provider cache, serves every
+// callback of an execution.
+func scopeFuncs(composer *Composer, compose []ComposerFunc) []lifecycle.ScopeFunc {
 	callbacks := make([]lifecycle.ScopeFunc, len(compose))
 
 	for index, callback := range compose {
@@ -488,6 +496,96 @@ func (application *Application) composers(compose []ComposerFunc) []lifecycle.Sc
 	}
 
 	return callbacks
+}
+
+// rootScopes returns the runtime, composer and ordered callbacks that build the
+// application from app and then run compose on the same composer. The first
+// callback uses app like any provider, so values its settings take from other
+// providers are cached for the later callbacks, then hands the built
+// application's hooks to the runtime that already owns the cleanups the build
+// registered. It panics with [ErrNilFunc] for a nil app.
+func rootScopes(app *Provider[*Application], compose []ComposerFunc) (*lifecycle.Runtime, *Composer, []lifecycle.ScopeFunc) {
+	if app == nil {
+		panic(fmt.Errorf("app: root application provider: %w", ErrNilFunc))
+	}
+
+	runtime := lifecycle.NewPending()
+	composer := &Composer{}
+
+	build := func(scope *lifecycle.Scope) {
+		composer.scope = scope
+		built := composer.Use(app)
+
+		if built == nil {
+			composer.Require(fmt.Errorf("app: root application provider returned nil: %w", ErrNilApplication))
+		}
+
+		composer.Require(runtime.Adopt(built.execution))
+		built.execution = runtime
+		composer.application = built
+	}
+
+	return runtime, composer, append([]lifecycle.ScopeFunc{build}, scopeFuncs(composer, compose)...)
+}
+
+// Start builds the application from the root provider app, composes it with
+// compose, and starts it like [Application.Start], returning the started
+// application so the caller can Wait for it and Shutdown. One composer, with
+// one provider cache and one cleanup stack, serves the whole call: app is used
+// first, so providers its settings depend on (a log handler, telemetry) are
+// built as ordinary providers, registrations they make are owned by the
+// returned application, and later Use calls in compose return the same values.
+//
+// While app is being built, [Composer.App] panics with [ErrProviderCycle]
+// because there is no application yet. If building fails through Must or
+// Require, registered cleanups run in reverse order, the error is returned
+// and reported once on stderr, since the application logger does not exist.
+// A nil provider result returns an error wrapping [ErrNilApplication]. After a
+// successful build, errors, panics and cancellation behave as in
+// [Application.Start]; the returned application is nil on any error.
+//
+// app must build a new [Application] on every call: one that already started
+// returns an error wrapping [ErrInvalidPhase]. A nil app panics with
+// [ErrNilFunc].
+//
+//	app, err := application.Start(ctx, server.App, server.Compose)
+//	if err != nil {
+//		return err
+//	}
+//	defer app.Shutdown(context.WithoutCancel(ctx))
+//	return app.Wait(ctx)
+func Start(ctx context.Context, app *Provider[*Application], compose ...ComposerFunc) (*Application, error) {
+	runtime, composer, scopes := rootScopes(app, compose)
+
+	if err := runtime.Start(ctx, scopes...); err != nil {
+		return nil, err
+	}
+
+	return composer.application, nil
+}
+
+// Run builds the application from the root provider app, composes it with
+// compose, starts it, waits for runners or ctx, then shuts down with the
+// configured shutdown timeout. Building, composition and lifecycle semantics are
+// those of [Start] and [Application.Run]: lifecycle failures are already logged
+// when Run returns, so use the result for exit status rather than logging it
+// again. A failure while building the application is reported once on stderr.
+// A nil app panics with [ErrNilFunc].
+//
+//	// cmd/server/main.go
+//	return application.Run(ctx, server.App, server.Compose)
+//
+//	// internal/bootstrap/server/app.go
+//	var App = application.Provide(func(compose *application.Composer) *application.Application {
+//		return application.New(func(app *application.Builder) {
+//			app.Name("shop")
+//			app.Telemetry(compose.Use(bootstrap.Telemetry))
+//		})
+//	})
+func Run(ctx context.Context, app *Provider[*Application], compose ...ComposerFunc) error {
+	runtime, _, scopes := rootScopes(app, compose)
+
+	return runtime.Run(ctx, scopes...)
 }
 
 // Shutdown cancels the runners, waits for them until ctx ends, and then runs
@@ -559,9 +657,16 @@ var (
 	// Example: matched := errors.Is(registrationError, application.ErrDuplicateCheck); fmt.Println(matched)
 	ErrDuplicateCheck = health.ErrDuplicateCheck
 
+	// ErrNilApplication reports a root provider passed to [Run] or [Start] that
+	// built a nil *Application. Both return it wrapped, so use errors.Is.
+	//
+	// Example: matched := errors.Is(err, application.ErrNilApplication); fmt.Println(matched)
+	ErrNilApplication = errors.New("nil application")
+
 	// ErrProviderCycle reports a [Provider] used again while its own build
 	// function was still running. Composer.Use panics with a wrapping error whose
-	// message names the chain of provider value types.
+	// message names the chain of provider value types. Composer.App panics with
+	// it while the root application of [Run] or [Start] is still being built.
 	//
 	// Example: matched := errors.Is(recoveredPanic, application.ErrProviderCycle); fmt.Println(matched)
 	ErrProviderCycle = errors.New("provider cycle")

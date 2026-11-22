@@ -97,14 +97,7 @@ func (composer *Composer) Use[T any](provider *Provider[T]) T {
 			continue
 		}
 
-		chain := make([]string, 0, len(composer.building)-index+1)
-		for _, member := range composer.building[index:] {
-			chain = append(chain, member.name)
-		}
-
-		chain = append(chain, provider.name)
-
-		panic(fmt.Errorf("app: %w: %s", ErrProviderCycle, strings.Join(chain, " -> ")))
+		panic(composer.cycleError(index, provider.name))
 	}
 
 	composer.building = append(composer.building, providerKey{provider: provider, name: provider.name})
@@ -120,4 +113,18 @@ func (composer *Composer) Use[T any](provider *Provider[T]) T {
 	composer.provided[provider] = value
 
 	return value
+}
+
+// cycleError builds the [ErrProviderCycle] error for a provider chain that
+// starts at composer.building[from] and returns to name, for example
+// "app: provider cycle: *router.Router -> *iam.IAM -> *router.Router".
+func (composer *Composer) cycleError(from int, name string) error {
+	chain := make([]string, 0, len(composer.building)-from+1)
+	for _, member := range composer.building[from:] {
+		chain = append(chain, member.name)
+	}
+
+	chain = append(chain, name)
+
+	return fmt.Errorf("app: %w: %s", ErrProviderCycle, strings.Join(chain, " -> "))
 }

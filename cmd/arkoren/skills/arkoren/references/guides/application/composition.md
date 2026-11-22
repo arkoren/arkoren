@@ -6,6 +6,7 @@ order: 20
 summary:
   - Share concrete typed dependencies while keeping construction and cleanup under one owner.
   - Declare values that must exist once per process as memoized providers, and write ordinary constructors for everything else.
+  - Build the application itself from a provider so its settings come from ordinary providers.
   - Abort failed construction and own subscriptions before later setup can fail.
   - Skip optional acquisition and routes with a plain Go if on configuration, debug, or environment.
 ---
@@ -217,6 +218,59 @@ and supervised serving, not a second cleanup owner. Root callbacks passed
 directly to application `Start` or `Run` are ordinary `func(*application.Composer)`
 functions, so a registration function with only the composer parameter can be
 passed to them as is.
+
+## Build the Application from a Provider
+
+The application itself is a provider. Declare it with `Provide`, take its
+handles from ordinary providers, and let `application.Run` build it, compose the
+process and run it. With your own `LogHandler` provider (a
+`func(slog.Leveler) slog.Handler` factory) and `Telemetry` provider (a
+`*telemetry.Telemetry`):
+
+```go
+var App = application.Provide(func(compose *application.Composer) *application.Application {
+	return application.New(func(app *application.Builder) {
+		app.Name("shop")
+		app.Debug(os.Getenv("APP_DEBUG") == "true")
+		app.LogHandler(compose.Use(LogHandler))
+		app.Telemetry(compose.Use(Telemetry))
+	})
+})
+
+func Compose(compose *application.Composer) {
+	compose.Use(OrdersRoutes)
+
+	if compose.App().Debug() {
+		compose.Use(MCP)
+	}
+
+	compose.Use(Server)
+}
+```
+
+The entry point calls `application.Run(ctx, App, Compose)`. `application.Start`
+takes the same arguments and returns the started application, so the caller can
+`Wait` and `Shutdown` it. A nil provider panics with `ErrNilFunc`.
+
+`Run` uses one composer for the whole call. It uses `App` first, so a provider
+the settings depend on is built like any other and its value is the same one
+`Compose` gets from a later `Use`. Cleanup registered by those providers belongs
+to the application: it runs at shutdown and when composition or startup fails,
+in reverse registration order. Build one fresh application on every call; a
+provider that returns an application that already started fails with
+`ErrInvalidPhase`, and one that returns nil fails with `ErrNilApplication`.
+
+`composer.App()` exists only after that build. Calling it from a provider the
+application depends on panics with `ErrProviderCycle`, naming the chain, because
+the application cannot depend on itself. Read settings there from the
+environment or from another provider instead. If building the application
+fails through `Must` or `Require`, `Run` runs the registered cleanup, returns
+the error and reports it once on standard error, because no application logger
+exists yet.
+
+To run an application you construct yourself, as in tests or a library, call
+`application.New` and its `Start` or `Run` methods with the same `Compose`
+callbacks.
 
 ## Select Optional Features
 
