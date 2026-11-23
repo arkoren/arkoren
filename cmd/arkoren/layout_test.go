@@ -218,7 +218,7 @@ func TestLayoutHelpIsOffline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, want := range []string{"feature", "process", "provider", "migration"} {
+	for _, want := range []string{"feature", "process", "provider", "migration", "ark"} {
 		if !strings.Contains(env.Stdout.(*bytes.Buffer).String(), want) {
 			t.Fatalf("add help lacks %q:\n%s", want, env.Stdout)
 		}
@@ -287,3 +287,186 @@ func TestLayoutCommandsOnBuiltProject(t *testing.T) {
 		t.Fatalf("check after add: %v, %v", report, err)
 	}
 }
+
+// iamExampleFeatures is the --with list whose output examples.md shows. It leaves
+// out google, whose startup performs network discovery, so the identity process
+// test in the example runs offline.
+const iamExampleFeatures = "reset,verification,two-factor,tokens,permissions,account,github"
+
+// TestAddArkIAMDryRunReportsPlan lists the files, the Compose insertions, the
+// pinned modules and the steps left to the user, and writes nothing.
+func TestAddArkIAMDryRunReportsPlan(t *testing.T) {
+	t.Parallel()
+
+	env := scaffoldedProject(t)
+
+	report, err := runLayout(t, env, "add", "ark", "iam", "--with", iamExampleFeatures, "--dry-run")
+
+	if err != nil || report["dry_run"] != true {
+		t.Fatalf("report = %v, err = %v", report, err)
+	}
+
+	edited := report["edited"].([]any)[0].(map[string]any)
+	inserted := edited["inserted"].([]any)
+
+	if edited["path"] != "internal/bootstrap/server/compose.go" || len(inserted) != 3 || inserted[0] != "compose.Use(bootstrap.IAMRouter)" {
+		t.Fatalf("edited = %v", edited)
+	}
+
+	if requires := report["requires"].([]any); requires[0] != "arkoren.dev/ark/iam@v0.5.0" {
+		t.Fatalf("requires = %v", requires)
+	}
+
+	if steps := report["next_steps"].([]any); !strings.Contains(steps[0].(string), "Migrations()") {
+		t.Fatalf("next_steps = %v", steps)
+	}
+
+	if _, err := os.Stat(filepath.Join(env.Dir, "internal/bootstrap/iam.go")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry run wrote iam.go: %v", err)
+	}
+}
+
+// TestAddArkArgumentsAreChecked rejects arguments iam does not take, a missing
+// OAuth provider and unknown features.
+func TestAddArkArgumentsAreChecked(t *testing.T) {
+	t.Parallel()
+
+	env := scaffoldedProject(t)
+
+	for _, args := range [][]string{
+		{"add", "ark", "iam", "extra"}, {"add", "ark", "oauth"}, {"add", "ark", "oauth", "google", "github"},
+		{"add", "ark", "iam", "--with", "passkeys"}, {"add", "ark", "oauth", "myspace"},
+	} {
+		_, err := runLayout(t, env, args...)
+		requireNewUsage(t, err)
+	}
+}
+
+// TestExamplesMatchAddArkOutput compares every identity file of the arkoren-structure
+// examples with what `arkoren add ark iam` writes, so the example agents copy can
+// never drift from the generator.
+func TestExamplesMatchAddArkOutput(t *testing.T) {
+	t.Parallel()
+
+	env := scaffoldedProject(t)
+
+	if _, err := runLayout(t, env, "add", "ark", "iam", "--with", iamExampleFeatures, "--skip-tidy"); err != nil {
+		t.Fatal(err)
+	}
+
+	examples, err := skillSource.ReadFile("skills/arkoren-structure/references/examples.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{
+		"iam", "password_reset", "email_verification", "token_scopes", "roles", "account_view", "github", "github_sign_up",
+		"hasher", "cache", "link_signer", "two_factor_key", "oauth_key", "mailer",
+	} {
+		rel := "internal/bootstrap/" + name + ".go"
+		generated, err := os.ReadFile(filepath.Join(env.Dir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if shown := exampleFile(t, string(examples), rel); shown != string(generated) {
+			t.Fatalf("examples.md shows %s differently from `add ark iam`:\n--- example\n%s\n--- generated\n%s", rel, shown, generated)
+		}
+	}
+}
+
+// exampleFile returns the Go block that examples shows under the heading line
+// `rel`, which is a path in backticks on a line of its own.
+func exampleFile(t *testing.T, examples, rel string) string {
+	t.Helper()
+
+	_, after, found := strings.Cut(examples, "\n`"+rel+"`\n\n```go\n")
+	if !found {
+		t.Fatalf("examples.md has no block for %s", rel)
+	}
+
+	block, _, found := strings.Cut(after, "```\n")
+	if !found {
+		t.Fatalf("examples.md block for %s is not closed", rel)
+	}
+
+	return block
+}
+
+// TestAddArkIAMGeneratedProject builds the identity module's generated providers
+// against this checkout's modules, vets them, requires `check` to stay clean, and
+// then runs the process test of examples.md: the identity routes serve a
+// registration, the identity job sends the verification email through a mailer
+// the test supplies, and the emailed link verifies the address. It needs the Go
+// toolchain and resolves third-party modules, so short mode skips it.
+func TestAddArkIAMGeneratedProject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a generated project")
+	}
+
+	env := scaffoldedProject(t)
+
+	for _, args := range [][]string{
+		{"add", "ark", "iam", "--with", iamExampleFeatures},
+		{"add", "ark", "oauth", "google"},
+	} {
+		if _, err := runLayout(t, env, append(args, "--skip-tidy")...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+
+	// The identity process test needs a Migrator that runs the module's migrations.
+	identity := filepath.Join(env.Dir, "internal/bootstrap")
+
+	if err := os.WriteFile(filepath.Join(identity, "migrator.go"), []byte(migratorSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	examples, err := skillSource.ReadFile("skills/arkoren-structure/references/examples.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	test := exampleFile(t, string(examples), "internal/bootstrap/server/iam_test.go")
+
+	if err := os.WriteFile(filepath.Join(env.Dir, "internal/bootstrap/server/iam_test.go"), []byte(test), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	useCheckoutModules(t, env.Dir)
+
+	for _, args := range [][]string{{"build", "-mod=readonly", "./..."}, {"vet", "./..."}, {"test", "-race", "-count=1", "./..."}} {
+		command := exec.CommandContext(t.Context(), "go", args...)
+		command.Dir = env.Dir
+		command.Env = append(os.Environ(), "GOWORK=off")
+
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("go %v: %v\n%s", args, err, output)
+		}
+	}
+
+	report, err := runLayout(t, env, "check")
+
+	if err != nil || report["ok"] != true {
+		t.Fatalf("check after add ark: %v, %v", report, err)
+	}
+}
+
+// migratorSource is the Migrator provider of the generated project in
+// TestAddArkIAMGeneratedProject: the application has no migrations of its own, so
+// it holds the identity module's.
+const migratorSource = `package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/database/migrate"
+)
+
+// Migrator holds the identity module's migrations.
+var Migrator = application.Provide(func(compose *application.Composer) *migrate.Migrator {
+	migrator := migrate.New(compose.Use(Database))
+	compose.Require(migrator.Add(compose.Use(IAM).Migrations()...))
+
+	return migrator
+})
+`

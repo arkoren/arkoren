@@ -1,0 +1,17 @@
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam/apitoken"
+	"arkoren.dev/core/application"
+)
+
+// TokenScopes is the identity module's token settings: the scope catalog that
+// personal and device tokens may carry, and the ceiling on what a user may grant.
+// AnyScope lets every user grant every listed scope; replace it with a function
+// of the user (or the permission store) to cap tokens at what their owner holds.
+// The scopes below are placeholders: name the scopes your routes check.
+var TokenScopes = application.Provide(func(*application.Composer) apitoken.BuilderFunc {
+	return func(tokens *apitoken.Builder) {
+		tokens.Grants(apitoken.AnyScope, "read", "write")
+	}
+})

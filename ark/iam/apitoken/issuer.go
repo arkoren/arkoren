@@ -16,8 +16,8 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/foundation/query"
-	"arkoren.dev/foundation/query/schema"
 
+	"arkoren.dev/ark/iam/internal/migration"
 	"arkoren.dev/ark/iam/internal/storage"
 )
 
@@ -43,8 +43,9 @@ const (
 	//	fmt.Println(apitoken.DefaultDeviceIdleTTL) // 2160h0m0s
 	DefaultDeviceIdleTTL = 90 * 24 * time.Hour
 
-	// maxNameLength bounds a token's name, in bytes.
-	maxNameLength = 255
+	// maxNameLength bounds a token's name, in bytes. It is the width of the
+	// stored column, which the migration definitions own.
+	maxNameLength = migration.TokenNameLength
 
 	// idLength and secretLength are the lengths of the public id and the secret
 	// of a token text, in base32 characters (60 and 130 random bits).
@@ -249,24 +250,7 @@ func NewIssuer(provider *auth.UserProvider, db *database.Database, store *cache.
 //		return err
 //	}
 func (issuer *Issuer) Migrations() []migrate.Definition {
-	return storage.Group("apitoken", issuer.instance).Migrations(
-		migrate.NewMigration("api-tokens-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(issuer.table, func(table *schema.Table) {
-				table.String("id", 32).Bytewise().Primary()
-				table.String("subject", 255).Bytewise()
-				table.String("kind", 16)
-				table.String("name", maxNameLength)
-				table.String("secret_hash", 64).Bytewise()
-				table.String("user_version", 64).Bytewise()
-				table.Text("scopes")
-				table.BigInteger("last_used_at").Default(0)
-				table.BigInteger("expires_at").Default(0)
-				table.BigInteger("created_at")
-				table.Index("subject", "created_at")
-			})))
-			migration.Down(migrate.Schema(schema.Drop(issuer.table)))
-		}),
-	)
+	return migration.Tokens(issuer.instance)
 }
 
 // PersonalTokens reports whether personal tokens are enabled

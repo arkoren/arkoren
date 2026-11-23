@@ -177,6 +177,20 @@ func (consumer *Consumer) Driver() ConsumerDriver {
 	return consumer.driver
 }
 
+// Queues returns a copy of the queue restriction set with
+// [ConsumerBuilder.Queues]. An empty result means the consumer consumes every
+// handled queue. Modules that register their own jobs read it to refuse a
+// consumer whose restriction would never run those jobs.
+//
+//	consumer := queue.NewConsumer(driver, func(consumer *queue.ConsumerBuilder) {
+//		consumer.Queues("emails")
+//	})
+//	fmt.Println(consumer.Queues())
+//	// Output: [emails]
+func (consumer *Consumer) Queues() []string {
+	return slices.Clone(consumer.config.Queues)
+}
+
 // DriverAs returns the first driver of type T in the chain of the
 // underlying driver. A driver that wraps another exposes it with an
 // Unwrap() ConsumerDriver method, so wrappers such as prefixing or tracing

@@ -115,6 +115,54 @@ func (composer *Composer) Use[T any](provider *Provider[T]) T {
 	return value
 }
 
+// Supply sets value as the provider's value for this composition without running
+// its build function. Every later [Composer.Use] of provider, including from
+// nested providers, returns value, and because build never runs, none of the
+// Startup, Cleanup, Run or Check callbacks it would have registered exist.
+//
+// Supply exists for tests. A test passes its own root provider to [Start]; the
+// root is built first, so its Supply calls run before anything uses the
+// provider, and it then returns the production root through Use:
+//
+//	root := application.Provide(func(composer *application.Composer) *application.Application {
+//		composer.Supply(Mailer, mail.New(mailtest.New()))
+//
+//		return composer.Use(server.App)
+//	})
+//	app, err := application.Start(ctx, root, server.Compose)
+//
+// The value is owned by the caller, so the composition never cleans it up.
+// Supply is composition-only and the cache is private to one Start or Run, so
+// other compositions still build the provider normally.
+//
+// Supply panics with [ErrNilFunc] for a nil provider and with [ErrInvalidPhase]
+// outside synchronous composition, when provider was already built or supplied
+// in this composition, and when provider is still being built: in each case a
+// consumer may already hold another value. Supply the value before the first Use.
+func (composer *Composer) Supply[T any](provider *Provider[T], value T) {
+	if provider == nil {
+		panic(fmt.Errorf("app: Supply: %w", ErrNilFunc))
+	}
+
+	composer.scope.Validate()
+
+	if _, ok := composer.provided[provider]; ok {
+		panic(fmt.Errorf("app: Supply: %s is already built: %w", provider.name, ErrInvalidPhase))
+	}
+
+	for _, entry := range composer.building {
+		if entry.provider == any(provider) {
+			panic(fmt.Errorf("app: Supply: %s is still being built: %w", provider.name, ErrInvalidPhase))
+		}
+	}
+
+	if composer.provided == nil {
+		composer.provided = map[any]any{}
+	}
+
+	composer.provided[provider] = value
+}
+
 // cycleError builds the [ErrProviderCycle] error for a provider chain that
 // starts at composer.building[from] and returns to name, for example
 // "app: provider cycle: *router.Router -> *iam.IAM -> *router.Router".

@@ -184,7 +184,7 @@ func TestAppRegisteredKeepsTheVerificationRequest(t *testing.T) {
 		if !ran {
 			t.Fatal("the application's Registered hook did not run")
 		}
-		if got := sys.box.dispatchedVerifies; len(got) != 1 || got[0].Subject != mustSubject(t, sys) {
+		if got := sys.box.dispatchedVerifies(t); len(got) != 1 || got[0].Subject != mustSubject(t, sys) {
 			t.Fatalf("verifications dispatched = %+v, want one for the new user", got)
 		}
 	})
@@ -211,7 +211,7 @@ func TestAppTakenKeepsTheOwnerNotice(t *testing.T) {
 		if !ran {
 			t.Fatal("the application's Taken hook did not run")
 		}
-		if got := sys.box.dispatchedResets; len(got) != 1 || !got[0].Notice {
+		if got := sys.box.dispatchedResets(t); len(got) != 1 || !got[0].Notice {
 			t.Fatalf("resets dispatched = %+v, want one notice for the owner", got)
 		}
 	})

@@ -1,7 +1,6 @@
 package iam_test
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"testing"
@@ -9,7 +8,6 @@ import (
 	"arkoren.dev/core/service/database"
 
 	"arkoren.dev/ark/iam"
-	"arkoren.dev/ark/iam/account"
 	"arkoren.dev/ark/iam/apitoken"
 	"arkoren.dev/ark/iam/internal/apptest"
 	"arkoren.dev/ark/iam/password"
@@ -161,10 +159,10 @@ func TestRegisterWithResetAndVerificationDispatchesOnBothPaths(t *testing.T) {
 			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
 		}
 		subject := mustSubject(t, sys)
-		if got := sys.box.dispatchedVerifies; len(got) != 1 || got[0].Subject != subject {
+		if got := sys.box.dispatchedVerifies(t); len(got) != 1 || got[0].Subject != subject {
 			t.Fatalf("verifications dispatched = %+v, want one for the new subject", got)
 		}
-		if got := sys.box.dispatchedResets; len(got) != 1 || got[0] != (password.ResetRequest{Identifier: "Ada@example.com", Notice: true}) {
+		if got := sys.box.dispatchedResets(t); len(got) != 1 || got[0] != (password.ResetRequest{Identifier: "Ada@example.com", Notice: true}) {
 			t.Fatalf("resets dispatched = %+v, want one notice for the identifier as typed", got)
 		}
 	})
@@ -181,8 +179,8 @@ func TestRegisterWithResetOnlyDispatchesNothing(t *testing.T) {
 		if fresh.Status != http.StatusAccepted || taken.Status != fresh.Status || taken.Body != fresh.Body {
 			t.Fatalf("new = %d %q, taken = %d %q, want the same 202", fresh.Status, fresh.Body, taken.Status, taken.Body)
 		}
-		if len(sys.box.dispatchedVerifies) != 0 || len(sys.box.dispatchedResets) != 0 {
-			t.Fatalf("dispatched verifications %+v and resets %+v, want none", sys.box.dispatchedVerifies, sys.box.dispatchedResets)
+		if verifies, resets := sys.box.dispatchedVerifies(t), sys.box.dispatchedResets(t); len(verifies) != 0 || len(resets) != 0 {
+			t.Fatalf("dispatched verifications %+v and resets %+v, want none", verifies, resets)
 		}
 	})
 }
@@ -194,12 +192,8 @@ func TestRegisterDispatchFailureStaysAccepted(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		sys := newAppWith(t, db, instance, both, func(identity *iam.Builder) {
-			identity.Password(hasher(), registration)
-			identity.Directory(func(accounts *account.Builder) {
-				accounts.Verification(newSigner(t, ""), func(context.Context, account.VerifyRequest) error { return errors.New("queue down") }, func(context.Context, account.VerifyMessage) error { return nil })
-			})
-		})
+		sys := newAppWith(t, db, instance, both, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		sys.box.queue.FailWith(errors.New("queue down"))
 		fresh, taken := registerBoth(sys)
 		if fresh.Status != http.StatusAccepted || taken.Status != http.StatusAccepted {
 			t.Fatalf("new = %d %s, taken = %d %s, want 202 for both", fresh.Status, fresh.Body, taken.Status, taken.Body)
@@ -219,7 +213,7 @@ func TestResendDispatchesAndTheWorkerSkipsAVerifiedUser(t *testing.T) {
 		if reply := sys.client.Post("/email/verify/resend", ""); reply.Status != http.StatusAccepted {
 			t.Fatalf("resend = %d %s", reply.Status, reply.Body)
 		}
-		if _, verifications := sys.box.counts(); verifications != 2 {
+		if _, verifications := sys.box.counts(t); verifications != 2 {
 			t.Fatalf("verification emails after a resend = %d, want 2", verifications)
 		}
 		if reply := sys.client.Post("/email/verify", `{"token":"`+sys.box.lastVerify(t).Signed+`"}`); reply.Status != http.StatusNoContent {
@@ -228,10 +222,10 @@ func TestResendDispatchesAndTheWorkerSkipsAVerifiedUser(t *testing.T) {
 		if reply := sys.client.Post("/email/verify/resend", ""); reply.Status != http.StatusAccepted {
 			t.Fatalf("resend after verifying = %d %s", reply.Status, reply.Body)
 		}
-		if got := len(sys.box.dispatchedVerifies); got != 3 {
+		if got := len(sys.box.dispatchedVerifies(t)); got != 3 {
 			t.Fatalf("dispatched %d verifications, want 3: the route dispatches for a verified user too", got)
 		}
-		if _, verifications := sys.box.counts(); verifications != 2 {
+		if _, verifications := sys.box.counts(t); verifications != 2 {
 			t.Fatalf("verification emails = %d, want 2: a verified user is sent nothing", verifications)
 		}
 	})

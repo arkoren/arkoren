@@ -1,10 +1,10 @@
 ---
 title: Layout Commands
-description: Orient in a project with map, add features, processes, providers and migrations without hand-writing boilerplate, and enforce the layout rules with check.
+description: Orient in a project with map, add features, processes, providers, migrations and ark modules without hand-writing boilerplate, and enforce the layout rules with check.
 order: 65
 summary:
   - Read a compact inventory of processes, providers, features and migrations before searching the code.
-  - Create a feature, process, provider or migration from templates and wire it with inserted compose.Use lines.
+  - Create a feature, process, provider, migration or ark module's providers from templates and wire them with inserted compose.Use lines.
   - Preview every change with --dry-run, and know that existing files are never overwritten.
   - Fail a build when imports, bootstrap shape, package names or Composer use break the layout rules.
 ---
@@ -124,6 +124,51 @@ When a created file imports a module that `go.mod` does not require yet, such
 as `arkoren.dev/foundation/query`, `add` runs `go mod tidy` after writing and
 reports `"tidied": true`. Pass `--skip-tidy` to stay offline and tidy later.
 
+## Add an Ark Module
+
+An ark is an opt-in module such as `arkoren.dev/ark/iam`. `add ark` writes the
+bootstrap providers that wire it, so the module's own settings stay in small
+files you can read and change:
+
+```sh
+arkoren add ark iam --with reset,verification,two-factor,tokens,permissions,account,github
+arkoren add ark oauth google
+```
+
+`add ark iam` always writes `internal/bootstrap/iam.go` with the `IAM`,
+`IAMRouter` and, when `reset` or `verification` is selected, `IAMJobs`
+providers, and one file per selected feature that returns the construction
+callback of that feature's package (`PasswordReset`, `EmailVerification`,
+`TokenScopes`, `Roles`, `AccountView`). `--with` takes `reset` (registration and
+password recovery), `verification`, `two-factor`, `tokens`, `permissions`,
+`account`, `google` and `github`; password login is always on. `github` also
+writes `GitHubSignUp`, which lets a first GitHub login create a user: remove it
+from `IAM` to only log in existing users. `add ark oauth google` (or `github`)
+writes only that sign-in client and the key it needs; pass the client to
+`identity.Provider` in `IAM` yourself.
+
+Every shared provider the new code uses is written with a local default when
+`internal/bootstrap` does not declare one by name, and kept when it does:
+`Database` (SQLite), `Cache` (memory), `Hasher` (bcrypt), and with email
+`LinkSigner`, `Mailer` (logs email), `Queue` (memory), `Dispatcher`, `Consumer`
+and `Work`, plus `TwoFactorKey` and `OAuthKey` as selected. Keys load from files
+named by environment variables, such as `LINK_KEY_FILE`; create them with
+`arkoren key generate shared --out FILE`.
+
+The command inserts `compose.Use(bootstrap.IAMRouter)` into the server's
+`Compose`, and `compose.Use(bootstrap.IAMJobs)` and `compose.Use(bootstrap.Work)`
+into the `Compose` of `--process NAME` (default `server`), skipping lines already
+there. With the memory queue the process that serves HTTP must also send the
+emails, which is why `server` is the default; move the two lines to a worker when
+you swap the queue driver. The module's pinned version is fetched with `go get`
+before `go mod tidy`, so tidy does not pick a newer release; `--skip-tidy` leaves
+both for you, and the report lists them under `requires`.
+
+The report also lists `next_steps`, the work the command cannot do: add
+`compose.Use(IAM).Migrations()...` to your `Migrator` (the migrate process then
+builds `IAM` and needs the same environment as the server), set the environment
+variables and key files, and replace the logging mailer before production.
+
 ## Preview and Safety
 
 Add `--dry-run` to any `add` command to print the plan and write nothing:
@@ -136,6 +181,8 @@ Add `--dry-run` to any `add` command to print the plan and write nothing:
   "tidied": false
 }
 ```
+
+`add ark` reports `requires` and `next_steps` beside these keys when it has any.
 
 Without it the command prints the same report after writing. `add` never
 overwrites: if any target path exists, including a feature directory, it fails
@@ -166,7 +213,8 @@ needs the `arkoren` command on `PATH` (override with `make check ARKOREN=...`).
 | `below-child-imports-feature` | A package below a feature root imports that feature's root or surfaces. |
 | `feature-imports-driver` | A feature or `internal/platform` package imports `arkoren.dev/driver/...` or `arkoren.dev/ark/iam`. Only bootstrap wires them. |
 | `banned-package-name` | A package path contains `util`, `common`, `shared`, `helpers`, `models`, `controllers`, `services`, `handlers` or `repositories`. |
-| `composer-use-outside-composition` | `Use` is called on a `*application.Composer` parameter inside a method, or inside a closure the function creates, such as a `Startup` callback or handler. A settings callback passed directly to `application.New` runs during the build and is allowed. |
+| `composer-use-outside-composition` | `Use` is called on a `*application.Composer` parameter inside a method, or inside a closure the function creates, such as a `Startup` callback or handler. A construction callback, a function literal taking a `*pkg.XBuilder` of an `arkoren.dev` package (the settings callback of `application.New` or `iam.New`, and the sub-builder callbacks nested in it), runs during the build and is allowed. |
+| `composer-supply-outside-tests` | `Supply` is called on a `*application.Composer` parameter in a file that is not a `_test.go` file. A test replaces a provider's value from its own root provider. |
 | `bootstrap-new-outside-bootstrap` | Code outside the `internal/bootstrap` package calls `bootstrap.New...`. |
 
 The checks are syntactic, so they run without a build but have limits. The

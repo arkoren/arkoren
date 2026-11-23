@@ -141,6 +141,36 @@ the shared piece into a third provider. A nil build function panics with
 `ErrNilFunc` at `Provide`. A build that aborts through `Must` or `Require` fails
 composition and caches nothing.
 
+## Replace a Provider in Tests
+
+A test that starts the whole process often needs one provider's value to be its own, such
+as a mailer over a fake. `composer.Supply(provider, value)` sets the provider's value
+for the composition without running its build function, so the startup, cleanup and
+checks that build would have registered never exist. Every `Use` of that provider,
+including from nested providers, returns the supplied value.
+
+Supply the value before anything uses the provider. Pass `application.Start` a
+root provider of your own: the root is built first, supplies the values, and then
+returns the production root through `Use`:
+
+```go
+root := application.Provide(func(composer *application.Composer) *application.Application {
+	composer.Supply(Mailer, mail.New(mailtest.New()))
+
+	return composer.Use(server.App)
+})
+
+app, err := application.Start(ctx, root, server.Compose)
+```
+
+`Supply` is composition-only like `Use`. It panics with `ErrInvalidPhase` outside
+composition, when the provider was already built or supplied in this composition,
+and while that provider is still being built, because a consumer may already hold
+another value. A nil provider panics with `ErrNilFunc`. The cache belongs to one
+`Start` or `Run`, so other compositions still build the provider normally. The
+caller owns the supplied value, so the composition never cleans it up. Keep
+`Supply` in test files; `arkoren check` reports it anywhere else.
+
 ## Construct Everything Else
 
 Use `Provide` only for values that must exist once. For anything else, write an

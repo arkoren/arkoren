@@ -131,6 +131,9 @@ type source struct {
 	file *ast.File
 	// test is true for _test.go files.
 	test bool
+	// imports maps the local name each import binds in this file to its import
+	// path. Imports for side effects or with a dot bind no name.
+	imports map[string]string
 }
 
 // Project is a loaded project: its module path and the parsed Go files below
@@ -285,7 +288,7 @@ func (project *Project) parseTree(ctx context.Context, top string) error {
 
 		rel = filepath.ToSlash(rel)
 		project.sources = append(project.sources, &source{
-			rel: rel, dir: path.Dir(rel), file: parsed, test: strings.HasSuffix(name, "_test.go"),
+			rel: rel, dir: path.Dir(rel), file: parsed, test: strings.HasSuffix(name, "_test.go"), imports: importPaths(parsed),
 		})
 
 		return nil
@@ -332,6 +335,23 @@ func importName(file *ast.File, importPath string) string {
 	}
 
 	return ""
+}
+
+// importPaths maps the local name each import of file binds to its import path.
+// Blank and dot imports bind no name and are omitted.
+func importPaths(file *ast.File) map[string]string {
+	paths := make(map[string]string, len(file.Imports))
+
+	for _, spec := range file.Imports {
+		value, err := strconv.Unquote(spec.Path.Value)
+		name := importSpecName(spec)
+
+		if err == nil && name != "_" && name != "." {
+			paths[name] = value
+		}
+	}
+
+	return paths
 }
 
 // isComposerParam reports whether field is declared as *application.Composer,

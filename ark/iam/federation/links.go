@@ -13,8 +13,8 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/foundation/query"
-	"arkoren.dev/foundation/query/schema"
 
+	"arkoren.dev/ark/iam/internal/migration"
 	"arkoren.dev/ark/iam/internal/storage"
 )
 
@@ -146,29 +146,7 @@ func NewLinks(provider *auth.UserProvider, db *database.Database, configure ...B
 //		return err
 //	}
 func (links *Links) Migrations() []migrate.Definition {
-	return storage.Group("federation", links.instance).Migrations(
-		migrate.NewMigration("links-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(links.table, func(table *schema.Table) {
-				table.String("id", 32).Bytewise().Primary()
-				table.String("subject", 255).Bytewise()
-				table.String("issuer", 255).Bytewise()
-				table.String("external", 255).Bytewise()
-				table.BigInteger("created_at")
-				table.BigInteger("last_used_at").Default(0)
-				table.Unique("issuer", "external")
-				table.Unique("subject", "issuer")
-			})))
-			migration.Down(migrate.Schema(schema.Drop(links.table)))
-		}),
-		migrate.NewMigration("links-add-claims", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Alter(links.table, func(table *schema.Table) {
-				table.JSON("claims").Nullable()
-			})))
-			migration.Down(migrate.Schema(schema.Alter(links.table, func(table *schema.Table) {
-				table.DropColumn("claims")
-			})))
-		}),
-	)
+	return migration.Links(links.instance)
 }
 
 // Ping verifies, read-only, that the table exists. A missing table returns an

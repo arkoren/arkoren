@@ -1,0 +1,30 @@
+package bootstrap
+
+import (
+	"cmp"
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/mail/slogmail"
+)
+
+// Mailer sends the application's email. This starter writes each email to the
+// application log instead of delivering it: summaries only, plus the body when
+// application debug is on, which is how a developer reads a reset or
+// verification link locally. Bodies can carry credentials, so debug must stay
+// off in production, where this driver must be replaced by a delivering one such
+// as SMTP. The sender is MAIL_FROM, defaulting to a placeholder address.
+var Mailer = application.Provide(func(compose *application.Composer) *mail.Mailer {
+	debug := compose.App().Debug()
+
+	driver := slogmail.New(func(driver *slogmail.Builder) {
+		if debug {
+			driver.Detail(slogmail.DetailBody)
+		}
+	})
+
+	return mail.New(driver, func(mailer *mail.Builder) {
+		mailer.From(mail.Address{Email: cmp.Or(os.Getenv("MAIL_FROM"), "noreply@example.com")})
+	})
+})

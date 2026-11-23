@@ -30,6 +30,8 @@ const (
 	RuleComposerUse = "composer-use-outside-composition"
 	// RuleBootstrapNew marks a bootstrap.New* call outside internal/bootstrap.
 	RuleBootstrapNew = "bootstrap-new-outside-bootstrap"
+	// RuleComposerSupply marks Composer.Supply called outside a _test.go file.
+	RuleComposerSupply = "composer-supply-outside-tests"
 )
 
 // Violation is one broken layout rule at a source position.
@@ -53,7 +55,8 @@ type Violation struct {
 //     stay plain Go that takes its dependencies as arguments;
 //   - an exported function of the internal/bootstrap package with a
 //     *application.Composer parameter and no result is a mistake: bootstrap
-//     exports providers, and constructors that return a value;
+//     exports providers (each returning a component or a construction callback
+//     for one) and constructors that return a value;
 //   - a surface child (web, jobs, flow, tools, events, schedules,
 //     <feature>test) is imported only by internal/bootstrap, including its
 //     process roots; _test.go files may import any child, since fixtures
@@ -67,11 +70,18 @@ type Violation struct {
 //     declares a *application.Composer parameter (a provider's build function,
 //     a process root's Compose, a New*(compose, ...) constructor), never inside
 //     a method, nor inside a closure the function creates, because a closure
-//     runs after composition (handlers, Startup and Run callbacks);
+//     runs after composition (handlers, Startup and Run callbacks). The one
+//     exception is a construction callback, a function literal whose parameter
+//     is an Arkoren construction draft (*application.Builder, *iam.Builder,
+//     *password.Builder: a pointer to a type named ...Builder in an arkoren.dev
+//     package). Those callbacks run once, synchronously, while the constructor
+//     they are passed to runs, so Use inside them is still composition;
+//   - Composer.Supply, which replaces a provider's value, is called only in
+//     _test.go files;
 //   - bootstrap.New* functions are called only from internal/bootstrap.
 //
-// The Use rule is a syntactic heuristic: it recognizes a Use call whose
-// receiver is a parameter declared as *application.Composer. A Composer
+// The Use and Supply rules are a syntactic heuristic: they recognize a call
+// whose receiver is a parameter declared as *application.Composer. A Composer
 // stored in a struct field or passed on to another function is not followed.
 //
 // Example:
@@ -217,7 +227,7 @@ func (project *Project) checkCalls(src *source, add func(rule, file string, line
 		if classify(src.dir).kind == kindBootstrap && !src.test && fn.Recv == nil && fn.Name.IsExported() &&
 			fn.Type.Results == nil && composerParamName(fn.Type, app) != "" {
 			add(RuleBootstrapAction, src.rel, project.line(fn.Pos()), "func "+fn.Name.Name+" takes a Composer and returns nothing: "+
-				"internal/bootstrap exports providers; declare var "+fn.Name.Name+" = application.Provide(...) that returns the component, "+
+				"internal/bootstrap exports providers; declare var "+fn.Name.Name+" = application.Provide(...) that returns the component or a construction callback for one, "+
 				"or a New* constructor that returns a value")
 		}
 
@@ -253,24 +263,20 @@ type useScope struct {
 // checkUse walks one function body with the enclosing function scopes. A call
 // X.Use(...) counts when X names the Composer parameter of some enclosing
 // function. It is allowed only when that function is the innermost one (not a
-// nested closure) and is not a method. A settings callback passed directly to
-// application.New counts as part of its enclosing function, because it runs
-// synchronously while the provider builds the application.
+// nested closure) and is not a method. A construction callback (see
+// [isConstructionCallback]) counts as part of its enclosing function, because
+// it runs synchronously while the constructor it is passed to builds the value.
+// A call X.Supply(...) on such a receiver is reported in every file but tests.
 func (project *Project) checkUse(
 	src *source, typ *ast.FuncType, body *ast.BlockStmt, method bool, outer []useScope, app string,
 	add func(rule, file string, line int, message string),
 ) {
 	scopes := append(slices.Clone(outer), useScope{composer: composerParamName(typ, app), method: method})
-	current := len(scopes) - 1
-
-	// inline holds the settings callbacks passed to application.New: they run
-	// synchronously inside the call, during composition, so Use is valid there.
-	inline := map[*ast.FuncLit]bool{}
 
 	ast.Inspect(body, func(node ast.Node) bool {
 		switch node := node.(type) {
 		case *ast.FuncLit:
-			if inline[node] {
+			if isConstructionCallback(node, src.imports) {
 				return true
 			}
 
@@ -278,55 +284,93 @@ func (project *Project) checkUse(
 
 			return false
 		case *ast.CallExpr:
-			selector, ok := node.Fun.(*ast.SelectorExpr)
-
-			if ok && selector.Sel.Name == "New" && isIdent(selector.X, app) {
-				for _, argument := range node.Args {
-					if literal, ok := argument.(*ast.FuncLit); ok {
-						inline[literal] = true
-					}
-				}
-			}
-
-			if !ok || selector.Sel.Name != "Use" {
-				return true
-			}
-
-			receiver, ok := selector.X.(*ast.Ident)
-
-			if !ok {
-				return true
-			}
-
-			// Search from the innermost scope: the closest scope naming the receiver wins.
-			owner := -1
-
-			for index := current; index >= 0; index-- {
-				if scopes[index].composer == receiver.Name {
-					owner = index
-
-					break
-				}
-			}
-
-			switch {
-			case owner < 0:
-			case owner != current:
-				add(RuleComposerUse, src.rel, project.line(node.Pos()), receiver.Name+".Use inside a closure: the closure runs after "+
-					"composition; call Use at the top of the function that owns the Composer and capture the result")
-			case scopes[current].method:
-				add(RuleComposerUse, src.rel, project.line(node.Pos()), receiver.Name+".Use inside a method: services and stores "+
-					"receive their dependencies from the provider; call Use in the provider's build function")
-			}
+			project.checkComposerCall(src, node, scopes, add)
 		}
 
 		return true
 	})
 }
 
-// isIdent reports whether expr is the identifier name.
-func isIdent(expr ast.Expr, name string) bool {
-	ident, ok := expr.(*ast.Ident)
+// checkComposerCall reports a Use or Supply call whose receiver names the
+// Composer parameter of an enclosing function, per the rules on [Project.Check].
+// scopes is the lexical stack of checkUse and its last entry the function that
+// contains call.
+func (project *Project) checkComposerCall(src *source, call *ast.CallExpr, scopes []useScope, add func(rule, file string, line int, message string)) {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
 
-	return ok && ident.Name == name
+	if !ok || (selector.Sel.Name != "Use" && selector.Sel.Name != "Supply") {
+		return
+	}
+
+	receiver, ok := selector.X.(*ast.Ident)
+
+	if !ok {
+		return
+	}
+
+	// Search from the innermost scope: the closest scope naming the receiver wins.
+	current := len(scopes) - 1
+	owner := -1
+
+	for index := current; index >= 0; index-- {
+		if scopes[index].composer == receiver.Name {
+			owner = index
+
+			break
+		}
+	}
+
+	line := project.line(call.Pos())
+
+	switch {
+	case owner < 0:
+	case selector.Sel.Name == "Supply":
+		if !src.test {
+			add(RuleComposerSupply, src.rel, line, receiver.Name+".Supply replaces a provider's value and belongs in tests: "+
+				"pass a test root provider that supplies the value to application.Start")
+		}
+	case owner != current:
+		add(RuleComposerUse, src.rel, line, receiver.Name+".Use inside a closure: the closure runs after "+
+			"composition; call Use at the top of the function that owns the Composer and capture the result")
+	case scopes[current].method:
+		add(RuleComposerUse, src.rel, line, receiver.Name+".Use inside a method: services and stores "+
+			"receive their dependencies from the provider; call Use in the provider's build function")
+	}
+}
+
+// isConstructionCallback reports whether literal is a construction callback: a
+// function literal with a parameter of type *pkg.XBuilder, where pkg is an
+// import of an arkoren.dev package and the type name ends in Builder, with or
+// without type arguments. Arkoren constructors run these callbacks once,
+// synchronously, before they return, so a Composer.Use inside one still runs
+// during composition. imports maps local import names to paths.
+func isConstructionCallback(literal *ast.FuncLit, imports map[string]string) bool {
+	for _, field := range literal.Type.Params.List {
+		star, ok := field.Type.(*ast.StarExpr)
+
+		if !ok {
+			continue
+		}
+
+		typ := star.X
+
+		switch generic := typ.(type) {
+		case *ast.IndexExpr:
+			typ = generic.X
+		case *ast.IndexListExpr:
+			typ = generic.X
+		}
+
+		selector, ok := typ.(*ast.SelectorExpr)
+
+		if !ok || !strings.HasSuffix(selector.Sel.Name, "Builder") {
+			continue
+		}
+
+		if pkg, ok := selector.X.(*ast.Ident); ok && strings.HasPrefix(imports[pkg.Name], "arkoren.dev/") {
+			return true
+		}
+	}
+
+	return false
 }

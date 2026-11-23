@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 
@@ -21,15 +22,21 @@ func addCLICommand(env console.Environment) *cli.Command {
 	dryRun := &cli.BoolFlag{Name: "dry-run", Usage: "Show the files and edits without writing"}
 	skipTidy := &cli.BoolFlag{Name: "skip-tidy", Usage: "Write files offline without running go mod tidy for new imports"}
 
-	subcommand := func(name, usage string, flags []cli.Flag, plan func(*layout.Project, *cli.Command) (*layout.Plan, error)) *cli.Command {
+	// subcommand declares one add operation. argsUsage names its single positional
+	// argument, such as NAME; empty means the operation takes none.
+	subcommand := func(name, usage, argsUsage string, flags []cli.Flag, plan func(*layout.Project, *cli.Command) (*layout.Plan, error)) *cli.Command {
 		return &cli.Command{
 			Name:      name,
 			Usage:     usage,
-			ArgsUsage: "NAME",
+			ArgsUsage: argsUsage,
 			Flags:     append(flags, dryRun, skipTidy),
 			Action: func(ctx context.Context, command *cli.Command) error {
-				if command.Args().Len() != 1 {
-					return console.UsageError("add %s requires exactly one NAME; usage: arkoren add %s NAME [flags]", name, name)
+				if argsUsage == "" && command.Args().Present() {
+					return console.UsageError("add %s takes no arguments; usage: arkoren add %s [flags]", name, name)
+				}
+
+				if argsUsage != "" && command.Args().Len() != 1 {
+					return console.UsageError("add %s requires exactly one %s; usage: arkoren add %s %s [flags]", name, argsUsage, name, argsUsage)
 				}
 
 				project, err := layout.Load(ctx, env.Dir)
@@ -61,6 +68,12 @@ func addCLICommand(env console.Environment) *cli.Command {
 				}
 
 				if needed && !command.Bool("skip-tidy") {
+					if len(changes.Requires) > 0 {
+						if err := scaffold.Get(ctx, project.Root, changes.Requires); err != nil {
+							return err
+						}
+					}
+
 					if err := scaffold.Tidy(ctx, project.Root); err != nil {
 						return err
 					}
@@ -79,15 +92,20 @@ func addCLICommand(env console.Environment) *cli.Command {
 		featureFlags = append(featureFlags, &cli.BoolFlag{Name: surface, Usage: "Create the " + surface + " surface and register it"})
 	}
 
+	arkIAMFlags := []cli.Flag{
+		&cli.StringSliceFlag{Name: "with", Usage: "Features to enable, comma separated: " + strings.Join(layout.IAMFeatures, ", ")},
+		&cli.StringFlag{Name: "process", Value: "server", Usage: "Process root (internal/bootstrap/NAME) whose Compose uses the email jobs (IAMJobs and Work)"},
+	}
+
 	return &cli.Command{
 		Name:  "add",
-		Usage: "Add a feature, process, provider or migration to the project layout",
+		Usage: "Add a feature, process, provider, migration or ark module to the project layout",
 		Description: "Creates files from templates and never overwrites one; it edits existing code only by inserting " +
 			"compose.Use lines into a process root's Compose or the migrations list. Run it in the project root, which needs " +
 			"cmd/<process>/main.go and internal/bootstrap. When a new file imports a module go.mod does not require, " +
 			"it runs go mod tidy unless --skip-tidy is set. Use --dry-run to preview. See the arkoren-structure skill.",
 		Commands: []*cli.Command{
-			subcommand("feature", "Create internal/NAME with its bootstrap providers, used from a process's Compose", featureFlags,
+			subcommand("feature", "Create internal/NAME with its bootstrap providers, used from a process's Compose", "NAME", featureFlags,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					options := layout.FeatureOptions{Name: command.Args().First(), Process: command.String("process")}
 
@@ -99,24 +117,46 @@ func addCLICommand(env console.Environment) *cli.Command {
 
 					return project.AddFeature(options, newTemplates)
 				}),
-			subcommand("process", "Create cmd/NAME and its process root with App and an empty Compose", nil,
+			subcommand("process", "Create cmd/NAME and its process root with App and an empty Compose", "NAME", nil,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					return project.AddProcess(command.Args().First(), newTemplates)
 				}),
-			subcommand("provider", "Create a shared provider in internal/bootstrap", nil,
+			subcommand("provider", "Create a shared provider in internal/bootstrap", "NAME", nil,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					return project.AddProvider(command.Args().First(), newTemplates)
 				}),
-			subcommand("migration", "Create an application migration and register it in All", nil,
+			subcommand("migration", "Create an application migration and register it in All", "NAME", nil,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					return project.AddMigration(command.Args().First(), newTemplates)
 				}),
+			{
+				Name:  "ark",
+				Usage: "Add the providers of an opt-in ark module (iam, oauth)",
+				Description: "Writes the bootstrap providers that wire an ark module, with local defaults for every shared provider " +
+					"it needs and internal/bootstrap does not declare, and pins the ark's module version with go get. " +
+					"The result lists the steps it could not do itself under next_steps.",
+				Commands: []*cli.Command{
+					subcommand("iam", "Add the identity module (ark/iam): IAM, IAMRouter and a provider per --with feature", "", arkIAMFlags,
+						func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
+							options := layout.IAMOptions{With: command.StringSlice("with"), Process: command.String("process")}
+
+							return project.AddIAM(options, newTemplates)
+						}),
+					subcommand("oauth", "Add an OAuth sign-in client (ark/oauth) for PROVIDER: google or github", "PROVIDER", nil,
+						func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
+							return project.AddOAuth(command.Args().First(), newTemplates)
+						}),
+				},
+			},
 		},
 	}
 }
 
 // addReport is the JSON result of an add: the files created, the insertions
-// made into existing files, and whether go mod tidy ran (set by the caller). Paths are slash-separated and project-relative.
+// made into existing files, and whether go mod tidy ran (set by the caller).
+// When the plan has them it also lists the pinned modules to fetch (requires)
+// and the steps left to the user (next_steps). Paths are slash-separated and
+// project-relative.
 func addReport(plan *layout.Plan, dryRun bool) map[string]any {
 	edits := make([]map[string]any, 0, len(plan.Edit))
 
@@ -124,7 +164,17 @@ func addReport(plan *layout.Plan, dryRun bool) map[string]any {
 		edits = append(edits, map[string]any{"path": edit.Path, "inserted": edit.Inserted})
 	}
 
-	return map[string]any{"dry_run": dryRun, "created": files.Paths(plan.Create), "edited": edits, "tidied": false}
+	report := map[string]any{"dry_run": dryRun, "created": files.Paths(plan.Create), "edited": edits, "tidied": false}
+
+	if len(plan.Requires) > 0 {
+		report["requires"] = plan.Requires
+	}
+
+	if len(plan.Notes) > 0 {
+		report["next_steps"] = plan.Notes
+	}
+
+	return report
 }
 
 // checkCLICommand declares `arkoren check`: it reports layout rule violations

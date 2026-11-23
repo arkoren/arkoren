@@ -1,17 +1,18 @@
 # Examples
 
-A small shop service shaped by the arkoren-structure rules: a `server` with HTTP routes and an event listener, a `worker` consuming jobs, and a `migrate` one-shot. Every file compiles and passes `go vet` and `arkoren check` against `arkoren.dev/core` v0.18.0, and both tests at the end pass. Drivers are SQLite and the memory queue; swap them inside the bootstrap providers without touching features. Generated files keep their long doc comments in a real project; they are shortened here.
+A small shop service shaped by the arkoren-structure rules: a `server` with HTTP routes and an event listener, a `worker` consuming jobs, and a `migrate` one-shot. Every file compiles and passes `go vet` and `arkoren check` against `arkoren.dev/core` v0.19.0 (the identity files against `arkoren.dev/ark/iam` v0.5.0), and the tests at the end pass. Drivers are SQLite and the memory queue; swap them inside the bootstrap providers without touching features. Generated files keep their long doc comments in a real project; they are shortened here.
 
 ## Contents
 
 - Processes: thin `main`, the `App` provider and the `Compose` of each process
 - Bootstrap providers: database (two singletons, one constructor), queue, migrator, router
 - Feature wiring: the providers in `internal/bootstrap/<feature>.go` that build each feature and make its surfaces live
+- Identity (`ark/iam`): the `IAM` provider, fragment providers that return construction callbacks, the router, the email jobs, the shared providers they use
 - Migrations: schema-builder operations extracted into exported variables
 - Feature roots: plain Go with dependencies as constructor arguments, a store with exported query functions, a service with an extracted transaction body and an after-commit event, a cross-feature interface
 - Web surface: handlers using the request and response helpers, a validation schema, problems
 - Other surfaces: job handlers, an event listener in another feature
-- Tests: a handler test with no composer, and the whole process started with `application.Start`
+- Tests: a handler test with no composer, the whole process started with `application.Start`, and the identity flow with a test root provider that supplies the mailer
 
 ## Processes
 
@@ -88,10 +89,15 @@ import (
 )
 
 // Compose is the explicit list of what the server process runs: feature
-// providers first, diagnostics only in debug, and the HTTP server last.
+// providers first (the identity router before the routes that need the user,
+// the identity jobs before the consumer that runs them), diagnostics only in
+// debug, and the HTTP server last.
 func Compose(compose *application.Composer) {
+	compose.Use(bootstrap.IAMRouter)
 	compose.Use(bootstrap.OrdersRoutes)
 	compose.Use(bootstrap.NotificationsListeners)
+	compose.Use(bootstrap.IAMJobs)
+	compose.Use(bootstrap.Work)
 
 	if compose.App().Debug() {
 		compose.Use(bootstrap.MCP)
@@ -232,11 +238,13 @@ import (
 	"example.com/shop/internal/migrations"
 )
 
-// Migrator holds the application's migrations (add each ark's Migrations()
-// here too).
+// Migrator holds the application's migrations and each ark's. IAM.Migrations
+// returns every feature's groups whichever are enabled, so building IAM here
+// means the migrate process needs IAM's settings (keys, URLs) too.
 var Migrator = application.Provide(func(compose *application.Composer) *migrate.Migrator {
 	migrator := migrate.New(compose.Use(Database))
 	compose.Require(migrator.Add(migrations.All()...))
+	compose.Require(migrator.Add(compose.Use(IAM).Migrations()...))
 
 	return migrator
 })
@@ -388,6 +396,453 @@ var NotificationsListeners = application.Provide(func(compose *application.Compo
 	compose.MustDefer(listeners.Register(events))
 
 	return listeners
+})
+```
+
+## Identity
+
+`arkoren add ark iam --with reset,verification,two-factor,tokens,permissions,account,github` writes these files and inserts `compose.Use(bootstrap.IAMRouter)`, `IAMJobs` and `Work` into the server's `Compose`. Add `google` to `--with`, or run `arkoren add ark oauth google`, for a second sign-in client. The tests in this reference compare the files below with that command's output.
+
+The `IAM` provider calls `iam.New` over `Database` and `Cache`, publishes the module's events on the application's bus and registers its readiness check. Each optional feature takes the settings of one fragment provider: `PasswordReset` returns the `password.BuilderFunc` that turns on registration and reset, `EmailVerification` the `account.BuilderFunc` for verification, and so on. A fragment provider returns a construction callback instead of a component, and `IAM` resolves it with `compose.Use` inside the facade's own callback, which runs once, synchronously, during composition. Plain settings stay `os.Getenv` inside their provider; only a real need turns one into a provider of its own.
+
+`IAMRouter` returns the shared router wrapped in the identity middleware after mounting the module's routes on it, so routes that need the signed-in user mount on it. `IAMJobs` registers the module's email jobs on the consumer: the module stores them on the `Dispatcher` from the request and sends them through the `Mailer`, and the process that lists `IAMJobs` and `Work` in its `Compose` sends the emails. With the memory queue that is the server. When the `Queue` driver becomes a networked one, move `IAMJobs` and `Work` to the worker's `Compose` and deploy the worker before enabling a new email feature. A consumer restricted with `Queues(...)` must list `iam.QueueName` (`"iam"`).
+
+`internal/bootstrap/iam.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam"
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/router"
+	"arkoren.dev/core/service/queue"
+	"arkoren.dev/foundation/totp"
+)
+
+// IAM is the process's one identity module: password login, the sessions and
+// guard behind it, and every feature this provider enables. It reads the
+// database and cache through providers and publishes its events on the
+// application's bus. Each optional feature is configured by the fragment
+// provider that its callback receives, so a feature's settings live in one
+// small file. The module does no I/O when built; the application runs
+// IAM.Migrations from the Migrator provider, and the readiness check registered
+// here fails until they have run.
+//
+// Sessions and counters live in the Cache provider. The default memory cache is
+// private to this process; use a shared cache driver before running more than
+// one process or replica. Behind a reverse proxy, set the client address source
+// with identity.ClientIP, and keep CSRF protection on every route a session can
+// reach.
+var IAM = application.Provide(func(compose *application.Composer) *iam.IAM {
+	events := compose.App().Events()
+
+	identity := compose.Must(iam.New(compose.Use(Database), compose.Use(Cache), func(identity *iam.Builder) {
+		identity.Events(events)
+		identity.Queue(compose.Use(Dispatcher))
+		identity.Password(compose.Use(Hasher), compose.Use(PasswordReset))
+		identity.Directory(compose.Use(EmailVerification))
+		identity.TwoFactor(totp.New("shop"), compose.Use(TwoFactorKey))
+		identity.Tokens(compose.Use(TokenScopes))
+		identity.Permissions(compose.Use(Roles))
+		identity.Provider(compose.Use(GitHub), compose.Use(GitHubSignUp))
+		identity.Account(compose.Use(AccountView))
+	}))
+
+	compose.Check("iam", identity.Ping)
+
+	return identity
+})
+
+// IAMRouter mounts the identity routes on the shared router and returns the
+// router that identifies users: it runs the session and authenticator
+// middleware before its routes. Routes that need the signed-in user mount on
+// this router instead of Router, and routes that must be signed in add
+// auth.Require to it. List it in the Compose of every process that serves HTTP,
+// before the providers whose routes need the user.
+var IAMRouter = application.Provide(func(compose *application.Composer) *router.Router {
+	identity := compose.Use(IAM)
+	routes := compose.Use(Router)
+
+	web := routes.With(identity.Middleware())
+	web.Group("/", identity.Register)
+
+	return web
+})
+
+// IAMJobs registers the identity module's background jobs on the shared
+// consumer and returns it. The jobs send the module's emails (password reset
+// and email verification); the module stores them on the Dispatcher provider
+// from the request. List it, then Work, in the Compose of the process that sends
+// the emails: the server for a single process, a worker once the memory queue
+// is replaced by a networked driver. Deploy that process before enabling a new
+// email feature elsewhere, and list the queue iam.QueueName in any queue
+// restriction of the consumer.
+var IAMJobs = application.Provide(func(compose *application.Composer) *queue.Consumer {
+	identity := compose.Use(IAM)
+	consumer := compose.Use(Consumer)
+
+	compose.Require(identity.RegisterJobs(consumer))
+
+	return consumer
+})
+```
+
+`internal/bootstrap/password_reset.go`
+
+```go
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/ark/iam/password"
+	"arkoren.dev/core/application"
+)
+
+// PasswordReset is the identity module's password settings: self-service
+// registration and forgotten-password recovery. Reset emails go through the
+// Mailer provider and carry a link signed by LinkSigner to the page at
+// PASSWORD_RESET_URL, an absolute URL without a fragment, such as
+// https://app.example.com/reset-password. That page reads the signed value from
+// the fragment and posts it to POST /password/reset. Registration with the
+// built-in users requires reset, because the reset notice is how the owner of an
+// address someone else registered learns of it; remove the Registration call
+// when users are added another way.
+var PasswordReset = application.Provide(func(compose *application.Composer) password.BuilderFunc {
+	signer := compose.Use(LinkSigner)
+	mailer := compose.Use(Mailer)
+	resetURL := os.Getenv("PASSWORD_RESET_URL")
+
+	return func(passwords *password.Builder) {
+		passwords.Registration(true)
+		passwords.Reset(signer, mailer, resetURL)
+	}
+})
+```
+
+`internal/bootstrap/email_verification.go`
+
+```go
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/ark/iam/account"
+	"arkoren.dev/core/application"
+)
+
+// EmailVerification is the identity module's directory settings: email
+// verification of the built-in users. Verification emails go through the Mailer
+// provider and carry a link signed by LinkSigner to the page at
+// EMAIL_VERIFY_URL, an absolute URL without a fragment, such as
+// https://app.example.com/verify-email. That page reads the signed value from
+// the fragment and posts it to POST /email/verify. Verification never blocks
+// login; protect routes that need a verified email with IAM.RequireVerified.
+var EmailVerification = application.Provide(func(compose *application.Composer) account.BuilderFunc {
+	signer := compose.Use(LinkSigner)
+	mailer := compose.Use(Mailer)
+	verifyURL := os.Getenv("EMAIL_VERIFY_URL")
+
+	return func(accounts *account.Builder) {
+		accounts.Verification(signer, mailer, verifyURL)
+	}
+})
+```
+
+`internal/bootstrap/token_scopes.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam/apitoken"
+	"arkoren.dev/core/application"
+)
+
+// TokenScopes is the identity module's token settings: the scope catalog that
+// personal and device tokens may carry, and the ceiling on what a user may grant.
+// AnyScope lets every user grant every listed scope; replace it with a function
+// of the user (or the permission store) to cap tokens at what their owner holds.
+// The scopes below are placeholders: name the scopes your routes check.
+var TokenScopes = application.Provide(func(*application.Composer) apitoken.BuilderFunc {
+	return func(tokens *apitoken.Builder) {
+		tokens.Grants(apitoken.AnyScope, "read", "write")
+	}
+})
+```
+
+`internal/bootstrap/roles.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam/permission"
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/auth/gate"
+)
+
+// Roles is the identity module's permission settings: the roles and permissions
+// that can be assigned to users. It defines one administrator role. Holders of
+// the users:manage permission may grant and revoke roles through the management
+// routes, never beyond what they hold, and the last administrator cannot lose
+// the role. Users read their own permissions through GET /me/permissions.
+// Replace the placeholder with the roles and permissions of the application and
+// check them in handlers with gate.HasPermission and gate.HasRole.
+var Roles = application.Provide(func(*application.Composer) permission.BuilderFunc {
+	manage := gate.NewPermission("users:manage")
+	admin := gate.NewRole("admin", func(role *gate.RoleBuilder) {
+		role.Grants(manage)
+	})
+
+	return func(policy *permission.Builder) {
+		policy.Roles(admin)
+		policy.KeepOne(admin)
+		policy.Management(manage)
+		policy.SelfService(true)
+	}
+})
+```
+
+`internal/bootstrap/account_view.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam"
+	"arkoren.dev/core/application"
+)
+
+// AccountView is the identity module's account settings: what GET /account tells
+// the signed-in user beyond the subject and email facts, which is how the request
+// logged in, their permissions and their two-factor state.
+// The route never encodes application data; compose a GET /me from IAM.Account
+// when the profile belongs in the answer.
+var AccountView = application.Provide(func(*application.Composer) iam.AccountBuilderFunc {
+	return func(view *iam.AccountBuilder) {
+		view.Permissions(true)
+		view.TwoFactor(true)
+		view.Login(true)
+	}
+})
+```
+
+`internal/bootstrap/github.go`
+
+```go
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/ark/oauth/oauthauth"
+	"arkoren.dev/core/application"
+)
+
+// GitHub is the process's one GitHub sign-in client. It reads GITHUB_CLIENT_ID,
+// GITHUB_CLIENT_SECRET and GITHUB_REDIRECT_URL (the absolute address of the
+// callback route, such as https://app.example.com/auth/github/callback) from the
+// environment, and seals its login cookies with the OAuthKey provider. Pass the
+// client to the identity module with identity.Provider(compose.Use(GitHub)),
+// which mounts its login and callback routes.
+var GitHub = application.Provide(func(compose *application.Composer) *oauthauth.Client {
+	cipher := compose.Use(OAuthKey)
+
+	client := compose.Must(oauthauth.New(oauthauth.GitHub(), cipher, os.Getenv("GITHUB_CLIENT_ID"), func(client *oauthauth.ClientBuilder) {
+		client.ClientSecret(os.Getenv("GITHUB_CLIENT_SECRET"))
+		client.RedirectURL(os.Getenv("GITHUB_REDIRECT_URL"))
+	}))
+	compose.Startup(client.Start)
+
+	return client
+})
+```
+
+`internal/bootstrap/github_sign_up.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam"
+	"arkoren.dev/core/application"
+)
+
+// GitHubSignUp is the identity module's settings for the GitHub provider: it
+// lets a first GitHub login create a user, when GitHub proved an email address.
+// Without it the provider only logs in people the application already has.
+// Remove it from the IAM provider to turn sign-up off.
+var GitHubSignUp = application.Provide(func(*application.Composer) iam.ProviderBuilderFunc {
+	return func(login *iam.ProviderBuilder) {
+		login.SignUp(true)
+	}
+})
+```
+
+The shared providers the module uses, written with local defaults when `internal/bootstrap` lacks them: a SQLite `Database` and the memory `Queue`, `Dispatcher`, `Consumer` and `Work` shown above, plus these. Keys come from files that `arkoren key generate shared --out FILE` creates, one per purpose. `Mailer` logs email instead of sending it and logs bodies only in debug, which is how a developer reads a link locally.
+
+`internal/bootstrap/hasher.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/hash"
+	"arkoren.dev/driver/bcrypt/bcrypthash"
+)
+
+// Hasher hashes and verifies passwords with bcrypt at its default cost. Raise
+// the cost, or swap in another driver such as argon2, here without touching
+// features.
+var Hasher = application.Provide(func(*application.Composer) *hash.Hasher {
+	return hash.New(bcrypthash.New())
+})
+```
+
+`internal/bootstrap/cache.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
+)
+
+// Cache is the process's shared cache, which holds sessions and rate-limit
+// counters. The memory driver keeps entries in this process only: sessions end
+// with a restart and are not shared between processes or replicas. Swap in a
+// networked driver here before running more than one.
+var Cache = application.Provide(func(compose *application.Composer) *cache.Cache {
+	driver := memorycache.New()
+	compose.Cleanup(driver.Stop)
+	compose.Startup(driver.Start)
+
+	return cache.New(driver)
+})
+```
+
+`internal/bootstrap/link_signer.go`
+
+```go
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/link"
+	"arkoren.dev/foundation/key"
+)
+
+// LinkSigner signs the links the application emails, such as password reset and
+// email verification. It loads a 32-byte shared key from the file named by
+// LINK_KEY_FILE; create one with `arkoren key generate shared --out FILE`.
+// Reserve the key for links: it is not an encryption key, and rotating it ends
+// every link already sent. Composition fails when the file is missing or invalid,
+// and the application never generates a key to replace a missing one.
+var LinkSigner = application.Provide(func(compose *application.Composer) *link.Signer {
+	secret := compose.Must(key.LoadShared(os.Getenv("LINK_KEY_FILE")))
+
+	return compose.Must(link.New(secret))
+})
+```
+
+`internal/bootstrap/two_factor_key.go`
+
+```go
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/crypto"
+	"arkoren.dev/driver/aes/aescrypto"
+	"arkoren.dev/foundation/key"
+)
+
+// TwoFactorKey encrypts the stored two-factor secrets with AES. It loads a
+// 32-byte shared key from the file named by TWO_FACTOR_KEY_FILE; create one with
+// `arkoren key generate shared --out FILE`. Reserve the key for these secrets:
+// losing or replacing it makes every enrolled authenticator unusable. Composition
+// fails when the file is missing or invalid, and the application never generates
+// a key to replace a missing one.
+var TwoFactorKey = application.Provide(func(compose *application.Composer) *crypto.Encrypter {
+	secret := compose.Must(key.LoadShared(os.Getenv("TWO_FACTOR_KEY_FILE")))
+	driver := compose.Must(aescrypto.New(secret))
+	compose.Cleanup(driver.Stop)
+
+	return compose.Must(crypto.New(driver))
+})
+```
+
+`internal/bootstrap/oauth_key.go`
+
+```go
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/crypto"
+	"arkoren.dev/driver/aes/aescrypto"
+	"arkoren.dev/foundation/key"
+)
+
+// OAuthKey seals the login cookies of the OAuth sign-in clients with AES. It
+// loads a 32-byte shared key from the file named by OAUTH_KEY_FILE; create one
+// with `arkoren key generate shared --out FILE`. Every process and replica that
+// serves the callback must load the same key, or a login started on one fails on
+// another. Composition fails when the file is missing or invalid, and the
+// application never generates a key to replace a missing one.
+var OAuthKey = application.Provide(func(compose *application.Composer) *crypto.Encrypter {
+	secret := compose.Must(key.LoadShared(os.Getenv("OAUTH_KEY_FILE")))
+	driver := compose.Must(aescrypto.New(secret))
+	compose.Cleanup(driver.Stop)
+
+	return compose.Must(crypto.New(driver))
+})
+```
+
+`internal/bootstrap/mailer.go`
+
+```go
+package bootstrap
+
+import (
+	"cmp"
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/mail/slogmail"
+)
+
+// Mailer sends the application's email. This starter writes each email to the
+// application log instead of delivering it: summaries only, plus the body when
+// application debug is on, which is how a developer reads a reset or
+// verification link locally. Bodies can carry credentials, so debug must stay
+// off in production, where this driver must be replaced by a delivering one such
+// as SMTP. The sender is MAIL_FROM, defaulting to a placeholder address.
+var Mailer = application.Provide(func(compose *application.Composer) *mail.Mailer {
+	debug := compose.App().Debug()
+
+	driver := slogmail.New(func(driver *slogmail.Builder) {
+		if debug {
+			driver.Detail(slogmail.DetailBody)
+		}
+	})
+
+	return mail.New(driver, func(mailer *mail.Builder) {
+		mailer.From(mail.Address{Email: cmp.Or(os.Getenv("MAIL_FROM"), "noreply@example.com")})
+	})
 })
 ```
 
@@ -835,7 +1290,7 @@ func (listeners *Listeners) Placed(ctx context.Context, placement orders.Placeme
 
 ## Tests
 
-A handler test builds the surface with a fake and records a request on a plain router: no composer, no application. The process test starts the real `server.App` and `server.Compose` with `application.Start`, points the database at memory through the environment, runs the migrator in a `Startup` callback, and records a request on the shared router.
+A handler test builds the surface with a fake and records a request on a plain router: no composer, no application. The process test starts the real `server.App` and `server.Compose` with `application.Start`, points the database at memory through the environment, runs the migrator in a `Startup` callback, and records a request on the shared router. To replace a provider's value, a test passes its own root provider to `application.Start`: it supplies the value with `compose.Supply` and then returns `compose.Use(server.App)`. The root is built first, so the supplied value exists before anything uses the provider, and the provider's own build, with its startup and cleanup, never runs. `compose.Supply` belongs to tests only; `arkoren check` flags it elsewhere.
 
 `internal/orders/web/web_test.go`
 
@@ -937,3 +1392,158 @@ func TestPlaceOrder(t *testing.T) {
 	}
 }
 ```
+
+`internal/bootstrap/server/iam_test.go`
+
+```go
+package server_test
+
+import (
+	"context"
+	"encoding/json/v2"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/router"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/mail/mailtest"
+	"arkoren.dev/foundation/key"
+
+	"example.com/shop/internal/bootstrap"
+	"example.com/shop/internal/bootstrap/server"
+)
+
+// inbox is a mail driver that records every email in its fake and then signals
+// on sent, so a test waits for the worker without sleeping.
+type inbox struct {
+	*mailtest.Fake
+	sent chan struct{}
+}
+
+// Send records message and signals that one email arrived.
+func (driver inbox) Send(ctx context.Context, message mail.Message) (mail.Receipt, error) {
+	receipt, err := driver.Fake.Send(ctx, message)
+	driver.sent <- struct{}{}
+
+	return receipt, err
+}
+
+// writeKeys creates one shared key file per purpose and points the environment
+// variables the providers read at them.
+func writeKeys(t *testing.T) {
+	t.Helper()
+
+	for _, variable := range []string{"LINK_KEY_FILE", "TWO_FACTOR_KEY_FILE", "OAUTH_KEY_FILE"} {
+		secret, err := key.GenerateShared()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		path := filepath.Join(t.TempDir(), "shared.key")
+
+		if err := os.WriteFile(path, []byte(secret.Base64()+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Setenv(variable, path)
+	}
+}
+
+// TestRegistrationEmailVerifiesTheAddress registers a user, waits for the
+// verification email the identity job sends, logs in and posts the link's signed
+// value, as the verification page does.
+func TestRegistrationEmailVerifiesTheAddress(t *testing.T) {
+	writeKeys(t)
+
+	t.Setenv("DATABASE_URL", "file::memory:")
+	t.Setenv("HTTP_ADDR", "127.0.0.1:0")
+	t.Setenv("PASSWORD_RESET_URL", "https://app.example.com/reset-password")
+	t.Setenv("EMAIL_VERIFY_URL", "https://app.example.com/verify-email")
+	t.Setenv("GITHUB_CLIENT_ID", "client")
+	t.Setenv("GITHUB_CLIENT_SECRET", "secret")
+	t.Setenv("GITHUB_REDIRECT_URL", "https://app.example.com/auth/github/callback")
+
+	mailbox := inbox{Fake: mailtest.New(), sent: make(chan struct{}, 1)}
+
+	root := application.Provide(func(compose *application.Composer) *application.Application {
+		compose.Supply(bootstrap.Mailer, mail.New(mailbox, func(mailer *mail.Builder) {
+			mailer.From(mail.Address{Email: "noreply@example.com"})
+		}))
+
+		return compose.Use(server.App)
+	})
+
+	var routes *router.Router
+
+	app, err := application.Start(t.Context(), root, server.Compose, func(compose *application.Composer) {
+		routes = compose.Use(bootstrap.Router)
+
+		compose.Startup(compose.Use(bootstrap.Migrator).Up)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		if err := app.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+
+	post := func(path, body string, cookies []*http.Cookie) *http.Response {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+
+		for _, cookie := range cookies {
+			request.AddCookie(cookie)
+		}
+
+		return routes.Record(request)
+	}
+
+	credentials := `{"email":"ada@example.com","password":"correct horse"}`
+
+	if response := post("/register", credentials, nil); response.StatusCode != http.StatusAccepted {
+		t.Fatalf("register status = %d, want %d", response.StatusCode, http.StatusAccepted)
+	}
+
+	select {
+	case <-mailbox.sent:
+	case <-t.Context().Done():
+		t.Fatal("no verification email was sent")
+	}
+
+	var token string
+
+	for _, word := range strings.Fields(mailbox.Sent()[0].TextBody()) {
+		if encoded, found := strings.CutPrefix(word, "https://app.example.com/verify-email#"); found {
+			token, err = url.QueryUnescape(encoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	login := post("/login", credentials, nil)
+	if login.StatusCode != http.StatusNoContent {
+		t.Fatalf("login status = %d, want %d", login.StatusCode, http.StatusNoContent)
+	}
+
+	body, err := json.Marshal(map[string]string{"token": token})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if response := post("/email/verify", string(body), login.Cookies()); response.StatusCode != http.StatusNoContent {
+		t.Fatalf("verify status = %d, want %d", response.StatusCode, http.StatusNoContent)
+	}
+}
+```
+
+The identity test supplies a `Mailer` over `mailtest`, so no email leaves the process, and waits on a channel for the worker to send the verification email instead of sleeping. Use `mailtest` for email in every test, the memory queue or `queuetest` for jobs, and `Supply` only for values the test must control.
