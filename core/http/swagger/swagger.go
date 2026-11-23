@@ -143,6 +143,9 @@ func New(specificationURL string, configure ...BuilderFunc) (*Viewer, error) {
 // no middleware and no prefix of its own; attach it with a group, usually
 // routes.Group("/docs", viewer.Register), after any access-control middleware.
 // There is no catch-all, so every other path below the group is a router 404.
+// Each route carries its OpenAPI operation (summary, media type, caching
+// headers and, for the page, the redirect and 404 problem), so the router's
+// export lists the documentation routes without further annotation.
 //
 // The page addresses its assets relative to its own URL, so it must be served
 // with a trailing slash. A request for the group path without one ("/docs") is
@@ -160,10 +163,43 @@ func New(specificationURL string, configure ...BuilderFunc) (*Viewer, error) {
 //	routes := router.New()
 //	routes.With(auth.Middleware(authenticator), auth.Require()).Group("/docs", viewer.Register)
 func (viewer *Viewer) Register(r *router.Router) {
-	r.Get("/", viewer.servePage)
-	r.Get("/swagger-ui.css", viewer.stylesheet.serve)
-	r.Get("/swagger-ui-bundle.js", viewer.bundle.serve)
-	r.Get("/initializer.js", viewer.initializer.serve)
+	r.Get("/", viewer.servePage, pageOperation)
+	r.Get("/swagger-ui.css", viewer.stylesheet.serve, assetOperation("Swagger UI stylesheet", "text/css; charset=utf-8", "public, max-age=3600"))
+	r.Get("/swagger-ui-bundle.js", viewer.bundle.serve, assetOperation("Swagger UI script", "text/javascript; charset=utf-8", "public, max-age=3600"))
+	r.Get("/initializer.js", viewer.initializer.serve, assetOperation("Swagger UI initializer", "text/javascript; charset=utf-8", "no-store"))
+}
+
+// pageOperation describes the documentation page route of [Viewer.Register]:
+// the uncached HTML page with its security headers, the 308 relative redirect
+// that a request without the trailing slash receives, and the 404 problem for
+// a last path segment the redirect refuses to echo. It changes no handler
+// behavior.
+func pageOperation(operation *router.OperationBuilder) {
+	operation.Summary("API documentation")
+	operation.Description("Serves the Swagger UI page for this application's OpenAPI document. The page links its assets " +
+		"relative to its own URL, so it is served with a trailing slash; a request without one is redirected to the " +
+		"relative Location. HEAD answers headers only.")
+	operation.Tags("documentation")
+	operation.MediaResponse(http.StatusOK, "text/html; charset=utf-8", router.RawSchema(`{"type":"string"}`))
+	operation.ResponseHeader(http.StatusOK, "Cache-Control", router.RawSchema(`{"type":"string","const":"no-store"}`))
+	operation.ResponseHeader(http.StatusOK, "X-Content-Type-Options", router.RawSchema(`{"type":"string","const":"nosniff"}`))
+	operation.Response(http.StatusPermanentRedirect, "Redirected to the page with a trailing slash")
+	operation.ResponseHeader(http.StatusPermanentRedirect, "Location", router.RawSchema(`{"type":"string","description":"The last path segment plus a slash, relative to the request."}`))
+	operation.Problem(problem.NotFound())
+}
+
+// assetOperation describes one pinned static resource of [Viewer.Register]:
+// its media type and the caching of its 200 answer. summary names the
+// resource and cacheControl is the exact Cache-Control value it is served with.
+func assetOperation(summary, media, cacheControl string) router.OperationBuilderFunc {
+	return func(operation *router.OperationBuilder) {
+		operation.Summary(summary)
+		operation.Description("Serves a resource of the documentation page. HEAD answers headers only.")
+		operation.Tags("documentation")
+		operation.MediaResponse(http.StatusOK, media, router.RawSchema(`{"type":"string"}`))
+		operation.ResponseHeader(http.StatusOK, "Cache-Control", router.RawSchema(`{"type":"string","const":"`+cacheControl+`"}`))
+		operation.ResponseHeader(http.StatusOK, "X-Content-Type-Options", router.RawSchema(`{"type":"string","const":"nosniff"}`))
+	}
 }
 
 // redirectSegment matches the only last path segments the trailing-slash

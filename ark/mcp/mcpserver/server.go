@@ -163,14 +163,14 @@ func prepare(tools []mcp.Tool) ([]registration, error) {
 //	if err != nil {
 //		return err
 //	}
-//	routes.Post("/rpc", server.EndpointHandler())
+//	routes.Post("/rpc", server.EndpointHandler(), mcpserver.Operation)
 func (server *Server) EndpointHandler() router.Handler {
 	return router.HTTP(server.handler)
 }
 
-// Register adds the MCP endpoint to r as POST "/", so the endpoint is the path
-// of the group it is attached to. It applies no middleware and no prefix of its
-// own, and registers no GET or DELETE route: the router answers those with 405,
+// Register adds the MCP endpoint to r as POST "/" with its [Operation], so the
+// endpoint is the path of the group it is attached to. It applies no middleware
+// and no prefix of its own, and registers no GET or DELETE route: the router answers those with 405,
 // as the specification suggests for a server without sessions or a stream.
 //
 // Attach it to a group, after the middleware that admits the caller:
@@ -187,7 +187,7 @@ func (server *Server) EndpointHandler() router.Handler {
 //	routes := router.New()
 //	routes.With(auth.Middleware(authenticator), auth.Require()).Group("/mcp", server.Register)
 func (server *Server) Register(r *router.Router) {
-	r.Post("/", server.EndpointHandler())
+	r.Post("/", server.EndpointHandler(), Operation)
 }
 
 // Server exposes the native SDK server for advanced protocol features. Native

@@ -266,7 +266,7 @@ func (store *Store) Catalog() []string {
 // Example:
 //
 //	if permissions.SelfService() {
-//		web.Get("/me/permissions", permissions.SelfHandler())
+//		web.Get("/me/permissions", permissions.SelfHandler(), permission.SelfOperation)
 //	}
 func (store *Store) SelfService() bool {
 	return store.selfService
@@ -278,7 +278,7 @@ func (store *Store) SelfService() bool {
 // Example:
 //
 //	if _, ok := permissions.Management(); ok {
-//		web.Get("/users/{subject}/permissions", permissions.UserHandler())
+//		web.Get("/users/{subject}/permissions", permissions.UserHandler(), permission.UserOperation)
 //	}
 func (store *Store) Management() (gate.Permission, bool) {
 	return store.management, store.managed

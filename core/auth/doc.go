@@ -77,10 +77,10 @@
 //	}))
 //
 //	r.Post("/login", signIn)
-//	r.Get("/login/second-factor", guard.PendingHandler())
-//	r.Post("/login/second-factor", guard.ChallengeHandler())
-//	r.Post("/logout", guard.LogoutHandler())
-//	r.With(auth.RequireSession()).Post("/confirm", guard.ConfirmHandler())
+//	r.Get("/login/second-factor", guard.PendingHandler(), auth.PendingOperation)
+//	r.Post("/login/second-factor", guard.ChallengeHandler(), auth.ChallengeOperation)
+//	r.Post("/logout", guard.LogoutHandler(), auth.LogoutOperation)
+//	r.With(auth.RequireSession()).Post("/confirm", guard.ConfirmHandler(), auth.ConfirmOperation)
 //
 //	private := r.With(auth.Require())
 //	private.Get("/me", me)

@@ -60,6 +60,6 @@
 //	if err != nil {
 //		return err
 //	}
-//	web.Get("/auth/google/callback", google.CallbackHandler(guard, links.Resolve))
-//	web.Post("/connections/{provider}", links.ConnectHandler(guard, map[string]string{"google": "/auth/google"}))
+//	web.Get("/auth/google/callback", google.CallbackHandler(guard, links.Resolve), oauthauth.CallbackOperation)
+//	web.Post("/connections/{provider}", links.ConnectHandler(guard, map[string]string{"google": "/auth/google"}), federation.ConnectOperation)
 package federation

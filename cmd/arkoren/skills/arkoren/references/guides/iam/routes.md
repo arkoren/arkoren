@@ -55,7 +55,7 @@ particular request is authorized.
 | `GET /auth/{name}/nonce` | Provider implements `iam.NativeProvider` |
 | `POST /auth/{name}/native` | Provider implements `iam.NativeProvider` |
 | `GET /connections` | A provider registered |
-| `POST /connections/{provider}` | A provider registered |
+| `POST /connections/{id}` | A provider registered |
 | `DELETE /connections/{id}` | A provider registered |
 | `GET /me/permissions` | Permissions with self-service |
 | `GET /users/{subject}/permissions` | Permissions with management |
@@ -227,9 +227,16 @@ If you need different application URLs, register the matching facade handlers
 instead of calling `Register`:
 
 ```go
-web.Post("/accounts/sign-in", identity.LoginHandler())
-web.Put("/accounts/password", identity.ChangePasswordHandler())
+web.Post("/accounts/sign-in", identity.LoginHandler(), password.LoginOperation)
+web.Put("/accounts/password", identity.ChangePasswordHandler(), password.ChangeOperation)
 ```
+
+Pass the matching operation, as `Register` does, so the route appears in the router's
+[OpenAPI document](../openapi/built-in-handlers.md#other-annotations). The operations live
+beside the handlers: `password`, `twofactor`, `apitoken`, `federation`, `permission` and
+`account` (from `arkoren.dev/ark/iam/...`) export one per handler, and `iam` exports
+those of the session, account, login-challenge and provider routes. Operations that declare
+path parameters use the names of the default paths.
 
 Keep the facade middleware and CSRF protection on `web`.
 Session, freshness, verified-email, and JSON checks remain inside the handlers.
@@ -244,9 +251,9 @@ For a configured Google client whose `RedirectURL` is
 
 ```go
 callback := google.CallbackHandler(identity.Guard(), identity.Resolve)
-web.Get("/sso/google", google.LoginHandler())
-web.Get("/sso/google/callback", callback)
-web.Post("/sso/google/callback", callback)
+web.Get("/sso/google", google.LoginHandler(), oauthauth.LoginOperation)
+web.Get("/sso/google/callback", callback, oauthauth.CallbackOperation)
+web.Post("/sso/google/callback", callback, oauthauth.CallbackOperation)
 ```
 
 `identity.Resolve` uses the shared connection store, including built-in unverified
@@ -276,7 +283,7 @@ targets := map[string]string{
 Register the connect handler with those targets:
 
 ```go
-web.Post("/connections/{provider}", identity.Links().ConnectHandler(identity.Guard(), targets))
+web.Post("/connections/{provider}", identity.Links().ConnectHandler(identity.Guard(), targets), federation.ConnectOperation)
 ```
 
 That preserves the [explicit connection flow](federated-sign-in.md#connect-a-provider).

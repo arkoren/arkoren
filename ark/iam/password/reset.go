@@ -100,7 +100,7 @@ func (message ResetMessage) Link(base string) string {
 // Example:
 //
 //	if verifier.ResetEnabled() {
-//		web.Post("/password/forgot", verifier.ForgotHandler())
+//		web.Post("/password/forgot", verifier.ForgotHandler(), password.ForgotOperation)
 //	}
 func (verifier *Verifier) ResetEnabled() bool {
 	return verifier.signer != nil

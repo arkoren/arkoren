@@ -51,12 +51,12 @@ unprotected public route. The handler adds no access controls.
 To publish the contract on an appropriately protected `routes` router:
 
 ```go
-routes.Get("/openapi.json", routes.OpenAPIHandler("Greeting API", "1.0.0"))
+routes.Get("/openapi.json", routes.OpenAPIHandler("Greeting API", "1.0.0"), router.OpenAPIOperation)
 ```
 
 Serve that router through your [HTTP server](../http-networking/server.md).
 A successful GET returns the document with `Content-Type: application/json`.
-The registration has no operation callback, so it is omitted from its own export.
+`router.OpenAPIOperation` describes the route, so the document lists itself with its 200 JSON answer and the 500 problem returned when an operation declaration is invalid.
 
 Document configuration callbacks run once when you construct `OpenAPIHandler`.
 Generation happens on its first request, capturing all routes registered before
@@ -99,8 +99,9 @@ to the relative `docs/`, built only from the last path segment, never from `Host
 forwarding headers or the query string. A last segment with characters other
 than letters, digits and `._~-` is a `404`. At the router root,
 `routes.Group("/", viewer.Register)` serves the page at `/`. The viewer has no per-route handler methods, because the
-assets are tied to the page by fixed relative names. Leave the routes
-unannotated: the exporter does not discover operations inside the UI.
+assets are tied to the page by fixed relative names. `Register` annotates
+each route, so the document lists the page (with its `308` redirect and `404`) and the
+three assets with their media types and caching headers.
 
 Once the server runs, opening `/docs/` makes the browser fetch `/openapi.json`.
 The factory neither generates nor fetches that document. Pinned JavaScript and

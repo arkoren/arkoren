@@ -36,7 +36,7 @@
 //	}, func(operation *router.OperationBuilder) {
 //		operation.ID("health").Response(http.StatusNoContent, "Healthy")
 //	})
-//	routes.Get("/openapi.json", routes.OpenAPIHandler("Example", "1"))
+//	routes.Get("/openapi.json", routes.OpenAPIHandler("Example", "1"), router.OpenAPIOperation)
 //
 // With [RecoverBuilder.Events], [Recover] publishes [PanicRecovered]
 // ("http.panic.recovered") with the converted error and the stack for every

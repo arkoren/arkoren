@@ -11,8 +11,11 @@
 //		log.Fatal(err)
 //	}
 //	routes := router.New()
-//	routes.Get("/openapi.json", routes.OpenAPIHandler("Billing", "1.0"))
+//	routes.Get("/openapi.json", routes.OpenAPIHandler("Billing", "1.0"), router.OpenAPIOperation)
 //	routes.Group("/docs", viewer.Register)
+//
+// Register annotates its four routes, so they appear in the router's OpenAPI
+// document with their media types, caching headers and the page's redirect.
 //
 // The page links its assets with relative URLs, so it works under any prefix,
 // including one added by a reverse proxy; no forwarded headers are trusted. A

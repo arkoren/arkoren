@@ -118,8 +118,8 @@ Core owns the two routes that finish a pending login, so every module answers
 alike:
 
 ```go
-web.Get("/login/second-factor", guard.PendingHandler())
-web.Post("/login/second-factor", guard.ChallengeHandler())
+web.Get("/login/second-factor", guard.PendingHandler(), auth.PendingOperation)
+web.Post("/login/second-factor", guard.ChallengeHandler(), auth.ChallengeOperation)
 ```
 
 `PendingHandler` answers `200` with `{"methods": ["otp"]}`, the methods this user
@@ -238,7 +238,7 @@ When the user is not fresh, ask them to prove themselves again and post the
 method and input to the confirm route:
 
 ```go
-web.With(auth.RequireSession()).Post("/confirm", guard.ConfirmHandler())
+web.With(auth.RequireSession()).Post("/confirm", guard.ConfirmHandler(), auth.ConfirmOperation)
 ```
 
 `ConfirmHandler` works like the challenge against the step-up credentials, with

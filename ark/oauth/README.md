@@ -71,8 +71,8 @@ if err != nil {
 r.Use(session.Middleware(store))
 r.Use(csrf.Middleware())
 r.Use(auth.Middleware(guard.Authenticator()))
-r.Get("/login", client.LoginHandler()) // supports ?return_to=/local/path
-r.Get("/oauth/callback", client.CallbackHandler(guard, resolve))
+r.Get("/login", client.LoginHandler(), oauthauth.LoginOperation) // supports ?return_to=/local/path
+r.Get("/oauth/callback", client.CallbackHandler(guard, resolve), oauthauth.CallbackOperation)
 r.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 	logout.Redirect("/")
 }))
@@ -145,8 +145,8 @@ client := compose.Must(oauth.New(oauth.Google(), cipher, webClientID,
 	},
 ))
 
-r.Get("/auth/google/nonce", client.NonceHandler())
-r.Post("/auth/google/native", client.NativeHandler(guard, resolve))
+r.Get("/auth/google/nonce", client.NonceHandler(), oauthauth.NonceOperation)
+r.Post("/auth/google/native", client.NativeHandler(guard, resolve), oauthauth.NativeOperation)
 ```
 
 `NonceHandler` answers `{"nonce"}` and keeps it in the session for ten minutes.
@@ -221,6 +221,9 @@ api.With(gate.Require(gate.HasScopes("posts:write"))).Post("/posts", createPost)
   pass through. A subject the user provider does not know or has disabled is
   `auth.ErrUnauthenticated` (401); an invalid subject is `auth.ErrInvalidSubject`.
 - `client.NonceHandler()`, `client.NativeHandler(guard, resolve)`: native ID-token login for Google and Apple.
+- `oauthauth.LoginOperation`, `CallbackOperation`, `NonceOperation` and `NativeOperation` describe these four
+  handlers (parameters, redirects, cookies, bodies and problems) in the router's OpenAPI document; pass each as the
+  last argument of the route registration. A callback registered for GET and POST on one path carries no operation ID.
 - The handlers use the guard's session without default-slot fallback (the native handlers use the default session). A
   missing session returns 401 before consuming the login cookie or calling the
   provider or mapper. A nil guard or mapper returns a configuration error before

@@ -261,7 +261,7 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 // Example:
 //
 //	if verifier.Registration() {
-//		web.Post("/register", verifier.RegisterHandler())
+//		web.Post("/register", verifier.RegisterHandler(), password.RegisterOperation)
 //	}
 func (verifier *Verifier) Registration() bool {
 	return verifier.registration

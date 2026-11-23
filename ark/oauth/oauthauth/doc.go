@@ -78,8 +78,8 @@
 //
 //		auth.Middleware(guard.Authenticator()),
 //	)
-//	web.Get("/login", client.LoginHandler()) // supports ?return_to=/local/path
-//	web.Get("/oauth/callback", client.CallbackHandler(guard, resolve))
+//	web.Get("/login", client.LoginHandler(), oauthauth.LoginOperation) // supports ?return_to=/local/path
+//	web.Get("/oauth/callback", client.CallbackHandler(guard, resolve), oauthauth.CallbackOperation)
 //	web.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 //		logout.Redirect("/")
 //	}))
@@ -157,8 +157,8 @@
 //	client := compose.Must(oauth.New(oauth.Google(), cipher, webClientID, func(client *oauth.ClientBuilder) {
 //		client.NativeAudiences(webClientID, iosClientID)
 //	}))
-//	web.Get("/auth/google/nonce", client.NonceHandler())
-//	web.Post("/auth/google/native", client.NativeHandler(guard, resolve))
+//	web.Get("/auth/google/nonce", client.NonceHandler(), oauthauth.NonceOperation)
+//	web.Post("/auth/google/native", client.NativeHandler(guard, resolve), oauthauth.NativeOperation)
 //
 // Both handlers use the default session of session.Middleware. Other presets
 // return [ErrUnsupported].

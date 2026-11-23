@@ -921,3 +921,47 @@ func TestListDoesNotInvokeTools(t *testing.T) {
 		t.Fatalf("list invoked tools or omitted native additions: %+v", listed.Tools)
 	}
 }
+
+// TestRegisterExportsOperation verifies Register carries the endpoint's
+// operation, so the router exports POST on the group path without errors, with
+// a summary, a body and the documented statuses.
+func TestRegisterExportsOperation(t *testing.T) {
+	t.Parallel()
+
+	server, err := mcpserver.New("catalog", "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routes := router.New()
+	routes.Group("/mcp", server.Register)
+
+	data, err := routes.OpenAPI("MCP", "1")
+	if err != nil {
+		t.Fatalf("OpenAPI() error = %v", err)
+	}
+
+	var document struct {
+		Paths map[string]map[string]struct {
+			Summary     string                    `json:"summary"`
+			RequestBody map[string]any            `json:"requestBody"`
+			Responses   map[string]map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	operation := document.Paths["/mcp"]["post"]
+
+	if operation.Summary == "" || operation.RequestBody == nil {
+		t.Fatalf("operation = %+v, want summary and body", operation)
+	}
+
+	for _, status := range []string{"200", "202", "400", "405"} {
+		if operation.Responses[status] == nil {
+			t.Errorf("operation does not declare status %s", status)
+		}
+	}
+}

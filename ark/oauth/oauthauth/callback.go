@@ -104,7 +104,7 @@ import (
 //
 //	r.Get("/auth/google/callback", client.CallbackHandler(guard, func(ctx context.Context, external auth.External) (string, error) {
 //		return links.SubjectFor(ctx, external.Issuer, external.Subject) // create or refuse per policy
-//	}))
+//	}), oauthauth.CallbackOperation)
 func (client *Client) CallbackHandler(guard *auth.Guard, resolve auth.Resolver) router.Handler {
 	var configurationErr error
 

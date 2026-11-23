@@ -30,7 +30,7 @@ import (
 //
 // Example:
 //
-//	r.Get("/auth/google", client.LoginHandler()) // supports ?return_to=/local/path&fresh=1
+//	r.Get("/auth/google", client.LoginHandler(), oauthauth.LoginOperation) // supports ?return_to=/local/path&fresh=1
 func (client *Client) LoginHandler() router.Handler {
 	return func(writer http.ResponseWriter, httpRequest *http.Request) error {
 		if client.config.RedirectURL == "" {

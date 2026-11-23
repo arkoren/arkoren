@@ -77,7 +77,7 @@ type Link struct {
 //	if err != nil {
 //		return err
 //	}
-//	web.Get("/auth/google/callback", google.CallbackHandler(guard, links.Resolve))
+//	web.Get("/auth/google/callback", google.CallbackHandler(guard, links.Resolve), oauthauth.CallbackOperation)
 type Links struct {
 	provider *auth.UserProvider
 	db       *database.Database

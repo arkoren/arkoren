@@ -1,6 +1,7 @@
 package swagger_test
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net/http"
@@ -361,24 +362,6 @@ func TestViewerPageUsesOnlyExternalLocalResources(t *testing.T) {
 	}
 }
 
-// TestViewerRoutesStayOutOfOpenAPI checks that registering the viewer does
-// not change the OpenAPI export, because its routes carry no operation metadata.
-func TestViewerRoutesStayOutOfOpenAPI(t *testing.T) {
-	t.Parallel()
-
-	routes := docsRouter(t, "/docs", "/openapi.json")
-
-	data, err := routes.OpenAPI("Docs", "1")
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if strings.Contains(string(data), "/docs") {
-		t.Fatalf("viewer routes were exported: %s", data)
-	}
-}
-
 // TestNewCallbacksRunOnceInOrder checks draft semantics independently of
 // input validation; even invalid configuration must invoke supplied callbacks.
 func TestNewCallbacksRunOnceInOrder(t *testing.T) {
@@ -416,4 +399,51 @@ func (writer *failedWriter) Write([]byte) (int, error) {
 // bytes, including when io.WriteString selects the StringWriter fast path.
 func (writer *failedWriter) WriteString(string) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+// TestRegisterExportsOperations verifies Register annotates every route, so the
+// router exports the four documentation paths without errors, each with a
+// summary and a 200 response, and the page also documents its redirect.
+func TestRegisterExportsOperations(t *testing.T) {
+	t.Parallel()
+
+	viewer, err := swagger.New("/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routes := router.New()
+	routes.Group("/docs", viewer.Register)
+
+	data, err := routes.OpenAPI("Docs", "1")
+	if err != nil {
+		t.Fatalf("OpenAPI() error = %v", err)
+	}
+
+	var document struct {
+		Paths map[string]map[string]struct {
+			Summary   string                    `json:"summary"`
+			Responses map[string]map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(document.Paths) != 4 {
+		t.Fatalf("paths = %d, want 4", len(document.Paths))
+	}
+
+	for path, methods := range document.Paths {
+		operation := methods["get"]
+
+		if operation.Summary == "" || operation.Responses["200"] == nil {
+			t.Errorf("%s operation = %+v, want summary and 200", path, operation)
+		}
+	}
+
+	if document.Paths["/docs"]["get"].Responses["308"] == nil {
+		t.Error("page does not document its redirect")
+	}
 }
