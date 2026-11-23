@@ -1,0 +1,24 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/crypto"
+	"arkoren.dev/driver/aes/aescrypto"
+	"arkoren.dev/foundation/key"
+)
+
+// TwoFactorKey encrypts the stored two-factor secrets with AES. It loads a
+// 32-byte shared key from the file named by TWO_FACTOR_KEY_FILE; create one with
+// `arkoren key generate shared --out FILE`. Reserve the key for these secrets:
+// losing or replacing it makes every enrolled authenticator unusable. Composition
+// fails when the file is missing or invalid, and the application never generates
+// a key to replace a missing one.
+var TwoFactorKey = application.Provide(func(compose *application.Composer) *crypto.Encrypter {
+	secret := compose.Must(key.LoadShared(os.Getenv("TWO_FACTOR_KEY_FILE")))
+	driver := compose.Must(aescrypto.New(secret))
+	compose.Cleanup(driver.Stop)
+
+	return compose.Must(crypto.New(driver))
+})

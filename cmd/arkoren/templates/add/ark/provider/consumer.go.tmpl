@@ -1,0 +1,13 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/queue"
+)
+
+// Consumer receives jobs from Queue. Job providers register their handlers on it.
+// List the queue names a restricted consumer should run in its builder; an
+// unrestricted consumer runs every queue that has a handler.
+var Consumer = application.Provide(func(compose *application.Composer) *queue.Consumer {
+	return queue.NewConsumer(compose.Use(Queue))
+})

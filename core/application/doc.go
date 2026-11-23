@@ -100,6 +100,13 @@
 // value does not start or stop it: register cleanup once, immediately after
 // acquisition, in the build function or constructor that owns the resource.
 //
+// A test replaces one provider's value with [Composer.Supply], which sets the
+// value without running the provider's build, so its startup, cleanup and checks
+// never register. The test passes [Start] a root provider that supplies the
+// values and then returns the production root through Use; the root is built
+// first, so a value is supplied before anything uses its provider. Supply panics
+// with [ErrInvalidPhase] once the provider is built or while it is building.
+//
 // Because Startup hooks run in registration order and Cleanup in reverse, a
 // provider that calls Use on its dependencies before registering its own
 // lifecycle callbacks has its dependencies started first and stopped last.

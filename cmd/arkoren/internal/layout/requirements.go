@@ -23,13 +23,11 @@ import (
 //		// run go mod tidy in project.Root
 //	}
 func (project *Project) NeedsTidy(plan *Plan) (bool, error) {
-	content, err := os.ReadFile(filepath.Join(project.Root, "go.mod"))
+	required, err := project.requirements()
 
 	if err != nil {
-		return false, fmt.Errorf("read go.mod: %w", err)
+		return false, err
 	}
-
-	required := requiredModules(content)
 
 	for _, created := range plan.Create {
 		if !strings.HasSuffix(created.Path, ".go") {
@@ -58,6 +56,18 @@ func (project *Project) NeedsTidy(plan *Plan) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// requirements returns the module paths that go.mod requires, direct and
+// indirect.
+func (project *Project) requirements() ([]string, error) {
+	content, err := os.ReadFile(filepath.Join(project.Root, "go.mod"))
+
+	if err != nil {
+		return nil, fmt.Errorf("read go.mod: %w", err)
+	}
+
+	return requiredModules(content), nil
 }
 
 // external reports whether path belongs to neither the standard library nor

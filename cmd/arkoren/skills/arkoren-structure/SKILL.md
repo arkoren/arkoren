@@ -24,7 +24,7 @@ Verified code for every pattern below is in [references/examples.md](references/
 ## Three rules
 
 1. **Features are plain Go.** Feature roots, their children (surfaces above, clients below) and `internal/platform` never import `arkoren.dev/core/application` or `internal/bootstrap`. Constructors take their dependencies as arguments: `NewStore(db)`, `NewService(store, ...)`.
-2. **`internal/bootstrap` holds only providers.** Every exported declaration is `var X = application.Provide(...)` that returns the component it makes live: it may register its lifecycle, mount itself on the router or subscribe itself. Feature wiring lives in `internal/bootstrap/<feature>.go`. Bootstrap imports features; features never import bootstrap.
+2. **`internal/bootstrap` holds only providers.** Every exported declaration is `var X = application.Provide(...)` that returns either the component it makes live (it may register its lifecycle, mount itself on the router or subscribe itself) or a construction callback for one, a fragment provider such as `PasswordReset` returning `password.BuilderFunc`. Feature wiring lives in `internal/bootstrap/<feature>.go`. Bootstrap imports features; features never import bootstrap.
 3. **A process root `internal/bootstrap/<process>/` has `app.go` and `compose.go`.** `App` is the provider holding the application's settings. `Compose` is the explicit list of `compose.Use(bootstrap.X)` calls the process runs. `cmd/<process>/main.go` runs `application.Run(ctx, <process>.App, <process>.Compose)`.
 
 ## Workflow
@@ -44,6 +44,8 @@ Verified code for every pattern below is in [references/examples.md](references/
 | A workflow, MCP tool or schedule | `flow/`, `tools/`, `schedules/` children of the feature | `--flow`, `--tools`, `--schedules` |
 | Domain types, rules, a service or queries | the feature root: `<feature>.go`, `service.go`, `store.go` | `arkoren add feature <name>` |
 | A database, cache, queue, secret store or SDK client shared by features | `internal/bootstrap/<name>.go` provider | `arkoren add provider <name>` |
+| Users, login, registration, password reset, email verification, two-factor, API tokens, roles (`ark/iam`) | `internal/bootstrap/iam.go` (`IAM`, `IAMRouter`, `IAMJobs`) with one fragment provider per feature | `arkoren add ark iam --with reset,verification,two-factor,tokens,permissions,account,google,github [--process worker]` |
+| Sign in with an external provider (`ark/oauth`) | `internal/bootstrap/<provider>.go` client provider, passed to `identity.Provider` in `IAM` | `arkoren add ark oauth google` (or `github`) |
 | An outbound API client used by one feature | a child below that feature, such as `internal/<feature>/carrier/` | none |
 | The same client needed by a second feature | promote it to its own feature that exposes a `Service` | none |
 | A schema change | `internal/migrations/`, listed in `All()` | `arkoren add migration <name>` |
@@ -100,7 +102,8 @@ Start flat: a small surface may begin as a file in the root and move to a child 
 - **The path prefix belongs to the provider**, not the surface: the surface registers relative paths.
 - **Parameterized constructors are the one exception to "only providers".** For several singletons of one kind, declare one provider variable each and share a value-returning `NewDatabase(compose, "REPORTING_DATABASE_URL")`. Only providers call it, because each call opens a new resource.
 - Name bootstrap providers for their resource (`Database`, `Router`) and feature providers `<Feature>Store`, `<Feature>Service` and `<Feature><Surface>` (`OrdersRoutes`, `NotificationsListeners`).
-- Read settings with `os.Getenv` inside the provider that needs them; there is no config package.
+- Read settings with `os.Getenv` inside the provider that needs them; there is no config package. Do not turn plain settings such as `DATABASE_URL` into providers by default; do it only when a real need appears.
+- **Extract a facade's sub-builder configuration into fragment providers.** When a facade callback grows (`iam.New(db, store, func(identity *iam.Builder) { ... })`), move each sub-builder's settings into a provider that returns the subpackage's `BuilderFunc` (`var PasswordReset = application.Provide(... password.BuilderFunc ...)`), and resolve it with `compose.Use` inside the facade's callback: `identity.Password(compose.Use(Hasher), compose.Use(PasswordReset))`. A construction callback (a function literal taking `*pkg.XBuilder` of an `arkoren.dev` package) runs once, synchronously, while the constructor builds, so `compose.Use` there is still composition. Resolve everything else first and bind the app handles at the top (`events := compose.App().Events()`).
 - Call `compose.Use` only while composing: in providers, a `New*(compose, ...)` constructor and `Compose`, never in handlers, services or other feature code. Express conditions as a plain `if`, such as `if compose.App().Debug()`.
 
 ## Across features
@@ -115,6 +118,8 @@ Start flat: a small surface may begin as a file in the root and move to a child 
 - Test pure rules in `<feature>.go` directly.
 - Test a surface as plain Go: build it with fakes for the interfaces it defines, register it on `router.New().Prefix(...)`, and call `routes.Record(request)`. No composer is needed.
 - Test a whole process with `application.Start(ctx, server.App, server.Compose, extra...)`. Point providers at local drivers through the environment (`DATABASE_URL=file::memory:` for SQLite) and run `compose.Use(bootstrap.Migrator).Up` in a `Startup` callback. Shut the application down in `t.Cleanup` with `context.Background()`, since the test context is already canceled there.
+- Replace a provider's value in a process test with a **test root provider**: pass `application.Provide(...)` to `application.Start` instead of `server.App`; it calls `compose.Supply(bootstrap.Mailer, mail.New(mailtest.New()))` for each value to replace and then returns `compose.Use(server.App)`. The root is built first, so `Supply` precedes every `Use`, and the supplied provider's own build (with its startup and cleanup) never runs. `Supply` panics after the provider is built or while it is building, and `arkoren check` allows it only in `_test.go` files.
+- Email in tests goes through `core/service/mail/mailtest` (`mailtest.New()` as the mailer's driver, `AssertSent`, `Sent()`), jobs through the memory queue or `queuetest`. The identity module sends its emails from queue jobs: wait for the worker without sleeping (a mail driver that signals a channel, or `queuetest.Fake.Drain`). `examples.md` has a complete identity process test.
 - Put fakes shared by other packages' tests in `internal/<feature>/<feature>test/`.
 
 ## Common mistakes
@@ -128,9 +133,12 @@ Start flat: a small surface may begin as a file in the root and move to a child 
 - One parameterized provider for several instances: declare separate provider variables over a shared `New*(compose, ...)` constructor.
 - A job or topic declared in a `jobs/` or `events/` child while the root dispatches it: move the declaration to the root.
 - A listener provider used only by a process that never emits the event.
+- A fragment provider that returns a value other than a construction callback or component, or `compose.Use` of a fragment provider outside the facade's callback: resolve it inside `iam.New(..., func(identity *iam.Builder) { ... })`.
+- `compose.Supply` in a provider or `Compose`: it replaces a value and belongs in a test root provider.
+- Enabling password reset or email verification without `identity.Queue(...)`, forgetting `IAMJobs` and `Work` in the process that sends the emails, or restricting the consumer's `Queues(...)` without `iam.QueueName` ("iam"): the module fails construction or its jobs wait unconsumed. Add `compose.Use(IAM).Migrations()` to the `Migrator`.
 - `Compose` or `App` written in `main.go` or in `internal/bootstrap` itself: put them in `internal/bootstrap/<process>`.
 - Raw SQL, inline schema operations in `NewMigration`, an inline closure in `WithTransaction`, `json.NewDecoder` or `http.Error` in a handler, or a schema or problem declared inside a handler: extract each into its exported declaration as above.
 - Packages named `util`, `common`, `shared`, `helpers`, `models`, `controllers`, `services`, `handlers` or `repositories`: name packages for their purpose, extract shared code on its third real use, and inline a helper again once it grows flags.
 - One feature importing another feature's `web/` or `jobs/` child, or any feature importing `arkoren.dev/driver/...`: depend on the other feature's root, and on drivers only through bootstrap providers.
 
-`arkoren check` enforces the mechanical rules: `feature-imports-application`, `bootstrap-action-func`, `surface-imported-outside-bootstrap`, `below-child-imports-feature`, `feature-imports-driver` (drivers and `ark/iam`), `banned-package-name`, `composer-use-outside-composition` and `bootstrap-new-outside-bootstrap`. It has no exceptions; if a rule blocks something intentional, explain the case to the user instead of working around it.
+`arkoren check` enforces the mechanical rules: `feature-imports-application`, `bootstrap-action-func`, `surface-imported-outside-bootstrap`, `below-child-imports-feature`, `feature-imports-driver` (drivers and `ark/iam`), `banned-package-name`, `composer-use-outside-composition` (construction callbacks, function literals taking `*pkg.XBuilder` of an `arkoren.dev` package, are inside composition), `composer-supply-outside-tests` and `bootstrap-new-outside-bootstrap`. Beyond that exemption it has none; if a rule blocks something intentional, explain the case to the user instead of working around it.

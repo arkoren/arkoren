@@ -1,0 +1,16 @@
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam"
+	"arkoren.dev/core/application"
+)
+
+// GitHubSignUp is the identity module's settings for the GitHub provider: it
+// lets a first GitHub login create a user, when GitHub proved an email address.
+// Without it the provider only logs in people the application already has.
+// Remove it from the IAM provider to turn sign-up off.
+var GitHubSignUp = application.Provide(func(*application.Composer) iam.ProviderBuilderFunc {
+	return func(login *iam.ProviderBuilder) {
+		login.SignUp(true)
+	}
+})

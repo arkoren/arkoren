@@ -101,7 +101,7 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 // ([Verifier.LoginHandler]). When [Users.Create] returns [ErrIdentifierTaken] it
 // creates nothing, still hashes the password so the time taken matches, and runs
 // the [Builder.Taken] hook, which is where the application tells the owner (the
-// facade dispatches a reset notice or a verification there). The hook runs at
+// facade stores a reset notice or a verification job there). The hook runs at
 // most as often as the throttle lets registrations through, so the route cannot
 // be used to flood a mailbox. Any other error of [Users.Create] (an invalid
 // identifier, say) passes through. The answer does not say whether the identifier
@@ -284,11 +284,11 @@ func (verifier *Verifier) endOtherLogins(guard *auth.Guard, r *http.Request, sub
 
 // ForgotHandler returns the handler of POST /password/forgot. The body is
 // {"email": "..."} (or "identifier"). It counts the request, then calls the
-// dispatch function of [Builder.Reset] with a [ResetRequest] holding the
+// reset job on the [Builder.Queue] dispatcher with a [ResetRequest] holding the
 // identifier exactly as typed, whether or not the user exists, and answers an
 // empty 202. Nothing is looked up in the request, so the answer and its time
 // say nothing about which identifiers exist; the lookup, the signing and the
-// email happen in the worker that runs [Verifier.SendReset], and the email goes
+// email happen in the worker that runs [Verifier.RegisterJobs], and the email goes
 // to the address stored with the user, never to the text of the request.
 //
 // Requests are counted before anything else: more than 5 per identifier as

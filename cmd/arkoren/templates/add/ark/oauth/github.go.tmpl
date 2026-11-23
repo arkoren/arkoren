@@ -1,0 +1,26 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/ark/oauth/oauthauth"
+	"arkoren.dev/core/application"
+)
+
+// GitHub is the process's one GitHub sign-in client. It reads GITHUB_CLIENT_ID,
+// GITHUB_CLIENT_SECRET and GITHUB_REDIRECT_URL (the absolute address of the
+// callback route, such as https://app.example.com/auth/github/callback) from the
+// environment, and seals its login cookies with the OAuthKey provider. Pass the
+// client to the identity module with identity.Provider(compose.Use(GitHub)),
+// which mounts its login and callback routes.
+var GitHub = application.Provide(func(compose *application.Composer) *oauthauth.Client {
+	cipher := compose.Use(OAuthKey)
+
+	client := compose.Must(oauthauth.New(oauthauth.GitHub(), cipher, os.Getenv("GITHUB_CLIENT_ID"), func(client *oauthauth.ClientBuilder) {
+		client.ClientSecret(os.Getenv("GITHUB_CLIENT_SECRET"))
+		client.RedirectURL(os.Getenv("GITHUB_REDIRECT_URL"))
+	}))
+	compose.Startup(client.Start)
+
+	return client
+})

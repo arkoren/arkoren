@@ -391,7 +391,7 @@ iam.ProviderBuilder.SignUp, per provider), and the token scope catalog takes its
 twofactor, apitoken, federation and permission never import each other; subjects are strings
 and cross-package writes join the context transaction of the one Database. A
 password reset calls Users.Rotate, which bumps UserRecord.Version and ends
-sessions, pending logins and API tokens; tokens never carry factors. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use. ark/oauth requires core v0.8.x: Client.Name(),
+sessions, pending logins and API tokens; tokens never carry factors. Password reset and email verification are off until `password.Builder.Reset(signer, mailer, resetURL, configure...)` and `account.Builder.Verification(signer, mailer, verifyURL, configure...)` are given (the URLs are the app pages the links open, required, absolute, no fragment; `ResetBuilder.Email`/`VerificationBuilder.Email` replace the default plain-text email and are the only override). IAM queues its own jobs on the app's dispatcher and sends through the app's mailer, keeps no token tables and starts no goroutine: `identity.Queue(dispatcher)` (also `Queue` on the `password`/`account` builders for standalone use) is required with either feature or `New` fails with `ErrInvalidConfig`; the jobs are built per instance by `storage.NewJob` (names `iam-password-reset`/`iam-email-verification` plus `-<instance>` with `_` written `-`, queue `iam.QueueName`), the facade never exposes a job, handler or dispatch func, and `identity.RegisterJobs(consumer)` registers the handlers of the enabled features (`Verifier.RegisterJobs`, `Directory.RegisterJobs`; keep a new job's registration there) in the worker process. `RegisterJobs` cannot read the consumer's queue restriction until ark/iam requires a core with `Consumer.Queues()`; a restricted consumer must list `iam.QueueName`. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; a send may run more than once and an email the mailer rejects as `mail.ErrInvalidMessage` is `queue.Permanent`. Keep the forgot route storing the identifier as typed, and the conditional write that makes a reset single use. `IAM.Migrations()` returns every feature's group for the instance whatever is enabled (definitions live in `internal/migration`, the packages' `Migrations` methods delegate to them), omitting only the built-in users with `Builder.Users`; groups are append-only. `IAM.Ping` checks the enabled features only. ark/oauth requires core v0.8.x: Client.Name(),
 LoginHandler() and CallbackHandler(guard, auth.Resolver) (with NonceHandler() and
 NativeHandler(guard, auth.Resolver) for Google and Apple ID tokens) match the
 Provider and NativeProvider interfaces that ark/iam declares, so Client
@@ -614,9 +614,17 @@ internal/bootstrap/server (app.go: the `App` provider with the application setti
 list of what the process runs), go.mod, README, Makefile,
 Dockerfile, .dockerignore, .gitignore, .editorconfig, .env and .env.example.
 No application tests are generated. Every exported declaration of internal/bootstrap is an `application.Provide`
-variable that returns the component it makes live; `arkoren add feature` writes `internal/bootstrap/<feature>.go`
+variable that returns the component it makes live or a construction callback for one (a fragment provider such as
+`PasswordReset` returning `password.BuilderFunc`, resolved with `compose.Use` inside the facade's callback, which
+`arkoren check` treats as composition: a function literal taking `*pkg.XBuilder` of an `arkoren.dev` package); `arkoren add feature` writes `internal/bootstrap/<feature>.go`
 with the store, service and surface providers, features never import `application` or bootstrap, and
-`arkoren check` enforces both (`feature-imports-application`, `bootstrap-action-func`).
+`arkoren check` enforces both (`feature-imports-application`, `bootstrap-action-func`) and `composer-supply-outside-tests`
+(`Composer.Supply` only in `_test.go`). `arkoren add ark iam --with ...` and `arkoren add ark oauth <provider>` write the
+ark's providers from `templates/add/ark/` (IAM, IAMRouter, IAMJobs, one fragment file per feature, and every missing shared
+provider by name with local defaults), insert `compose.Use` lines, and fetch the ark with `go get` at the version pinned in
+`internal/layout/ark.go` (`modulePins`; bump a pin with the release plan's proposal in the same change as the template or
+API it needs). The IAM code in `skills/arkoren-structure/references/examples.md` is compared with the generator's output
+by `TestExamplesMatchAddArkOutput`; regenerate the example when a template changes.
 The go.mod template pins `arkoren.dev/core` to the release that ships with the CLI (the Provider API and
 `application.Run`), so bump
 it in the same change as any core API the templates need, using the version the release plan proposes
@@ -798,6 +806,14 @@ Settled; reopen only with the owner.
   - The constructor's readiness check (`Ping` or `Start`) verifies the tables
     exist, read-only, and fails with the contract's `ErrNotFound`, naming
     `Migrations()`. It never creates them.
+  - `Migrations()` depends only on the instance and structural choices (such as
+    the application's own users replacing the built-in users table), never on
+    feature switches: a module with optional features returns every feature's
+    groups, generated without constructing the disabled features (share the
+    definitions through the module's `internal/` package and have the
+    subpackages' methods delegate), so enabling a feature later needs no new
+    migrator call. Groups are append-only; never rename a group or an id or edit
+    a shipped step. Readiness checks still cover the enabled features only.
 
 ## Publishing
 

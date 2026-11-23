@@ -15,6 +15,10 @@ import (
 	"arkoren.dev/core/event"
 	"arkoren.dev/core/http/link"
 	"arkoren.dev/core/service/database"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/mail/mailtest"
+	"arkoren.dev/core/service/queue"
+	"arkoren.dev/core/service/queue/queuetest"
 	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/iam/password"
@@ -340,15 +344,17 @@ func TestSendResetForAnUnknownIdentifierSendsNothing(t *testing.T) {
 	})
 }
 
-// TestSendResetReturnsTheDeliveryError verifies a failing deliver function is
+// TestSendResetReturnsTheDeliveryError verifies a failing mailer's error is
 // returned, so a queue retries the request.
 func TestSendResetReturnsTheDeliveryError(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		down := errors.New("smtp down")
+		fake := mailtest.New()
+		fake.FailWith(down)
 		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
-			passwords.Reset(newSigner(t, ""), func(context.Context, password.ResetRequest) error { return nil }, func(context.Context, password.ResetMessage) error { return down })
+			passwords.Reset(newSigner(t, ""), newMailer(fake), resetPage)
 		})
 		sys.registerAda(t, sys.client)
 		if err := sys.verifier.SendReset(testContext(t), password.ResetRequest{Identifier: "ada@example.com"}); !errors.Is(err, down) {
@@ -357,21 +363,122 @@ func TestSendResetReturnsTheDeliveryError(t *testing.T) {
 	})
 }
 
-// TestResetNeedsAllThree verifies a partial Reset setting fails construction.
-func TestResetNeedsAllThree(t *testing.T) {
+// TestResetRejectsIncompleteSettings verifies a Reset setting missing its
+// signer, mailer, queue or page, or naming a page that is relative or carries a
+// fragment, fails construction.
+func TestResetRejectsIncompleteSettings(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		users := newFakeUsers()
 		sys := newSystem(t, db, instance)
-		_, err := password.NewVerifier(sys.provider, db, sys.store, testClientIP, sys.hasher, password.Users{
-			Lookup: users.Lookup,
-			Rotate: users.Rotate,
-		}, func(passwords *password.Builder) {
-			passwords.Reset(nil, func(context.Context, password.ResetRequest) error { return nil }, func(context.Context, password.ResetMessage) error { return nil })
+		signer := newSigner(t, "")
+		mailer := newMailer(mailtest.New())
+		dispatcher := queue.NewDispatcher(queuetest.New())
+		invalid := []func(*password.Builder){
+			func(passwords *password.Builder) { passwords.Queue(dispatcher).Reset(nil, mailer, resetPage) },
+			func(passwords *password.Builder) { passwords.Queue(dispatcher).Reset(signer, nil, resetPage) },
+			func(passwords *password.Builder) { passwords.Reset(signer, mailer, resetPage) },
+			func(passwords *password.Builder) { passwords.Queue(dispatcher).Reset(signer, mailer, "") },
+			func(passwords *password.Builder) {
+				passwords.Queue(dispatcher).Reset(signer, mailer, "/reset-password")
+			},
+			func(passwords *password.Builder) { passwords.Queue(dispatcher).Reset(signer, mailer, resetPage+"#top") },
+		}
+		for index, configure := range invalid {
+			_, err := password.NewVerifier(sys.provider, db, sys.store, testClientIP, sys.hasher, password.Users{
+				Lookup: users.Lookup,
+				Rotate: users.Rotate,
+			}, configure)
+			if !errors.Is(err, password.ErrInvalidConfig) {
+				t.Fatalf("setting %d: NewVerifier error = %v, want ErrInvalidConfig", index, err)
+			}
+		}
+	})
+}
+
+// TestRegisterJobsSendsTheStoredRequest verifies a request stored by
+// RequestReset is sent by the handler RegisterJobs registers, with the job named
+// after the instance on the queue "iam".
+func TestRegisterJobsSendsTheStoredRequest(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, _ string) {
+		fake := queuetest.New()
+		sys := newConfiguredSystem(t, db, "tenant_a", func(passwords *password.Builder) {
+			passwords.Queue(queue.NewDispatcher(fake))
 		})
-		if !errors.Is(err, password.ErrInvalidConfig) {
-			t.Fatalf("NewVerifier error = %v, want ErrInvalidConfig", err)
+		sys.registerAda(t, sys.client)
+		consumer := queue.NewConsumer(fake)
+		if err := sys.verifier.RegisterJobs(consumer); err != nil {
+			t.Fatalf("RegisterJobs: %v", err)
+		}
+		if err := sys.verifier.RequestReset(testContext(t), password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
+			t.Fatalf("RequestReset: %v", err)
+		}
+		dispatched := fake.Dispatched()
+		if len(dispatched) != 1 || dispatched[0].Name != "iam-password-reset-tenant-a" || dispatched[0].Queue != "iam" {
+			t.Fatalf("dispatched = %+v, want the reset job of tenant_a on queue iam", dispatched)
+		}
+		if err := fake.Drain(testContext(t), consumer); err != nil {
+			t.Fatalf("Drain: %v", err)
+		}
+		if len(*sys.sent) != 1 || (*sys.sent)[0].Address != "ada@example.com" {
+			t.Fatalf("sent = %+v, want one message to the stored address", *sys.sent)
+		}
+	})
+}
+
+// TestDefaultResetEmails verifies the default reset email and the notice to the
+// owner of a taken identifier go to the stored address with the page link, and
+// say different things.
+func TestDefaultResetEmails(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		fake := mailtest.New()
+		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
+			passwords.Reset(newSigner(t, ""), newMailer(fake), resetPage)
+		})
+		sys.registerAda(t, sys.client)
+		ctx := testContext(t)
+		for _, request := range []password.ResetRequest{{Identifier: "ada@example.com"}, {Identifier: "ada@example.com", Notice: true}} {
+			if err := sys.verifier.SendReset(ctx, request); err != nil {
+				t.Fatalf("SendReset(%+v): %v", request, err)
+			}
+		}
+		sent := fake.Sent()
+		if len(sent) != 2 {
+			t.Fatalf("sent %d emails, want 2", len(sent))
+		}
+		for _, message := range sent {
+			if message.To()[0].Email != "ada@example.com" || message.Subject() == "" || !strings.Contains(message.TextBody(), resetPage+"#") {
+				t.Fatalf("email = to %v subject %q body %q, want the stored address, a subject and the page link", message.To(), message.Subject(), message.TextBody())
+			}
+		}
+		if sent[0].Subject() == sent[1].Subject() {
+			t.Fatalf("the reset and the notice share the subject %q", sent[0].Subject())
+		}
+	})
+}
+
+// TestInvalidResetEmailFailsPermanently verifies an email the mailer rejects as
+// malformed is a permanent failure, which a queue does not retry.
+func TestInvalidResetEmailFailsPermanently(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
+			passwords.Reset(newSigner(t, ""), newMailer(mailtest.New()), resetPage, func(reset *password.ResetBuilder) {
+				reset.Email(func(password.ResetMessage, string) mail.Message {
+					return mail.NewMessage(mail.Recipients{}, mail.Body{})
+				})
+			})
+		})
+		sys.registerAda(t, sys.client)
+		err := sys.verifier.SendReset(testContext(t), password.ResetRequest{Identifier: "ada@example.com"})
+		if !errors.Is(err, queue.ErrPermanent) || !errors.Is(err, mail.ErrInvalidMessage) {
+			t.Fatalf("SendReset error = %v, want a permanent invalid-message failure", err)
 		}
 	})
 }

@@ -1,0 +1,21 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/link"
+	"arkoren.dev/foundation/key"
+)
+
+// LinkSigner signs the links the application emails, such as password reset and
+// email verification. It loads a 32-byte shared key from the file named by
+// LINK_KEY_FILE; create one with `arkoren key generate shared --out FILE`.
+// Reserve the key for links: it is not an encryption key, and rotating it ends
+// every link already sent. Composition fails when the file is missing or invalid,
+// and the application never generates a key to replace a missing one.
+var LinkSigner = application.Provide(func(compose *application.Composer) *link.Signer {
+	secret := compose.Must(key.LoadShared(os.Getenv("LINK_KEY_FILE")))
+
+	return compose.Must(link.New(secret))
+})

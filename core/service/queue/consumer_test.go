@@ -579,6 +579,37 @@ func TestWorkerRejectsDuplicateHandler(t *testing.T) {
 	}
 }
 
+// TestConsumerQueuesReturnsDetachedRestriction checks that Queues reports the
+// configured restriction and that editing the result cannot change the consumer.
+func TestConsumerQueuesReturnsDetachedRestriction(t *testing.T) {
+	t.Parallel()
+
+	consumer := queue.NewConsumer(jobConsumerDriver{}, func(consumer *queue.ConsumerBuilder) {
+		consumer.Queues("emails", "iam")
+	})
+
+	queues := consumer.Queues()
+	if !slices.Equal(queues, []string{"emails", "iam"}) {
+		t.Fatalf("Queues = %v, want [emails iam]", queues)
+	}
+
+	queues[0] = "changed"
+
+	if got := consumer.Queues()[0]; got != "emails" {
+		t.Fatalf("Queues()[0] = %q after edit, want emails", got)
+	}
+}
+
+// TestConsumerQueuesEmptyByDefault checks that an unrestricted consumer reports
+// no queues.
+func TestConsumerQueuesEmptyByDefault(t *testing.T) {
+	t.Parallel()
+
+	if got := queue.NewConsumer(jobConsumerDriver{}).Queues(); len(got) != 0 {
+		t.Fatalf("Queues = %v, want empty", got)
+	}
+}
+
 // TestWorkerRejectsNilHandler checks registration rejects a missing execution
 // function before it can be invoked by a delivery.
 func TestWorkerRejectsNilHandler(t *testing.T) {

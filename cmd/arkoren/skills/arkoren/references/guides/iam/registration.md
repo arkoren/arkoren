@@ -26,16 +26,17 @@ With the built-in users, `Registration(true)` requires password `Reset(true, ...
 without it `iam.New` ignores registration, logs one warning that names
 `password.Builder.Registration`, and mounts no `POST /register`. Configure email
 verification too so new users can prove their addresses and existing owners
-receive a recovery notice. Reuse the signer and callbacks from Email Links:
+receive a recovery notice. Reuse the signer, mailer and queue from Email Links:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Queue(dispatcher)
 	identity.Password(hasher, func(passwords *password.Builder) {
-		passwords.Reset(signer, dispatchReset, deliverReset)
+		passwords.Reset(signer, mailer, "https://app.example.com/reset-password")
 		passwords.Registration(true)
 	})
 	identity.Directory(func(accounts *account.Builder) {
-		accounts.Verification(signer, dispatchVerification, deliverVerification)
+		accounts.Verification(signer, mailer, "https://app.example.com/verify-email")
 	})
 })
 ```
@@ -78,18 +79,18 @@ The email work depends on the enabled flows:
 | Reset and verification | Queue a verification email | Queue a reset notice for the owner |
 | Reset only | Queue nothing | Queue nothing |
 
-With verification configured, both branches dispatch work rather than doing
+With verification configured, both branches store a job rather than doing
 one synchronous lookup-and-send path. A reset notice has
 `password.ResetMessage.Notice` set; the email should explain the attempted
 registration and offer a new password if the owner did not create the account.
 
-A dispatch or post-registration hook failure is logged, but the response
+A failure to store the job or a post-registration hook failure is logged, but the response
 stays `202`. Unlike an explicit forgot-password request, this response must not
 distinguish the new-address branch from the taken-address branch.
 Provide a resend-verification or forgot-password action if mail does not arrive.
 
 With [your own users](own-users.md), `Users.Create` is required and IAM does
-not dispatch these registration emails automatically. Your application owns
+not queue these registration emails automatically. Your application owns
 verification and equivalent owner notices.
 
 ## Response Limits

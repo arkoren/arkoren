@@ -6,17 +6,18 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"slices"
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
+	"arkoren.dev/core/service/queue"
 
 	"arkoren.dev/ark/iam/account"
 	"arkoren.dev/ark/iam/apitoken"
 	"arkoren.dev/ark/iam/federation"
+	"arkoren.dev/ark/iam/internal/migration"
 	"arkoren.dev/ark/iam/internal/storage"
 	"arkoren.dev/ark/iam/password"
 	"arkoren.dev/ark/iam/permission"
@@ -26,7 +27,9 @@ import (
 // ErrInvalidConfig is wrapped by the errors of [New] for an unusable
 // configuration: a missing dependency (database, store or client address
 // source), a duplicate provider name, an invalid instance or scheme, an enabled
-// feature without its required components (a nil hasher or two-factor cipher),
+// feature without its required components (a nil hasher or two-factor cipher,
+// or [password.Builder.Reset] or [account.Builder.Verification] without a signer,
+// a mailer, a page address or [Builder.Queue]),
 // [Builder.Directory] combined with [Builder.Users], or a failing package
 // constructor (tokens with no kind enabled, a scope catalog without a grant
 // function, an invalid or conflicting permission definition). A setting whose
@@ -100,7 +103,7 @@ type IAM struct {
 	providers   []mountedProvider
 	account     *AccountBuilder
 	middleware  router.Middleware
-	migrations  []migrate.Definition
+	instance    string
 	pingers     []func(context.Context) error
 
 	// verified tells whether a user's email is verified: the directory's, or
@@ -169,6 +172,7 @@ func New(db *database.Database, store *cache.Cache, configure ...BuilderFunc) (*
 		db:           db,
 		store:        store,
 		clientIP:     settings.clientIP,
+		instance:     settings.instance,
 		emailProven:  settings.emailProven,
 		keepPersonal: settings.keepPersonal,
 	}
@@ -308,52 +312,68 @@ func (identity *IAM) MustAccept(methods ...auth.Method) {
 	}
 }
 
-// SendReset is the worker side of a password reset; see
-// [password.Verifier.SendReset]. It has the shape func(context.Context,
-// password.ResetRequest) error, so a queue consumer or a workflow step can use
-// it directly: the dispatch function of [password.Builder.Reset] stores a
-// [password.ResetRequest] and the worker passes it here. An unknown user sends
-// nothing and returns nil; an error of the deliver function is returned so the
-// queue retries, which means one request may deliver more than once. Without
-// [Builder.Password] it returns an error wrapping [ErrInvalidConfig], and without
-// [password.Builder.Reset] one wrapping [password.ErrInvalidConfig].
+// QueueName is the name of the queue every job of the module runs on. A consumer
+// that restricts its queues with queue.ConsumerBuilder.Queues must include it, or
+// the emails of [password.Builder.Reset] and [account.Builder.Verification] are
+// stored and never sent.
 //
 // Example:
 //
-//	consumer.Handle(resetJob, identity.SendReset)
-func (identity *IAM) SendReset(ctx context.Context, request password.ResetRequest) error {
-	if identity.verifier == nil {
-		return fmt.Errorf("%w: SendReset requires Builder.Password", ErrInvalidConfig)
-	}
+//	consumer := queue.NewConsumer(driver, func(consumer *queue.ConsumerBuilder) {
+//		consumer.Queues("emails", iam.QueueName)
+//	})
+const QueueName = storage.Queue
 
-	return identity.verifier.SendReset(ctx, request)
-}
-
-// SendVerification is the worker side of an email verification; see
-// [account.Directory.SendVerification]. It has the shape func(context.Context,
-// account.VerifyRequest) error, so a queue consumer or a workflow step can use
-// it directly. A deleted or already verified user sends nothing and returns nil;
-// an error of the deliver function is returned so the queue retries, which means
-// one request may deliver more than once. It returns an error wrapping
-// [ErrInvalidConfig] with the application's own [Builder.Users], or without
-// [account.Builder.Verification].
+// RegisterJobs registers the handlers of the module's background jobs on
+// consumer, so the process that runs the consumer sends the emails of
+// [password.Builder.Reset] and [account.Builder.Verification]. The application
+// does not name the jobs and nothing else needs wiring: new jobs of a feature
+// that is enabled register here too. Features that are off register nothing, so
+// a process that builds the same [IAM] as the one that dispatches registers
+// exactly the jobs it can receive. Job names carry the [Builder.Instance], so
+// several instances can share one consumer.
+//
+// The jobs run on the queue [QueueName]. RegisterJobs cannot see a queue
+// restriction of the consumer: a consumer built with queue.ConsumerBuilder.Queues
+// must list [QueueName], or stored jobs wait unconsumed. It returns the first
+// error of the registrations, for example queue.ErrDuplicateName when the
+// consumer already handles the module's jobs. Run it at composition and let the
+// consumer's own runner consume.
 //
 // Example:
 //
-//	consumer.Handle(verifyJob, identity.SendVerification)
-func (identity *IAM) SendVerification(ctx context.Context, request account.VerifyRequest) error {
-	if identity.directory == nil {
-		return fmt.Errorf("%w: SendVerification requires the built-in users", ErrInvalidConfig)
+//	consumer := queue.NewConsumer(driver)
+//	if err := identity.RegisterJobs(consumer); err != nil {
+//		return err
+//	}
+//	compose.Run(consumer.Run)
+func (identity *IAM) RegisterJobs(consumer *queue.Consumer) error {
+	if identity.verifier != nil {
+		if err := identity.verifier.RegisterJobs(consumer); err != nil {
+			return err
+		}
+	}
+	if identity.directory != nil {
+		return identity.directory.RegisterJobs(consumer)
 	}
 
-	return identity.directory.SendVerification(ctx, request)
+	return nil
 }
 
-// Migrations returns the migrations of the enabled features only, in the order
-// the tables depend on each other: users, passwords, two-factor, tokens,
-// connections, permissions. Each package keeps its own migration group, so they may also be
-// added separately. The application adds them to its migrator; the facade never
-// runs DDL.
+// Migrations returns the migrations of every feature of the module for this
+// instance, in the order their tables depend on each other: users, passwords,
+// two-factor, tokens, connections, permissions. It does not depend on which
+// features are enabled, so enabling a feature later never needs a new migrator
+// call: its table already exists and its readiness check already passes. The
+// only structural choice that removes a group is [Builder.Users]: with the
+// application's own users, the built-in users group is left out.
+//
+// Each package keeps its own migration group (see the Migrations method of each
+// package, which returns the same definitions), so they may also be added
+// separately. Groups are append-only: a release that changes a table adds a
+// migration at the end of its group, never rewrites a shipped one. The
+// application adds the definitions to its migrator; the facade never runs DDL.
+// [IAM.Ping] still checks the tables of the enabled features only.
 //
 // Example:
 //
@@ -361,7 +381,16 @@ func (identity *IAM) SendVerification(ctx context.Context, request account.Verif
 //		return err
 //	}
 func (identity *IAM) Migrations() []migrate.Definition {
-	return slices.Clone(identity.migrations)
+	var definitions []migrate.Definition
+	if identity.directory != nil {
+		definitions = append(definitions, migration.Account(identity.instance)...)
+	}
+	definitions = append(definitions, migration.Password(identity.instance)...)
+	definitions = append(definitions, migration.TwoFactor(identity.instance)...)
+	definitions = append(definitions, migration.Tokens(identity.instance)...)
+	definitions = append(definitions, migration.Links(identity.instance)...)
+
+	return append(definitions, migration.Permissions(identity.instance)...)
 }
 
 // Ping verifies, read-only, that the tables of every enabled feature exist and

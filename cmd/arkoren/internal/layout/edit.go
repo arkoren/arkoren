@@ -2,6 +2,7 @@ package layout
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -55,11 +56,13 @@ func endOfLine(content []byte, offset int) int {
 // addUses returns the content of a process root's file with one
 // `compose.Use(bootstrap.Provider)` statement per provider inserted into
 // Compose, the bootstrap import if the file lacks it, and the inserted
-// statement texts.
+// statement texts. A provider the Compose already uses is skipped; when every
+// provider is already used the content is returned unchanged with no statements.
 //
 // The statements go before the tail of Compose: the first top-level `if`
 // statement (such as `if compose.App().Debug()` around bootstrap.MCP) or
-// `compose.Use(bootstrap.Server)`, whichever comes first. Without a tail they
+// `compose.Use(bootstrap.Server)` or `compose.Use(bootstrap.Work)`, whichever
+// comes first. Without a tail they
 // are appended after the last statement; in an empty Compose they become its
 // only statements. An existing bootstrap import keeps its local name. A new one
 // goes into the import block as its own group after the last non-module import,
@@ -89,44 +92,77 @@ func addUses(rel string, content []byte, module string, providers []string) ([]b
 	}
 
 	bootstrapPath := module + "/internal/bootstrap"
-	bootstrap := importName(file, bootstrapPath)
+	imported := importName(file, bootstrapPath)
+	bootstrap := cmp.Or(imported, "bootstrap")
 	offset := func(pos token.Pos) int { return fset.Position(pos).Offset }
+
+	var calls []string
+
+	for _, provider := range providers {
+		call := param + ".Use(" + bootstrap + "." + provider + ")"
+
+		if imported == "" || !composeUses(compose, call) {
+			calls = append(calls, call)
+		}
+	}
+
+	if len(calls) == 0 {
+		return content, nil, nil
+	}
 
 	var edits []textEdit
 
-	if bootstrap == "" {
-		bootstrap = "bootstrap"
+	if imported == "" {
+		edit, err := importEdit(rel, file, content, module, offset)
 
-		if slices.ContainsFunc(file.Imports, func(spec *ast.ImportSpec) bool { return importSpecName(spec) == bootstrap }) {
-			return nil, nil, console.UsageError("%s already imports another package as bootstrap", rel)
+		if err != nil {
+			return nil, nil, err
 		}
 
-		anchor := importAnchor(file, module)
-
-		if anchor == nil {
-			return nil, nil, console.UsageError("%s has no parenthesized import block to extend", rel)
-		}
-
-		separator := "\n\t"
-
-		if value, _ := strconv.Unquote(anchor.Path.Value); !strings.HasPrefix(value, module+"/") {
-			separator = "\n\n\t"
-		}
-
-		edits = append(edits, textEdit{endOfLine(content, offset(anchor.End())), separator + strconv.Quote(bootstrapPath)})
+		edits = append(edits, edit)
 	}
 
-	calls := make([]string, 0, len(providers))
-
-	for _, provider := range providers {
-		calls = append(calls, param+".Use("+bootstrap+"."+provider+")")
-	}
-
-	edits = append(edits, composeEdit(content, compose, param+".Use("+bootstrap+".Server)", calls, offset))
+	serve := []string{param + ".Use(" + bootstrap + ".Server)", param + ".Use(" + bootstrap + ".Work)"}
+	edits = append(edits, composeEdit(content, compose, serve, calls, offset))
 
 	updated, err := applyEdits(content, edits)
 
 	return updated, calls, err
+}
+
+// importEdit builds the insertion of the module's internal/bootstrap import into
+// file, as its own group after the last non-module import or directly after the
+// last import of module. It returns a usage error naming rel when another
+// package is already imported as bootstrap or the file has no parenthesized
+// import block.
+func importEdit(rel string, file *ast.File, content []byte, module string, offset func(token.Pos) int) (textEdit, error) {
+	if slices.ContainsFunc(file.Imports, func(spec *ast.ImportSpec) bool { return importSpecName(spec) == "bootstrap" }) {
+		return textEdit{}, console.UsageError("%s already imports another package as bootstrap", rel)
+	}
+
+	anchor := importAnchor(file, module)
+
+	if anchor == nil {
+		return textEdit{}, console.UsageError("%s has no parenthesized import block to extend", rel)
+	}
+
+	separator := "\n\t"
+
+	if value, _ := strconv.Unquote(anchor.Path.Value); !strings.HasPrefix(value, module+"/") {
+		separator = "\n\n\t"
+	}
+
+	return textEdit{endOfLine(content, offset(anchor.End())), separator + strconv.Quote(module+"/internal/bootstrap")}, nil
+}
+
+// composeUses reports whether the body of compose has a top-level statement
+// whose source text is call, such as compose.Use(bootstrap.Work).
+func composeUses(compose *ast.FuncDecl, call string) bool {
+	return slices.ContainsFunc(compose.Body.List, func(statement ast.Stmt) bool {
+		expression, ok := statement.(*ast.ExprStmt)
+
+		return ok && types.ExprString(expression.X) == call
+	})
 }
 
 // composeDecl returns the top-level function Compose, or nil.
@@ -141,13 +177,13 @@ func composeDecl(file *ast.File) *ast.FuncDecl {
 }
 
 // composeEdit builds the insertion of calls into compose, as described on
-// [addUses]. serve is the source text of the statement that serves the process
-// and so ends the list of features.
-func composeEdit(content []byte, compose *ast.FuncDecl, serve string, calls []string, offset func(token.Pos) int) textEdit {
+// [addUses]. serve lists the source texts of the statements that serve the
+// process and so end the list of features.
+func composeEdit(content []byte, compose *ast.FuncDecl, serve []string, calls []string, offset func(token.Pos) int) textEdit {
 	statements := compose.Body.List
 	anchor := slices.IndexFunc(statements, func(statement ast.Stmt) bool {
 		if expression, ok := statement.(*ast.ExprStmt); ok {
-			return types.ExprString(expression.X) == serve
+			return slices.Contains(serve, types.ExprString(expression.X))
 		}
 
 		_, conditional := statement.(*ast.IfStmt)

@@ -56,6 +56,13 @@ type Plan struct {
 	Create []files.File
 	// Edit lists existing files changed by inserting lines at one anchor.
 	Edit []Edit
+	// Requires lists the modules, as module@version, that the new files import
+	// and go.mod does not require yet, each pinned by the CLI. Fetch them with
+	// go get before go mod tidy, so tidy does not resolve a newer release.
+	Requires []string
+	// Notes lists the steps the command could not do itself, such as adding
+	// migrations to an existing Migrator or setting environment variables.
+	Notes []string
 }
 
 // Edit is one insertion into an existing file.
@@ -436,6 +443,10 @@ func (project *Project) planEdit(plan *Plan, rel string, edit func([]byte) ([]by
 
 	if err != nil {
 		return err
+	}
+
+	if len(inserted) == 0 {
+		return nil
 	}
 
 	plan.Edit = append(plan.Edit, Edit{Path: rel, Inserted: inserted, original: original, content: content})

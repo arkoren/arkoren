@@ -1,9 +1,11 @@
 package iam_test
 
 import (
-	"context"
+	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,10 @@ import (
 	"arkoren.dev/core/service/crypto"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/hash"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/mail/mailtest"
+	"arkoren.dev/core/service/queue"
+	"arkoren.dev/core/service/queue/queuetest"
 	"arkoren.dev/driver/aes/aescrypto"
 	"arkoren.dev/driver/bcrypt/bcrypthash"
 	"arkoren.dev/foundation/key"
@@ -39,24 +45,40 @@ type wire struct {
 	// verify configures account.Builder.Verification, which the built-in users
 	// need and the application's own users cannot have.
 	verify bool
+
+	// defaultEmail leaves the emails of reset and verification at their default
+	// wording instead of the recording functions of the outbox, so a test can
+	// read what the module really sends from the mailer's fake.
+	defaultEmail bool
 }
 
 // both is the usual harness: reset and verification, as an application that
 // sends every email would configure them.
 var both = wire{reset: true, verify: true}
 
-// outbox collects what the facade dispatches and delivers. Its dispatch
-// functions call the matching Send function of the facade at once, as a queue
-// worker would later, so the tests stay synchronous.
+// Pages of the application that the links of the emails open.
+const (
+	resetPage  = "https://app.example.com/reset-password"
+	verifyPage = "https://app.example.com/verify-email"
+)
+
+// outbox collects what the facade stores on its queue and sends through its
+// mailer. Messages are sent when a test drains the queue, as a worker would run
+// them later; the accessors drain first, so the tests read as if the work were
+// synchronous. The custom email functions record the messages they write, which
+// gives the tests the signed values without parsing the default wording.
 type outbox struct {
-	mu                 sync.Mutex
-	identity           *iam.IAM
-	signer             *link.Signer
-	wire               wire
-	resets             []password.ResetMessage
-	verifications      []account.VerifyMessage
-	dispatchedResets   []password.ResetRequest
-	dispatchedVerifies []account.VerifyRequest
+	mu            sync.Mutex
+	identity      *iam.IAM
+	signer        *link.Signer
+	wire          wire
+	queue         *queuetest.Fake
+	dispatcher    *queue.Dispatcher
+	consumer      *queue.Consumer
+	mail          *mailtest.Fake
+	mailer        *mail.Mailer
+	resets        []password.ResetMessage
+	verifications []account.VerifyMessage
 }
 
 // building serializes the construction of facades: [registration] is a plain
@@ -87,14 +109,34 @@ func newSigner(t *testing.T, origin string) *link.Signer {
 	return signer
 }
 
-// newBox returns an outbox with a relative signer.
+// newMailer returns a mailer over a recording fake with a default sender.
+func newMailer(fake *mailtest.Fake) *mail.Mailer {
+	return mail.New(fake, func(mailer *mail.Builder) {
+		mailer.From(mail.Address{Email: "noreply@example.com"})
+	})
+}
+
+// newBox returns an outbox with a relative signer, an in-memory queue and a
+// recording mailer.
 func newBox(t *testing.T, w wire) *outbox {
 	t.Helper()
 
-	return &outbox{signer: newSigner(t, ""), wire: w}
+	fake := queuetest.New()
+	sent := mailtest.New()
+
+	return &outbox{
+		signer:     newSigner(t, ""),
+		wire:       w,
+		queue:      fake,
+		dispatcher: queue.NewDispatcher(fake),
+		consumer:   queue.NewConsumer(fake),
+		mail:       sent,
+		mailer:     newMailer(sent),
+	}
 }
 
-// construct runs iam.New for box while it is the one [registration] sees.
+// construct runs iam.New for box while it is the one [registration] sees, and
+// registers the module's jobs on the box's consumer.
 func construct(box *outbox, db *database.Database, store *cache.Cache, configure ...iam.BuilderFunc) (*iam.IAM, error) {
 	building.Lock()
 	defer building.Unlock()
@@ -104,49 +146,86 @@ func construct(box *outbox, db *database.Database, store *cache.Cache, configure
 
 	configure = append([]iam.BuilderFunc{func(identity *iam.Builder) {
 		identity.ClientIP(testClientIP)
+		identity.Queue(box.dispatcher)
 	}}, configure...)
 	identity, err := iam.New(db, store, configure...)
 	box.identity = identity
+	if err != nil {
+		return nil, err
+	}
 
-	return identity, err
+	return identity, identity.RegisterJobs(box.consumer)
 }
 
-// dispatchReset is the dispatch function of password.Builder.Reset.
-func (box *outbox) dispatchReset(ctx context.Context, request password.ResetRequest) error {
-	box.mu.Lock()
-	box.dispatchedResets = append(box.dispatchedResets, request)
-	box.mu.Unlock()
+// drain runs the stored jobs through the module's handlers, which sends the
+// emails. A box without email features handles no job and has nothing to run.
+func (box *outbox) drain(t *testing.T) {
+	t.Helper()
 
-	return box.identity.SendReset(ctx, request)
+	if err := box.queue.Drain(testContext(t), box.consumer); err != nil && !errors.Is(err, queue.ErrNoQueues) {
+		t.Fatalf("drain: %v", err)
+	}
 }
 
-// deliverReset is the deliver function of password.Builder.Reset.
-func (box *outbox) deliverReset(_ context.Context, message password.ResetMessage) error {
+// resetEmail records message and writes the email of a password reset.
+func (box *outbox) resetEmail(message password.ResetMessage, href string) mail.Message {
 	box.mu.Lock()
 	defer box.mu.Unlock()
 
 	box.resets = append(box.resets, message)
 
-	return nil
+	return emailTo(message.Address, href)
 }
 
-// dispatchVerify is the dispatch function of account.Builder.Verification.
-func (box *outbox) dispatchVerify(ctx context.Context, request account.VerifyRequest) error {
-	box.mu.Lock()
-	box.dispatchedVerifies = append(box.dispatchedVerifies, request)
-	box.mu.Unlock()
-
-	return box.identity.SendVerification(ctx, request)
-}
-
-// deliverVerify is the deliver function of account.Builder.Verification.
-func (box *outbox) deliverVerify(_ context.Context, message account.VerifyMessage) error {
+// verifyEmail records message and writes the email of an email verification.
+func (box *outbox) verifyEmail(message account.VerifyMessage, href string) mail.Message {
 	box.mu.Lock()
 	defer box.mu.Unlock()
 
 	box.verifications = append(box.verifications, message)
 
-	return nil
+	return emailTo(message.Address, href)
+}
+
+// emailTo returns a minimal email to address whose body is text.
+func emailTo(address, text string) mail.Message {
+	return mail.NewMessage(mail.Recipients{To: []mail.Address{{Email: address}}}, mail.Body{Text: text})
+}
+
+// dispatchedResets returns the reset requests stored on the queue so far, in
+// order, whether or not a worker ran them.
+func (box *outbox) dispatchedResets(t *testing.T) []password.ResetRequest {
+	t.Helper()
+
+	return dispatched[password.ResetRequest](t, box, "iam-password-reset")
+}
+
+// dispatchedVerifies returns the verification requests stored on the queue so
+// far, in order, whether or not a worker ran them.
+func (box *outbox) dispatchedVerifies(t *testing.T) []account.VerifyRequest {
+	t.Helper()
+
+	return dispatched[account.VerifyRequest](t, box, "iam-email-verification")
+}
+
+// dispatched decodes the payloads of the jobs stored under name, with or without
+// an instance suffix.
+func dispatched[T any](t *testing.T, box *outbox, name string) []T {
+	t.Helper()
+
+	var payloads []T
+	for _, message := range box.queue.Dispatched() {
+		if !strings.HasPrefix(message.Name, name) {
+			continue
+		}
+		var payload T
+		if err := json.Unmarshal(message.Payload, &payload); err != nil {
+			t.Fatalf("decode %s payload %s: %v", name, message.Payload, err)
+		}
+		payloads = append(payloads, payload)
+	}
+
+	return payloads
 }
 
 // lastReset returns the newest reset message that is not a registration
@@ -169,6 +248,7 @@ func (box *outbox) lastNotice(t *testing.T) password.ResetMessage {
 func (box *outbox) lastResetWhere(t *testing.T, notice bool) password.ResetMessage {
 	t.Helper()
 
+	box.drain(t)
 	box.mu.Lock()
 	defer box.mu.Unlock()
 
@@ -187,6 +267,7 @@ func (box *outbox) lastResetWhere(t *testing.T, notice bool) password.ResetMessa
 func (box *outbox) lastVerify(t *testing.T) account.VerifyMessage {
 	t.Helper()
 
+	box.drain(t)
 	box.mu.Lock()
 	defer box.mu.Unlock()
 
@@ -198,7 +279,10 @@ func (box *outbox) lastVerify(t *testing.T) account.VerifyMessage {
 }
 
 // counts returns how many reset and verification messages were delivered.
-func (box *outbox) counts() (resets, verifications int) {
+func (box *outbox) counts(t *testing.T) (resets, verifications int) {
+	t.Helper()
+
+	box.drain(t)
 	box.mu.Lock()
 	defer box.mu.Unlock()
 
@@ -218,7 +302,15 @@ func registration(passwords *password.Builder) {
 // reset configures forgotten-password recovery on the outbox of the facade
 // being built, whatever its wiring says.
 func reset(passwords *password.Builder) {
-	passwords.Reset(buildingBox.signer, buildingBox.dispatchReset, buildingBox.deliverReset)
+	box := buildingBox
+	if box.wire.defaultEmail {
+		passwords.Reset(box.signer, box.mailer, resetPage)
+
+		return
+	}
+	passwords.Reset(box.signer, box.mailer, resetPage, func(reset *password.ResetBuilder) {
+		reset.Email(box.resetEmail)
+	})
 }
 
 // verification returns the callback that configures email verification of the
@@ -226,7 +318,14 @@ func reset(passwords *password.Builder) {
 func (box *outbox) verification() iam.BuilderFunc {
 	return func(identity *iam.Builder) {
 		identity.Directory(func(accounts *account.Builder) {
-			accounts.Verification(box.signer, box.dispatchVerify, box.deliverVerify)
+			if box.wire.defaultEmail {
+				accounts.Verification(box.signer, box.mailer, verifyPage)
+
+				return
+			}
+			accounts.Verification(box.signer, box.mailer, verifyPage, func(verification *account.VerificationBuilder) {
+				verification.Email(box.verifyEmail)
+			})
 		})
 	}
 }

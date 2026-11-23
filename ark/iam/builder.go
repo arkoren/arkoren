@@ -12,10 +12,12 @@ import (
 	"arkoren.dev/core/http/session"
 	"arkoren.dev/core/service/crypto"
 	"arkoren.dev/core/service/hash"
+	"arkoren.dev/core/service/queue"
 	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/ark/iam/account"
 	"arkoren.dev/ark/iam/apitoken"
+	"arkoren.dev/ark/iam/internal/storage"
 	"arkoren.dev/ark/iam/internal/web"
 	"arkoren.dev/ark/iam/password"
 	"arkoren.dev/ark/iam/permission"
@@ -58,6 +60,7 @@ type Builder struct {
 	clientIP        func(*http.Request) string
 	instance        string
 	events          *event.Bus
+	dispatcher      *queue.Dispatcher
 	users           *Users
 	directorySet    bool
 	directory       []account.BuilderFunc
@@ -145,6 +148,24 @@ func (identity *Builder) Events(bus *event.Bus) *Builder {
 	return identity
 }
 
+// Queue sets the dispatcher on which the module stores its background work, the
+// emails of [password.Builder.Reset] and [account.Builder.Verification]. The
+// module owns those jobs: it stores them on this dispatcher from the request and
+// sends the emails, through the mailer given to Reset and Verification, in the
+// worker that runs [IAM.RegisterJobs]. Enabling Reset or Verification without
+// Queue makes [New] fail with [ErrInvalidConfig]. A nil dispatcher is the same as
+// no call. The jobs run on the queue [QueueName]; a consumer restricted with
+// queue.ConsumerBuilder.Queues must list it.
+//
+// Example:
+//
+//	identity.Queue(dispatcher)
+func (identity *Builder) Queue(dispatcher *queue.Dispatcher) *Builder {
+	identity.dispatcher = dispatcher
+
+	return identity
+}
+
 // Users replaces the built-in users table with the application's own; see
 // [Users]. Without it the facade uses the built-in directory, which identifies
 // users by email. It cannot be combined with [Builder.Directory]: [New] fails
@@ -168,7 +189,7 @@ func (identity *Builder) Users(users Users) *Builder {
 // Example:
 //
 //	identity.Directory(func(accounts *account.Builder) {
-//		accounts.Verification(signer, dispatch, deliver).VerifyTTL(time.Hour)
+//		accounts.Verification(signer, mailer, "https://app.example.com/verify-email").VerifyTTL(time.Hour)
 //	})
 func (identity *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 	identity.directorySet = true
@@ -195,7 +216,7 @@ func (identity *Builder) Directory(configure ...account.BuilderFunc) *Builder {
 // Example:
 //
 //	identity.Password(hasher, func(passwords *password.Builder) {
-//		passwords.Registration(true).Reset(signer, dispatchReset, deliverReset)
+//		passwords.Registration(true).Reset(signer, mailer, "https://app.example.com/reset-password")
 //	})
 func (identity *Builder) Password(hasher *hash.Hasher, configure ...password.BuilderFunc) *Builder {
 	identity.passwordOn = true
@@ -471,11 +492,15 @@ func (identity *Builder) SessionLifetime(lifetime time.Duration) *Builder {
 }
 
 // validate checks the combinations of settings that no package can see, in
-// order: the providers, the application's users and directory settings, the
+// order: the client address source, the instance (which [IAM.Migrations] uses
+// even for features that are off), the providers, the application's users and directory settings, the
 // two-factor cipher, the session lifetime.
 func (identity *Builder) validate() error {
 	if identity.clientIP == nil {
 		return errors.New("client address source is required")
+	}
+	if err := storage.ValidInstance(identity.instance); err != nil {
+		return err
 	}
 	if err := validateProviders(identity.providers); err != nil {
 		return err

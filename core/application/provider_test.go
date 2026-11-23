@@ -293,3 +293,157 @@ func TestRunEndsWhenOnlyRunnerReturns(t *testing.T) {
 		t.Fatalf("state = %v, want stopped", app.State())
 	}
 }
+
+// TestSupplySkipsBuild checks that a supplied value is returned by Use and the
+// provider's build function never runs.
+func TestSupplySkipsBuild(t *testing.T) {
+	t.Parallel()
+
+	builds := 0
+	shared := application.Provide(func(*application.Composer) *provided {
+		builds++
+
+		return &provided{name: "built"}
+	})
+	supplied := &provided{name: "supplied"}
+
+	app := application.New()
+	mustNil(t, app.Start(t.Context(), func(composer *application.Composer) {
+		composer.Supply(shared, supplied)
+
+		if composer.Use(shared) != supplied {
+			t.Fatal("Use did not return the supplied value")
+		}
+	}))
+	t.Cleanup(func() { mustNil(t, app.Shutdown(context.Background())) })
+
+	if builds != 0 {
+		t.Fatalf("builds = %d, want 0", builds)
+	}
+}
+
+// TestSupplySkipsLifecycleRegistration checks that the Startup and Cleanup
+// callbacks of a supplied provider's build never register.
+func TestSupplySkipsLifecycleRegistration(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+
+	shared := application.Provide(func(composer *application.Composer) *provided {
+		composer.Startup(func(context.Context) error {
+			events = append(events, "startup")
+
+			return nil
+		})
+		composer.Cleanup(func(context.Context) error {
+			events = append(events, "cleanup")
+
+			return nil
+		})
+
+		return &provided{}
+	})
+
+	app := application.New()
+	mustNil(t, app.Start(t.Context(), func(composer *application.Composer) {
+		composer.Supply(shared, &provided{})
+		composer.Use(shared)
+	}))
+	mustNil(t, app.Shutdown(context.Background()))
+
+	if len(events) != 0 {
+		t.Fatalf("events = %v, want none", events)
+	}
+}
+
+// TestSupplyAfterUsePanics checks that supplying a provider already built in
+// the composition is rejected, so no consumer holds a stale value.
+func TestSupplyAfterUsePanics(t *testing.T) {
+	t.Parallel()
+
+	shared := application.Provide(func(*application.Composer) *provided { return &provided{} })
+	app := application.New()
+
+	mustPanic(t, application.ErrInvalidPhase, func() {
+		_ = app.Start(t.Context(), func(composer *application.Composer) {
+			composer.Use(shared)
+			composer.Supply(shared, &provided{})
+		})
+	})
+}
+
+// TestSupplyWhileBuildingPanics checks that a provider cannot supply its own
+// value from inside its build function.
+func TestSupplyWhileBuildingPanics(t *testing.T) {
+	t.Parallel()
+
+	var shared *application.Provider[*provided]
+
+	shared = application.Provide(func(composer *application.Composer) *provided {
+		composer.Supply(shared, &provided{})
+
+		return &provided{}
+	})
+	app := application.New()
+
+	mustPanic(t, application.ErrInvalidPhase, func() {
+		_ = app.Start(t.Context(), func(composer *application.Composer) {
+			composer.Use(shared)
+		})
+	})
+}
+
+// TestSupplyIsolatesCompositions checks that a supplied value never leaks into
+// another composition, which builds the provider normally.
+func TestSupplyIsolatesCompositions(t *testing.T) {
+	t.Parallel()
+
+	shared := application.Provide(func(*application.Composer) *provided {
+		return &provided{name: "built"}
+	})
+	first := application.New()
+	mustNil(t, first.Start(t.Context(), func(composer *application.Composer) {
+		composer.Supply(shared, &provided{name: "supplied"})
+	}))
+	t.Cleanup(func() { mustNil(t, first.Shutdown(context.Background())) })
+
+	second := application.New()
+	mustNil(t, second.Start(t.Context(), func(composer *application.Composer) {
+		if got := composer.Use(shared).name; got != "built" {
+			t.Fatalf("name = %q, want built", got)
+		}
+	}))
+	t.Cleanup(func() { mustNil(t, second.Shutdown(context.Background())) })
+}
+
+// TestSupplyFromTestRootProvider checks the testing pattern: a root provider
+// supplies a value, then returns the production root, whose providers see it.
+func TestSupplyFromTestRootProvider(t *testing.T) {
+	t.Parallel()
+
+	shared := application.Provide(func(*application.Composer) *provided {
+		return &provided{name: "built"}
+	})
+	production := application.Provide(func(composer *application.Composer) *application.Application {
+		composer.Use(shared)
+
+		return application.New()
+	})
+	root := application.Provide(func(composer *application.Composer) *application.Application {
+		composer.Supply(shared, &provided{name: "supplied"})
+
+		return composer.Use(production)
+	})
+
+	var seen string
+
+	app, err := application.Start(t.Context(), root, func(composer *application.Composer) {
+		seen = composer.Use(shared).name
+	})
+	mustNil(t, err)
+	t.Cleanup(func() { mustNil(t, app.Shutdown(context.Background())) })
+
+	if seen != "supplied" {
+		t.Fatalf("seen = %q, want supplied", seen)
+	}
+}

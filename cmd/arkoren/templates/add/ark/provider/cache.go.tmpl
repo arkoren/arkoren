@@ -1,0 +1,19 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
+)
+
+// Cache is the process's shared cache, which holds sessions and rate-limit
+// counters. The memory driver keeps entries in this process only: sessions end
+// with a restart and are not shared between processes or replicas. Swap in a
+// networked driver here before running more than one.
+var Cache = application.Provide(func(compose *application.Composer) *cache.Cache {
+	driver := memorycache.New()
+	compose.Cleanup(driver.Stop)
+	compose.Startup(driver.Start)
+
+	return cache.New(driver)
+})
