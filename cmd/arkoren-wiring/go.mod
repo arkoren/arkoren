@@ -3,9 +3,9 @@ module arkoren.dev/cmd/arkoren-wiring
 go 1.27
 
 require (
-	arkoren.dev/ark/iam v0.4.0
+	arkoren.dev/ark/iam v0.5.0
 	arkoren.dev/ark/oauth v0.3.0
-	arkoren.dev/core v0.14.0
+	arkoren.dev/core v0.19.0
 	arkoren.dev/driver/aes v0.1.0
 	arkoren.dev/driver/bcrypt v0.1.0
 	arkoren.dev/driver/sqlite v0.1.0

@@ -34,6 +34,10 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/core/service/hash"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/mail/mailtest"
+	"arkoren.dev/core/service/queue"
+	"arkoren.dev/core/service/queue/queuetest"
 	"arkoren.dev/driver/aes/aescrypto"
 	"arkoren.dev/driver/bcrypt/bcrypthash"
 	sqlite "arkoren.dev/driver/sqlite/sqlitedatabase"
@@ -230,21 +234,43 @@ func (b *browser) get(path string, headers ...string) reply {
 
 // system is a composed facade behind a running server.
 type system struct {
+	t        *testing.T
 	identity *iam.IAM
 	provider *fakeProvider
 	browser  *browser
-	verified []account.VerifyMessage
-	mu       sync.Mutex
+	mail     *mailtest.Fake
+	jobs     *queuetest.Fake
+	consumer *queue.Consumer
 }
 
-// deliverVerification records the verification emails the facade sends.
-func (sys *system) deliverVerification(_ context.Context, message account.VerifyMessage) error {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+// verificationToken runs the queued jobs and returns the signed value of the
+// link in the last email sent, which the page of the application would read
+// from the URL fragment and post to the verify or reset route.
+func (sys *system) verificationToken() string {
+	sys.t.Helper()
 
-	sys.verified = append(sys.verified, message)
+	if err := sys.jobs.Drain(sys.t.Context(), sys.consumer); err != nil {
+		sys.t.Fatalf("drain jobs: %v", err)
+	}
+	sent := sys.mail.Sent()
+	if len(sent) == 0 {
+		sys.t.Fatal("no email was sent")
+	}
+	for _, word := range strings.Fields(sent[len(sent)-1].TextBody()) {
+		_, fragment, found := strings.Cut(word, "#")
+		if !found {
+			continue
+		}
+		token, err := url.QueryUnescape(fragment)
+		if err != nil {
+			sys.t.Fatalf("unescape link fragment %q: %v", fragment, err)
+		}
 
-	return nil
+		return token
+	}
+	sys.t.Fatalf("email has no link: %q", sent[len(sent)-1].TextBody())
+
+	return ""
 }
 
 // newCipher returns an AES encrypter over a fresh key.
@@ -290,7 +316,12 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...iam.BuilderF
 	}
 	t.Cleanup(func() { _ = driver.Stop(context.Background()) })
 	db := database.New(driver)
-	sys := &system{provider: newFakeProvider(t)}
+	sys := &system{t: t, provider: newFakeProvider(t), mail: mailtest.New(), jobs: queuetest.New()}
+	mailer := mail.New(sys.mail, func(mailer *mail.Builder) {
+		mailer.From(mail.Address{Email: "noreply@app.test"})
+	})
+	dispatcher := queue.NewDispatcher(sys.jobs)
+	sys.consumer = queue.NewConsumer(sys.jobs)
 	ctx := oidc.ClientContext(t.Context(), sys.provider.httpClient())
 	google, err := oauthauth.New(oauthauth.Google(), newCipher(t), "cid", func(client *oauthauth.ClientBuilder) {
 		client.ClientSecret("secret")
@@ -314,16 +345,13 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...iam.BuilderF
 		t.Fatalf("link.New: %v", err)
 	}
 	sys.identity, err = iam.New(db, cache.New(memorycache.New()), append([]iam.BuilderFunc{func(identity *iam.Builder) {
+		identity.Queue(dispatcher)
 		identity.Password(hash.New(bcrypthash.New(func(driver *bcrypthash.Builder) { driver.Cost(4) })), func(passwords *password.Builder) {
-			passwords.Registration(true).Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
-				return sys.identity.SendReset(ctx, request)
-			}, func(context.Context, password.ResetMessage) error { return nil })
+			passwords.Registration(true).Reset(signer, mailer, "https://app.test/reset-password")
 		})
 		if builtIn {
 			identity.Directory(func(accounts *account.Builder) {
-				accounts.Verification(signer, func(ctx context.Context, request account.VerifyRequest) error {
-					return sys.identity.SendVerification(ctx, request)
-				}, sys.deliverVerification)
+				accounts.Verification(signer, mailer, "https://app.test/verify-email")
 			})
 		}
 		identity.TwoFactor(totp.New("Example"), newCipher(t))
@@ -333,6 +361,9 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...iam.BuilderF
 	}}, configure...)...)
 	if err != nil {
 		t.Fatalf("iam.New: %v", err)
+	}
+	if err := sys.identity.RegisterJobs(sys.consumer); err != nil {
+		t.Fatalf("RegisterJobs: %v", err)
 	}
 	migrator := migrate.New(db)
 	if err := migrator.Add(sys.identity.Migrations()...); err != nil {
