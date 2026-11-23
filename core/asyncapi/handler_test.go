@@ -1,6 +1,7 @@
 package asyncapi_test
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"arkoren.dev/core/asyncapi"
+	"arkoren.dev/core/http/router"
 )
 
 // ExampleDocument_Handler shows the public handler can serve a HEAD response
@@ -118,5 +120,36 @@ func TestHandlerWriteError(t *testing.T) {
 
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("write error lost: %v", err)
+	}
+}
+
+// TestDocumentOperationExportsOpenAPI verifies the handler registers with its
+// operation and that the router exports a summary with 200 and 500 responses.
+func TestDocumentOperationExportsOpenAPI(t *testing.T) {
+	t.Parallel()
+
+	routes := router.New()
+	routes.Get("/asyncapi.json", asyncapi.New("Events", "1").Handler(), asyncapi.DocumentOperation)
+
+	data, err := routes.OpenAPI("Docs", "1")
+	if err != nil {
+		t.Fatalf("OpenAPI() error = %v", err)
+	}
+
+	var document struct {
+		Paths map[string]map[string]struct {
+			Summary   string                    `json:"summary"`
+			Responses map[string]map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	operation := document.Paths["/asyncapi.json"]["get"]
+
+	if operation.Summary == "" || operation.Responses["200"] == nil || operation.Responses["500"] == nil {
+		t.Fatalf("operation = %+v, want summary, 200 and 500", operation)
 	}
 }

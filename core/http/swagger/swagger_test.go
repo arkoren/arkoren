@@ -1,6 +1,7 @@
 package swagger_test
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net/http"
@@ -159,7 +160,7 @@ func TestHandlerUnknownPathsReturnNotFound(t *testing.T) {
 
 		endpoint.ServeHTTP(response, httptest.NewRequest(http.MethodGet, address, nil))
 
-		if response.Code != http.StatusNotFound || response.Body.Len() != 0 {
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Header().Get("Content-Type"), "json") {
 			t.Fatalf("%s: status %d, body %s", address, response.Code, response.Body.String())
 		}
 	}
@@ -381,4 +382,45 @@ func (writer *failedWriter) Write([]byte) (int, error) {
 // bytes, including when io.WriteString selects the StringWriter fast path.
 func (writer *failedWriter) WriteString(string) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+// TestOperationsExportOpenAPI verifies the documentation page exports with its
+// operation and that the hidden asset wildcard neither appears nor fails export.
+func TestOperationsExportOpenAPI(t *testing.T) {
+	t.Parallel()
+
+	endpoint, err := swagger.Handler("/docs", "/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routes := router.New()
+	routes.Get("/docs", endpoint, swagger.Operation)
+	routes.Get("/docs/{path...}", endpoint, swagger.AssetsOperation)
+
+	data, err := routes.OpenAPI("Docs", "1")
+	if err != nil {
+		t.Fatalf("OpenAPI() error = %v", err)
+	}
+
+	var document struct {
+		Paths map[string]map[string]struct {
+			Summary   string                    `json:"summary"`
+			Responses map[string]map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(document.Paths) != 1 {
+		t.Fatalf("paths = %d, want only /docs", len(document.Paths))
+	}
+
+	operation := document.Paths["/docs"]["get"]
+
+	if operation.Summary == "" || operation.Responses["200"] == nil {
+		t.Fatalf("operation = %+v, want summary and 200", operation)
+	}
 }

@@ -10,10 +10,14 @@
 //		log.Fatal(err)
 //	}
 //	routes := router.New()
-//	routes.Get("/docs", endpoint)
-//	routes.Get("/docs/{path...}", endpoint)
+//	routes.Get("/docs", endpoint, swagger.Operation)
+//	routes.Get("/docs/{path...}", endpoint, swagger.AssetsOperation)
 //
-// For the root base path "/", register "/{path...}". A reverse proxy prefix
+// [Operation] describes the page in the router's OpenAPI document. The wildcard
+// is an opaque catch-all, so [AssetsOperation] hides it from export instead of
+// documenting it.
+//
+// For the root base path "/", register "/{path...}" with [AssetsOperation]. A reverse proxy prefix
 // must be included in the explicit base path; no forwarded headers are trusted.
 // Protect documentation routes with the application's normal middleware when
 // the API is private. The browser fetches the specification and any referenced

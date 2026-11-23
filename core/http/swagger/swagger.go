@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"arkoren.dev/core/http/router"
+	"arkoren.dev/foundation/problem"
 )
 
 // assets holds the unmodified upstream distribution and its legal notices.
@@ -63,8 +64,8 @@ type resource struct {
 //		log.Fatal(err)
 //	}
 //	routes := router.New()
-//	routes.Get("/docs", endpoint)
-//	routes.Get("/docs/{path...}", endpoint)
+//	routes.Get("/docs", endpoint, swagger.Operation)
+//	routes.Get("/docs/{path...}", endpoint, swagger.AssetsOperation)
 func Handler(basePath, specificationURL string, configure ...BuilderFunc) (router.Handler, error) {
 	page := &Builder{title: "API documentation"}
 
@@ -93,6 +94,37 @@ func Handler(basePath, specificationURL string, configure ...BuilderFunc) (route
 	return func(writer http.ResponseWriter, request *http.Request) error {
 		return serve(resources, writer, request)
 	}, nil
+}
+
+// Operation describes the documentation page that [Handler] serves at its base
+// path. It documents the uncached HTML page and its security headers, and leaves
+// the embedded assets to [AssetsOperation]. The annotation changes no handler
+// behavior and registers no route; the application owns the path, middleware
+// and access control.
+//
+// Example:
+//
+//	routes.Get("/docs", endpoint, swagger.Operation)
+func Operation(operation *router.OperationBuilder) {
+	operation.Summary("API documentation")
+	operation.Description("Serves the Swagger UI page for this application's OpenAPI document. " +
+		"The page is also served at the base path with a trailing slash. HEAD answers headers only.")
+	operation.MediaResponse(http.StatusOK, "text/html; charset=utf-8", router.RawSchema(`{"type":"string"}`))
+	operation.ResponseHeader(http.StatusOK, "Cache-Control", router.RawSchema(`{"type":"string","const":"no-store"}`))
+	operation.ResponseHeader(http.StatusOK, "X-Content-Type-Options", router.RawSchema(`{"type":"string","const":"nosniff"}`))
+}
+
+// AssetsOperation is the metadata of the wildcard route that serves the pinned
+// Swagger UI assets and its initializer beneath the base path. The wildcard is
+// an opaque catch-all that the router's OpenAPI export cannot describe as one
+// path, so it hides the registration instead of documenting it: the route stays
+// callable and listed by Routes, and export neither reports nor includes it.
+//
+// Example:
+//
+//	routes.Get("/docs/{path...}", endpoint, swagger.AssetsOperation)
+func AssetsOperation(operation *router.OperationBuilder) {
+	operation.Hidden(true)
 }
 
 // resolveSpecification validates browser-facing URL input and resolves relative
@@ -192,22 +224,37 @@ func representations(prefix, specificationURL, title string) (map[string]resourc
 	return resources, nil
 }
 
+// ErrMethodNotAllowed is the 405 problem the endpoint returns for a method other
+// than GET or HEAD, with an Allow header. Router registration with Get never
+// reaches it; it protects an endpoint registered with Any or mounted directly.
+// Paths the endpoint does not serve are the standard 404 problem. Both are
+// rendered by the router like any other problem, so documentation routes never
+// answer with an empty or plain-text error body.
+//
+// Example:
+//
+//	endpoint, _ := swagger.Handler("/docs", "/openapi.json")
+//	err := endpoint(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/docs", nil))
+//	fmt.Println(errors.Is(err, swagger.ErrMethodNotAllowed)) // true
+var ErrMethodNotAllowed = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:core:http/swagger:method-not-allowed")
+	details.Title("Method not allowed")
+	details.Detail("The documentation endpoint serves GET and HEAD only.")
+	details.Status(http.StatusMethodNotAllowed)
+	details.Header("Allow", "GET, HEAD")
+})
+
 // serve uses exact paths, not a filesystem handler, so directories, traversal,
 // and unspecified files can never expose embedded package contents.
 func serve(resources map[string]resource, writer http.ResponseWriter, request *http.Request) error {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
-		writer.Header().Set("Allow", "GET, HEAD")
-		writer.WriteHeader(http.StatusMethodNotAllowed)
-
-		return nil
+		return ErrMethodNotAllowed
 	}
 
 	entry, ok := resources[request.URL.Path]
 
 	if !ok {
-		writer.WriteHeader(http.StatusNotFound)
-
-		return nil
+		return problem.NotFound()
 	}
 
 	writer.Header().Set("Content-Type", entry.contentType)

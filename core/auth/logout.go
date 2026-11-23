@@ -18,7 +18,7 @@ import (
 //
 //	r.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 //		logout.Redirect("/").Events(events)
-//	}))
+//	}), auth.LogoutOperation)
 type LogoutBuilder struct {
 	// settings holds the private construction values until publication.
 	settings logoutSettings
@@ -45,7 +45,7 @@ type logoutSettings struct {
 //
 //	r.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 //		logout.Redirect("/")
-//	}))
+//	}), auth.LogoutOperation)
 func (logout *LogoutBuilder) Redirect(target string) *LogoutBuilder {
 	logout.settings.Redirect = target
 
@@ -60,7 +60,7 @@ func (logout *LogoutBuilder) Redirect(target string) *LogoutBuilder {
 //
 //	r.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 //		logout.Events(events)
-//	}))
+//	}), auth.LogoutOperation)
 func (logout *LogoutBuilder) Events(events *event.Bus) *LogoutBuilder {
 	logout.settings.Events = events
 
@@ -74,7 +74,7 @@ func (logout *LogoutBuilder) Events(events *event.Bus) *LogoutBuilder {
 //	var policy auth.LogoutBuilderFunc = func(logout *auth.LogoutBuilder) {
 //		logout.Redirect("/")
 //	}
-//	r.Post("/logout", guard.LogoutHandler(policy))
+//	r.Post("/logout", guard.LogoutHandler(policy), auth.LogoutOperation)
 type LogoutBuilderFunc = func(*LogoutBuilder)
 
 // LoggedOutEvent reports that a logged-in user logged out. It carries only the
@@ -128,11 +128,11 @@ var LoggedOut = event.NewTopic[LoggedOutEvent]("auth.user.logged-out")
 //
 // Example:
 //
-//	web.Post("/logout", guard.LogoutHandler())
+//	web.Post("/logout", guard.LogoutHandler(), auth.LogoutOperation)
 //
 //	web.Post("/sign-out", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 //		logout.Redirect("/")
-//	}))
+//	}), auth.LogoutOperation)
 func (guard *Guard) LogoutHandler(configure ...LogoutBuilderFunc) router.Handler {
 	logout := &LogoutBuilder{}
 
