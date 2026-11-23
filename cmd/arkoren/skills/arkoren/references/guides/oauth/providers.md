@@ -170,8 +170,8 @@ handler for GET too, because the GET finishes the login. With `r` your
 session-enabled router:
 
 ```go
-r.Post("/oauth/apple/callback", client.CallbackHandler(guard, mapIdentity))
-r.Get("/oauth/apple/callback", client.CallbackHandler(guard, mapIdentity))
+r.Post("/oauth/apple/callback", client.CallbackHandler(guard, mapIdentity), oauthauth.CallbackOperation)
+r.Get("/oauth/apple/callback", client.CallbackHandler(guard, mapIdentity), oauthauth.CallbackOperation)
 ```
 
 The encrypted state cookie protects this callback and uses `SameSite=None`, so

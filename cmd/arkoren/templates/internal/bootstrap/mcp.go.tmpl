@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"arkoren.dev/ark/mcp/mcpserver"
 	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/router"
 )
 
 // MCP mounts read-only application, route, and telemetry diagnostics at /mcp
@@ -37,7 +38,13 @@ var MCP = application.Provide(func(compose *application.Composer) *mcpserver.Ser
 		listener.Tools(routes.MCPTools("http")...)
 	}))
 
-	routes.Mount("/mcp", endpoint)
+	// The MCP endpoint is a protocol, advertised by tools/list rather than by an
+	// HTTP operation, and a mount is an opaque catch-all that OpenAPI export
+	// cannot describe as one path, so the registration is hidden from the
+	// document instead of left unannotated.
+	routes.Mount("/mcp", endpoint, func(operation *router.OperationBuilder) {
+		operation.Hidden(true)
+	})
 
 	return endpoint
 })

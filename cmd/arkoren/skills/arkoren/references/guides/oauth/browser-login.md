@@ -24,11 +24,11 @@ already runs `auth.Middleware(guard.Authenticator())`. Import `auth` from
 is an `auth.Resolver`: it returns the local account's subject.
 
 ```go
-web.Get("/login", client.LoginHandler())
-web.Get("/oauth/callback", client.CallbackHandler(guard, mapIdentity))
+web.Get("/login", client.LoginHandler(), oauthauth.LoginOperation)
+web.Get("/oauth/callback", client.CallbackHandler(guard, mapIdentity), oauthauth.CallbackOperation)
 web.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 	logout.Redirect("/")
-}))
+}), auth.LogoutOperation)
 ```
 
 `LoginHandler` redirects to the provider. A successful callback verifies the

@@ -152,6 +152,21 @@ prefix of its own, and is used preferably as `routes.Group("/", pkg.Register)`.
 Its signature stays `func(*router.Router)` so the method value works as a group
 callback and as a direct call.
 
+**Handler operations.** Every exported handler (`XHandler()`, a `router.Handler`
+value) ships an exported `XOperation func(*router.OperationBuilder)` in its own
+package, written like `application.LiveOperation`: summary, description, tags,
+every path/query parameter, the body schema, each response with its schema
+(cookies and `Location` as response headers), and every problem the handler
+returns through `Problem` with its real identity. Every registration passes it
+as the last argument: `Register*` functions, templates, doc examples and guides.
+Multi-method registrations carry no operation ID. A handler that cannot export
+(a `Mount` or `{path...}` catch-all) passes an operation that sets `Hidden(true)`.
+A module uses only operations and builder methods of the core it requires.
+Name path wildcards once per template: OpenAPI export rejects `/x/{id}` beside
+`/x/{name}`. Document auth in the description and its 401/403 problems; `Security`
+needs schemes the application declares. Test that the registered routes export
+with no errors and that each operation has a summary and its statuses.
+
 Every public API takes one of three shapes.
 
 Every exported construction draft has a matching function alias:
@@ -767,6 +782,13 @@ trust are explicit CLI actions, never startup repair or a loader side effect.
   for review; the generic templates in `foundation/problem` stay
   `about:blank`. Domain and contract
   sentinels stay plain errors; applications map them with `http/middleware/errormap`.
+- Request data is parsed with a `foundation/validate` schema through
+  `request.ParseJSON`, and that same schema is the operation's body schema. Every
+  failure a client can cause is a `problem.Details` sentinel with a stable
+  `Type`, rendered by the router; handlers write no ad-hoc validation, plain-text
+  or hand-built JSON error bodies. Exceptions are protocol-fixed formats (probe
+  bodies, MCP JSON-RPC, OAuth redirects), and a plain `http.Handler` without a
+  router (Prometheus) writes the problem document itself.
 - Never discard an error silently; after a side effect, write `_ =` with a
   comment saying why.
 

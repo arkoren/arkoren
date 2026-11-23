@@ -130,7 +130,7 @@ func main() {
 
 	routes := router.New()
 	routes.Use(csrf.Middleware())
-	routes.Mount("/mcp", endpoint)
+	routes.Mount("/mcp", endpoint, mcpserver.Operation)
 
 	log.Print("serving MCP at http://127.0.0.1:8080/mcp")
 	log.Fatal(http.ListenAndServe("127.0.0.1:8080", routes))

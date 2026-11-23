@@ -51,12 +51,12 @@ unprotected public route. The handler adds no access controls.
 To publish the contract on an appropriately protected `routes` router:
 
 ```go
-routes.Get("/openapi.json", routes.OpenAPIHandler("Greeting API", "1.0.0"))
+routes.Get("/openapi.json", routes.OpenAPIHandler("Greeting API", "1.0.0"), router.OpenAPIOperation)
 ```
 
 Serve that router through your [HTTP server](../http-networking/server.md).
 A successful GET returns the document with `Content-Type: application/json`.
-The registration has no operation callback, so it is omitted from its own export.
+`router.OpenAPIOperation` describes the route, so the document lists itself with its 200 JSON answer and the 500 problem returned when an operation declaration is invalid.
 
 Document configuration callbacks run once when you construct `OpenAPIHandler`.
 Generation happens on its first request, capturing all routes registered before
@@ -86,14 +86,16 @@ Invalid paths or URLs return an error. After checking `err`, register both the
 base route and its subtree on the appropriately protected router:
 
 ```go
-routes.Get("/docs", viewer)
-routes.Get("/docs/{path...}", viewer)
+routes.Get("/docs", viewer, swagger.Operation)
+routes.Get("/docs/{path...}", viewer, swagger.AssetsOperation)
 ```
 
 The viewer serves `/docs` and `/docs/`, with assets beneath `/docs/`. Keep these
-paths equal to the base path passed to the factory. Leave both registrations
-unannotated: the exporter does not discover operations inside the UI, and an
-annotated catch-all would fail export.
+paths equal to the base path passed to the factory. `swagger.Operation` describes
+the page. The subtree is an opaque catch-all that the exporter cannot describe as one
+path, so `swagger.AssetsOperation` hides it from the document; a visible annotation
+on a catch-all would fail export. For the root base path, register `/{path...}` with
+`swagger.AssetsOperation`.
 
 Once the server runs, opening `/docs/` makes the browser fetch `/openapi.json`.
 The factory neither generates nor fetches that document. Pinned JavaScript and

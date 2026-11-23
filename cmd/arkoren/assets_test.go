@@ -260,7 +260,7 @@ func TestNewMCPIsAProvider(t *testing.T) {
 
 	source := renderedNewSource(t, "internal/bootstrap/mcp.go")
 	contains(t, source, "var MCP = application.Provide(func(compose *application.Composer) *mcpserver.Server {",
-		"routes := compose.Use(Router)", `routes.MCPTools("http")`, `routes.Mount("/mcp", endpoint)`)
+		"routes := compose.Use(Router)", `routes.MCPTools("http")`, `routes.Mount("/mcp", endpoint, func(operation *router.OperationBuilder) {`, "operation.Hidden(true)")
 
 	_, implementation, _ := strings.Cut(source, "var MCP = ")
 

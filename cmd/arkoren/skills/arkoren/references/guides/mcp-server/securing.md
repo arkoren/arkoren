@@ -58,7 +58,7 @@ before mounting the checked `endpoint` from [tool registration](serving.md#endpo
 ```go
 routes.Use(auth.Middleware(auth.Bearer(verifyAccessToken)))
 routes.Use(auth.Require())
-routes.Mount("/mcp", endpoint)
+routes.Mount("/mcp", endpoint, mcpserver.Operation)
 ```
 
 `auth.Middleware` stores a verified `auth.Identity`, but permits anonymous requests when

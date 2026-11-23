@@ -64,6 +64,26 @@ capturing the configured application name. The page displays that name and
 Arkoren resource links, not runtime, configuration, or build diagnostics. Choose
 an application name suitable for public display.
 
+## Other Annotations
+
+The packages that ship an HTTP handler ship its operation next to it. Pass the
+callback as the last argument of the registration:
+
+| Handler | Callback | Declared Output |
+| --- | --- | --- |
+| `routes.OpenAPIHandler(...)` | `router.OpenAPIOperation` | The cached document at `200` and a `500` problem. |
+| `Document.Handler()` (AsyncAPI) | `asyncapi.DocumentOperation` | The cached AsyncAPI JSON at `200` and a `500` problem. |
+| `swagger.Handler(...)` page | `swagger.Operation` | The Swagger UI page as `200` HTML. |
+| `swagger.Handler(...)` subtree | `swagger.AssetsOperation` | Nothing: it hides the opaque `{path...}` catch-all. |
+| `driver.Handler()` (Prometheus) | `prometheustelemetry.Operation` | Metrics text at `200`; the `500`, `501` and `503` failures. |
+| `guard.PendingHandler()`, `ChallengeHandler()`, `ConfirmHandler()`, `LogoutHandler()` | `auth.PendingOperation`, `ChallengeOperation`, `ConfirmOperation`, `LogoutOperation` | Bodies, statuses, session cookies and the guard's problems. |
+| `client.LoginHandler()`, `CallbackHandler(...)`, `NonceHandler()`, `NativeHandler(...)` (OAuth) | `oauthauth.LoginOperation`, `CallbackOperation`, `NonceOperation`, `NativeOperation` | Redirects, cookies, native bodies and the login problems. |
+| IAM routes | the operation in each package, such as `password.LoginOperation` | Bodies, statuses, cookies and the stable problems. [IAM routes](../iam/routes.md) lists them. |
+
+`identity.Register` already passes them. A callback that needs a path parameter
+declares it under the name of the default path (`{id}`, `{subject}`, `{name}`); if you
+register a handler on a path that names the wildcard differently, export reports it.
+
 ## Readiness Details
 
 Readiness reports whether the application is live and its cached health pass is
@@ -136,22 +156,20 @@ requirements.
 Other handlers depend on provider configuration or implement a protocol that a
 single operation cannot describe. Annotate only the behavior you actually serve:
 
-- [OAuth login](../oauth/overview.md) uses redirects and provider callbacks.
-  Describe actual statuses and the `Location` header with `Response` and
-  `ResponseHeader`, rather than assuming JSON. The document API does not support
-  OAuth-flow or OpenID Connect security schemes.
+- [OAuth login](../oauth/overview.md) has operations for its four handlers
+  (see above). They describe redirects and the `Location` header rather than JSON.
+  The document API does not support OAuth-flow or OpenID Connect security schemes.
 - [Webhook receivers](../webhooks/receiving-webhooks.md) need provider-specific
   bodies and signature headers. Declare them explicitly; annotations neither
   verify signatures nor discover provider-specific failure responses.
-- [Downloads](../file-storage/uploads-and-downloads.md) and
-  [Prometheus metrics](../observability/telemetry-drivers.md#prometheus) need their
+- [Downloads](../file-storage/uploads-and-downloads.md) need their
   actual media types and headers. Use `MediaResponse`, not `JSONResponse`, for
   binary or text output. The [response declarations](operations.md#describe-responses)
   show the pattern.
 - Mounted [MCP endpoints](../mcp-server/first-server.md) remain a separate protocol.
-  Export does not traverse their handlers or infer internal operations. Leave
-  mounts and catch-all routes unannotated or hidden; visible annotated opaque
-  paths fail export.
+  Export does not traverse their handlers or infer internal operations. Mount the
+  server with `mcpserver.Operation`, which hides the registration; visible annotated
+  opaque paths fail export.
 
 For every integration, match the body, headers, statuses, and security policy to
 the configured handler and middleware. A static annotation or diagnostic route

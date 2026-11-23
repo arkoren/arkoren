@@ -30,7 +30,18 @@ func NewHandlers(service *{{.Feature}}.Service) *Handlers {
 func (handlers *Handlers) Register(routes *router.Router) {
 	routes.Use(Problems)
 
-	routes.Get("/", handlers.List)
+	routes.Get("/", handlers.List, listOperation)
+}
+
+// listOperation documents the placeholder GET / route in the router's OpenAPI
+// document. Replace it with the description of the feature's real routes and
+// give each route its own operation: a summary, tags, parameters, the body and
+// response schemas, and the problems its handler returns.
+func listOperation(operation *router.OperationBuilder) {
+	operation.Summary("List {{.Feature}}")
+	operation.Description("Placeholder collection route of the {{.Feature}} feature; it answers an empty list until it calls the Service.")
+	operation.Tags("{{.Feature}}")
+	operation.JSONResponse(http.StatusOK, router.RawSchema(`{"type":"array","items":{}}`))
 }
 
 // List handles the feature's collection route. It responds with an empty JSON

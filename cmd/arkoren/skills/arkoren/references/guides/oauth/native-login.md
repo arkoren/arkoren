@@ -24,8 +24,8 @@ cookie jar. Both use the default session of the session middleware. Mount them
 behind the same rate limit as your other login routes:
 
 ```go
-web.Get("/auth/google/nonce", client.NonceHandler())
-web.Post("/auth/google/native", client.NativeHandler(guard, mapIdentity))
+web.Get("/auth/google/nonce", client.NonceHandler(), oauthauth.NonceOperation)
+web.Post("/auth/google/native", client.NativeHandler(guard, mapIdentity), oauthauth.NativeOperation)
 ```
 
 `NonceHandler` answers `{"nonce": "..."}` and stores the nonce in the session.

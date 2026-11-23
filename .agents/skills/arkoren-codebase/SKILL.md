@@ -264,7 +264,11 @@ generated starter will use `RegisterProbes` after the next core release.
 operation callbacks describe requests and responses; they do not change handler,
 validation, error-mapping, or authentication behavior. Keep the public route-list
 and MCP diagnostic wire shapes unchanged. OpenAPI JSON and Swagger UI handlers
-are explicitly registered by the application. The Swagger UI package lives at
+are explicitly registered by the application. Every shipped handler has its own
+`XOperation` and every registration in the repository passes it (see Handler
+operations in `arkoren-go`); each module defines operations with only the core
+API its `go.mod` requires, so an ark never calls an operation added to core in
+the same change. The Swagger UI package lives at
 `core/http/swagger`, with pinned frontend assets and no third-party Go dependency.
 Keep its assets and rendering out of router imports. Document schema-export
 limitations instead of claiming that annotations enforce wire conformance.
