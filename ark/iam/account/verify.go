@@ -109,7 +109,7 @@ func (message VerifyMessage) Link(base string) string {
 // Example:
 //
 //	if directory.VerificationEnabled() {
-//		web.Post("/email/verify", directory.VerifyHandler())
+//		web.Post("/email/verify", directory.VerifyHandler(), account.VerifyOperation)
 //	}
 func (directory *Directory) VerificationEnabled() bool {
 	return directory.signer != nil
@@ -319,7 +319,7 @@ func (directory *Directory) verify(ctx context.Context, only, signed string) (st
 //
 // Example:
 //
-//	web.Post("/email/verify", directory.VerifyHandler())
+//	web.Post("/email/verify", directory.VerifyHandler(), account.VerifyOperation)
 func (directory *Directory) VerifyHandler() router.Handler {
 	if !directory.VerificationEnabled() {
 		panic("account: VerifyHandler requires Builder.Verification")
@@ -330,9 +330,7 @@ func (directory *Directory) VerifyHandler() router.Handler {
 		if err != nil {
 			return err
 		}
-		body, err := web.Decode[struct {
-			Token string `json:"token"`
-		}](r)
+		body, err := web.Parse(r, tokenSchema)
 		if err != nil {
 			return err
 		}
@@ -359,7 +357,7 @@ func (directory *Directory) VerifyHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/email/verify/resend", directory.ResendHandler())
+//	web.Post("/email/verify/resend", directory.ResendHandler(), account.ResendOperation)
 func (directory *Directory) ResendHandler() router.Handler {
 	if !directory.VerificationEnabled() {
 		panic("account: ResendHandler requires Builder.Verification")

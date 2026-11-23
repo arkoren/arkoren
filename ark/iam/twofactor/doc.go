@@ -60,5 +60,5 @@
 //		policy.SecondFactor(factors.Credential(), factors.RecoveryCredential())
 //		policy.StepUp(factors.Credential())
 //	})
-//	web.Post("/two-factor/setup", factors.SetupHandler(guard))
+//	web.Post("/two-factor/setup", factors.SetupHandler(guard), twofactor.SetupOperation)
 package twofactor

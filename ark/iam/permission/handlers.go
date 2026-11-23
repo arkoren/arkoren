@@ -46,7 +46,7 @@ type userBody struct {
 //
 // Example:
 //
-//	web.Get("/me/permissions", permissions.SelfHandler())
+//	web.Get("/me/permissions", permissions.SelfHandler(), permission.SelfOperation)
 func (store *Store) SelfHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := request.Identity(r)
@@ -69,7 +69,7 @@ func (store *Store) SelfHandler() router.Handler {
 //
 // Example:
 //
-//	web.Get("/users/{subject}/permissions", permissions.UserHandler())
+//	web.Get("/users/{subject}/permissions", permissions.UserHandler(), permission.UserOperation)
 func (store *Store) UserHandler() router.Handler {
 	store.needManagement("UserHandler")
 
@@ -103,7 +103,7 @@ func (store *Store) UserHandler() router.Handler {
 //
 // Example:
 //
-//	web.Put("/users/{subject}/permissions/{name}", permissions.GrantHandler(guard))
+//	web.Put("/users/{subject}/permissions/{name}", permissions.GrantHandler(guard), permission.GrantOperation)
 func (store *Store) GrantHandler(guard *auth.Guard) router.Handler {
 	store.needManagement("GrantHandler")
 
@@ -116,7 +116,7 @@ func (store *Store) GrantHandler(guard *auth.Guard) router.Handler {
 //
 // Example:
 //
-//	web.Delete("/users/{subject}/permissions/{name}", permissions.RevokeHandler(guard))
+//	web.Delete("/users/{subject}/permissions/{name}", permissions.RevokeHandler(guard), permission.RevokeOperation)
 func (store *Store) RevokeHandler(guard *auth.Guard) router.Handler {
 	store.needManagement("RevokeHandler")
 
@@ -147,7 +147,7 @@ func (store *Store) RevokeHandler(guard *auth.Guard) router.Handler {
 //
 // Example:
 //
-//	web.Put("/users/{subject}/roles/{name}", permissions.GrantRoleHandler(guard))
+//	web.Put("/users/{subject}/roles/{name}", permissions.GrantRoleHandler(guard), permission.GrantRoleOperation)
 func (store *Store) GrantRoleHandler(guard *auth.Guard) router.Handler {
 	store.needManagement("GrantRoleHandler")
 
@@ -160,7 +160,7 @@ func (store *Store) GrantRoleHandler(guard *auth.Guard) router.Handler {
 //
 // Example:
 //
-//	web.Delete("/users/{subject}/roles/{name}", permissions.RevokeRoleHandler(guard))
+//	web.Delete("/users/{subject}/roles/{name}", permissions.RevokeRoleHandler(guard), permission.RevokeRoleOperation)
 func (store *Store) RevokeRoleHandler(guard *auth.Guard) router.Handler {
 	store.needManagement("RevokeRoleHandler")
 

@@ -167,7 +167,7 @@ func (identity *IAM) HasAnyRole(ctx context.Context, subject string, roles ...ga
 //
 // Example:
 //
-//	web.Get("/me/permissions", identity.SelfPermissionsHandler())
+//	web.Get("/me/permissions", identity.SelfPermissionsHandler(), permission.SelfOperation)
 func (identity *IAM) SelfPermissionsHandler() router.Handler {
 	need(identity.permissions != nil, "SelfPermissionsHandler", "Builder.Permissions")
 
@@ -180,7 +180,7 @@ func (identity *IAM) SelfPermissionsHandler() router.Handler {
 //
 // Example:
 //
-//	web.Get("/users/{subject}/permissions", identity.UserPermissionsHandler())
+//	web.Get("/users/{subject}/permissions", identity.UserPermissionsHandler(), permission.UserOperation)
 func (identity *IAM) UserPermissionsHandler() router.Handler {
 	identity.needManagement("UserPermissionsHandler")
 
@@ -195,7 +195,7 @@ func (identity *IAM) UserPermissionsHandler() router.Handler {
 //
 // Example:
 //
-//	web.Put("/users/{subject}/permissions/{name}", identity.GrantPermissionHandler())
+//	web.Put("/users/{subject}/permissions/{name}", identity.GrantPermissionHandler(), permission.GrantOperation)
 func (identity *IAM) GrantPermissionHandler() router.Handler {
 	identity.needManagement("GrantPermissionHandler")
 
@@ -209,7 +209,7 @@ func (identity *IAM) GrantPermissionHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/users/{subject}/permissions/{name}", identity.RevokePermissionHandler())
+//	web.Delete("/users/{subject}/permissions/{name}", identity.RevokePermissionHandler(), permission.RevokeOperation)
 func (identity *IAM) RevokePermissionHandler() router.Handler {
 	identity.needManagement("RevokePermissionHandler")
 
@@ -222,7 +222,7 @@ func (identity *IAM) RevokePermissionHandler() router.Handler {
 //
 // Example:
 //
-//	web.Put("/users/{subject}/roles/{name}", identity.GrantRoleHandler())
+//	web.Put("/users/{subject}/roles/{name}", identity.GrantRoleHandler(), permission.GrantRoleOperation)
 func (identity *IAM) GrantRoleHandler() router.Handler {
 	identity.needManagement("GrantRoleHandler")
 
@@ -235,7 +235,7 @@ func (identity *IAM) GrantRoleHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/users/{subject}/roles/{name}", identity.RevokeRoleHandler())
+//	web.Delete("/users/{subject}/roles/{name}", identity.RevokeRoleHandler(), permission.RevokeRoleOperation)
 func (identity *IAM) RevokeRoleHandler() router.Handler {
 	identity.needManagement("RevokeRoleHandler")
 

@@ -12,6 +12,7 @@ import (
 	"arkoren.dev/core/http/middleware/contenttype"
 	"arkoren.dev/core/http/request"
 	"arkoren.dev/foundation/problem"
+	"arkoren.dev/foundation/validate"
 )
 
 // ErrEmailUnverified is the 403 problem a handler answers to a user whose email
@@ -81,10 +82,12 @@ var RequireJSON = contenttype.Middleware(func(content *contenttype.Builder) {
 // Every request of the module carries a handful of short strings.
 const MaxBody = 64 << 10
 
-// Decode reads the JSON body of r into a T, limited to [MaxBody] bytes. A
-// malformed or oversized body returns the request package's problem.
-func Decode[T any](r *http.Request) (T, error) {
-	return request.JSON[T](r, request.MaxSize(MaxBody))
+// Parse reads the JSON body of r through schema with [request.ParseJSON],
+// limited to [MaxBody] bytes. Malformed JSON, an oversized body and schema
+// violations return the request package's problems (400, 413 and 422), so every
+// handler documents its body with the very schema that parses it.
+func Parse[T any](r *http.Request, schema validate.Schema[T]) (T, error) {
+	return request.ParseJSON(r, schema, request.MaxSize(MaxBody))
 }
 
 // Session returns the identity of r when it comes from a browser session, the
