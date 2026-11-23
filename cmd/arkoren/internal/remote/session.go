@@ -52,7 +52,13 @@ func (session *Session) style() console.Style {
 // run retains either write failure and suppresses subsequent output, so even
 // callers with an independent command verdict cannot hide an output failure.
 func (session *Session) print(raw []byte) {
-	_, _ = session.env.Stdout.Write(console.Format(raw, session.style()))
+	formatted := console.Format(raw, session.style())
+
+	if len(formatted) == 0 {
+		return
+	}
+
+	_, _ = session.env.Stdout.Write(formatted)
 	_, _ = session.env.Stdout.Write([]byte("\n"))
 }
 

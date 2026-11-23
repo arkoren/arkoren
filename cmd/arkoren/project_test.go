@@ -549,7 +549,7 @@ func TestNewFlagsAroundDestination(t *testing.T) {
 
 	output := env.Stdout.(*bytes.Buffer).String()
 
-	contains(t, output, `"module": "example.com/hello"`, `"yes": true`, `"conflicts": []`)
+	contains(t, output, `"module": "example.com/hello"`, `"dry_run": true`, `"action": "create"`)
 
 	if strings.Contains(output, "AGENTS.md") {
 		t.Fatal("opt-out preview includes agent files")
@@ -843,7 +843,7 @@ func TestNewDryRunDoesNotPromptOrWrite(t *testing.T) {
 
 	output := env.Stdout.(*bytes.Buffer).String()
 	fragments := []string{
-		env.Dir, `"module":`, `"yes": false`, "go.mod", `"conflicts": []`,
+		env.Dir, `"module":`, `"dry_run": true`, "go.mod",
 	}
 
 	for _, fragment := range fragments {

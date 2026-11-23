@@ -122,7 +122,7 @@ exits 2. Non-preview conflicts go to stderr with `conflict_count` and
 `add`, `check` and `map` read the current directory, which must hold the project
 layout; otherwise they exit 2. See [Layout Commands](layout-commands.md) for
 the flags, insertion points and rules. `map --text` prints text lines, the only
-local report that is not JSON.
+local report that never goes through the JSON renderer.
 
 `skills install`, `skills update`, and `skills status` accept `--dir PATH`
 (default `.agents/skills`, with `arkoren` appended) and `--dry-run`, before or
@@ -232,14 +232,16 @@ supplied. It never calls identity to obtain `app` or a version override.
 
 Each tool summary contains `command`, optional description, `kind` (`read` or
 `action`), and `follow`. `native_name` appears when different. Descriptions can
-be abbreviated with `description_truncated`; verbose discovery includes full
+be abbreviated with a trailing `…`; verbose discovery includes full
 descriptions, input/output schemas, positionals, examples, and semantic roles.
 It is not a raw MCP catalog or local CLI manual.
 
 `status` calls a uniquely advertised identity role before a uniquely advertised
 health role, once each with `{}`; missing or ambiguous roles are skipped.
 Identity failure stops before health or output. Health failure appears as data
-and does not itself fail status. The report retains configuration sources,
+and does not itself fail status. The report has a `summary` and, with a health
+role, an `ok` verdict; it retains configuration sources (`url`, `url_source`,
+`token_set`, `token_source`),
 negotiated protocol, implementation version, optional process `instance`, and
 health. A string identity `arkoren` overrides the implementation version for
 this report only. `app` selects name, version, environment, and state when
@@ -248,21 +250,31 @@ status and check/failing/pending counts; verbose mode keeps full details.
 Neither mode makes extra role calls. Arkoren's health tool with `{}` observes
 cached checks; external servers define their own role semantics.
 
-Local reports use these fields rather than completion prose:
+Local reports start with a `summary` sentence and use these fields rather than
+completion prose. Actions then list `changes` (each with `action` `create`,
+`edit`, `remove`, `write`, `require` or `tidy`, a `path`, and an optional
+`detail`) and `next_steps`; a preview says "Would …" and sets `dry_run`. A
+failure is an error, never a result flag.
 
-| Command | Result fields |
+| Command | Result fields after `summary` |
 | --- | --- |
-| `new` | `created`, `destination`, `module`, `file_count`; previews include `dry_run`, `yes`, `conflict_count`. Verbose adds paths and preview conflicts. |
-| `add` | `dry_run`, `created` (paths), `edited` (`path` and `inserted` lines). |
-| `check` | `ok` and `violations`, each with `rule`, `file`, `line`, `message`. |
-| `map` | `module`, `processes`, `bootstrap`, `features`, `migrations`, `platform`; empty groups are omitted. |
-| `skills` | `directory`, `state`, `bundled_revision`, and installed revision/modification count when managed. Install/update add operation, preview state, write/remove/conflict counts; completed writes set `completed`. Verbose adds per-file details. |
-| `key generate` to file | `created`, `category`, absolute `path`; no private contents. |
-| `key check` | `valid`, `category`, absolute `path`. |
-| Certificate generation | `created`, `certificate`, `key`, `trust_changed: false`. |
-| `certificate check` | `certificate`, optional `key`, `parsed`, `key_matched`, `expiry_checked: false`, `trust_checked: false`. |
-| Root trust/untrust | `action`, `completed`, `sha256`, `target`. |
-| `--version` | `version`; verbose adds Go/module and available revision identifiers, not dependency or compiler-setting dumps. |
+| `new` | `dry_run` (previews), `module`, `destination`, `file_count`, `conflict_count` (previews), then `next_steps` for a real run. Verbose adds `conflicts` and one `create` change per file. |
+| `add` | `dry_run`, `changes`: `create` per file, `edit` per inserted line, `require` per pinned module, `tidy` when run; `next_steps`. |
+| `check` | `ok` and `violations`, each with `file`, `line`, `rule`, `message`. |
+| `map` | No summary: `module`, `processes`, `bootstrap`, `features`, `migrations`, `platform`; empty groups are omitted. |
+| `skills` | `dry_run` (previews) and `skills`, one entry per skill with `name`, `state`, `directory`, `installed_revision`, `bundled_revision`, `modified_file_count`; install/update add `written_files`, `removed_files`, `conflict_count`. Verbose adds `modified_files`, `conflicts` and `write`/`remove` changes. |
+| `key generate` to file | `category`, and a `create` change for the absolute `path`; no private contents. |
+| `key check` | `category`, absolute `path`. |
+| Certificate generation | `changes` creating the certificate and the private key; `next_steps` for a root. |
+| `certificate check` | `certificate`, optional `key` and `key_matched`, and `not_checked` (`expiry`, `trust`). |
+| Root trust/untrust | `action`, `target`, `sha256`. |
+| `--version` | No summary: `version`; verbose adds `module`, `go_version`, `revision`, `revision_at` and `modified`, not dependency or compiler-setting dumps. |
+
+On a terminal the summary is a bold headline: green `✓`, red `✗` when `ok` is
+false, yellow `→` for a preview. Empty values are omitted from the text, short
+lists print on one line, and lists of flat records print as tables. A remote
+tool's `{items, truncated}` list prints as a bare table, with a dim note when
+more results exist; JSON keeps every field.
 
 ## Failure Diagnostics
 

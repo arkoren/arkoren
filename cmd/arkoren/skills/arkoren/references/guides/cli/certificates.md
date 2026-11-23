@@ -33,9 +33,11 @@ arkoren certificate root generate --name "Example Local Development" --cert root
 
 Success creates a self-signed ECDSA P-256 root and an unencrypted PKCS #8 private
 key. Its default validity is 5 × 365 days, and it cannot issue intermediate CAs.
-Distribute only the public `root.pem`; keep `root-key.pem` private. The JSON
-receipt contains `created: true`, both absolute paths in `certificate` and
-`key`, and `trust_changed: false`, never the private contents.
+Distribute only the public `root.pem`; keep `root-key.pem` private. The result
+has the `summary` "Generated root certificate", a `changes` list that creates
+the certificate and the private key (detail `private key`), and `next_steps`
+saying system trust was not changed and naming `arkoren certificate root trust`.
+It never contains the private contents.
 
 Both destinations are required. Parent directories must already exist without
 symlinked parents. Existing outputs, including dangling symlinks, are refused;
@@ -88,15 +90,16 @@ To check that the public root bundle parses, without loading a private key:
 arkoren certificate check --cert root.pem
 ```
 
-The result has `parsed: true`, `key_matched: false`,
-`expiry_checked: false`, and `trust_checked: false`. No private material is
-printed. To check the server certificate's matching private key as well:
+The result has the `summary` "Certificate parsed", the `certificate` path, and
+`not_checked: ["expiry", "trust"]`, naming what parsing does not establish. No
+private material is printed. To check the server certificate's matching private key as well:
 
 ```sh
 arkoren certificate check --cert server.pem --key server-key.pem
 ```
 
-Success now has `key_matched: true` and includes the key path. A malformed bundle,
+Success has the `summary` "Certificate parsed; key matches", `key_matched: true`
+and the key path. A malformed bundle,
 mismatched key, or missing file fails. Supported unencrypted PEM identities can
 also contain existing RSA, ECDSA, or Ed25519 keys.
 
@@ -145,8 +148,10 @@ arkoren certificate root trust root.pem --yes
 
 Noninteractive use requires bare `--yes`. `-yes`, `--yes=true`, and other
 value-bearing approval forms are invalid. The warning still appears with
-`--yes`. Success reports `action`, `completed: true`, `sha256`, and
-`target`; it does not prove every client uses that store.
+`--yes`. Success reports a `summary` such as "Trusted root certificate in
+TARGET", plus `action`, `target` and `sha256`; it does not prove every client
+uses that store. The warning is `{"warning": {...}}` with `message`, `action`,
+`target`, `sha256` and `effects`, as text on a terminal stderr.
 
 The CLI never invokes `sudo`, requests UAC elevation, or relaunches itself.
 If permissions are insufficient, rerun only the trust operation with the

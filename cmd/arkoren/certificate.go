@@ -57,7 +57,7 @@ func generateCertificateRoot(ctx context.Context, name string, paths certificate
 		return fmt.Errorf("generate root certificate: %w", err)
 	}
 
-	return persistCertificate(ctx, inventory, identity, env)
+	return persistCertificate(ctx, inventory, identity, true, env)
 }
 
 // generateCertificateServer loads only the explicitly selected issuer. Both
@@ -92,7 +92,7 @@ func generateCertificateServer(ctx context.Context, options certificateServerArg
 		return fmt.Errorf("generate server certificate: %w", err)
 	}
 
-	return persistCertificate(ctx, inventory, identity, env)
+	return persistCertificate(ctx, inventory, identity, false, env)
 }
 
 // checkCertificate reports structural parsing and optional key matching only.
@@ -116,17 +116,39 @@ func checkCertificate(ctx context.Context, paths certificatePaths, env console.E
 		}
 	}
 
-	report := map[string]any{
-		"certificate": keyPath(env.Dir, paths.cert),
-		"parsed":      true, "key_matched": paths.key != "",
-		"expiry_checked": false, "trust_checked": false,
+	report := certificateCheckResult{
+		Summary:     "Certificate parsed",
+		Certificate: keyPath(env.Dir, paths.cert),
+		NotChecked:  []string{"expiry", "trust"},
 	}
 
 	if paths.key != "" {
-		report["key"] = keyPath(env.Dir, paths.key)
+		report.Summary = "Certificate parsed; key matches"
+		report.Key = keyPath(env.Dir, paths.key)
+		report.KeyMatched = true
 	}
 
 	return env.Result(report)
+}
+
+// certificateCheckResult is the JSON result of `arkoren certificate check`.
+// A key that does not match is an error, not a result, so key_matched is only
+// ever true.
+type certificateCheckResult struct {
+	// Summary reads "Certificate parsed" or "Certificate parsed; key matches".
+	Summary string `json:"summary"`
+
+	// Certificate is the checked certificate file.
+	Certificate string `json:"certificate"`
+
+	// Key is the checked private key file, present only when one was given.
+	Key string `json:"key,omitzero"`
+
+	// KeyMatched is true when a key was given and matches; absent otherwise.
+	KeyMatched bool `json:"key_matched,omitzero"`
+
+	// NotChecked names what parsing does not establish: expiry and trust.
+	NotChecked []string `json:"not_checked"`
 }
 
 // certificateCLICommand keeps certificate provisioning offline and declares

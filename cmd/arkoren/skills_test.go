@@ -155,7 +155,7 @@ func TestSkillsInstallWorksOffline(t *testing.T) {
 
 // TestSkillsInstallIncludesStructureSkill checks the structure skill ships beside
 // the reference skill, in its own directory with its own manifest, and appears in
-// the result under related_skills.
+// the result's skills array.
 func TestSkillsInstallIncludesStructureSkill(t *testing.T) {
 	t.Parallel()
 
@@ -173,9 +173,7 @@ func TestSkillsInstallIncludesStructureSkill(t *testing.T) {
 	}
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
-	related, ok := document["related_skills"].(map[string]any)
-
-	if !ok || related["arkoren-structure"].(map[string]any)["state"] != "installed" {
+	if document["summary"] != "Installed 2 skills" || skillEntry(document, "arkoren-structure")["state"] != "installed" {
 		t.Fatalf("result = %v", document)
 	}
 }
@@ -264,7 +262,7 @@ func TestSkillsDryRunNeverCreatesDirectories(t *testing.T) {
 		t.Fatalf("dry-run wrote files: %v, %v", entries, err)
 	}
 
-	contains(t, env.Stdout.(*bytes.Buffer).String(), "SKILL.md", skill.SkillManifestName, `"conflicts": []`)
+	contains(t, env.Stdout.(*bytes.Buffer).String(), "SKILL.md", skill.SkillManifestName)
 }
 
 // TestSkillsFlagsBeforeSubcommand exercises inherited family flags without
@@ -280,7 +278,7 @@ func TestSkillsFlagsBeforeSubcommand(t *testing.T) {
 	}
 
 	contains(t, env.Stdout.(*bytes.Buffer).String(),
-		filepath.Join(env.Dir, ".claude/skills/arkoren"), "SKILL.md", `"conflicts": []`)
+		filepath.Join(env.Dir, ".claude/skills/arkoren"), "SKILL.md")
 
 	entries, err := os.ReadDir(env.Dir)
 
@@ -301,7 +299,9 @@ func TestSkillsStatusMissingNeverWrites(t *testing.T) {
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 
-	if document["state"] != "not installed" || document["bundled_revision"] == "" {
+	primary := skillEntry(document, "arkoren")
+
+	if document["summary"] != "arkoren skill is not installed" || primary["state"] != "not installed" || primary["bundled_revision"] == "" {
 		t.Fatalf("status = %v", document)
 	}
 
@@ -433,7 +433,9 @@ func TestSkillsStatusReportsEditsWithoutFailure(t *testing.T) {
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 
-	if len(document["modified_files"].([]any)) != 1 || document["installed_revision"] == "" || document["bundled_revision"] == "" {
+	primary := skillEntry(document, "arkoren")
+
+	if len(primary["modified_files"].([]any)) != 1 || primary["installed_revision"] == "" || primary["bundled_revision"] == "" {
 		t.Fatalf("status = %v", document)
 	}
 }
@@ -457,7 +459,7 @@ func TestSkillsUpdateDryRunPreservesInstalledRevision(t *testing.T) {
 		t.Fatalf("dry-run changed installed revision: %+v, %v", installed, err)
 	}
 
-	contains(t, env.Stdout.(*bytes.Buffer).String(), `"operation": "write"`, `"path": "SKILL.md"`, `"conflicts": []`)
+	contains(t, env.Stdout.(*bytes.Buffer).String(), `"action": "write"`, `"path": "arkoren/SKILL.md"`)
 }
 
 // TestSkillsInstallDifferentRevisionRequiresExplicitUpdate avoids implicit upgrades.
@@ -565,4 +567,17 @@ func TestSkillsUpdateProtectsModifiedAPIPage(t *testing.T) {
 	if err != nil || string(content) != "old skill" {
 		t.Fatalf("conflict partially updated skill: %q, %v", content, err)
 	}
+}
+
+// skillEntry returns the named skill from a decoded skills result.
+func skillEntry(document map[string]any, name string) map[string]any {
+	skills, _ := document["skills"].([]any)
+
+	for _, entry := range skills {
+		if fields := entry.(map[string]any); fields["name"] == name {
+			return fields
+		}
+	}
+
+	return nil
 }

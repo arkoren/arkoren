@@ -80,7 +80,8 @@ func (env Environment) OutputStyle() Style {
 }
 
 // WriteJSON encodes before writing and checks short writes on both boundaries.
-// The style may translate the document into text; see [Format].
+// The style may translate the document into text; see [Format]. A document
+// whose text is empty, because every member was omitted, writes nothing.
 func WriteJSON(out io.Writer, value any, presentation Style) error {
 	encoded, err := json.Marshal(value, json.Deterministic(true))
 
@@ -90,7 +91,13 @@ func WriteJSON(out io.Writer, value any, presentation Style) error {
 
 	output := &Output{Writer: out}
 
-	if _, err := output.Write(Format(encoded, presentation)); err != nil {
+	formatted := Format(encoded, presentation)
+
+	if len(formatted) == 0 {
+		return nil
+	}
+
+	if _, err := output.Write(formatted); err != nil {
 		return err
 	}
 

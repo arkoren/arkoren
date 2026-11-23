@@ -557,7 +557,7 @@ callable by exact name. Do not infer diagnostic roles from names or hardcode
 owner operations. Local command names win only unqualified. Schema-guided JSON
 input remains server-validated. Snake_case properties accept kebab-case flag
 aliases; exact properties win and map keys remain literal. Follow uses bounded
-cursor calls, not a second transport. Never replay a mutation automatically.
+cursor calls, not a second transport. Never replay a mutation automatically. Output shapes: `arkoren-go`, CLI output shapes.
 Keep output failures, safe structured failures, timeout budgets, and cancellation
 explicit in the CLI and its end-to-end MCP tests.
 

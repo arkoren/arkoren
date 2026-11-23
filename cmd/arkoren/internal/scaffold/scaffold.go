@@ -103,12 +103,22 @@ func Execute(ctx context.Context, options Options, inventory []files.File, env c
 		}
 	}
 
-	report := map[string]any{
-		"created": true, "destination": options.Folder, "module": options.Module, "file_count": len(inventory),
+	report := newResult{
+		Summary:     fmt.Sprintf("Created project %s in %s", options.Module, options.Folder),
+		Module:      options.Module,
+		Destination: options.Folder,
+		FileCount:   len(inventory),
+		NextSteps:   []string{"cd " + options.Folder},
 	}
 
+	if options.SkipTidy {
+		report.NextSteps = append(report.NextSteps, "go mod tidy")
+	}
+
+	report.NextSteps = append(report.NextSteps, "make run")
+
 	if env.Presentation.Verbose {
-		report["files"] = files.Paths(inventory)
+		report.Changes = newChanges(inventory)
 	}
 
 	return env.Result(report)

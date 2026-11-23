@@ -131,7 +131,9 @@ contracts first: a role does not guarantee read-only behavior.
 arkoren status
 ```
 
-The report includes configuration sources without printing the token. Identity
+The report starts with a `summary` naming the connected application and, when
+the server has a health role, an `ok` verdict. It flattens configuration into
+`url`, `url_source`, `token_set` and `token_source` without printing the token. Identity
 can add application and process details and override the reported server version.
 An identity failure stops before health or report output. A health failure is
 included in the report without itself failing the command; `status` is not a

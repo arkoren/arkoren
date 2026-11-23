@@ -36,12 +36,12 @@ const (
 
 // Violation is one broken layout rule at a source position.
 type Violation struct {
-	// Rule is one of the Rule constants.
-	Rule string `json:"rule"`
 	// File is the slash-separated path relative to the project root.
 	File string `json:"file"`
 	// Line is the 1-based line of the offending import, call or package.
 	Line int `json:"line"`
+	// Rule is one of the Rule constants.
+	Rule string `json:"rule"`
 	// Message explains the violation and names the fix.
 	Message string `json:"message"`
 }

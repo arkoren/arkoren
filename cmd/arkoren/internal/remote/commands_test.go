@@ -21,11 +21,11 @@ func TestLongToolDescriptionsAreOptIn(t *testing.T) {
 	brief := SummarizeTools(manifest, false)[0]
 	full := SummarizeTools(manifest, true)[0]
 
-	if !brief.DescriptionTruncated || len([]rune(brief.Description)) > console.MaxDiagnosticRunes+1 {
+	if !strings.HasSuffix(brief.Description, "…") || len([]rune(brief.Description)) > console.MaxDiagnosticRunes+1 {
 		t.Fatal("default catalog did not abbreviate the description")
 	}
 
-	if full.Description != description || full.DescriptionTruncated || len(full.InputSchema) == 0 {
+	if full.Description != description || len(full.InputSchema) == 0 {
 		t.Fatal("verbose catalog lost tool details")
 	}
 }
