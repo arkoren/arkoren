@@ -131,7 +131,7 @@ problem:
 arkoren app:logs --level warn --limit 100
 ```
 
-This prints one JSON result, not a live stream. A snapshot followed by a new
+This prints one result, not a live stream. A snapshot followed by a new
 `--follow` invocation is not an atomic handoff: records can fall between them.
 For controlled continuation, use ordinary calls with `--cursor` and retain the
 returned cursor according to the

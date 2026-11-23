@@ -470,7 +470,8 @@ func TestStaticCLIVersionRemainsANativeTool(t *testing.T) {
 }
 
 // TestStaticCLIHelpRemainsANativeTool verifies that removing local help frees
-// its exact native name. JSON is an ordinary schema input, not a help format.
+// its exact native name. A json input property is set through -input because
+// -json is a global flag.
 func TestStaticCLIHelpRemainsANativeTool(t *testing.T) {
 	t.Parallel()
 
@@ -491,7 +492,7 @@ func TestStaticCLIHelpRemainsANativeTool(t *testing.T) {
 		return &sdkmcp.CallToolResult{StructuredContent: input}, nil
 	})
 
-	result := runConnection(t, t.Context(), nativeServerURL(t, server), "", "help", "--json", "--compact")
+	result := runConnection(t, t.Context(), nativeServerURL(t, server), "", "help", "-input", `{"json":true}`, "--compact")
 
 	if result.code != console.ExitOK || result.out != "{\"json\":true}\n" {
 		t.Fatalf("result = %+v", result)
@@ -578,14 +579,15 @@ func TestToolsRejectsTargetsBeforeConfiguration(t *testing.T) {
 }
 
 // TestLocalHelpDoesNotOfferJSON preserves the framework's human-only help.
-// Machine discovery is available only through tools, not local help targets.
+// The only --json mention is the shared global flag; a command must not add a
+// local machine-discovery flag of its own.
 func TestLocalHelpDoesNotOfferJSON(t *testing.T) {
 	t.Parallel()
 
 	page := newRig(t).run("key", "generate", "--help").expectOK(t).stdout
 
-	if strings.Contains(page, "--json") {
-		t.Fatalf("local help offers JSON discovery: %s", page)
+	if strings.Count(page, "--json") != 1 || !strings.Contains(page, "--json                      Print results and errors as JSON") {
+		t.Fatalf("local help offers JSON discovery beyond the global flag: %s", page)
 	}
 }
 
@@ -5506,7 +5508,7 @@ func TestLocalReportsUseTerminalStyle(t *testing.T) {
 
 		output := env.Stdout.(*bytes.Buffer).String()
 
-		if code != console.ExitOK || !strings.Contains(output, "\x1b[") || !strings.Contains(output, "\n  ") {
+		if code != console.ExitOK || !strings.Contains(output, "\x1b[") || strings.Contains(output, "{") {
 			t.Fatalf("%v: exit = %d; stdout = %q; stderr = %s", args, code, output, env.Stderr)
 		}
 	}
@@ -5729,11 +5731,9 @@ func TestTerminalErrorsHonorNoColor(t *testing.T) {
 
 	output := env.Stderr.(*bytes.Buffer).String()
 
-	if code != console.ExitFailure || !strings.Contains(output, "\n  ") {
+	if code != console.ExitFailure || strings.Contains(output, "\x1b") || strings.Contains(output, "{") || !strings.Contains(output, "Error") {
 		t.Fatalf("exit = %d; stderr = %q", code, output)
 	}
-
-	errorDocument(t, output)
 }
 
 // TestTerminalErrorsHonorNoColorEnvironment applies NO_COLOR to stderr too.
@@ -5754,11 +5754,9 @@ func TestTerminalErrorsHonorNoColorEnvironment(t *testing.T) {
 
 	output := env.Stderr.(*bytes.Buffer).String()
 
-	if code != console.ExitFailure || !strings.Contains(output, "\n  ") {
+	if code != console.ExitFailure || strings.Contains(output, "\x1b") || strings.Contains(output, "{") || !strings.Contains(output, "Error") {
 		t.Fatalf("exit = %d; stderr = %q", code, output)
 	}
-
-	errorDocument(t, output)
 }
 
 // TestTerminalErrorsHonorCompact keeps machine-oriented overrides available
@@ -6149,7 +6147,7 @@ func TestOutputIsColoredOnATerminal(t *testing.T) {
 		terminal: true,
 	}, "billing:payments").expectOK(t).stdout
 
-	if !strings.Contains(out, console.ColorKey+`"items"`+console.ColorReset) || !strings.Contains(out, "\n  ") {
+	if !strings.Contains(out, console.ColorKey+"Cursor"+console.ColorReset) || !strings.Contains(out, "\n  ") || strings.Contains(out, "{") {
 		t.Fatalf("out = %q", out)
 	}
 }

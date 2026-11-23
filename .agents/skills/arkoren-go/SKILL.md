@@ -856,10 +856,14 @@ in attributes (`arkoren.<component>.<field>`).
   `slices.Clone`, `strings.CutPrefix`, `strings.SplitSeq` over hand-written loops
   and single-use helpers. Guard clauses, no `else` after `return`.
 - CLI commands emit one JSON result document, including local mutations and
-  version reporting; follow emits NDJSON. Route local reports through the shared
-  result renderer and retain stdout failure precedence. Errors and trust warnings
-  are JSON records on stderr. Help and interactive prompts remain text; explicit
-  key exports remain raw. Preserve these exceptions when adding output paths.
+  version reporting; follow emits NDJSON. Results and errors are JSON documents
+  that `console.Format` translates to colored text when the destination stream is
+  a terminal; `-json`, `-compact` or a non-terminal stream keep JSON, and follow
+  stays NDJSON. Route every output path through `env.Result`, `WriteJSON` or
+  `Format`, never hand-written text, and retain stdout failure precedence. Trust
+  warnings are records on stderr and follow the same rule. Help and interactive
+  prompts remain text; explicit key exports remain raw. Preserve these
+  exceptions when adding output paths.
   CLI-owned summaries select task-relevant fields rather than dumping MCP
   catalogs or manuals. Default reports use counts and concise diagnostics;
   `--verbose` exposes complete safe context, file inventories, tool schemas,

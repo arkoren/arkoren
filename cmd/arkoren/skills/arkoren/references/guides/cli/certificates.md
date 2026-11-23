@@ -88,7 +88,7 @@ To check that the public root bundle parses, without loading a private key:
 arkoren certificate check --cert root.pem
 ```
 
-The JSON result has `parsed: true`, `key_matched: false`,
+The result has `parsed: true`, `key_matched: false`,
 `expiry_checked: false`, and `trust_checked: false`. No private material is
 printed. To check the server certificate's matching private key as well:
 
@@ -145,7 +145,7 @@ arkoren certificate root trust root.pem --yes
 
 Noninteractive use requires bare `--yes`. `-yes`, `--yes=true`, and other
 value-bearing approval forms are invalid. The warning still appears with
-`--yes`. Success prints JSON with `action`, `completed: true`, `sha256`, and
+`--yes`. Success reports `action`, `completed: true`, `sha256`, and
 `target`; it does not prove every client uses that store.
 
 The CLI never invokes `sudo`, requests UAC elevation, or relaunches itself.

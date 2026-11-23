@@ -164,7 +164,7 @@ After starting the application, use an [authenticated CLI connection](../cli/con
 to inspect the published catalog:
 
 ```sh
-arkoren tools --json
+arkoren tools
 ```
 
 Confirm that only the intended tools appear for that operator. Then check the

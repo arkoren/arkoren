@@ -25,7 +25,7 @@
 //	arkoren certificate root generate --name "Local development" --cert root.pem --key root-key.pem
 //	arkoren certificate generate --ca-cert root.pem --ca-key root-key.pem --dns localhost --cert server.pem --key server-key.pem
 //	arkoren certificate check --cert server.pem --key server-key.pem
-//	arkoren [global flags] tools [--json]
+//	arkoren [global flags] tools
 //	arkoren [global flags] <command> --help
 //	arkoren [global flags] status
 //	arkoren --version
@@ -53,9 +53,12 @@
 // never imply rollback. Private key files and scaffold .env receive POSIX 0600
 // or a protected current-user-only Windows DACL at exclusive creation.
 //
-// Command results, including local operations and --version, are JSON.
-// "arkoren tools" prints command names, descriptions, and capabilities; --json
-// remains accepted for compatibility. Errors are JSON objects on stderr. Follow emits
+// Command results, including local operations and --version, are JSON
+// documents. On a terminal they are translated into aligned, colored text
+// (labeled lines, sections and tables); -json or -compact keeps JSON there,
+// and output that is not a terminal is always JSON. "arkoren tools" prints
+// command names, descriptions, and capabilities. Errors are the same kind of
+// document on stderr, judged by stderr's own terminal state. Follow emits
 // NDJSON. Help and interactive prompts remain text; explicit key exports remain
 // raw PEM or base64 rather than JSON strings.
 // Default reports summarize incidental lists and diagnostics. --verbose adds
@@ -335,6 +338,8 @@ func parseGlobals(args []string) (console.Globals, []string, error) {
 			switch def.Names[0] {
 			case "verbose":
 				flags.Verbose = enabled
+			case "json":
+				flags.JSON = enabled
 			case "compact":
 				flags.Compact = enabled
 			case "no-color":

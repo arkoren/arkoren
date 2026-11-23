@@ -42,7 +42,7 @@ For an application's encryption key, select a new explicit destination:
 arkoren key generate shared --out app-key.key
 ```
 
-Success prints JSON with `created: true`, `category: "shared"`, and the absolute
+Success reports `created: true`, `category: "shared"`, and the absolute
 `path`, never the private contents. There is no implicit destination or overwrite
 flag. Existing files and symlinks are refused, and missing parent directories
 fail.

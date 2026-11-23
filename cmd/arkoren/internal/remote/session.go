@@ -38,20 +38,21 @@ type Session struct {
 	wait *WaitBudget
 }
 
-// style returns how to print JSON: indented unless -compact, and colored
-// only on a terminal that has not opted out with -no-color or NO_COLOR.
+// style returns how to print results: text on a terminal unless -json or
+// -compact, JSON indented unless -compact, and colored only on a terminal
+// that has not opted out with -no-color or NO_COLOR.
 func (session *Session) style() console.Style {
 	env := session.env
 	env.Presentation = session.flags
 
-	return env.JSONStyle()
+	return env.OutputStyle()
 }
 
-// print writes a JSON document followed by a newline. The stdout boundary in
+// print writes a result document followed by a newline. The stdout boundary in
 // run retains either write failure and suppresses subsequent output, so even
 // callers with an independent command verdict cannot hide an output failure.
 func (session *Session) print(raw []byte) {
-	_, _ = session.env.Stdout.Write(console.Render(raw, session.style()))
+	_, _ = session.env.Stdout.Write(console.Format(raw, session.style()))
 	_, _ = session.env.Stdout.Write([]byte("\n"))
 }
 

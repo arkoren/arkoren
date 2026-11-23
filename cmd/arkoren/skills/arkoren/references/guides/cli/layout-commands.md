@@ -48,7 +48,7 @@ feature orders constructors: NewService; NewStore
 feature orders above: web(NewHandlers)
 ```
 
-Without `--text`, the same content is one JSON document with `module`,
+Without `--text`, the same content is one document (JSON when piped or with `--json`) with `module`,
 `processes`, `bootstrap`, `features`, `migrations` and `platform`. The listing
 holds names only; open the files for behavior.
 
@@ -199,8 +199,8 @@ Review the diff with your version control after any `add`.
 arkoren check
 ```
 
-The command prints one JSON document, `{"ok": true, "violations": []}` for a
-conforming project. Each violation has `rule`, `file`, `line` and a `message`
+The command prints one report, as JSON `{"ok": true, "violations": []}` for a
+conforming project when piped or with `--json`. Each violation has `rule`, `file`, `line` and a `message`
 naming the fix. It exits 1 when there are violations, so it can gate a build.
 Projects created with `arkoren new` run it as part of `make check`; the target
 needs the `arkoren` command on `PATH` (override with `make check ARKOREN=...`).

@@ -66,6 +66,9 @@ type Globals struct {
 	// Compact, NoColor, Follow, and Help are the boolean flags.
 	Compact, NoColor, Follow, Help bool
 
+	// JSON prints results and errors as JSON even on a terminal.
+	JSON bool
+
 	// Verbose includes complete diagnostic context and local file lists.
 	Verbose bool
 }

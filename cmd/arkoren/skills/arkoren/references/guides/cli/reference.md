@@ -23,11 +23,11 @@ Uppercase operands below are values you supply, not literal words.
 | Form | Contract |
 | --- | --- |
 | `arkoren`, `arkoren -h`, `arkoren --help` | Offline root help as text; no endpoint configuration is read. |
-| `arkoren --version` | Installed CLI version as JSON, offline. |
+| `arkoren --version` | Installed CLI version, offline. |
 | `arkoren new DIR [flags]` | Create a starter and resolve Go dependencies; `--skip-tidy` creates files offline. Existing files are never overwritten. |
 | `arkoren add feature NAME [--web --jobs --flow --tools --events --schedules] [--process NAME]` | Create the plain-Go feature `internal/NAME` with the requested surfaces and its providers in `internal/bootstrap/NAME.go`, and add `compose.Use` lines to the `Compose` of `internal/bootstrap/PROCESS` (default `server`). |
 | `arkoren add process\|provider\|migration NAME` | Create `cmd/NAME` with its process root, a bootstrap provider, or a registered migration. All `add` forms accept `--dry-run` and `--skip-tidy`, never overwrite, and run `go mod tidy` when new files import an unrequired module. |
-| `arkoren check` | Report layout rule violations with file and line as JSON; exit 1 if there are any. |
+| `arkoren check` | Report layout rule violations with file and line; exit 1 if there are any. |
 | `arkoren map [--text]` | Print processes with their `Compose` statements, providers by file, features and migrations from source. |
 | `arkoren skills install\|update\|status [flags]` | Manage the CLI's bundled documentation offline. |
 | `arkoren key generate TYPE --out FILE` | Generate `shared`, `signing`, or `exchange` private material. |
@@ -39,7 +39,7 @@ Uppercase operands below are values you supply, not literal words.
 | `arkoren certificate check --cert FILE [--key FILE]` | Parse public PEM and optionally check the matching private key. |
 | `arkoren certificate root trust FILE [--yes]` | Explicitly install one public root in the supported system store. |
 | `arkoren certificate root untrust FILE [--yes]` | Remove trust for that exact root in the selected system scope. |
-| `arkoren tools [--json]` | Discover tools as JSON without invoking them; no positional target is accepted. |
+| `arkoren tools` | Discover tools without invoking them; no positional target is accepted. |
 | `arkoren status` | Explicitly call uniquely advertised identity and health roles for a report. |
 | `arkoren NAME --help` | Discover one remote tool's schema without invoking it. |
 | `arkoren GROUP: --help` | Describe an advertised CLI group, unless an exact native name takes precedence. |
@@ -80,7 +80,8 @@ schema-derived flags. One or two leading dashes work; flags do not bundle.
 | `--url URL` | No URL | Select the MCP mount; otherwise environment, then file. |
 | `--token TOKEN` | No token | Supply an existing bearer credential; otherwise environment, then file. |
 | `--env-file PATH` | Implicit `./.env` | Replace the file; an explicit nonempty path must exist and approves its URL for inherited tokens. Empty disables file loading. |
-| `--compact` | Off | Print ordinary JSON documents on one line. |
+| `--json` | Off | Print results and errors as JSON even on a terminal. Output that is not a terminal is always JSON. |
+| `--compact` | Off | Print each JSON document on one line; implies `--json`. |
 | `--verbose` | Off | Include complete captured safe diagnostics, schemas, local file lists, and status/build detail. |
 | `--no-color` | Off | Disable terminal coloring and bold help headings. Nonempty `NO_COLOR` also disables them. |
 | `--request-timeout DURATION` | `10s` | Per-request deadline for ordinary requests; `0` removes that deadline. Waiting reads normally use their total budget. Does not limit follow. |
@@ -190,17 +191,22 @@ that reader.
 
 | Output | Format |
 | --- | --- |
-| Ordinary local or remote result, including `--version` | One JSON document. |
+| Ordinary local or remote result, including `--version` | Text on a terminal; otherwise, or with `--json`, one JSON document. |
 | `--follow` | Compact NDJSON records and loss notices on the same stdout stream. |
 | Help and interactive confirmation | Text. |
 | `key public` and `key generate --out -` | Raw PEM or base64, not JSON strings. |
-| Errors | JSON with an `error` object on stderr. |
-| Trust warning before mutation | JSON with a `warning` object on stderr, even with `--yes`. |
+| Errors | On stderr: text on a terminal, otherwise, or with `--json`, JSON with an `error` object. |
+| Trust warning before mutation | On stderr even with `--yes`: text on a terminal, otherwise JSON with a `warning` object. |
 
-Ordinary JSON is indented by default. Terminal output adds color unless
-disabled; pipes do not. `--compact` changes indentation, not content. Help uses
-bold terminal headings and plain piped headings; remote output schemas follow
-the same color policy. Stderr independently checks whether its own stream is a
+On a terminal, results and errors are translated into colored text: aligned
+labels, nested objects as headed sections, and arrays of flat objects as tables.
+Output that is not a terminal stays JSON, indented by default, so pipes, scripts
+and agents are unaffected. Pass `--json` for JSON on a terminal, and `--compact`
+for one-line JSON; `--compact` implies `--json` and changes indentation, not
+content. Agents whose shells are not terminals already receive JSON; pass
+`--json` when a stable machine format must not depend on that. Color is off with
+`--no-color` or a nonempty `NO_COLOR`. Help uses bold terminal headings and
+plain piped headings. Stderr independently checks whether its own stream is a
 terminal. Use `--compact --no-color` for one-line JSON diagnostics in captures.
 
 Remote results prefer structured MCP content with sorted keys. A single text
@@ -228,8 +234,7 @@ Each tool summary contains `command`, optional description, `kind` (`read` or
 `action`), and `follow`. `native_name` appears when different. Descriptions can
 be abbreviated with `description_truncated`; verbose discovery includes full
 descriptions, input/output schemas, positionals, examples, and semantic roles.
-It is not a raw MCP catalog or local CLI manual. `tools --json` is a compatibility
-spelling of the same focused result.
+It is not a raw MCP catalog or local CLI manual.
 
 `status` calls a uniquely advertised identity role before a uniquely advertised
 health role, once each with `{}`; missing or ambiguous roles are skipped.

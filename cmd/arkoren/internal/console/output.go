@@ -52,19 +52,21 @@ type ErrorReport struct {
 
 // Result writes one local result using the remote result presentation policy.
 func (env Environment) Result(value any) error {
-	return WriteJSON(env.Stdout, value, env.JSONStyle())
+	return WriteJSON(env.Stdout, value, env.OutputStyle())
 }
 
-// DiagnosticStyle uses the same JSON policy as results, but checks stderr's
+// DiagnosticStyle uses the same policy as results, but checks stderr's
 // terminal state so redirecting either stream does not style the other one.
 func (env Environment) DiagnosticStyle() Style {
 	env.IsTerminal = env.ErrorTerminal
 
-	return env.JSONStyle()
+	return env.OutputStyle()
 }
 
-// JSONStyle applies formatting without resolving inspector configuration.
-func (env Environment) JSONStyle() Style {
+// OutputStyle applies formatting without resolving inspector configuration.
+// A terminal gets translated text unless -json or -compact asks for JSON;
+// any other destination always gets JSON, so scripts and agents can parse it.
+func (env Environment) OutputStyle() Style {
 	color := env.IsTerminal && !env.Presentation.NoColor
 
 	if color && env.Env != nil {
@@ -72,10 +74,13 @@ func (env Environment) JSONStyle() Style {
 		color = value == ""
 	}
 
-	return Style{Indent: !env.Presentation.Compact, Color: color}
+	raw := env.Presentation.JSON || env.Presentation.Compact
+
+	return Style{Indent: !env.Presentation.Compact, Color: color, Text: env.IsTerminal && !raw}
 }
 
 // WriteJSON encodes before writing and checks short writes on both boundaries.
+// The style may translate the document into text; see [Format].
 func WriteJSON(out io.Writer, value any, presentation Style) error {
 	encoded, err := json.Marshal(value, json.Deterministic(true))
 
@@ -85,7 +90,7 @@ func WriteJSON(out io.Writer, value any, presentation Style) error {
 
 	output := &Output{Writer: out}
 
-	if _, err := output.Write(Render(encoded, presentation)); err != nil {
+	if _, err := output.Write(Format(encoded, presentation)); err != nil {
 		return err
 	}
 
