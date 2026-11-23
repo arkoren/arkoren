@@ -97,7 +97,7 @@ Use callback aliases (`server.BuilderFunc`) in parameters/slices/returns; litera
     Schedule EntryBuilder requires positional names/functions and final When validation. Nil execution functions are domain errors; invalid specs retain the first error. Overlap defaults on; zero timeout is unlimited and negative is invalid. Retained entry drafts cannot change published settings. Spec and scalar/composite/object-wide schemas stay immutable.
     Per-call, SDK and suite options stay separate, including WithTransaction/WithSession. Before workflow telemetry, read [Workflows](references/guides/workflows/overview.md): configure each pod independently, instrument attempts not replay, and upgrade Temporal workers first. [Migrations](references/guides/migrations/overview.md), [Diagnostic Tools](references/guides/diagnostics/diagnostic-tools.md), [Running Agents](references/guides/llm/running-agents.md)
 12. MCP: `core/mcp` defines tools; `ark/mcp/mcpserver` serves HTTP. Start with [a first server and client connection](references/guides/mcp-server/first-server.md); direct `Tool.Call` is for unit tests.
-    Register explicitly with `mcpserver.Builder.Tools`. Admit with `auth.Middleware(auth.Bearer(verifyAccessToken))`, then `auth.Require()` before `routes.Mount("/mcp", endpoint)`; the verifier returns an `auth.Identity` whose record holds the `User` policies read. Optional `gate.Require(canUseMCP)` gates the endpoint. CLI `ARKOREN_MCP_TOKEN` supplies an existing bearer credential; acquisition/refresh is external. Keep SDK imports in composition/adapter; ark factories are application patterns.
+    Register explicitly with `mcpserver.Builder.Tools`. Admit with `auth.Middleware(auth.Bearer(verifyAccessToken))`, then `auth.Require()` before `routes.Group("/mcp", endpoint.Register)`; the verifier returns an `auth.Identity` whose record holds the `User` policies read. Optional `gate.Require(canUseMCP)` gates the endpoint. CLI `ARKOREN_MCP_TOKEN` supplies an existing bearer credential; acquisition/refresh is external. Keep SDK imports in composition/adapter; ark factories are application patterns.
     Authenticate HTTP; shared service handlers authorize resources with Gate. App-owned `Available` runs before decode and filters complete unpaginated discovery; policy errors fail closed, even wrapped `ToolError`. Annotations are hints. Input parses once; adapter validates output; no replay. MCP tools/list is the only catalog. CLIInfo/Role/Cursor/Positional/Example are optional namespaced metadata; ToolFailure is approved result metadata outside successful output. Native additions are unmanaged; OAuth metadata/challenges need separate setup. [MCP overview](references/guides/mcp/overview.md)
 
 Install modules: [Installation](references/guides/first-steps/installation.md). For typed keys, read [Application Keys](references/guides/keys/overview.md). Provision explicitly; missing startup keys fail.
@@ -164,7 +164,7 @@ opaque to inference.
 
 #### Fundamentals
 
-- [Routing](references/guides/http-fundamentals/routing.md): Register request handlers, capture path values, group routes, and mount standard HTTP handlers.
+- [Routing](references/guides/http-fundamentals/routing.md): Register request handlers, capture path values, group routes, and adapt standard HTTP handlers.
 - [Requests](references/guides/http-fundamentals/requests.md): Read typed request inputs, decode bounded bodies, and preserve input errors and upload ownership.
 - [Responses](references/guides/http-fundamentals/responses.md): Return ordinary handler results as JSON, text, HTML, bytes, or redirects without hiding response failures.
 - [Streaming Responses](references/guides/http-fundamentals/streaming-responses.md): Send live bytes or server-sent events while managing producer cancellation, shutdown, and committed failures.
@@ -454,7 +454,7 @@ opaque to inference.
 
 - [OpenAPI Overview](references/guides/openapi/overview.md): Describe an HTTP route and export its contract independently of request handling or documentation serving.
 - [Describing Operations](references/guides/openapi/operations.md): Align typed requests and responses with explicit parameters, errors, examples, and security declarations.
-- [Serving Documentation](references/guides/openapi/serving.md): Export an HTTP contract, serve cached JSON, and mount a bundled Swagger UI with explicit access controls.
+- [Serving Documentation](references/guides/openapi/serving.md): Export an HTTP contract, serve cached JSON, and register a bundled Swagger UI with explicit access controls.
 - [Built-in Handlers](references/guides/openapi/built-in-handlers.md): Attach shipped application annotations and identify integrations that need an explicit, application-specific contract.
 
 #### AsyncAPI
@@ -492,6 +492,6 @@ opaque to inference.
 #### MCP Server
 
 - [First Server](references/guides/mcp-server/first-server.md): Build a local HTTP MCP server and discover and call its first tool with an MCP client.
-- [Serving Tools](references/guides/mcp-server/serving.md): Register typed tools with the MCP Server ark, mount its HTTP endpoint, and understand its transport, availability, telemetry, and native SDK behavior.
+- [Serving Tools](references/guides/mcp-server/serving.md): Register typed tools with the MCP Server ark, add its HTTP route, and understand its transport, availability, telemetry, and native SDK behavior.
 - [Securing MCP](references/guides/mcp-server/securing.md): Protect the MCP HTTP boundary with verified identity, TLS, Host and Origin policy, and deliberate OAuth integration.
 <!-- toc:end -->

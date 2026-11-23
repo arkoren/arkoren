@@ -172,13 +172,13 @@ func TestMCPListsTwoRoutersUnderTheirOwnNames(t *testing.T) {
 	}
 }
 
-// TestMCPListsMountedHandlers checks that mounted standard handlers
+// TestMCPListsAdaptedHandlers checks that adapted standard handlers
 // appear in inspection with their registered catch-all pattern.
-func TestMCPListsMountedHandlers(t *testing.T) {
+func TestMCPListsAdaptedHandlers(t *testing.T) {
 	t.Parallel()
 
 	r := router.New()
-	r.Mount("/inspect", http.NotFoundHandler())
+	r.Any("/inspect/{path...}", router.HTTP(http.NotFoundHandler()))
 
 	got := routesOf(t, r.MCPTools("public")[0], `{"method":"GET"}`)
 

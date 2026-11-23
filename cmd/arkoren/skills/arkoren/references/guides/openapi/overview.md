@@ -97,7 +97,7 @@ errors, or enforce security declarations. Keep them aligned with
 [error mapping](../http-fundamentals/error-handling.md).
 [Describing Operations](operations.md) covers their declaration limits.
 
-The exporter does not inspect opaque mounted protocols or infer every integration's
+The exporter does not inspect opaque protocol endpoints or infer every integration's
 contract. Use the [built-in handler guide](built-in-handlers.md) to choose shipped
 annotations or describe an integration manually. For broker messages rather than
 HTTP operations, use [AsyncAPI](../asyncapi/overview.md); it produces a separate

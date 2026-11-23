@@ -1,14 +1,14 @@
 package swagger
 
-// Builder configures one documentation page during Handler construction.
-// Retaining the draft does not permit changes to the published handler.
+// Builder configures one documentation page during New.
+// Retaining the draft does not permit changes to the published viewer.
 //
 // Example:
 //
 //	configure := func(page *swagger.Builder) {
 //		page.Title("Billing API")
 //	}
-//	_, err := swagger.Handler("/docs", "/openapi.json", configure)
+//	_, err := swagger.New("/openapi.json", configure)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
@@ -17,7 +17,7 @@ type Builder struct {
 	title string
 }
 
-// BuilderFunc configures a fresh Builder synchronously during Handler.
+// BuilderFunc configures a fresh Builder synchronously during New.
 // Callbacks run once in order; nil entries and callback panics propagate.
 //
 // Example:
@@ -25,7 +25,7 @@ type Builder struct {
 //	var configure swagger.BuilderFunc = func(page *swagger.Builder) {
 //		page.Title("Billing API")
 //	}
-//	_, err := swagger.Handler("/docs", "/openapi.json", configure)
+//	_, err := swagger.New("/openapi.json", configure)
 //	if err != nil {
 //		log.Fatal(err)
 //	}
@@ -37,7 +37,7 @@ type BuilderFunc = func(*Builder)
 //
 // Example:
 //
-//	_, err := swagger.Handler("/docs", "/openapi.json", func(page *swagger.Builder) {
+//	_, err := swagger.New("/openapi.json", func(page *swagger.Builder) {
 //		page.Title("Billing API")
 //	})
 //	if err != nil {

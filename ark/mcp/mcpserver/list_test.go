@@ -28,8 +28,8 @@ func TestAvailabilityTwoPrincipalsAndPlanChanges(t *testing.T) {
 	})
 
 	server := managed(t, tool)
-	paid := connect(t, principalHandler(server, "paid"), "2026-07-28")
-	free := connect(t, principalHandler(server, "free"), "2026-07-28")
+	paid := connect(t, principalHandler(handlerOf(server), "paid"), "2026-07-28")
+	free := connect(t, principalHandler(handlerOf(server), "free"), "2026-07-28")
 
 	requireCatalogSize(t, paid, 1)
 	requireCatalogSize(t, free, 0)
@@ -93,8 +93,8 @@ func TestAvailabilityLegacyContext(t *testing.T) {
 	})
 	server := managed(t, tool)
 
-	requireCatalogSize(t, connect(t, principalHandler(server, "paid"), "2025-11-25"), 1)
-	requireCatalogSize(t, connect(t, principalHandler(server, "free"), "2025-11-25"), 0)
+	requireCatalogSize(t, connect(t, principalHandler(handlerOf(server), "paid"), "2025-11-25"), 1)
+	requireCatalogSize(t, connect(t, principalHandler(handlerOf(server), "free"), "2025-11-25"), 0)
 }
 
 func TestAvailabilityFailureListingFailsClosed(t *testing.T) {
@@ -119,7 +119,7 @@ func TestAvailabilityFailureListingFailsClosed(t *testing.T) {
 		t.Fatal("construction evaluated policy")
 	}
 
-	session := connect(t, server, "2026-07-28")
+	session := connect(t, handlerOf(server), "2026-07-28")
 
 	result, err := session.ListTools(t.Context(), nil)
 
@@ -144,7 +144,7 @@ func TestAvailabilityPanicListingIsSanitized(t *testing.T) {
 			panic("secret-policy-panic")
 		})
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.ListTools(t.Context(), nil)
 
@@ -181,7 +181,7 @@ func TestAvailabilityLargeCatalogIncludesNativeTools(t *testing.T) {
 			return &sdkmcp.CallToolResult{}, nil
 		})
 
-	session := connect(t, server, "2026-07-28")
+	session := connect(t, handlerOf(server), "2026-07-28")
 
 	requireCatalogSize(t, session, (sdkmcp.DefaultPageSize+4)/2+1)
 
@@ -215,7 +215,7 @@ func TestAvailabilityListingCancellationReachesPolicy(t *testing.T) {
 		})
 	})
 
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)

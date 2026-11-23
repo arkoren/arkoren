@@ -11,6 +11,15 @@ import (
 	"arkoren.dev/core/http/router"
 )
 
+// serve dispatches a bodiless request through handler and returns the response.
+func serve(handler http.Handler, method, target string) *httptest.ResponseRecorder {
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(method, target, nil))
+
+	return response
+}
+
 // TestRouterHas reports registrations for both trailing-slash forms.
 func TestRouterHas(t *testing.T) {
 	t.Parallel()
