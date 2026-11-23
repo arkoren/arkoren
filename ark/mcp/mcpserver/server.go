@@ -149,6 +149,10 @@ func prepare(tools []mcp.Tool) ([]registration, error) {
 //		return err
 //	}
 //	mux.Handle("/mcp", http.HandlerFunc(server.ServeHTTP))
+//
+// With a core router, mount the server with [Operation]:
+//
+//	routes.Mount("/mcp", server, mcpserver.Operation)
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	server.handler.ServeHTTP(writer, request)
 }

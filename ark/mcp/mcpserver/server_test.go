@@ -20,6 +20,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"arkoren.dev/ark/mcp/mcpserver"
+	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/mcp"
 	"arkoren.dev/foundation/validate"
 )
@@ -849,5 +850,46 @@ func TestListDoesNotInvokeTools(t *testing.T) {
 
 	if calls.Load() != 0 || len(listed.Tools) != 2 {
 		t.Fatalf("list invoked tools or omitted native additions: %+v", listed.Tools)
+	}
+}
+
+// TestOperationHidesMountFromOpenAPI verifies a mounted server annotated with
+// Operation exports without error and contributes no path, while a visible
+// annotation of the same mount is rejected by the router.
+func TestOperationHidesMountFromOpenAPI(t *testing.T) {
+	t.Parallel()
+
+	server, err := mcpserver.New("catalog", "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routes := router.New()
+	routes.Mount("/mcp", server, mcpserver.Operation)
+
+	data, err := routes.OpenAPI("MCP", "1")
+	if err != nil {
+		t.Fatalf("OpenAPI() error = %v", err)
+	}
+
+	var document struct {
+		Paths map[string]any `json:"paths"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(document.Paths) != 0 {
+		t.Fatalf("paths = %v, want none", document.Paths)
+	}
+
+	visible := router.New()
+	visible.Mount("/mcp", server, func(operation *router.OperationBuilder) {
+		operation.Summary("MCP")
+	})
+
+	if _, err := visible.OpenAPI("MCP", "1"); err == nil {
+		t.Fatal("OpenAPI() accepted a visible mount annotation")
 	}
 }
