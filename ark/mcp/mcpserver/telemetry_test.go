@@ -45,7 +45,7 @@ func TestTelemetryExecutionErrorsArePayloadFree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session := connect(t, server, "2026-07-28")
+	session := connect(t, handlerOf(server), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{
 		Name: tool.Name(), Arguments: map[string]any{"text": "private-input"},

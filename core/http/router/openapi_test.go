@@ -215,13 +215,13 @@ func TestOpenAPIEquivalentTemplatesRejectDifferentNames(t *testing.T) {
 	}
 }
 
-// TestOpenAPIOpaqueAnnotatedMountRejectsExport ensures catch-alls are never
+// TestOpenAPIOpaqueAnnotatedCatchAllRejectsExport ensures catch-alls are never
 // converted into misleading one-segment path templates.
-func TestOpenAPIOpaqueAnnotatedMountRejectsExport(t *testing.T) {
+func TestOpenAPIOpaqueAnnotatedCatchAllRejectsExport(t *testing.T) {
 	t.Parallel()
 
 	routes := router.New()
-	routes.Mount("/files", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+	routes.Any("/files/{path...}", metadataHandler,
 		func(operation *router.OperationBuilder) {
 			operation.Summary("Files")
 		})

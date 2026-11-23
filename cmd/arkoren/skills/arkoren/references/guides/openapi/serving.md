@@ -1,11 +1,11 @@
 ---
 title: Serving Documentation
-description: Export an HTTP contract, serve cached JSON, and mount a bundled Swagger UI with explicit access controls.
+description: Export an HTTP contract, serve cached JSON, and register a bundled Swagger UI with explicit access controls.
 order: 30
 summary:
   - Export deterministic JSON as an artifact or serve a document cached on its first request.
-  - Mount bundled Swagger UI assets and choose safe base paths and document URLs.
-  - Protect the JSON contract and complete viewer subtree with explicit access and browser policies.
+  - Register bundled Swagger UI routes on a group and choose safe document URLs.
+  - Protect the JSON contract and every viewer route with explicit access and browser policies.
 ---
 
 # Serving Documentation
@@ -73,29 +73,35 @@ handler, rather than retrying generation.
 ## Add Swagger UI
 
 Swagger UI lets people browse the document and make API requests from their
-browser. Protect its complete subtree as well as the JSON endpoint when the
+browser. Protect every viewer route as well as the JSON endpoint when the
 contract is private; protecting only the HTML page leaves the JSON exposed.
 
 Import `arkoren.dev/core/http/swagger` and construct a viewer for your JSON URL:
 
 ```go
-viewer, err := swagger.Handler("/docs", "/openapi.json")
+viewer, err := swagger.New("/openapi.json")
 ```
 
-Invalid paths or URLs return an error. After checking `err`, register both the
-base route and its subtree on the appropriately protected router:
+An invalid URL returns an error. After checking `err`, attach the viewer to a
+group on the appropriately protected router:
 
 ```go
-routes.Get("/docs", viewer, swagger.Operation)
-routes.Get("/docs/{path...}", viewer, swagger.AssetsOperation)
+routes.Group("/docs", viewer.Register)
 ```
 
-The viewer serves `/docs` and `/docs/`, with assets beneath `/docs/`. Keep these
-paths equal to the base path passed to the factory. `swagger.Operation` describes
-the page. The subtree is an opaque catch-all that the exporter cannot describe as one
-path, so `swagger.AssetsOperation` hides it from the document; a visible annotation
-on a catch-all would fail export. For the root base path, register `/{path...}` with
-`swagger.AssetsOperation`.
+`Register` adds four exact `GET` routes: the page at `/docs/` and the assets
+`swagger-ui.css`, `swagger-ui-bundle.js` and `initializer.js` beside it. It
+applies no middleware and no prefix of its own, and there is no catch-all, so
+every other path below `/docs` is a `404`. The page links its assets with
+relative URLs, so any group path works, including one a reverse proxy adds. A
+request for `/docs` without the trailing slash is answered with a `308` redirect
+to the relative `docs/`, built only from the last path segment, never from `Host`,
+forwarding headers or the query string. A last segment with characters other
+than letters, digits and `._~-` is a `404`. At the router root,
+`routes.Group("/", viewer.Register)` serves the page at `/`. The viewer has no per-route handler methods, because the
+assets are tied to the page by fixed relative names. `Register` annotates
+each route, so the document lists the page (with its `308` redirect and `404`) and the
+three assets with their media types and caching headers.
 
 Once the server runs, opening `/docs/` makes the browser fetch `/openapi.json`.
 The factory neither generates nor fetches that document. Pinned JavaScript and
@@ -107,39 +113,36 @@ If the default tab title, `API documentation`, is too generic, use this alternat
 construction:
 
 ```go
-viewer, err := swagger.Handler("/docs", "/openapi.json", func(page *swagger.Builder) {
+viewer, err := swagger.New("/openapi.json", func(page *swagger.Builder) {
 	page.Title("Greeting API")
 })
 ```
 
 The title is escaped as plain text; an empty title remains empty. Construction
 callbacks run once, synchronously in order, even for invalid configuration. Nil
-callbacks panic. Retaining the draft cannot change the completed handler, which
+callbacks panic. Retaining the draft cannot change the completed viewer, which
 supports concurrent requests.
 
 ## Choose URLs
 
 Prefer a root-relative document URL such as `/openapi.json` when the viewer and
 document share an origin. HTTP(S) and relative URLs are also accepted. Relative
-URLs resolve against the configured base path plus `/`, consistently whether the
-page was opened at `/docs` or `/docs/`; request Host and forwarding headers do not
-change that resolution.
-
-The base path must be a clean absolute URL path with unreserved ASCII segments.
-It cannot have a trailing slash unless it is `/`. Wildcards, escaped separators,
-and queries are invalid. The document URL must be nonempty and cannot contain
-credentials, fragments, scheme-relative URLs, whitespace, or backslashes.
+URLs are left as written for the browser to resolve against the page URL, so
+`openapi.json` under `/docs/` becomes `/docs/openapi.json`; the viewer never
+rewrites them and request Host and forwarding headers cannot change them. The
+document URL must be nonempty and cannot contain credentials, fragments,
+scheme-relative URLs, whitespace, or backslashes.
 
 The viewer serves only its page and named assets; unknown paths return `404`.
-It accepts GET and HEAD, with no response body for HEAD. Other methods return
-`405` with `Allow: GET, HEAD` if they reach the handler; router method matching can
-reject them first. HTML and the initializer use `Cache-Control: no-store`;
+It accepts GET and HEAD, with no response body for HEAD; the router answers other
+methods with `405`. HTML and the initializer use `Cache-Control: no-store`;
 pinned JavaScript and CSS use `public, max-age=3600`.
 
 ## Protect Documentation
 
-A private contract needs protection at every entry point: the JSON route, viewer
-page, and viewer subtree. Use your existing authentication middleware or a
+A private contract needs protection at every entry point: the JSON route and
+every viewer route. Put the middleware on the router the group extends, as in
+`routes.With(auth.Middleware(authenticator), auth.Require()).Group("/docs", viewer.Register)`. Use your existing authentication middleware or a
 [restricted listener](../application/health-and-readiness.md). Hiding an operation
 from OpenAPI does not protect the live endpoint, and publishing its security
 requirement does not enforce it.

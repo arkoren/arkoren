@@ -9,13 +9,16 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"arkoren.dev/ark/mcp/mcpserver/internal/wire"
+	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/mcp"
 	"arkoren.dev/core/service/telemetry"
 	"arkoren.dev/foundation/validate"
 )
 
-// Server adapts immutable tools to stateless MCP Streamable HTTP. It has no
-// lifecycle resources; the application owns its listener and authentication.
+// Server adapts immutable tools to stateless MCP Streamable HTTP. It is not an
+// [http.Handler]: [Server.Register] and [Server.EndpointHandler] attach it to a
+// [router.Router]. It has no lifecycle resources; the application owns its
+// listener, authentication and Origin checks.
 //
 // Example:
 //
@@ -23,7 +26,7 @@ import (
 //	if err != nil {
 //		return err
 //	}
-//	mux.Handle("/mcp", server)
+//	routes.Group("/mcp", server.Register)
 type Server struct {
 	// native owns protocol negotiation and registration.
 	native *sdkmcp.Server
@@ -62,7 +65,7 @@ type registration struct {
 //	if err != nil {
 //		return err
 //	}
-//	mux.Handle("/mcp", server)
+//	routes.Group("/mcp", server.Register)
 func New(name, version string, configure ...BuilderFunc) (*Server, error) {
 	listener := &Builder{}
 
@@ -138,9 +141,21 @@ func prepare(tools []mcp.Tool) ([]registration, error) {
 	return entries, nil
 }
 
-// ServeHTTP delegates protocol handling without replacing the request context.
-// Wrap this handler with application authentication, authorization, origin
-// checks, and HTTP timeouts. The SDK bounds request bodies to its default limit.
+// EndpointHandler returns the MCP Streamable HTTP endpoint as a
+// [router.Handler], for applications that choose their own path or method set.
+// Most applications use [Server.Register] instead.
+//
+// The handler is the SDK's stateless, JSON-response transport: it accepts POST
+// only and answers every other method with 405 and "Allow: POST", ignores the
+// request path, keeps no sessions and offers no GET event stream. The request
+// context reaches tool handlers unchanged, so identities placed there by
+// application middleware stay visible. The SDK bounds request bodies.
+//
+// The server applies no Origin validation, authentication, authorization or
+// timeouts. The application owns them as middleware on the router group that
+// registers the endpoint, ahead of it. The MCP specification requires servers
+// to validate the Origin header against DNS rebinding, so serve a local
+// endpoint behind an Origin check such as the csrf middleware or a custom one.
 //
 // Example:
 //
@@ -148,13 +163,31 @@ func prepare(tools []mcp.Tool) ([]registration, error) {
 //	if err != nil {
 //		return err
 //	}
-//	mux.Handle("/mcp", http.HandlerFunc(server.ServeHTTP))
+//	routes.Post("/rpc", server.EndpointHandler(), mcpserver.Operation)
+func (server *Server) EndpointHandler() router.Handler {
+	return router.HTTP(server.handler)
+}
+
+// Register adds the MCP endpoint to r as POST "/" with its [Operation], so the
+// endpoint is the path of the group it is attached to. It applies no middleware
+// and no prefix of its own, and registers no GET or DELETE route: the router answers those with 405,
+// as the specification suggests for a server without sessions or a stream.
 //
-// With a core router, mount the server with [Operation]:
+// Attach it to a group, after the middleware that admits the caller:
+// authentication and authorization, Origin validation and timeouts belong to
+// the application. Registering it twice on one group panics as any duplicate
+// route does.
 //
-//	routes.Mount("/mcp", server, mcpserver.Operation)
-func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	server.handler.ServeHTTP(writer, request)
+// Example:
+//
+//	server, err := mcpserver.New("catalog", "1.0")
+//	if err != nil {
+//		return err
+//	}
+//	routes := router.New()
+//	routes.With(auth.Middleware(authenticator), auth.Require()).Group("/mcp", server.Register)
+func (server *Server) Register(r *router.Router) {
+	r.Post("/", server.EndpointHandler(), Operation)
 }
 
 // Server exposes the native SDK server for advanced protocol features. Native

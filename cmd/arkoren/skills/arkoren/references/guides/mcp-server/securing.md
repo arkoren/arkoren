@@ -32,7 +32,7 @@ not a public-host allowlist. The adapter does not enable the SDK's optional
 cross-origin protection, so your outer Origin policy remains necessary.
 
 With `router` imported from `arkoren.dev/core/http/router`, adapt your existing
-`boundary func(http.Handler) http.Handler` before authentication and mounting:
+`boundary func(http.Handler) http.Handler` before authentication and route registration:
 
 ```go
 routes := router.New()
@@ -53,20 +53,22 @@ type and `verifyAccessToken` has signature
 to the identity's record when policies need it.
 
 Import `arkoren.dev/core/auth` and add authentication to the router above
-before mounting the checked `endpoint` from [tool registration](serving.md#endpoint-registration):
+before registering the checked `endpoint` from [tool registration](serving.md#endpoint-registration):
 
 ```go
 routes.Use(auth.Middleware(auth.Bearer(verifyAccessToken)))
 routes.Use(auth.Require())
-routes.Mount("/mcp", endpoint, mcpserver.Operation)
+routes.Group("/mcp", endpoint.Register)
 ```
 
 `auth.Middleware` stores a verified `auth.Identity`, but permits anonymous requests when
 credentials are absent. `auth.Require()` rejects those requests. Invalid
-credentials fail authentication. Configure middleware before `Mount` and serve
-the router through your existing HTTP lifecycle.
+credentials fail authentication. Call `Use` before `Group` so the group inherits
+the middleware, and serve the router through your existing HTTP lifecycle. The
+server validates no Origin and sets no timeouts itself: both belong to
+application middleware on that group.
 
-The mount and adapter preserve request context for policies and handlers.
+The route and adapter preserve request context for policies and handlers.
 `auth.FromContext` returns the identity, and `auth.UserFromContext[User]` must use
 the exact concrete type stored in its record at admission: `User` and `*User`
 are different types. Mismatched lookups fail closed.
@@ -80,7 +82,7 @@ parser.
 
 Authentication need not grant everyone access to MCP. If your application has
 an endpoint-wide rule, import `arkoren.dev/core/auth/gate` and insert it
-after authentication but before the mount:
+after authentication but before the route:
 
 ```go
 routes.Use(gate.Require(canUseMCP))
@@ -94,7 +96,7 @@ those separate decisions.
 ## Browser Access
 
 For a trusted browser application on another origin, configure
-[CORS](../browser-security/cors.md) before authentication and mounting. With
+[CORS](../browser-security/cors.md) before authentication and route registration. With
 `cors` from `arkoren.dev/core/http/middleware/cors` and standard `net/http`:
 
 ```go
@@ -105,8 +107,8 @@ routes.Use(cors.Middleware(func(policy *cors.Builder) {
 }))
 ```
 
-This is inserted before the authentication block, not after the completed
-mount. CORS answers preflights and lets the trusted browser read responses;
+This is inserted before the authentication block, not after the route is
+registered. CORS answers preflights and lets the trusted browser read responses;
 it does not reject requests from disallowed origins. Keep the outer Origin
 policy. The `Mcp-Method` and `Mcp-Name` headers support newer protocol clients.
 

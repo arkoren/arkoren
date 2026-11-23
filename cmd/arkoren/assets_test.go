@@ -260,7 +260,7 @@ func TestNewMCPIsAProvider(t *testing.T) {
 
 	source := renderedNewSource(t, "internal/bootstrap/mcp.go")
 	contains(t, source, "var MCP = application.Provide(func(compose *application.Composer) *mcpserver.Server {",
-		"routes := compose.Use(Router)", `routes.MCPTools("http")`, `routes.Mount("/mcp", endpoint, func(operation *router.OperationBuilder) {`, "operation.Hidden(true)")
+		"routes := compose.Use(Router)", `routes.MCPTools("http")`, `routes.Group("/mcp", endpoint.Register)`)
 
 	_, implementation, _ := strings.Cut(source, "var MCP = ")
 
@@ -1153,14 +1153,10 @@ func TestNewRouterAnnotatesExistingRoutes(t *testing.T) {
 
 	source := renderedNewSource(t, "internal/bootstrap/router.go")
 
-	contains(t, source,
-		"routes.Get(application.LivePath, app.LiveHandler(), application.LiveOperation)",
-		"routes.Get(application.ReadyPath, app.ReadyHandler(), application.ReadyOperation)",
-		"routes.Get(application.StartupPath, app.StartupHandler(), application.StartupOperation)",
-	)
+	contains(t, source, `routes.Group("/", app.RegisterProbes)`)
 
-	if strings.Count(source, "routes.Get(") != 4 {
-		t.Fatal("router added routes beyond the probes and the welcome page")
+	if strings.Count(source, "routes.Get(") != 1 {
+		t.Fatal("router added routes beyond the welcome page")
 	}
 
 	unwanted := strings.Contains(source, "OpenAPIHandler") || strings.Contains(source, "InfoHandler") ||

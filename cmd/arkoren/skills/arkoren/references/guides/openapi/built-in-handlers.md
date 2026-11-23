@@ -73,14 +73,14 @@ callback as the last argument of the registration:
 | --- | --- | --- |
 | `routes.OpenAPIHandler(...)` | `router.OpenAPIOperation` | The cached document at `200` and a `500` problem. |
 | `Document.Handler()` (AsyncAPI) | `asyncapi.DocumentOperation` | The cached AsyncAPI JSON at `200` and a `500` problem. |
-| `swagger.Handler(...)` page | `swagger.Operation` | The Swagger UI page as `200` HTML. |
-| `swagger.Handler(...)` subtree | `swagger.AssetsOperation` | Nothing: it hides the opaque `{path...}` catch-all. |
+| `viewer.Register` (Swagger UI) | passed by `Register` | The page with its `308` redirect and `404`, and the three assets. |
+| `server.Register` (MCP) | `mcpserver.Operation`, passed by `Register` | The single JSON-RPC `POST`. |
 | `driver.Handler()` (Prometheus) | `prometheustelemetry.Operation` | Metrics text at `200`; the `500`, `501` and `503` failures. |
 | `guard.PendingHandler()`, `ChallengeHandler()`, `ConfirmHandler()`, `LogoutHandler()` | `auth.PendingOperation`, `ChallengeOperation`, `ConfirmOperation`, `LogoutOperation` | Bodies, statuses, session cookies and the guard's problems. |
 | `client.LoginHandler()`, `CallbackHandler(...)`, `NonceHandler()`, `NativeHandler(...)` (OAuth) | `oauthauth.LoginOperation`, `CallbackOperation`, `NonceOperation`, `NativeOperation` | Redirects, cookies, native bodies and the login problems. |
 | IAM routes | the operation in each package, such as `password.LoginOperation` | Bodies, statuses, cookies and the stable problems. [IAM routes](../iam/routes.md) lists them. |
 
-`identity.Register` already passes them. A callback that needs a path parameter
+`Register` functions (`identity.Register`, `viewer.Register`, `server.Register`, `app.RegisterProbes`) already pass them. A callback that needs a path parameter
 declares it under the name of the default path (`{id}`, `{subject}`, `{name}`); if you
 register a handler on a path that names the wildcard differently, export reports it.
 
@@ -166,9 +166,10 @@ single operation cannot describe. Annotate only the behavior you actually serve:
   actual media types and headers. Use `MediaResponse`, not `JSONResponse`, for
   binary or text output. The [response declarations](operations.md#describe-responses)
   show the pattern.
-- Mounted [MCP endpoints](../mcp-server/first-server.md) remain a separate protocol.
-  Export does not traverse their handlers or infer internal operations. Mount the
-  server with `mcpserver.Operation`, which hides the registration; visible annotated
+- [MCP endpoints](../mcp-server/first-server.md) are a protocol: `mcpserver.Operation`
+  (passed by `Register`) describes the single JSON-RPC POST, and the catalog of tools
+  comes from `tools/list`, not from OpenAPI. Export does not traverse the handler or
+  infer internal operations. Leave catch-all routes unannotated or hidden; visible annotated
   opaque paths fail export.
 
 For every integration, match the body, headers, statuses, and security policy to
