@@ -9,11 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"arkoren.dev/core/http/router"
+	"arkoren.dev/foundation/problem"
 )
 
 // assets holds the unmodified upstream distribution and its legal notices.
@@ -145,9 +147,10 @@ func New(specificationURL string, configure ...BuilderFunc) (*Viewer, error) {
 // The page addresses its assets relative to its own URL, so it must be served
 // with a trailing slash. A request for the group path without one ("/docs") is
 // answered with a 308 redirect to the relative Location "docs/", built from
-// the last path segment of the request only and never from the Host or any
-// forwarding header, so it stays correct behind a reverse proxy that adds a
-// prefix. Registered at the router root, the page is "/" and never redirects.
+// the last path segment of the request only and never from the Host, any
+// forwarding header or the query string, so it stays correct behind a reverse
+// proxy that adds a prefix. A last segment with characters other than
+// letters, digits and "._~-" answers 404 instead. Registered at the router root, the page is "/" and never redirects.
 //
 // Registering a second viewer on the same group panics, as any duplicate
 // pattern does.
@@ -163,8 +166,20 @@ func (viewer *Viewer) Register(r *router.Router) {
 	r.Get("/initializer.js", viewer.initializer.serve)
 }
 
+// redirectSegment matches the only last path segments the trailing-slash
+// redirect will echo back: RFC 3986 unreserved characters. Anything else, such
+// as an encoded slash or backslash, a colon, or an encoded dot sequence, could
+// be read by a browser as a different target, so it is never put in Location.
+var redirectSegment = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+
 // servePage serves the document, first redirecting a request without a
 // trailing slash so the page's relative asset URLs resolve inside the group.
+//
+// The redirect Location is the last request path segment plus "/", so it
+// stays relative and keeps any proxy prefix. No query string is copied, since
+// Swagger UI query-string configuration is disabled. A last segment that is
+// not purely unreserved characters, or is a dot segment, answers 404 rather
+// than reaching the Location header.
 func (viewer *Viewer) servePage(writer http.ResponseWriter, request *http.Request) error {
 	escaped := request.URL.EscapedPath()
 
@@ -172,22 +187,14 @@ func (viewer *Viewer) servePage(writer http.ResponseWriter, request *http.Reques
 		return viewer.page.serve(writer, request)
 	}
 
-	// The last segment is relative to the request URL, so the redirect keeps any
-	// proxy prefix. A colon in it would read as a scheme, so "./" guards it.
 	segment := escaped[strings.LastIndex(escaped, "/")+1:]
 
-	if strings.Contains(segment, ":") {
-		segment = "./" + segment
-	}
-
-	location := segment + "/"
-
-	if request.URL.RawQuery != "" {
-		location += "?" + request.URL.RawQuery
+	if !redirectSegment.MatchString(segment) || segment == "." || segment == ".." {
+		return problem.NotFound()
 	}
 
 	// http.Redirect would rewrite the relative Location into an absolute path.
-	writer.Header().Set("Location", location)
+	writer.Header().Set("Location", segment+"/")
 	writer.WriteHeader(http.StatusPermanentRedirect)
 
 	return nil

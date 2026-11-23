@@ -63,14 +63,14 @@ func TestViewerServesPageUnderGroup(t *testing.T) {
 	}
 }
 
-// TestViewerRedirectsToTrailingSlash checks the relative 308 for the bare path.
+// TestViewerRedirectsToTrailingSlash checks the relative 308 for the bare path, dropping the query.
 func TestViewerRedirectsToTrailingSlash(t *testing.T) {
 	t.Parallel()
 
 	routes := docsRouter(t, "/prefix/docs", "/openapi.json")
 	response := request(routes, http.MethodGet, "/prefix/docs?a=1")
 
-	if response.Code != http.StatusPermanentRedirect || response.Header().Get("Location") != "docs/?a=1" {
+	if response.Code != http.StatusPermanentRedirect || response.Header().Get("Location") != "docs/" {
 		t.Fatalf("status %d, location %q", response.Code, response.Header().Get("Location"))
 	}
 }
@@ -95,16 +95,18 @@ func TestViewerRedirectIgnoresForwardingHeaders(t *testing.T) {
 	}
 }
 
-// TestViewerRedirectGuardsColonSegment checks that a last segment containing a
-// colon cannot be read as a URL scheme.
-func TestViewerRedirectGuardsColonSegment(t *testing.T) {
+// TestViewerRedirectRejectsUnsafeSegments checks that a last segment outside
+// the unreserved set is a 404 and never reaches the Location header.
+func TestViewerRedirectRejectsUnsafeSegments(t *testing.T) {
 	t.Parallel()
 
-	routes := docsRouter(t, "/a:b", "/openapi.json")
-	response := request(routes, http.MethodGet, "/a:b")
+	for _, segment := range []string{"a:b", "a%2Fb", "a%5Cb", "%2F%2Fevil.test", "%2e%2e", "a%20b", "a%3Ab"} {
+		routes := docsRouter(t, "/"+segment, "/openapi.json")
+		response := request(routes, http.MethodGet, "/"+segment)
 
-	if response.Header().Get("Location") != "./a:b/" {
-		t.Fatalf("location %q", response.Header().Get("Location"))
+		if response.Code != http.StatusNotFound || response.Header().Get("Location") != "" {
+			t.Errorf("%q: status %d, location %q", segment, response.Code, response.Header().Get("Location"))
+		}
 	}
 }
 

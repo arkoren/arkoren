@@ -95,9 +95,10 @@ applies no middleware and no prefix of its own, and there is no catch-all, so
 every other path below `/docs` is a `404`. The page links its assets with
 relative URLs, so any group path works, including one a reverse proxy adds. A
 request for `/docs` without the trailing slash is answered with a `308` redirect
-to the relative `docs/`, built only from the request path, never from `Host` or
-forwarding headers. At the router root, `routes.Group("/", viewer.Register)`
-serves the page at `/`. The viewer has no per-route handler methods, because the
+to the relative `docs/`, built only from the last path segment, never from `Host`,
+forwarding headers or the query string. A last segment with characters other
+than letters, digits and `._~-` is a `404`. At the router root,
+`routes.Group("/", viewer.Register)` serves the page at `/`. The viewer has no per-route handler methods, because the
 assets are tied to the page by fixed relative names. Leave the routes
 unannotated: the exporter does not discover operations inside the UI.
 
