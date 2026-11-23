@@ -1,0 +1,25 @@
+package web
+
+import (
+	"net/http"
+
+	"arkoren.dev/core/http/middleware/errormap"
+	"arkoren.dev/foundation/problem"
+
+	"{{.Module}}/internal/{{.Feature}}"
+)
+
+// NotFound is the problem clients receive for a {{.Feature}} record that does
+// not exist. Point its type at the page documenting it, and keep the type
+// stable once clients depend on it.
+var NotFound = problem.New(func(details *problem.Builder) {
+	details.Type("https://{{.Module}}/problems/{{.Feature}}-not-found")
+	details.Title("Not found")
+	details.Status(http.StatusNotFound)
+})
+
+// Problems maps the {{.Feature}} domain errors to their problems for every
+// {{.Feature}} route. Add one errormap.Map per domain error a handler returns.
+var Problems = errormap.Middleware(
+	errormap.Map({{.Feature}}.ErrNotFound, NotFound),
+)

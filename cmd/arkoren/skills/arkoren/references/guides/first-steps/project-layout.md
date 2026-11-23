@@ -1,149 +1,205 @@
 ---
 title: Project Layout
-description: Grow an application into feature-owned packages while keeping dependency construction and resource ownership visible.
+description: Organize a service into processes, bootstrap providers, and plain-Go feature packages, with one visible place that wires each process.
 order: 50
 summary:
-  - Keep a small service small, then group related behavior into feature packages.
-  - Mount feature routes without giving handlers responsibility for listeners or drivers.
-  - Connect shared dependencies in one composition root and register cleanup once.
-  - Choose explicit cross-feature boundaries and test them without a running listener.
+  - Run each process from its own cmd directory, with an App provider and a Compose function in its process root.
+  - Keep internal/bootstrap to providers that return the component they make live.
+  - Write features as plain Go that takes dependencies as arguments and never imports bootstrap.
+  - Wire features with one bootstrap file each, and connect them through consumer-defined interfaces.
 ---
 
 # Project Layout
 
 When one feature changes, its routes, rules, and persistence code should be easy
-to find together. Group application behavior by feature and keep the code that
-connects features in a visible composition root. Arkoren does not discover files
-or require a particular directory layout.
+to find together, and the code that connects features should be easy to read in
+one place. Projects created with `arkoren new` follow the layout below, and the
+bundled `arkoren-structure` skill gives coding agents the same rules. Arkoren
+does not discover files, so an existing project with another layout keeps
+working: apply the construction rules to new code and leave its structure alone.
 
-A service with only the [Quickstart](quickstart.md) endpoint can keep its handler
-in `internal/bootstrap`. Extract a package when that behavior has enough rules,
-tests, or dependencies to deserve its own boundary—not to fill empty directories.
+Three rules shape the layout:
 
-## Growing Structure
+1. Features are plain Go. They never import `arkoren.dev/core/application` or
+   `internal/bootstrap`, and their constructors take dependencies as arguments.
+2. `internal/bootstrap` holds only providers. Each returns the component it
+   makes live.
+3. Each process has a root, `internal/bootstrap/<process>`, with an `App`
+   provider and a `Compose` function.
 
-For a greeting service that later adds a catalog, an application-owned layout
-could be:
+## Structure
+
+For a service that serves HTTP and runs migrations, the layout is:
 
 ```text
 hello/
-├── cmd/server/main.go
+├── cmd/
+│   ├── server/main.go
+│   └── migrate/main.go
 ├── internal/
 │   ├── bootstrap/
-│   │   ├── app.go
-│   │   ├── bootstrap.go
 │   │   ├── logging.go
-│   │   ├── mcp.go
 │   │   ├── router.go
-│   │   └── server.go
-│   ├── greeting/
-│   │   ├── greeting.go
-│   │   ├── http.go
-│   │   └── http_test.go
+│   │   ├── server.go
+│   │   ├── mcp.go
+│   │   ├── catalog.go
+│   │   ├── server/
+│   │   │   ├── app.go
+│   │   │   └── compose.go
+│   │   └── migrate/
+│   │       ├── app.go
+│   │       └── compose.go
+│   ├── migrations/
+│   ├── platform/
+│   │   └── ui/
 │   └── catalog/
 │       ├── catalog.go
+│       ├── service.go
 │       ├── store.go
-│       └── store_test.go
+│       ├── web/
+│       └── carrier/
 └── go.mod
 ```
 
-`cmd/server` owns process entry, signals, and exit status. `bootstrap` constructs
-dependencies, mounts features, and registers lifecycle work. `greeting` and
-`catalog` own application behavior. `internal` keeps these implementation packages
-behind Go's internal import boundary.
+The generator creates `cmd/server` and `bootstrap` with `bootstrap/server`. Add
+the rest as the application needs it, for example with `arkoren add`; an empty
+directory earns nothing.
 
-The generator creates only the executable and bootstrap, not these feature
-packages or tests. Add files as the application needs them. Environment loading
-can remain beside construction; introduce an application settings package only
-when the parsing or sharing described in [Configuration](configuration.md)
-justifies one.
+## Processes
 
-## Feature Ownership
+Each process has its own `cmd/<process>/main.go`: `server`, `worker`, `migrate`.
+One binary can run several surfaces, and a process that needs a different set
+of them gets its own directory. `main` calls
+`application.Run(ctx, server.App, server.Compose)` and maps the result to the
+exit status.
 
-A feature package owns related behavior from its incoming request to its data
-operations. Put its HTTP adapters, business rules, queries, and tests together
-rather than spreading them across global `handlers`, `models`, and
-`repositories` folders.
-
-That does not mean putting HTTP or SQL inside every rule. Keep calculations and
-decisions in plain Go functions when they do not need I/O. Let adapters handle
-request decoding and responses, and let a feature-owned store handle database
-access. Dependencies should be explicit fields or arguments, not package globals.
-
-If a feature adds jobs, events, or schema changes, keep those declarations with
-the feature too. Application startup and deployment decide when to run them;
-the presence of a file does not register a worker or apply a migration. Follow
-[Migration Deployment](../migrations/deployment.md) for schema ownership and
-rollout ordering.
-
-## Mounting Routes
-
-To extract the Quickstart's endpoint, move its `Greeting` type and `greet` helper
-into `internal/greeting`, changing their package declaration to `package greeting`.
-In that package's `http.go`, import `net/http`,
-`arkoren.dev/core/http/router`, and `arkoren.dev/core/service/cache`, then expose
-one route-registration function:
+The process root `internal/bootstrap/<process>` is a package named for the
+process that `main` imports. `App` is a provider that builds the
+[application](../application/overview.md) from its settings. `Compose` is the
+explicit list of what the process runs:
 
 ```go
-// Routes mounts greeting endpoints using the caller's cache.
-func Routes(routes *router.Router, visits *cache.Cache) {
-	routes.Post("/greetings/{name}", func(w http.ResponseWriter, r *http.Request) error {
-		return greet(w, r, visits)
-	})
+func Compose(compose *application.Composer) {
+	compose.Use(bootstrap.CatalogRoutes)
+
+	if compose.App().Debug() {
+		compose.Use(bootstrap.MCP)
+	}
+
+	compose.Use(bootstrap.Server)
 }
 ```
 
-This function registers handlers; it neither constructs a listener nor starts
-or stops the cache. The handler keeps the request context for cache calls.
-The feature borrows a facade whose lifetime the caller owns.
+Each `Use` builds a provider on first use. Feature providers come first so
+their routes exist, optional diagnostics next, and `Server` last, which serves
+the router. Reading `Compose` tells you what the process does; adding a feature
+to a process is one line. The conditional is a plain `if` on
+`compose.App().Debug()` or `compose.App().Environment()`.
 
-Inside the existing `Router(visits)` factory callback in
-`internal/bootstrap/router.go`, replace the old greeting registration with:
-
-```go
-greeting.Routes(routes, visits)
-```
-
-Import your application's package, `example.com/hello/internal/greeting`, and
-remove `net/http` from `router.go` if the old closure was its only use there.
-Keep middleware registration before feature routes. Remove the original helper
-file from `bootstrap` only after moving its implementation, so there is one
-owner and one registration of the endpoint.
-
-## Composition Root
-
-The composition root is where concrete dependencies meet. In the starter,
-`main` passes `bootstrap.Compose` to `app.Run`; the root constructs shared
-dependencies and passes them into typed factories. The Quickstart's cache wiring
-stays there even after the handler moves:
+A migration process uses one provider that registers a runner applying the
+application's migrations. [`application.Run`](../application/overview.md) then
+shuts down cleanly once its only runner returns without error:
 
 ```go
-driver := memorycache.New()
-compose.Cleanup(driver.Stop)
-compose.Startup(driver.Start)
-visits := cache.New(driver)
-
-routes := compose.Use(Router(visits))
+func Compose(compose *application.Composer) {
+	compose.Use(bootstrap.Migrate)
+}
 ```
 
-This fragment uses the Quickstart's `application.Composer` callback and imports
-for `cache` and `memorycache`. Keep diagnostics and listener selection after it.
-The acquiring owner registers cleanup once, immediately after acquisition.
-Do not add another cleanup hook in every feature that receives the facade.
+## Bootstrap
 
-Factories capture dependencies when obtained; their callbacks construct objects
-and mount routes when selected through `compose.Use`. Returning a value does not
-memoize it, transfer cleanup ownership, or start it. Construct a shared dependency
-once and pass that same value to its consumers. Split growing bootstrap code into
-typed factories rather than a global service lookup. See
-[Application Composition](../application/composition.md) for shared outputs and
-conditional features.
+`internal/bootstrap` holds what every process shares: providers for the log
+handler, the router, the server, and shared resources such as `Database` and
+`Migrator`, plus one file per feature that wires it. Every exported declaration
+is `var X = application.Provide(...)` that returns the component it makes live:
+it may register its lifecycle, mount itself on the router, or subscribe itself
+to the event bus. Bootstrap imports features. Features never import bootstrap,
+so the dependency graph points one way.
+
+The only other exported functions are value-returning constructors such as
+`NewDatabase(compose, envKey)`, which several providers share and only providers
+call. A bootstrap function that takes the composer and returns nothing hides
+what the process runs; make it a provider instead.
+
+Settings are environment variables read inside the provider that uses them. The
+starter has no configuration package.
+
+## Features
+
+A feature is one directory under `internal`. Its root package holds the
+feature's own code:
+
+| File | Holds |
+| --- | --- |
+| `catalog.go` | Domain types, pure rules and plain domain errors. |
+| `service.go` | `Service`, the feature's API, built by `NewService(store, ...)`. |
+| `store.go` | A concrete `Store` over the database and query packages, built by `NewStore(db)`. |
+
+There is no repository interface: transactions travel in the context through
+`db.WithTransaction`, so a service that only takes a `ctx` joins whatever
+transaction its caller opened. The root imports `platform`, core contracts, and
+its own sub-packages, never `application` or `bootstrap`. It may import another
+feature's root for its types.
+
+`internal/bootstrap/catalog.go` wires the feature with `CatalogStore`,
+`CatalogService`, and one provider per surface, such as `CatalogRoutes`:
+
+```go
+var CatalogRoutes = application.Provide(func(compose *application.Composer) *catalogweb.Handlers {
+	routes := compose.Use(Router)
+
+	handlers := catalogweb.NewHandlers(compose.Use(CatalogService))
+	handlers.Register(routes.Prefix("/catalog"))
+
+	return handlers
+})
+```
+
+Sub-packages sit on one side of the root:
+
+- Above the root, packages import the root, and only `internal/bootstrap` and
+  tests import them: `web/` for routes, `jobs/` for queue handlers, `flow/` for
+  workflows, `tools/` for MCP tools, `events/` for listeners, `schedules/`, and
+  `<feature>test/` for fakes and fixtures. Each surface is a struct built by a
+  `New` constructor with a `Register` method for its target, such as
+  `Register(routes *router.Router)` with relative paths. Bootstrap aliases them
+  `<feature><surface>`, as in `catalogweb`, and chooses the path prefix.
+- Below the root, packages are imported by the root and import nothing from the
+  feature: outbound clients such as `carrier/`, generated code, and shared wire
+  types.
+
+Start flat. A surface can begin as a file in the root and move into a child
+package when it outgrows a file or needs import isolation.
+`internal/platform/<purpose>` holds shared code that touches no external system
+and knows no feature, for example compiled-in page layouts.
+`internal/migrations` exports `func All() []migrate.Definition`, and a bootstrap
+`Migrator` provider adds it together with each module's `Migrations()`. See
+[Migration Deployment](../migrations/deployment.md) for ownership and rollout
+ordering.
+
+## Wiring
+
+Arkoren separates two kinds of construction. See
+[Application Composition](../application/composition.md) for each in detail.
+
+- A value the process holds exactly once is a provider declared with
+  `application.Provide`. Name bootstrap providers for their resource (`Router`,
+  `Database`) and feature providers `<Feature>Store`, `<Feature>Service` and
+  `<Feature><Surface>`. A provider takes no parameters.
+- Everything else is an ordinary constructor. One that owns lifecycle is an
+  exported `New*(compose, args...)` in bootstrap that registers it and returns a
+  fresh instance; only providers call it.
+
+A provider calls `Use` on its dependencies at the top, then a blank line, then
+constructs and registers what makes the component live. Dependencies start first
+and stop last. Call `Use` during composition only: never inside a service or
+handler, which receive their dependencies as arguments.
 
 ## Feature Boundaries
 
-When one feature needs an immediate answer from another, depend on the narrow
-behavior it needs. For example, an application-owned checkout feature could
-define this interface, with `context` imported:
+When one feature needs an immediate answer from another, define the narrow
+interface it needs in the asking feature. For example, checkout defines, with
+`context` imported:
 
 ```go
 // Availability supplies the stock observation needed by checkout.
@@ -152,30 +208,47 @@ type Availability interface {
 }
 ```
 
-Bootstrap can pass a catalog implementation that satisfies it without making
-checkout import the whole catalog package. This observation alone does not
-reserve stock; a checkout requiring an atomic reservation needs a contract that
-expresses that operation instead.
+Checkout's provider in `internal/bootstrap/checkout.go` passes
+`compose.Use(CatalogService)` to `checkout.NewService`, so checkout never
+imports the rest of the catalog. This observation alone does not reserve stock;
+a checkout requiring an atomic reservation needs a contract that expresses that
+operation instead.
 
 If no immediate answer is needed, an [application event](../events/overview.md)
-can notify another feature after a change. The in-process event bus is not a
-durable cross-process handoff; use a queue when work must survive that boundary.
-If two packages continually require each other's details, reconsider whether
-they represent one feature rather than adding more wiring to preserve the split.
+can notify another feature after a change. Declare the event in the publisher's
+root and listen from the subscriber's `events/` package. The in-process event bus
+is not a durable cross-process handoff; use a queue when work must survive that
+boundary. If two features need each other's details, they are one feature:
+merge them rather than adding wiring to preserve the split.
+
+The current user comes from `core/auth` through `request.Identity` and
+`request.User[T]`. Only bootstrap imports an identity module such as `ark/iam`.
+
+## Shared Code
+
+Extract shared code on its third real use, and inline a helper again when it
+gains flags. Name packages for their purpose: avoid `util`, `common`, `shared`,
+`helpers`, `models`, `controllers`, `services`, `handlers`, and `repositories`.
+Group a feature's behavior instead of spreading it across global folders by kind.
+
+## Tooling
+
+The CLI works with this layout. `arkoren map` lists processes, providers,
+features and migrations, `arkoren add feature|process|provider|migration`
+creates the files and inserts the `compose.Use` lines, and `arkoren check`
+reports violations of the import and construction rules above. The generated
+`make check` runs it. See [Layout Commands](../cli/layout-commands.md).
 
 ## Testing Features
 
-Test pure rules directly. Test HTTP behavior through the feature's registered
-router using request/response recorders; a listening socket is unnecessary.
+Test pure rules directly. Test a surface as plain Go: build it with fakes for the
+interfaces it defines, register it on a router, and record requests without a
+listening socket. Test a whole process by starting it with
+`application.Start(ctx, server.App, server.Compose)` against local drivers.
 Supply local drivers or fakes for the contracts the feature consumes, then use
 integration tests for the backend-specific behavior those substitutes cannot
 establish. [Testing Overview](../testing/overview.md) shows these boundaries.
 
-Local infrastructure is optional application tooling, not a layout requirement.
-If you add a Compose file, own its credentials, health checks, and teardown in
-your project. Follow the chosen driver's setup rather than assuming every test
-needs a container.
-
-The result is still ordinary Go packages: move or combine them as the application
-changes. Before deploying the assembled executable, review
+The result is still ordinary Go packages: move or combine them as the
+application changes. Before deploying the assembled executable, review
 [Deployment](deploying.md) for runtime configuration, probes, and shutdown.

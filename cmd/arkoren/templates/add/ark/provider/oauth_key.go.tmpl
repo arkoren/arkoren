@@ -1,0 +1,24 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/crypto"
+	"arkoren.dev/driver/aes/aescrypto"
+	"arkoren.dev/foundation/key"
+)
+
+// OAuthKey seals the login cookies of the OAuth sign-in clients with AES. It
+// loads a 32-byte shared key from the file named by OAUTH_KEY_FILE; create one
+// with `arkoren key generate shared --out FILE`. Every process and replica that
+// serves the callback must load the same key, or a login started on one fails on
+// another. Composition fails when the file is missing or invalid, and the
+// application never generates a key to replace a missing one.
+var OAuthKey = application.Provide(func(compose *application.Composer) *crypto.Encrypter {
+	secret := compose.Must(key.LoadShared(os.Getenv("OAUTH_KEY_FILE")))
+	driver := compose.Must(aescrypto.New(secret))
+	compose.Cleanup(driver.Stop)
+
+	return compose.Must(crypto.New(driver))
+})

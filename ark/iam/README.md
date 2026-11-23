@@ -32,12 +32,13 @@ migrations: the module never runs DDL.
 ```go
 scheme := totp.New("Acme") // the name authenticator apps show for this account
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Queue(dispatcher) // the module's emails are queue jobs
 	identity.Password(hasher, func(passwords *password.Builder) {
 		passwords.Registration(true) // off by default: omit it when you add users yourself
-		passwords.Reset(signer, dispatchReset, deliverReset) // required with registration and the built-in users
+		passwords.Reset(signer, mailer, "https://app.example.com/reset-password") // required with registration and the built-in users
 	})
 	identity.Directory(func(accounts *account.Builder) {
-		accounts.Verification(signer, dispatchVerification, deliverVerification)
+		accounts.Verification(signer, mailer, "https://app.example.com/verify-email")
 	})
 	identity.TwoFactor(scheme, cipher)
 	identity.Tokens()
@@ -52,7 +53,10 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 if err != nil {
 	return err
 }
-if err := migrator.Add(identity.Migrations()...); err != nil {
+if err := migrator.Add(identity.Migrations()...); err != nil { // every feature, enabled or not
+	return err
+}
+if err := identity.RegisterJobs(consumer); err != nil { // in the process that sends the emails
 	return err
 }
 web := routes.With(csrf.Middleware(), identity.Middleware())
@@ -74,10 +78,18 @@ The routes above require CSRF protection; the example uses core `csrf.Middleware
 
 Reset and verification links are signed values from core's `link.Signer`, bound to
 the password hash or the email state, so the module keeps no token tables and
-starts no goroutine. `dispatch` stores the work in your queue or workflow, and a
-worker runs `identity.SendReset` or `identity.SendVerification`, which call your `deliver`
-function to send the email. Without them the forgot-password, reset and
-verification routes are not mounted.
+starts no goroutine. IAM queues its own jobs on the dispatcher you give
+`identity.Queue` and sends through the mailer you give `Reset` and `Verification`,
+in the process that calls `identity.RegisterJobs(consumer)`; you declare no job
+or handler. The emails have default wording, and `ResetBuilder.Email` and
+`VerificationBuilder.Email` replace it. The jobs run on the queue `iam.QueueName`
+("iam"): a consumer restricted with `Queues` must list it. Enabling `Reset` or
+`Verification` without `Queue` fails `iam.New`, and without them the
+forgot-password, reset and verification routes are not mounted.
+
+`identity.Migrations()` returns every feature's migration groups whatever is
+enabled, so turning a feature on later needs no migrator change; only your own
+`Builder.Users` removes the built-in users group. Groups are append-only.
 
 `identity.Permissions(...)` stores role and permission assignments for core
 `gate.Role` and `gate.Permission` values. The guard then loads each session's

@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"net/http"
 	"os"
 
 	"arkoren.dev/core/application"
@@ -10,19 +9,19 @@ import (
 	"arkoren.dev/core/http/server"
 )
 
-// Server returns a factory that serves handler. Calling Server only captures
-// the handler; composition reads HTTP_ADDR, constructs the server, and registers
-// its lifecycle without opening a network listener.
+// Server serves the shared router over HTTP. It reads HTTP_ADDR, constructs the
+// server, and registers its lifecycle during composition without opening a
+// network listener. List it last in Compose, after every provider that mounts
+// routes.
 //
 // An empty or unset HTTP_ADDR preserves :8080, listening on all interfaces.
 // The development .env selects loopback instead. Keep local diagnostics on
 // loopback, and update ARKOREN_MCP_URL when changing the CLI's listener address.
 // Existing process environment takes precedence over the autoloaded .env.
-// Environment changes after construction do not reconfigure the server.
+// Environment changes after composition do not reconfigure the server.
 //
 // Startup opens the listener, Run serves after successful startup, and Cleanup
-// stops it on shutdown or lifecycle failure. This factory owns cleanup once;
-// consumers of its returned handle must not register duplicate cleanup.
+// stops it on shutdown or lifecycle failure. Server owns that cleanup once.
 // Addr reports the configured address until startup; observe it afterwards
 // for the actual bound port. Add timeout or TLS policy in the builder below.
 // The Started observer logs that bound address after successful application
@@ -30,25 +29,24 @@ import (
 //
 // See https://arkoren.dev/docs/guides/http-networking/server and
 // https://arkoren.dev/docs/guides/application/lifecycle-and-ownership.
-func Server(handler http.Handler) application.Factory[*server.Server] {
-	return func(compose *application.Composer) *server.Server {
-		events := compose.App().Events()
-		logger := compose.App().Logger()
+var Server = application.Provide(func(compose *application.Composer) *server.Server {
+	events := compose.App().Events()
+	logger := compose.App().Logger()
+	routes := compose.Use(Router)
 
-		listener := server.New(handler, func(listener *server.Builder) {
-			listener.Addr(os.Getenv("HTTP_ADDR"))
-		})
+	listener := server.New(routes, func(listener *server.Builder) {
+		listener.Addr(os.Getenv("HTTP_ADDR"))
+	})
 
-		compose.Cleanup(listener.Stop)
-		compose.Startup(listener.Start)
-		compose.Run(listener.Serve)
+	compose.Cleanup(listener.Stop)
+	compose.Startup(listener.Start)
+	compose.Run(listener.Serve)
 
-		compose.MustDefer(events.Listen(application.Started, func(ctx context.Context, _ event.Void) error {
-			logger.InfoContext(ctx, "http server started", "address", listener.Addr())
+	compose.MustDefer(events.Listen(application.Started, func(ctx context.Context, _ event.Void) error {
+		logger.InfoContext(ctx, "http server started", "address", listener.Addr())
 
-			return nil
-		}))
+		return nil
+	}))
 
-		return listener
-	}
-}
+	return listener
+})

@@ -153,6 +153,54 @@ func TestSkillsInstallWorksOffline(t *testing.T) {
 	}
 }
 
+// TestSkillsInstallIncludesStructureSkill checks the structure skill ships beside
+// the reference skill, in its own directory with its own manifest, and appears in
+// the result under related_skills.
+func TestSkillsInstallIncludesStructureSkill(t *testing.T) {
+	t.Parallel()
+
+	env := scaffoldEnvironment(t)
+
+	if code := run(t.Context(), []string{"skills", "install", "--compact"}, env); code != console.ExitOK {
+		t.Fatalf("exit=%d: %s", code, env.Stderr)
+	}
+
+	folder := filepath.Join(env.Dir, skill.DefaultSkillsDir, "arkoren-structure")
+	installed, err := skill.Inspect(t.Context(), folder)
+
+	if err != nil || installed.Manifest == nil || installed.Manifest.Name != "arkoren-structure" || len(installed.Modified) != 0 {
+		t.Fatalf("structure skill = %+v, %v", installed, err)
+	}
+
+	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
+	related, ok := document["related_skills"].(map[string]any)
+
+	if !ok || related["arkoren-structure"].(map[string]any)["state"] != "installed" {
+		t.Fatalf("result = %v", document)
+	}
+}
+
+// TestSkillsUpdateAddsStructureSkillToOlderProject checks that a project whose
+// managed install predates the structure skill gains it on update, while the
+// reference skill is updated in place.
+func TestSkillsUpdateAddsStructureSkillToOlderProject(t *testing.T) {
+	t.Parallel()
+
+	env := scaffoldEnvironment(t)
+	folder := filepath.Join(env.Dir, skill.DefaultSkillsDir, "arkoren")
+	installTestSkill(t, folder, testSkillBundle(t, map[string]string{"SKILL.md": "old"}))
+
+	if err := runSkills(t.Context(), []string{"update"}, env); err != nil {
+		t.Fatal(err)
+	}
+
+	structure, err := skill.Inspect(t.Context(), filepath.Join(env.Dir, skill.DefaultSkillsDir, "arkoren-structure"))
+
+	if err != nil || structure.Manifest == nil || len(structure.Modified) != 0 {
+		t.Fatalf("structure skill = %+v, %v", structure, err)
+	}
+}
+
 // TestSkillsMatchingInstallIsUnchanged prevents repeated installs rewriting files.
 func TestSkillsMatchingInstallIsUnchanged(t *testing.T) {
 	t.Parallel()

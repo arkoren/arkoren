@@ -3094,14 +3094,14 @@ func TestExistingProjectConflictIsConcise(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	if code := run(t.Context(), []string{"new", "."}, env); code != console.ExitOK {
+	if code := run(t.Context(), []string{"new", ".", "--skip-tidy"}, env); code != console.ExitOK {
 		t.Fatalf("create project: exit %d; %s", code, env.Stderr)
 	}
 
 	env.Stdout.(*bytes.Buffer).Reset()
 	env.Stderr.(*bytes.Buffer).Reset()
 
-	code := run(t.Context(), []string{"new", ".", "--yes"}, env)
+	code := run(t.Context(), []string{"new", ".", "--yes", "--skip-tidy"}, env)
 
 	text := env.Stderr.(*bytes.Buffer).String()
 	diagnostic := errorDocument(t, text)
@@ -3130,14 +3130,14 @@ func TestVerboseProjectConflictListsPaths(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	if code := run(t.Context(), []string{"new", "."}, env); code != console.ExitOK {
+	if code := run(t.Context(), []string{"new", ".", "--skip-tidy"}, env); code != console.ExitOK {
 		t.Fatalf("create project: exit %d; %s", code, env.Stderr)
 	}
 
 	env.Stdout.(*bytes.Buffer).Reset()
 	env.Stderr.(*bytes.Buffer).Reset()
 
-	code := run(t.Context(), []string{"new", ".", "--yes", "--verbose"}, env)
+	code := run(t.Context(), []string{"new", ".", "--yes", "--verbose", "--skip-tidy"}, env)
 
 	diagnostic := errorDocument(t, env.Stderr.(*bytes.Buffer).String())
 	paths := diagnostic["conflicts"].([]any)
@@ -4197,7 +4197,7 @@ func TestHelpBoundaryLiteralHelpRemainsDestination(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := run(t.Context(), []string{
-		"new", "--module=example.com/demo", "--no-agent-files", "--", "--help",
+		"new", "--module=example.com/demo", "--no-agent-files", "--skip-tidy", "--", "--help",
 	}, console.Environment{
 		Stdout: &stdout, Stderr: &stderr, Dir: dir,
 		Env: func(string) (string, bool) {
@@ -5555,7 +5555,7 @@ func TestProjectCreationPrintsOneJSONResult(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	code := run(t.Context(), []string{"new", "billing", "--no-agent-files", "--compact"}, env)
+	code := run(t.Context(), []string{"new", "billing", "--no-agent-files", "--skip-tidy", "--compact"}, env)
 
 	output := result{code: code, stdout: env.Stdout.(*bytes.Buffer).String(), stderr: env.Stderr.(*bytes.Buffer).String()}
 	document := output.expectOK(t).json(t)

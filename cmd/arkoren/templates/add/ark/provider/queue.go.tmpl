@@ -1,0 +1,18 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/queue/memoryqueue"
+)
+
+// Queue is the process's queue driver. The memory driver keeps jobs in this
+// process only, so the process that stores a job must also run its consumer, and
+// jobs are lost on restart. Swap in a networked driver here without touching
+// features, then run the consumer in a worker process.
+var Queue = application.Provide(func(compose *application.Composer) *memoryqueue.Driver {
+	driver := memoryqueue.New()
+	compose.Cleanup(driver.Stop)
+	compose.Startup(driver.Start)
+
+	return driver
+})

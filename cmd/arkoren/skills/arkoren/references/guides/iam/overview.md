@@ -33,7 +33,7 @@ session management, which come with any facade:
   with abuse limits; [registration](registration.md) opens self-service
   sign-up when you choose.
 - **[Email links](email-links.md)**: password reset and email verification
-  through signed, single-use links your queue delivers.
+  through signed, single-use links IAM queues and sends through your mailer.
 - **[Two-factor](two-factor.md)**: authenticator-app codes and recovery codes
   that finish a pending login.
 - **[Fresh logins](freshness.md)**: recent proof of identity before sensitive
@@ -61,7 +61,7 @@ Install the ark in your application's module:
 go get arkoren.dev/ark/iam
 ```
 
-IAM requires `arkoren.dev/core` v0.13.0 or later; `go get` raises your core
+IAM requires `arkoren.dev/core` v0.14.0 or later; `go get` raises your core
 requirement to that version when it is older. The packages you import from IAM
 use no database driver of their own: your application chooses and installs
 the [database driver](../database/drivers.md), cache, password hasher, and, for
@@ -140,15 +140,20 @@ Before serving requests, add IAM's migrations to your application's
 err = migrator.Add(identity.Migrations()...)
 ```
 
-The returned migrations include the built-in directory and only the enabled
-credential stores. Adding them does not execute them. Your deployment then runs:
+The returned migrations cover every feature of the module for your `Instance`,
+whichever features you enabled, so turning one on later needs no migrator change:
+its tables already exist. The one structural choice that removes a group is your
+own `Users`, which leaves out the built-in users table. Groups are append-only: a
+release that changes a table adds a migration to the end of its group and never
+rewrites a shipped one. Adding migrations does not execute them. Your deployment
+then runs:
 
 ```go
 err = migrator.Up(ctx)
 ```
 
 After migration, use `identity.Ping(ctx)` as a read-only readiness check. A missing
-table returns an error wrapping `iam.ErrNotMigrated` and names the table.
+table of an enabled feature returns an error wrapping `iam.ErrNotMigrated` and names the table.
 Your application still owns the database and cache lifecycles.
 
 ## Add a User

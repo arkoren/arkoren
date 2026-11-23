@@ -3,10 +3,13 @@ package password
 import (
 	"context"
 	"errors"
+	"net/url"
 	"time"
 
 	"arkoren.dev/core/event"
 	"arkoren.dev/core/http/link"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/queue"
 
 	"arkoren.dev/ark/iam/internal/storage"
 	"arkoren.dev/ark/iam/internal/web"
@@ -18,7 +21,7 @@ import (
 // Example:
 //
 //	verifier, err := password.NewVerifier(provider, db, store, clientIP, hasher, users, func(passwords *password.Builder) {
-//		passwords.Reset(signer, dispatch, deliver).ResetTTL(30 * time.Minute)
+//		passwords.Queue(dispatcher).Reset(signer, mailer, "https://app.example.com/reset-password").ResetTTL(30 * time.Minute)
 //	})
 type Builder struct {
 	instance     string
@@ -26,8 +29,10 @@ type Builder struct {
 	registration bool
 	resetSet     bool
 	signer       *link.Signer
-	dispatch     func(context.Context, ResetRequest) error
-	deliver      func(context.Context, ResetMessage) error
+	mailer       *mail.Mailer
+	resetURL     string
+	resetEmail   ResetEmailFunc
+	dispatcher   *queue.Dispatcher
 	resetTTL     time.Duration
 	policy       func(context.Context, string) error
 	registered   func(context.Context, string, string) error
@@ -83,18 +88,35 @@ func (passwords *Builder) Events(bus *event.Bus) *Builder {
 //
 // Example:
 //
-//	passwords.Registration(true).Reset(signer, dispatch, deliver)
+//	passwords.Registration(true).Reset(signer, mailer, "https://app.example.com/reset-password")
 func (passwords *Builder) Registration(enabled bool) *Builder {
 	passwords.registration = enabled
 
 	return passwords
 }
 
+// Queue sets the dispatcher that stores the module's background work. Reset
+// needs it: the forgot-password route stores one job per request on it and
+// returns, and the worker that runs [Verifier.RegisterJobs] sends the email. Through
+// the facade, iam.Builder.Queue sets it for every package, so only code that
+// builds a [Verifier] by itself calls it. The jobs run on the
+// queue "iam"; see [Verifier.RegisterJobs]. A later call replaces the earlier
+// one.
+//
+// Example:
+//
+//	passwords.Queue(dispatcher)
+func (passwords *Builder) Queue(dispatcher *queue.Dispatcher) *Builder {
+	passwords.dispatcher = dispatcher
+
+	return passwords
+}
+
 // Reset turns forgotten-password recovery on: calling it makes
 // [Verifier.ForgotHandler] and [Verifier.ResetHandler] work, and
-// [Verifier.SendReset] exists for the worker. Recovery is off when the method is
-// never called; to switch it from configuration, wrap the call in an if. A later
-// call replaces the earlier one.
+// [Verifier.SendReset] and [Verifier.RegisterJobs] exist for the worker.
+// Recovery is off when the method is never called; to switch it from
+// configuration, wrap the call in an if. A later call replaces the earlier one.
 // The package keeps no reset table and runs no goroutine; a reset link is a
 // value that signer signs and that stops working by itself:
 //
@@ -102,36 +124,106 @@ func (passwords *Builder) Registration(enabled bool) *Builder {
 //     ([link.Bind]), so the first successful reset or password change
 //     invalidates every link sent before, and it expires after
 //     [Builder.ResetTTL].
-//   - dispatch runs in the request, once per forgot-password request (and for
-//     the notice to the owner of a taken identifier, with
-//     [ResetRequest.Notice] set, see [Builder.Taken]). It must store the work durably (a queue job, a
-//     workflow run, an outbox row) and return, or return an error, which answers
-//     500 so the client retries. It receives the identifier exactly as typed and
-//     is called whether or not the user exists, so the response and its timing
-//     reveal nothing.
-//   - The stored work later reaches [Verifier.SendReset] in a worker, which
-//     looks the user up, signs the link and calls deliver with the
-//     [ResetMessage] to send. deliver renders and sends the email; its error is
-//     returned by SendReset so the queue retries, which means deliver may run
-//     more than once for one request.
+//   - The forgot-password route stores one job on the [Builder.Queue] dispatcher
+//     per request (and the notice to the owner of a taken identifier, with
+//     [ResetRequest.Notice] set, see [Builder.Taken]) and returns, or returns an
+//     error, which answers 500 so the client retries. The job carries the
+//     identifier exactly as typed and is stored whether or not the user exists,
+//     so the response and its timing reveal nothing.
+//   - The stored job later reaches [Verifier.SendReset] in a worker, which looks
+//     the user up, signs the link and sends the email through mailer. Its error
+//     is returned so the queue retries, which means one request may send more
+//     than once.
 //
-// Signer, dispatch and deliver are all required:
-// [NewVerifier] fails with [ErrInvalidConfig] when any is nil. Use a signer whose key is reserved for
-// links, and share it only with code that signs distinct paths; a reset link is
-// authenticated for its path, so links of other features never work here.
+// resetURL is the page of the application that the link opens, for example
+// "https://app.example.com/reset-password". The signed value travels in the
+// URL fragment ([ResetMessage.Link]), so the page reads it from location.hash
+// and posts it to POST /password/reset. It must be an absolute URL without a
+// fragment. The email is a plain-text message with a default subject and
+// wording; configure may replace it with [ResetBuilder.Email]. The callbacks run
+// directly once, in order, on one fresh [ResetBuilder].
+//
+// Signer, mailer, resetURL and a [Builder.Queue] dispatcher are all required:
+// [NewVerifier] fails with [ErrInvalidConfig] when any is missing or invalid.
+// Use a signer whose key is reserved for links, and share it only with code that
+// signs distinct paths; a reset link is authenticated for its path, so links of
+// other features never work here.
 //
 // Example:
 //
-//	passwords.Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
-//		return dispatcher.Dispatch(ctx, resetJob, request)
-//	}, func(ctx context.Context, message password.ResetMessage) error {
-//		return mailer.Send(ctx, resetEmail(message.Address, message.Link("https://app.example.com/reset-password")))
+//	passwords.Queue(dispatcher).Reset(signer, mailer, "https://app.example.com/reset-password", func(reset *password.ResetBuilder) {
+//		reset.Email(resetEmail)
 //	})
-func (passwords *Builder) Reset(signer *link.Signer, dispatch func(ctx context.Context, request ResetRequest) error, deliver func(ctx context.Context, message ResetMessage) error) *Builder {
+func (passwords *Builder) Reset(signer *link.Signer, mailer *mail.Mailer, resetURL string, configure ...ResetBuilderFunc) *Builder {
 	passwords.resetSet = true
-	passwords.signer, passwords.dispatch, passwords.deliver = signer, dispatch, deliver
+	passwords.signer = signer
+	passwords.mailer = mailer
+	passwords.resetURL = resetURL
+
+	draft := ResetBuilder{}
+	for _, apply := range configure {
+		apply(&draft)
+	}
+
+	passwords.resetEmail = draft.email
 
 	return passwords
+}
+
+// ResetBuilder configures the email of [Builder.Reset]. Callbacks run directly
+// once, in order, on one fresh draft; methods return the same draft.
+//
+// Example:
+//
+//	passwords.Reset(signer, mailer, resetURL, func(reset *password.ResetBuilder) {
+//		reset.Email(resetEmail)
+//	})
+type ResetBuilder struct {
+	email ResetEmailFunc
+}
+
+// ResetBuilderFunc is the callback form of [ResetBuilder].
+//
+// Example:
+//
+//	var configure password.ResetBuilderFunc = func(reset *password.ResetBuilder) {
+//		reset.Email(resetEmail)
+//	}
+//	passwords.Reset(signer, mailer, resetURL, configure)
+type ResetBuilderFunc = func(*ResetBuilder)
+
+// ResetEmailFunc writes the email of a password reset: message describes the
+// request and href is the page link to put in the body, the application's reset
+// URL with the signed value in its fragment. The result needs the recipient
+// message.Address and a body; the sender comes from the mailer's defaults unless
+// the message sets it. A message that fails validation is a permanent failure of
+// the job, because retrying cannot fix it.
+//
+// Example:
+//
+//	var resetEmail password.ResetEmailFunc = func(message password.ResetMessage, href string) mail.Message {
+//		return mail.NewMessage(mail.Recipients{To: []mail.Address{{Email: message.Address}}}, mail.Body{Text: href}, func(letter *mail.MessageBuilder) {
+//			letter.Subject("Reset your password")
+//		})
+//	}
+type ResetEmailFunc = func(message ResetMessage, href string) mail.Message
+
+// Email replaces the default reset email, a short plain-text message that says
+// who asked, shows the link and when it expires. compose runs in the worker for
+// every send, once per attempt, and must not keep the message: its Signed value
+// is a credential. A nil compose restores the default. Notice emails (see
+// [ResetMessage.Notice]) go through the same function, so a custom email must
+// handle both wordings.
+//
+// Example:
+//
+//	reset.Email(func(message password.ResetMessage, href string) mail.Message {
+//		return mail.NewMessage(mail.Recipients{To: []mail.Address{{Email: message.Address}}}, mail.Body{Text: href})
+//	})
+func (reset *ResetBuilder) Email(compose ResetEmailFunc) *ResetBuilder {
+	reset.email = compose
+
+	return reset
 }
 
 // ResetTTL sets how long a reset link is valid; zero selects
@@ -223,16 +315,22 @@ func (passwords *Builder) AfterChange(hook func(ctx context.Context, subject str
 }
 
 // validate checks the settings no setter can check alone.
-func (passwords *Builder) validate() error {
+func (passwords *Builder) validate(job queue.Job[ResetRequest]) error {
 	if err := storage.ValidInstance(passwords.instance); err != nil {
 		return err
 	}
 	if passwords.resetTTL < 0 {
 		return errors.New("negative reset lifetime")
 	}
-	if passwords.resetSet && (passwords.signer == nil || passwords.dispatch == nil || passwords.deliver == nil) {
-		return errors.New("Reset needs a signer, a dispatch function and a deliver function")
+	if !passwords.resetSet {
+		return nil
+	}
+	if passwords.signer == nil || passwords.mailer == nil || passwords.dispatcher == nil {
+		return errors.New("Reset needs a signer, a mailer and a queue dispatcher (Builder.Queue, or Builder.Queue of the iam facade)")
+	}
+	if page, err := url.Parse(passwords.resetURL); err != nil || !page.IsAbs() || page.Host == "" || page.Fragment != "" {
+		return errors.New("Reset needs the reset page as an absolute URL without a fragment")
 	}
 
-	return nil
+	return job.Err()
 }

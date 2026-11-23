@@ -1,0 +1,30 @@
+package events
+
+import (
+	"arkoren.dev/core/event"
+
+	"{{.Module}}/internal/{{.Feature}}"
+)
+
+// Listeners reacts to events of other features over the {{.Feature}} Service.
+type Listeners struct {
+	service *{{.Feature}}.Service
+}
+
+// NewListeners builds the listeners over service. It does no I/O and
+// subscribes to nothing; call Register to subscribe them.
+func NewListeners(service *{{.Feature}}.Service) *Listeners {
+	return &Listeners{service: service}
+}
+
+// Register subscribes the listeners on bus and returns the function that
+// removes the subscriptions. The provider in internal/bootstrap/{{.Feature}}.go
+// passes it to compose.MustDefer, so shutdown unsubscribes once.
+//
+// TODO: declare the events this feature reacts to in the publishing feature's
+// root package, then subscribe here and return the unsubscribe function:
+//
+//	return bus.Listen(topic, listeners.Handle)
+func (listeners *Listeners) Register(bus *event.Bus) (event.Unsubscribe, error) {
+	return func() {}, nil
+}

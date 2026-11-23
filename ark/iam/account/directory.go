@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/mail"
+	netmail "net/mail"
 	"strconv"
 	"strings"
 	"time"
@@ -17,9 +17,11 @@ import (
 	"arkoren.dev/core/service/cache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/queue"
 	"arkoren.dev/foundation/query"
-	"arkoren.dev/foundation/query/schema"
 
+	"arkoren.dev/ark/iam/internal/migration"
 	"arkoren.dev/ark/iam/internal/storage"
 )
 
@@ -115,17 +117,20 @@ type userRow struct {
 //	}
 //	guard, err := auth.NewGuard(directory.Provider(), store)
 type Directory struct {
-	db        *database.Database
-	instance  string
-	users     string
-	events    *event.Bus
-	signer    *link.Signer
-	dispatch  func(context.Context, VerifyRequest) error
-	deliver   func(context.Context, VerifyMessage) error
-	verifyTTL time.Duration
-	provider  *auth.UserProvider
-	store     *cache.Cache
-	clientIP  func(*http.Request) string
+	db         *database.Database
+	instance   string
+	users      string
+	events     *event.Bus
+	signer     *link.Signer
+	mailer     *mail.Mailer
+	verifyURL  string
+	email      VerifyEmailFunc
+	dispatcher *queue.Dispatcher
+	job        queue.Job[VerifyRequest]
+	verifyTTL  time.Duration
+	provider   *auth.UserProvider
+	store      *cache.Cache
+	clientIP   func(*http.Request) string
 }
 
 // NewDirectory returns the directory over db. store counts the verification
@@ -154,20 +159,24 @@ func NewDirectory(db *database.Database, store *cache.Cache, clientIP func(*http
 	for _, apply := range configure {
 		apply(&settings)
 	}
-	if err := settings.validate(); err != nil {
+	job := storage.NewJob[VerifyRequest](verifyJobName, settings.instance)
+	if err := settings.validate(job); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	directory := &Directory{
-		db:        db,
-		instance:  settings.instance,
-		users:     storage.Table(settings.instance, "users"),
-		events:    settings.events,
-		signer:    settings.signer,
-		dispatch:  settings.dispatch,
-		deliver:   settings.deliver,
-		verifyTTL: cmp.Or(settings.verifyTTL, DefaultVerifyTTL),
-		store:     store,
-		clientIP:  clientIP,
+		db:         db,
+		instance:   settings.instance,
+		users:      storage.Table(settings.instance, "users"),
+		events:     settings.events,
+		signer:     settings.signer,
+		mailer:     settings.mailer,
+		verifyURL:  settings.verifyURL,
+		email:      settings.email,
+		dispatcher: settings.dispatcher,
+		job:        job,
+		verifyTTL:  cmp.Or(settings.verifyTTL, DefaultVerifyTTL),
+		store:      store,
+		clientIP:   clientIP,
 	}
 	provider, err := auth.NewUserProvider(directory, func(users *auth.UserProviderBuilder) {
 		users.Events(settings.events)
@@ -176,6 +185,10 @@ func NewDirectory(db *database.Database, store *cache.Cache, clientIP func(*http
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	directory.provider = provider
+
+	if directory.email == nil {
+		directory.email = defaultVerifyEmail
+	}
 
 	return directory, nil
 }
@@ -204,19 +217,7 @@ func (directory *Directory) Provider() *auth.UserProvider {
 //		return err
 //	}
 func (directory *Directory) Migrations() []migrate.Definition {
-	return storage.Group("account", directory.instance).Migrations(
-		migrate.NewMigration("users-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(directory.users, func(table *schema.Table) {
-				table.String("id", 255).Bytewise().Primary()
-				table.String("email", 255).Bytewise().Unique()
-				table.BigInteger("version").Default(0)
-				table.BigInteger("verified_at").Default(0)
-				table.BigInteger("disabled_at").Default(0)
-				table.BigInteger("created_at")
-			})))
-			migration.Down(migrate.Schema(schema.Drop(directory.users)))
-		}),
-	)
+	return migration.Account(directory.instance)
 }
 
 // Ping verifies, read-only, that the table exists. A missing table returns an
@@ -287,7 +288,7 @@ func (directory *Directory) row(ctx context.Context, column, value string) (user
 // ("ada@example.com", without a display name) of at most 254 bytes.
 func normalizeEmail(email string) (string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	address, err := mail.ParseAddress(email)
+	address, err := netmail.ParseAddress(email)
 	if err != nil || address.Address != email || len(email) > maxEmailLength {
 		return "", ErrInvalidEmail
 	}

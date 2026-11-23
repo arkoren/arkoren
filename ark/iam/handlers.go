@@ -21,11 +21,11 @@ func need(enabled bool, handler, requirement string) {
 
 // RegisterHandler returns the handler of POST /register; see
 // [password.Verifier.RegisterHandler]. It always answers 202 and does not log
-// the user in. With the built-in users it dispatches nothing unless
+// the user in. With the built-in users it stores no job unless
 // [account.Builder.Verification] is also configured: then a new user gets a
 // verification email and, for a taken address, nothing is created and the owner
 // gets a reset notice ([password.Builder.Reset], which registration with the
-// built-in users requires). With Reset only, nothing is dispatched for a new or
+// built-in users requires). With Reset only, nothing is stored for a new or
 // a taken address, so both cost the same. The work is the same on both paths,
 // so the answer and its time do not tell them apart; a failing dispatch is
 // logged and the answer stays 202. It panics unless [Builder.Password] is
@@ -123,8 +123,8 @@ func (identity *IAM) VerifyEmailHandler() router.Handler {
 // ResendVerificationHandler returns the handler of POST /email/verify/resend;
 // see [account.Directory.ResendHandler]. It panics without the built-in
 // directory or without [account.Builder.Verification]. It is throttled per user
-// and per client address and dispatches the work for the worker that runs
-// [IAM.SendVerification].
+// and per client address and stores the work as a job for the worker that
+// [IAM.RegisterJobs] registers.
 //
 // Example:
 //
@@ -137,9 +137,9 @@ func (identity *IAM) ResendVerificationHandler() router.Handler {
 
 // ForgotPasswordHandler returns the handler of POST /password/forgot; see
 // [password.Verifier.ForgotHandler]. It panics unless [Builder.Password] is
-// enabled with [password.Builder.Reset]. The work is dispatched for the worker
-// that runs [IAM.SendReset], and the answer is an empty 202 whether or not
-// the user exists.
+// enabled with [password.Builder.Reset]. The work is stored as a job for the
+// worker that [IAM.RegisterJobs] registers, and the answer is an empty 202
+// whether or not the user exists.
 //
 // Example:
 //

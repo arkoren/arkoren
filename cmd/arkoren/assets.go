@@ -10,9 +10,10 @@ import (
 //go:embed all:templates
 var newTemplates embed.FS
 
-// skillSource embeds the authored consumer skill and all reference pages.
-// The all prefix retains dot- and underscore-prefixed files and directories,
-// matching the complete source tree rather than Go's default embed filtering.
+// skillSource embeds every authored managed skill (skills/arkoren with all its
+// reference pages, and skills/arkoren-structure). The all prefix retains dot-
+// and underscore-prefixed files and directories, matching the complete source
+// tree rather than Go's default embed filtering.
 //
-//go:embed all:skills/arkoren
+//go:embed all:skills
 var skillSource embed.FS

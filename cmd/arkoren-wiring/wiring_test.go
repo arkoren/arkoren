@@ -26,9 +26,7 @@ func register(t *testing.T, sys *system, b *browser) {
 	if r := b.post("/login", `{"email":"ada@example.com","password":"correct horse"}`); r.status != http.StatusNoContent {
 		t.Fatalf("login = %d %s", r.status, r.body)
 	}
-	sys.mu.Lock()
-	token := sys.verified[len(sys.verified)-1].Signed
-	sys.mu.Unlock()
+	token := sys.verificationToken()
 	if r := b.post("/email/verify", `{"token":"`+token+`"}`); r.status != http.StatusNoContent {
 		t.Fatalf("verify = %d %s", r.status, r.body)
 	}

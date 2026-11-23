@@ -4,7 +4,7 @@ description: Extend the generated HTTP service with a greeting route, a process-
 order: 30
 summary:
   - Run the starter and confirm its welcome page and readiness probe.
-  - Connect an error-returning handler to a POST route.
+  - Generate a feature with arkoren add and connect an error-returning handler to a POST route.
   - Add an atomic cache counter with application-owned startup and cleanup.
   - Return a client-safe problem response and stop the service cleanly.
 ---
@@ -16,8 +16,8 @@ name with an HTTP error. No database, broker, or credentials are needed.
 
 Start with the `hello` service from [Creating Projects](creating-a-project.md),
 including its dependency-resolution step. Run every command below from that
-project's root. Keep the generated bootstrap files: the edits extend them rather
-than replacing their lifecycle, middleware, or probes.
+project's root. Keep the generated bootstrap files: the edits add a feature beside them
+rather than replacing their lifecycle, middleware, or probes.
 
 ## First Request
 
@@ -49,36 +49,69 @@ process exits unsuccessfully rather than reporting a successful HTTP start.
 Stop with Ctrl+C before editing. Repeat the start command after each edit below;
 the starter does not watch or reload source files.
 
+## Add a Feature
+
+Put the greeting in its own feature, `greetings`. From the project root, generate
+its package, its wiring, and the line that makes the server run it:
+
+```sh
+arkoren add feature greetings --web
+```
+
+The command creates `internal/greetings` with a `Service`, a `Store`, and a `web`
+package, and `internal/bootstrap/greetings.go` with the providers that build
+them. It inserts `compose.Use(bootstrap.GreetingsRoutes)` into `Compose` in
+`internal/bootstrap/server/compose.go`, before the debug check and the server.
+Nothing is overwritten; `--dry-run` previews the files. The feature package is
+plain Go: it imports neither `application` nor `internal/bootstrap`, and
+`arkoren check` reports it if it does.
+
 ## Greeting Handler
 
 An Arkoren HTTP handler takes the familiar response writer and request, then
 returns an error. The router renders returned errors centrally, so handlers can
 return failures without writing a second response.
 
-Create `internal/bootstrap/greeting.go`. Start it with the package, imports,
-and a typed response:
+The generated `internal/greetings/web/web.go` serves a placeholder list. Replace
+its contents with a handler that reads a route wildcard named `name` and returns
+JSON:
 
 ```go
-package bootstrap
+package web
 
 import (
 	"net/http"
 
 	"arkoren.dev/core/http/response"
+	"arkoren.dev/core/http/router"
+
+	"example.com/hello/internal/greetings"
 )
 
 // Greeting is the JSON returned for an accepted greeting.
 type Greeting struct {
 	Message string `json:"message"`
 }
-```
 
-Append this handler to the same file. It reads a route wildcard named `name` and
-returns JSON:
+// Handlers serves the greetings routes over the greetings Service.
+type Handlers struct {
+	service *greetings.Service
+}
 
-```go
-// greet responds to a greeting request using the route's name.
-func greet(w http.ResponseWriter, r *http.Request) error {
+// NewHandlers builds the handlers over service.
+func NewHandlers(service *greetings.Service) *Handlers {
+	return &Handlers{service: service}
+}
+
+// Register mounts the routes on routes, which carries the /greetings prefix.
+func (handlers *Handlers) Register(routes *router.Router) {
+	routes.Use(Problems)
+
+	routes.Post("/{name}", handlers.Greet)
+}
+
+// Greet responds to a greeting request using the route's name.
+func (handlers *Handlers) Greet(w http.ResponseWriter, r *http.Request) error {
 	name := r.PathValue("name")
 
 	return response.JSON(w, http.StatusOK, Greeting{
@@ -88,20 +121,12 @@ func greet(w http.ResponseWriter, r *http.Request) error {
 ```
 
 `response.JSON` sets the content type and encodes the response. Returning its error
-keeps encoding or write failures visible to the router.
-
-## Route Registration
-
-In `internal/bootstrap/router.go`, inside the callback returned by `Router()`,
-add this line before `return routes`:
-
-```go
-routes.Post("/greetings/{name}", greet)
-```
-
-Keep the existing middleware, welcome route, and probe routes. Registration maps
-the method and path to the handler; it does not open a listener. Use POST because
-the next step records a greeting and changes state.
+keeps encoding or write failures visible to the router. The surface registers a
+relative path: the provider in `internal/bootstrap/greetings.go` mounts it under
+`/greetings` with `routes.Prefix("/greetings")`, on the process's one router, the
+same value the welcome page and probes were mounted on. Registration maps the
+method and path to the handler; it does not open a listener. Use POST because the
+next step records a greeting and changes state.
 
 Restart the service, then send a greeting:
 
@@ -123,59 +148,86 @@ state-changing routes without an application security policy.
 
 ## Counting Greetings
 
-Keep counters behind a cache facade so the handler does not depend on how values
-are stored. In `internal/bootstrap/bootstrap.go`, add these imports alongside
-the existing `application` import:
+Keep counters behind a cache facade so the feature does not depend on how values
+are stored. The process needs one cache, so declare it as a provider in
+bootstrap. Create `internal/bootstrap/cache.go`:
 
 ```go
-"arkoren.dev/core/service/cache"
-"arkoren.dev/core/service/cache/memorycache"
-```
+package bootstrap
 
-Inside `Compose`, replace only `routes := compose.Use(Router())` with:
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
+)
 
-```go
-driver := memorycache.New()
-compose.Cleanup(driver.Stop)
-compose.Startup(driver.Start)
-visits := cache.New(driver)
+// Cache is the process's one cache facade over an in-memory driver.
+var Cache = application.Provide(func(compose *application.Composer) *cache.Cache {
+	driver := memorycache.New()
 
-routes := compose.Use(Router(visits))
-```
+	compose.Cleanup(driver.Stop)
+	compose.Startup(driver.Start)
 
-Keep the following `compose.UseDebug(MCP(routes))` and
-`compose.Use(Server(routes))` calls. Cleanup is registered immediately at the
-driver's owner and runs in reverse order, so the server stops before the cache.
-Composition finishes before startup starts the cache's expiry janitor and binds
-the HTTP listener. Failures during composition or startup also release acquired
-resources.
-
-In `internal/bootstrap/router.go`, import `arkoren.dev/core/service/cache` and
-change the factory declaration to accept the facade:
-
-```go
-func Router(visits *cache.Cache) application.Factory[*router.Router] {
-```
-
-Keep the existing factory body and replace the greeting registration with this
-closure, which passes the shared facade to the handler:
-
-```go
-routes.Post("/greetings/{name}", func(w http.ResponseWriter, r *http.Request) error {
-	return greet(w, r, visits)
+	return cache.New(driver)
 })
 ```
 
-Add `net/http` to that file's imports. In `greeting.go`, add the `cache` import
-and a `Count int64` field with the tag `json:"count"` to `Greeting`. Replace
-the entire `greet` function with:
+The provider registers cleanup immediately at the driver's owner, and cleanup
+runs in reverse order, so the server stops before the cache. Composition
+finishes before startup starts the cache's expiry janitor and binds the HTTP
+listener. Failures during composition or startup also release acquired
+resources.
+
+The feature takes the cache as a constructor argument. This feature keeps no
+records, so delete `internal/greetings/store.go` and replace
+`internal/greetings/service.go` with:
 
 ```go
-// greet counts an accepted greeting and returns its current process-local total.
-func greet(w http.ResponseWriter, r *http.Request, visits *cache.Cache) error {
-	name := r.PathValue("name")
+package greetings
+
+import (
+	"context"
+
+	"arkoren.dev/core/service/cache"
+)
+
+// Service counts greetings.
+type Service struct {
+	visits *cache.Cache
+}
+
+// NewService builds the service over visits.
+func NewService(visits *cache.Cache) *Service {
+	return &Service{visits: visits}
+}
+
+// Greet counts an accepted greeting for name and returns its current
+// process-local total.
+func (service *Service) Greet(ctx context.Context, name string) (int64, error) {
 	key := cache.NewKey[int64]("greetings." + name)
-	count, err := visits.Increment(r.Context(), key, 1)
+
+	return service.visits.Increment(ctx, key, 1)
+}
+```
+
+In `internal/bootstrap/greetings.go`, delete the `GreetingsStore` provider and
+change the service provider to pass the cache:
+
+```go
+var GreetingsService = application.Provide(func(compose *application.Composer) *greetings.Service {
+	return greetings.NewService(compose.Use(Cache))
+})
+```
+
+In `web.go`, add a `Count int64` field with the tag `json:"count"` to `Greeting`
+and replace `Greet` with:
+
+```go
+// Greet counts an accepted greeting and returns its current total.
+func (handlers *Handlers) Greet(w http.ResponseWriter, r *http.Request) error {
+	name := r.PathValue("name")
+
+	count, err := handlers.service.Greet(r.Context(), name)
 	if err != nil {
 		return err
 	}
@@ -204,15 +256,15 @@ Restart, then issue the POST request twice. The second response contains:
 ```
 
 For shared counters across replicas, follow [Cache Drivers](../cache/drivers.md)
-for backend construction and ownership. The handler continues to use the facade.
+for backend construction and ownership. The feature continues to use the facade.
 Use [Key Definitions](../cache/keys.md) and [Counters](../cache/counters.md) when
 you need reusable naming or bounded counter windows.
 
 ## Expected Errors
 
 Reject an oversized name before changing its counter. Add
-`arkoren.dev/foundation/problem` to `greeting.go`'s imports. Immediately after
-`name := r.PathValue("name")`, insert:
+`arkoren.dev/foundation/problem` to `web.go`'s imports. Immediately after
+`name := r.PathValue("name")` in `Greet`, insert:
 
 ```go
 if len(name) > 32 {

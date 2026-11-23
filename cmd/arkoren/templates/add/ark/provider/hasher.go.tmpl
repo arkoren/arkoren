@@ -1,0 +1,14 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/hash"
+	"arkoren.dev/driver/bcrypt/bcrypthash"
+)
+
+// Hasher hashes and verifies passwords with bcrypt at its default cost. Raise
+// the cost, or swap in another driver such as argon2, here without touching
+// features.
+var Hasher = application.Provide(func(*application.Composer) *hash.Hasher {
+	return hash.New(bcrypthash.New())
+})

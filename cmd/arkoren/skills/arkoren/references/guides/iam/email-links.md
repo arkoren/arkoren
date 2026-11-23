@@ -1,25 +1,26 @@
 ---
 title: Email Links
-description: Wire durable email delivery, then let users reset passwords and verify addresses through signed, single-use links.
+description: Give IAM a queue, a mailer and page addresses, then let users reset passwords and verify addresses through signed, single-use links.
 order: 30
 summary:
-  - Separate request-time dispatch from worker-time lookup, signing, and email delivery.
-  - Configure password recovery and email verification with small queue-backed examples.
+  - Wire the queue, mailer and page addresses IAM needs to send its own emails.
+  - Run IAM's jobs in the process that sends mail and replace the default wording.
   - Submit signed links safely and distinguish password recovery from email verification.
 ---
 
 # Email Links
 
 A forgotten password needs a recovery path, and an email address needs proof
-before it can be trusted. IAM supplies signed links for both, but your
-application owns the email delivery. Neither feature runs until you provide a
-signer and two functions: **dispatch** stores work during the HTTP request;
-**deliver** sends the resulting message later.
+before it can be trusted. IAM supplies signed links for both and sends the
+emails itself: it queues its own jobs on your dispatcher from inside the request
+and sends through your mailer in a worker. You supply a signer, a mailer, the
+address of the page each link opens, and the queue. You write no job, handler
+or send function.
 
 This page extends the [password-enabled facade](overview.md#start-small).
 It uses an existing queue dispatcher and consumer; their connection and worker
-lifecycle belong to [Queues](../queues/overview.md). A workflow or outbox can
-make the same handoff.
+lifecycle belong to [Queues](../queues/overview.md), and the mailer to
+[Mail](../mail/overview.md).
 
 ## Prepare a Signer
 
@@ -44,148 +45,103 @@ The default signed value is a relative path and query. An
 an absolute value instead; IAM accepts either. The signature binds each
 purpose's path, so a verification link cannot be used as a password-reset link.
 
-## Deliver Messages
-
-A delivery callback receives the stored recipient address, signed value, and
-expiry time. The signed value is a credential: keep it out of logs, analytics,
-and exception reports.
-
-Suppose `sendEmail(ctx, address, subject, text)` is your application's mail
-adapter and returns an error. Import `password` from
-`arkoren.dev/ark/iam/password` and define the reset delivery:
-
-```go
-deliverReset := func(
-	ctx context.Context,
-	message password.ResetMessage,
-) error {
-	subject := "Reset your password"
-	if message.Notice {
-		subject = "Someone tried to register your address"
-	}
-	href := message.Link("https://app.example.com/reset-password")
-
-	return sendEmail(ctx, message.Address, subject, href)
-}
-```
-
-`Notice` distinguishes an ordinary reset request from a
-[registration attempt using a taken address](registration.md#registration-emails).
-In the latter email, explain that setting a new password recovers the account
-if the recipient did not create it. `message.Link(base)` puts the signed value
-in the URL fragment; `base` must not already have a fragment.
-
-Verification uses `account.VerifyMessage` from
-`arkoren.dev/ark/iam/account`, with no `Notice` field:
-
-```go
-deliverVerification := func(
-	ctx context.Context,
-	message account.VerifyMessage,
-) error {
-	href := message.Link("https://app.example.com/verify-email")
-
-	return sendEmail(ctx, message.Address, "Confirm your email", href)
-}
-```
-
-These page URLs belong to your front end, not to IAM. Delivery always uses
-the address stored with the user, never an address copied from an incoming
-reset request. For a concrete mail adapter, see
-[composing mail](../mail/composing-messages.md).
-
-## Store the Work
-
-Queue the request value, not a pre-signed link. The worker should look up the
-current user and sign just before delivery.
-Import `queue` from `arkoren.dev/core/service/queue`:
-
-```go
-resetJob := queue.NewJob[password.ResetRequest]("send-reset")
-```
-
-With your existing dispatcher, store each reset request:
-
-```go
-dispatchReset := func(
-	ctx context.Context,
-	request password.ResetRequest,
-) error {
-	return dispatcher.Dispatch(ctx, resetJob, request)
-}
-```
-
-`ResetRequest.Identifier` is exactly what the user typed. Do not look it up
-inside `dispatchReset`: the forgot-password response must not depend on
-whether that user exists. The optional `Notice` travels with the work.
-
-Verification jobs carry a subject instead:
-
-```go
-verifyJob := queue.NewJob[account.VerifyRequest]("send-verification")
-```
-
-Give verification its own dispatch callback:
-
-```go
-dispatchVerification := func(
-	ctx context.Context,
-	request account.VerifyRequest,
-) error {
-	return dispatcher.Dispatch(ctx, verifyJob, request)
-}
-```
-
-Both dispatch callbacks must store work durably before returning success.
-The queue's durability depends on your
-[driver and delivery setup](../queues/drivers.md); launching a goroutine is not
-a durable handoff. Stored request values remain decodable across IAM
-upgrades: new fields are additive, with zero values for older payloads.
-
 ## Enable the Flows
 
-With the signer and four callbacks defined, enable recovery on passwords and
-verification on the built-in directory:
+Give IAM the dispatcher with `Queue`, then enable each flow with the signer,
+your `*mail.Mailer` and the absolute address of the page that the link opens.
+That page belongs to your front end, not to IAM, and its address must not carry
+a fragment:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
+	identity.Queue(dispatcher)
 	identity.Password(hasher, func(passwords *password.Builder) {
-		passwords.Reset(signer, dispatchReset, deliverReset)
+		passwords.Reset(signer, mailer, "https://app.example.com/reset-password")
 	})
 	identity.Directory(func(accounts *account.Builder) {
-		accounts.Verification(signer, dispatchVerification, deliverVerification)
+		accounts.Verification(signer, mailer, "https://app.example.com/verify-email")
 	})
 })
 ```
 
 This leaves registration closed. Without `Reset`, IAM registers neither
 `/password/forgot` nor `/password/reset`. Without `Verification`, it registers
-neither email route. A partially configured flow makes construction fail;
-requesting one of its unavailable handlers directly panics during composition.
+neither email route. A flow missing its signer, mailer, page address or `Queue`
+makes `iam.New` fail with `iam.ErrInvalidConfig`; requesting one of its
+unavailable handlers directly panics during composition.
 
-Once `iam` exists, register the worker's reset handler:
+The emails are short plain-text messages with a default subject and wording,
+sent from the mailer's default sender. Delivery always uses the address stored
+with the user, never an address copied from an incoming reset request.
+
+## Run the Jobs
+
+Requests store work; a worker sends it. In the process that sends the emails,
+register IAM's handlers on the consumer once `iam` exists:
 
 ```go
-err = consumer.Handle(resetJob, identity.SendReset)
+err = identity.RegisterJobs(consumer)
 ```
 
-Register verification separately:
+`RegisterJobs` registers the handler of every job of the features you enabled,
+so a feature you enable later needs no further wiring. The jobs run on the queue
+named by `iam.QueueName` (`"iam"`) and carry the facade's `Instance`, so several
+instances can share one consumer. IAM cannot see a restriction set with
+`ConsumerBuilder.Queues`: if you restrict the consumer, list `iam.QueueName` or
+the stored jobs wait unconsumed.
+
+With the memory queue, the process that stores the jobs must run the consumer.
+With a networked queue driver, run `RegisterJobs` and the consumer in a worker,
+and deploy that worker before you enable a new email feature on the servers.
+Otherwise jobs queue up with nobody to send them.
+
+The worker looks the user up and signs the link just before sending, so a stored
+job holds only the request: the typed identifier for a reset, the subject for a
+verification. It silently skips unknown or disabled users (reset) and deleted or
+already verified users (verification). A mailer failure is returned so the
+queue's retry policy decides what happens next; an email the mailer rejects as
+malformed fails the job permanently, because retrying cannot fix it. Sending can
+therefore run more than once. Each attempt signs a link; earlier attempts remain
+usable until their expiry or the state they bind to changes. Neither flow needs a
+database table of email-link tokens. A [workflow](../workflows/steps.md) can call
+`Verifier.SendReset` and `Directory.SendVerification` from a step instead of using
+the queue.
+
+## Change the Wording
+
+To write your own email, pass a function to `Email` in the flow's callback. It
+receives the message and the page link to put in the body, and returns a
+`mail.Message`. The signed value is a credential: keep it out of logs, analytics
+and exception reports.
 
 ```go
-err = consumer.Handle(verifyJob, identity.SendVerification)
+passwords.Reset(signer, mailer, resetPage, func(reset *password.ResetBuilder) {
+	reset.Email(func(message password.ResetMessage, href string) mail.Message {
+		return mail.NewMessage(
+			mail.Recipients{To: []mail.Address{{Email: message.Address}}},
+			mail.Body{Text: href},
+		)
+	})
+})
 ```
 
-Construction does not invoke dispatch. Requests enqueue work; the running
-consumer later calls these methods. For workflows, call the same methods from
-a [workflow step](../workflows/steps.md) and start the run from dispatch.
-For synchronous tests only, dispatch can call the matching method directly.
+`message.Notice` distinguishes an ordinary reset request from a
+[registration attempt using a taken address](registration.md#registration-emails).
+In the latter email, explain that setting a new password recovers the account
+if the recipient did not create it. Verification uses
+`accounts.Verification(..., func(verification *account.VerificationBuilder) { verification.Email(...) })`
+with an `account.VerifyMessage`, which has no `Notice` field. Stored request
+values remain decodable across IAM upgrades: new fields are additive, with zero
+values for older payloads.
 
-`SendReset` silently skips unknown or disabled users. `SendVerification`
-silently skips deleted or already verified users. They return delivery errors
-to the worker, whose retry policy decides what happens next.
-Delivery can therefore run more than once. Each attempt signs a link; earlier
-attempts remain usable until their expiry or the state they bind to changes.
-Neither flow needs a database table of email-link tokens.
+For a concrete mail adapter, see [composing mail](../mail/composing-messages.md).
+
+## Without the Facade
+
+Code that builds `password.NewVerifier` or `account.NewDirectory` by itself calls
+`Queue(dispatcher)` on the package builder, next to `Reset` or `Verification`,
+and registers the handler with `verifier.RegisterJobs(consumer)` or
+`directory.RegisterJobs(consumer)`. The same names, queue and rules apply.
 
 ## Reset a Password
 

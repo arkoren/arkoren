@@ -1,0 +1,35 @@
+package tools
+
+import (
+	"context"
+
+	"arkoren.dev/core/mcp"
+
+	"{{.Module}}/internal/{{.Feature}}"
+)
+
+// Status is a placeholder read-only MCP tool for the {{.Feature}} feature.
+// Replace its handler with one that calls the feature's Service.
+var Status = mcp.NewTool("{{.Feature}}_status", func(ctx context.Context, input mcp.NoInput) (struct{}, error) {
+	return struct{}{}, nil
+}, func(action *mcp.ToolBuilder[mcp.NoInput, struct{}]) {
+	action.Description("Report the {{.Feature}} feature status").ReadOnly(true)
+})
+
+// Catalog is the {{.Feature}} feature's set of MCP tools over its Service.
+// An MCP endpoint is built from tools rather than registered on, so this
+// surface has no Register method: it hands them over with Tools.
+type Catalog struct {
+	service *{{.Feature}}.Service
+}
+
+// NewCatalog builds the catalog over service. It does no I/O.
+func NewCatalog(service *{{.Feature}}.Service) *Catalog {
+	return &Catalog{service: service}
+}
+
+// Tools returns the feature's tools to pass to the MCP endpoint's Tools
+// method. Add any availability policy to copies with Tool.WithAvailability.
+func (catalog *Catalog) Tools() []mcp.Tool {
+	return []mcp.Tool{Status}
+}

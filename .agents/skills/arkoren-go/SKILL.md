@@ -543,7 +543,7 @@ delivery, and lifecycle protocols explicit.
   permissions, and with `identity.Permissions(...)` the facade wires `Store.Load`
   as the guard's Grants and `Store.Permissions` as the token ceiling;
   their handlers take `*auth.Guard`, require `Identity.Session()` and call
-  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use.
+  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(signer, mailer, resetURL, configure...)` and `account.Builder.Verification(signer, mailer, verifyURL, configure...)` are given (the URLs are the app pages the links open, required, absolute, no fragment; `ResetBuilder.Email`/`VerificationBuilder.Email` replace the default plain-text email and are the only override). IAM queues its own jobs on the app's dispatcher and sends through the app's mailer, keeps no token tables and starts no goroutine: `identity.Queue(dispatcher)` (also `Queue` on the `password`/`account` builders for standalone use) is required with either feature or `New` fails with `ErrInvalidConfig`; the jobs are built per instance by `storage.NewJob` (names `iam-password-reset`/`iam-email-verification` plus `-<instance>` with `_` written `-`, queue `iam.QueueName`), the facade never exposes a job, handler or dispatch func, and `identity.RegisterJobs(consumer)` registers the handlers of the enabled features (`Verifier.RegisterJobs`, `Directory.RegisterJobs`; keep a new job's registration there) in the worker process. `RegisterJobs` cannot read the consumer's queue restriction until ark/iam requires a core with `Consumer.Queues()`; a restricted consumer must list `iam.QueueName`. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; a send may run more than once and an email the mailer rejects as `mail.ErrInvalidMessage` is `queue.Permanent`. Keep the forgot route storing the identifier as typed, and the conditional write that makes a reset single use. `IAM.Migrations()` returns every feature's group for the instance whatever is enabled (definitions live in `internal/migration`, the packages' `Migrations` methods delegate to them), omitting only the built-in users with `Builder.Users`; groups are append-only. `IAM.Ping` checks the enabled features only.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
   preserve the first definition error; nil conversion is a domain error, not
@@ -653,6 +653,12 @@ delivery, and lifecycle protocols explicit.
   accept ordered `ComposerFunc` callbacks. Composition completes before startup
   callbacks, then supervised runners and background checks launch. Only composers
   register lifecycle work; applications expose control and observation.
+  `application.Run(ctx, app, compose...)` and `application.Start` build the
+  application from a root `*Provider[*Application]` on one composer: providers
+  its settings use are ordinary providers whose cleanup the application owns,
+  and `compose.App()` while it is still being built panics with
+  `ErrProviderCycle`. Nil provider panics `ErrNilFunc`; a nil result returns
+  `ErrNilApplication`; build failures report once on stderr.
 - Compose modules with typed function arguments and return values. Register
   cleanup once at the acquiring owner, immediately after acquisition. Cleanup
   runs in reverse order on composition failure, startup failure, and shutdown,
@@ -675,27 +681,25 @@ delivery, and lifecycle protocols explicit.
   before user Startup callbacks. Listeners registered during composition can
   log through active application telemetry. Composition/telemetry-start failures
   dispatch Failed without Starting. There is no built-in app starting log.
-- Child composers use defined function types `Factory[T] func(*Composer) T`
-  and `Action func(*Composer)`. Their private methods implement one typed
-  execution protocol. These types intentionally are not aliases: their methods
-  enable inference without reflection or accepting arbitrary `any` values.
-  Root `ComposerFunc = func(*Composer)` remains an alias for `Start`/`Run`.
-- `Composer.Use(operation)` invokes one Factory or Action inline, sharing context,
-  cleanup ownership, and errors. A Factory returns its ordinary typed value;
-  an Action has a void body and its internal empty completion result is normally
-  ignored. Raw inline void callbacks need `application.Action(...)`; typed inline
-  callbacks need `application.Factory[T](...)`. Use has no variadic or batch form.
-  Bootstrap factories capture dependencies only; acquire resources and mutate
-  routes inside callbacks, so skipped features acquire nothing. Returned values
-  are constructed, not necessarily started. Returning them transfers no ownership
-  and memoizes nothing. Use typed module-owned structs for related outputs.
-- `UseWhen`, `UseDebug`, `UseIn`, and `UseInAny` accept either kind and return
-  `(value, executed)`. Selected callbacks run in the same scope; skipped callbacks
-  return zero and false without construction. A legitimate zero output still
-  returns true. Errors abort through Must/MustDefer/Require, never masquerade as false.
-  Nil interfaces, typed nil functions, recorded failures, and invalid phases are
-  checked even on skipped branches. Environment matching is exact; UseDebug uses
-  the construction flag, independently of environment or runtime log level.
+- `application.Provide(build func(*Composer) T) *Provider[T]` declares a value the
+  process holds exactly once (router, database). `Composer.Use(provider)` accepts
+  only a `*Provider[T]`, runs `build` on first use in a composition and returns
+  the cached value afterwards, keyed by the provider pointer and scoped to one
+  `Start`/`Run`, so applications never share values. Everything else is an
+  ordinary constructor; one that registers lifecycle is an exported
+  `New<Thing>(composer, args...)` returning a fresh instance. A provider calls
+  `Use` on its dependencies before registering its own Startup/Cleanup, so
+  dependencies start first and stop last. Re-entering a provider that is still
+  building panics with `ErrProviderCycle` naming the type chain; a nil build
+  panics with `ErrNilFunc` at `Provide`; a failed build (Must/Require abort) is
+  never cached. Use is composition-only (`ErrInvalidPhase` otherwise). `Composer.Supply(provider, value)` sets a provider's value for the composition without running its build, so its Startup/Cleanup/Check never register; it panics `ErrNilFunc` for nil and `ErrInvalidPhase` outside composition, for a provider already built or supplied and for one still building. It is for tests: a test root provider passed to `application.Start` supplies values (the root is built first) and returns `compose.Use(server.App)`; `arkoren check` allows `Supply` only in `_test.go` files. Root
+  `ComposerFunc = func(*Composer)` remains an alias for `Start`/`Run`.
+- Conditional wiring is a plain Go `if` on `composer.App().Debug()` (the
+  construction-time flag, independent of environment or log level) or
+  `composer.App().Environment()` (exact match). There are no `UseWhen`,
+  `UseIn`, `UseInAny` or `UseDebug`, no `Factory` or `Action`. Errors abort
+  through Must/MustDefer/Require. A `Run` whose only runner returns nil ends the
+  application cleanly, which one-shot commands such as migrate rely on.
 - `Composer.Must`, `MustDefer`, and `Require` abort synchronous composition with a private,
   execution-specific panic recovered into the original error by `Start`/`Run`.
   This is the explicit exception to ordinary returned-error handling. Do not use

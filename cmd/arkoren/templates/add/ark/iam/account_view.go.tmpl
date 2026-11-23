@@ -1,0 +1,23 @@
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam"
+	"arkoren.dev/core/application"
+)
+
+// AccountView is the identity module's account settings: what GET /account tells
+// the signed-in user beyond the subject and email facts, which is how the request
+// logged in{{if .Permissions}}, their permissions{{end}}{{if .TwoFactor}} and their two-factor state{{end}}.
+// The route never encodes application data; compose a GET /me from IAM.Account
+// when the profile belongs in the answer.
+var AccountView = application.Provide(func(*application.Composer) iam.AccountBuilderFunc {
+	return func(view *iam.AccountBuilder) {
+{{- if .Permissions}}
+		view.Permissions(true)
+{{- end}}
+{{- if .TwoFactor}}
+		view.TwoFactor(true)
+{{- end}}
+		view.Login(true)
+	}
+})

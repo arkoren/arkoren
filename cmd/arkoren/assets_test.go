@@ -41,8 +41,9 @@ func TestNewAgentDefaultsDescribeDirectComposition(t *testing.T) {
 	}
 
 	contains(t, string(content), "example.com/hello", ".agents/skills/arkoren/SKILL.md",
-		"make check", "make run", "make help", "internal/bootstrap", "AGENTS.md belong to the project")
-	contains(t, string(content), "Composition uses direct constructor calls")
+		".agents/skills/arkoren-structure/SKILL.md",
+		"make check", "make run", "make help", "cmd/server/main.go", "AGENTS.md belong to the project")
+	contains(t, string(content), "explicit list of what the process runs")
 }
 
 // TestNewCustomAgentDirectoryUpdatesEveryPointer keeps all generated links aligned.
@@ -242,34 +243,32 @@ func TestNewEnvironmentDefaultsStayPrivate(t *testing.T) {
 }
 
 // TestNewBootstrapReadsEnvironmentInCallback protects deferred settings reads
-// in application construction and server composition, not factory acquisition.
+// in application construction and server composition.
 func TestNewBootstrapReadsEnvironmentInCallback(t *testing.T) {
 	t.Parallel()
 
 	source := renderedNewSource(t, "internal/bootstrap/server.go")
 
 	contains(t, source, "listener.Addr(os.Getenv(\"HTTP_ADDR\"))")
-	contains(t, renderedNewSource(t, "internal/bootstrap/app.go"), "app.Debug(os.Getenv(\"APP_DEBUG\") == \"true\")")
+	contains(t, renderedNewSource(t, "internal/bootstrap/server/app.go"), "app.Debug(os.Getenv(\"APP_DEBUG\") == \"true\")")
 }
 
-// TestNewMCPReturnsFactory keeps construction and mounting inside the selected
-// composition callback, with debug selection owned by the root composer.
-func TestNewMCPReturnsFactory(t *testing.T) {
+// TestNewMCPIsAProvider keeps construction and mounting inside the MCP
+// provider, with debug selection owned by Compose.
+func TestNewMCPIsAProvider(t *testing.T) {
 	t.Parallel()
 
 	source := renderedNewSource(t, "internal/bootstrap/mcp.go")
-	contains(t, source, "application.Factory[*mcpserver.Server]", "return func(compose *application.Composer) *mcpserver.Server",
-		`routes.MCPTools("http")`, `routes.Mount("/mcp", endpoint)`)
+	contains(t, source, "var MCP = application.Provide(func(compose *application.Composer) *mcpserver.Server {",
+		"routes := compose.Use(Router)", `routes.MCPTools("http")`, `routes.Mount("/mcp", endpoint)`)
 
-	_, implementation, _ := strings.Cut(source, "func MCP(")
+	_, implementation, _ := strings.Cut(source, "var MCP = ")
 
-	if strings.Contains(implementation, ".UseDebug(") || strings.Contains(implementation, "auth.") || strings.Contains(implementation, "TOKEN") {
-		t.Fatal("MCP factory owns debug policy or adds authentication to the starter")
+	if strings.Contains(implementation, "Debug()") || strings.Contains(implementation, "auth.") || strings.Contains(implementation, "TOKEN") {
+		t.Fatal("MCP owns debug policy or adds authentication to the starter")
 	}
 
-	composition := renderedNewSource(t, "internal/bootstrap/bootstrap.go")
-
-	contains(t, composition, "compose.UseDebug(MCP(routes))")
+	contains(t, renderedNewSource(t, "internal/bootstrap/server/compose.go"), "if compose.App().Debug() {\n\t\tcompose.Use(bootstrap.MCP)")
 }
 
 // TestNewMainAutoloadsEnvironment keeps dotenv loading out of the run helper.
@@ -290,19 +289,19 @@ func TestNewMainAutoloadsEnvironment(t *testing.T) {
 func writeNewRuntimeTest(t *testing.T, destination string) {
 	t.Helper()
 
-	path := filepath.Join(destination, "internal/bootstrap/runtime_test.go")
+	path := filepath.Join(destination, "internal/bootstrap/server/runtime_test.go")
 
 	if err := os.WriteFile(path, []byte(newRuntimeTest), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	path = filepath.Join(destination, "internal/bootstrap/startup_test.go")
+	path = filepath.Join(destination, "internal/bootstrap/server/startup_test.go")
 
 	if err := os.WriteFile(path, []byte(newStartupRuntimeTest), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	path = filepath.Join(destination, "internal/bootstrap/security_test.go")
+	path = filepath.Join(destination, "internal/bootstrap/server/security_test.go")
 
 	if err := os.WriteFile(path, []byte(newSecurityRuntimeTest), 0o600); err != nil {
 		t.Fatal(err)
@@ -311,7 +310,7 @@ func writeNewRuntimeTest(t *testing.T, destination string) {
 
 // newRuntimeTest verifies actual server, application, and MCP adapter behavior in
 // the generated project using its real module dependencies.
-const newRuntimeTest = `package bootstrap_test
+const newRuntimeTest = `package server_test
 
 import (
 	"context"
@@ -325,12 +324,34 @@ import (
 	"testing"
 	"time"
 
-	"arkoren.dev/ark/mcp/mcpserver"
 	"arkoren.dev/core/application"
 	"arkoren.dev/core/http/router"
-	"arkoren.dev/core/http/server"
 	"example.com/hello/internal/bootstrap"
+	"example.com/hello/internal/bootstrap/server"
 )
+
+// testApp is a quiet application provider whose debug setting does not depend
+// on the environment, so tests can run in parallel.
+func testApp(debug bool) *application.Provider[*application.Application] {
+	return application.Provide(func(*application.Composer) *application.Application {
+		return application.New(func(app *application.Builder) {
+			app.Debug(debug)
+			app.LogHandler(func(level slog.Leveler) slog.Handler {
+				return slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: level})
+			})
+		})
+	})
+}
+
+// shutdown stops a started application when the test ends.
+func shutdown(t *testing.T, app *application.Application) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := app.Shutdown(context.Background()); err != nil {
+			t.Errorf("stop: %v", err)
+		}
+	})
+}
 
 // TestLoggerRedirectedOutputUsesJSON verifies output and mutable level wiring.
 func TestLoggerRedirectedOutputUsesJSON(t *testing.T) {
@@ -347,7 +368,11 @@ func TestLoggerRedirectedOutputUsesJSON(t *testing.T) {
 	os.Stderr = output
 	t.Cleanup(func() { os.Stderr = previous })
 	t.Setenv("APP_DEBUG", "false")
-	app := application.New(bootstrap.Application())
+	app, err := application.Start(t.Context(), server.App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown(t, app)
 	app.Logger().Debug("hidden")
 	app.SetLogLevel(slog.LevelDebug)
 	app.Logger().Debug("visible")
@@ -360,27 +385,21 @@ func TestLoggerRedirectedOutputUsesJSON(t *testing.T) {
 	}
 }
 
-// TestComposeStartsAndStops verifies the typed router and server graph with debug
-// disabled. The returned listener binds an ephemeral port and cleanup releases it.
+// TestComposeStartsAndStops verifies the process root with debug disabled.
+// Cleanup releases the loopback port the test reserved.
 func TestComposeStartsAndStops(t *testing.T) {
-	t.Setenv("HTTP_ADDR", "127.0.0.1:0")
-	app := application.New()
-	var listener *server.Server
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		routes := compose.Use(bootstrap.Router())
-		listener = compose.Use(bootstrap.Server(routes))
-	}); err != nil {
+	address := freeAddress(t)
+	t.Setenv("HTTP_ADDR", address)
+	t.Setenv("APP_DEBUG", "false")
+	app, err := application.Start(t.Context(), server.App, server.Compose)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Errorf("stop: %v", err)
-		}
-	})
+	shutdown(t, app)
 	client := &http.Client{Timeout: 5 * time.Second}
 	t.Cleanup(client.CloseIdleConnections)
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		"http://"+listener.Addr()+application.StartupPath, nil)
+		"http://"+address+application.StartupPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +413,6 @@ func TestComposeStartsAndStops(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("startup status = %d", response.StatusCode)
 	}
-	address := listener.Addr()
 	if err := app.Shutdown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -407,112 +425,63 @@ func TestComposeStartsAndStops(t *testing.T) {
 	})
 }
 
-// TestComposeDebugStartsWithoutToken protects local development MCP without
-// requiring authentication secrets or a configured telemetry driver.
-func TestComposeDebugStartsWithoutToken(t *testing.T) {
-	t.Setenv("HTTP_ADDR", "127.0.0.1:0")
-	t.Setenv("ARKOREN_MCP_TOKEN", "")
-	app := application.New(func(app *application.Builder) {
-		app.Debug(true)
-	})
-	if err := app.Start(t.Context(), bootstrap.Compose); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Errorf("stop: %v", err)
-		}
-	})
-}
-
-// TestMCPFactoryDefersMounting checks lazy construction and the typed endpoint
-// returned by Use without starting a separate transport or owning a listener.
-func TestMCPFactoryDefersMounting(t *testing.T) {
-	t.Parallel()
-	app := application.New()
-	routes := router.New()
-	feature := bootstrap.MCP(routes)
-	response := httptest.NewRecorder()
-	routes.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/mcp", nil))
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("MCP factory mounted before composition: %d", response.Code)
-	}
-	var endpoint *mcpserver.Server
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		endpoint = compose.Use(feature)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
-		}
-	})
-	if endpoint == nil {
-		t.Fatal("factory did not return the mounted endpoint")
-	}
-	response = httptest.NewRecorder()
-	routes.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/mcp", nil))
-	if response.Code == http.StatusNotFound {
-		t.Fatal("MCP composer did not mount the endpoint")
-	}
-}
-
-// TestMCPFactorySkippedWithoutRouter proves that a skipped debug factory does
-// not dereference dependencies, construct its endpoint, or mount any routes.
-func TestMCPFactorySkippedWithoutRouter(t *testing.T) {
-	t.Parallel()
-	feature := bootstrap.MCP(nil)
-	app := application.New()
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		endpoint, selected := compose.UseDebug(feature)
-		if endpoint != nil || selected {
-			t.Fatal("disabled factory returned an endpoint")
-		}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
-		}
-	})
-}
-
-// TestMCPComposerPreservesSubgroupMiddleware checks that the returned shared
-// router keeps its welcome page and routes MCP through inherited middleware.
-func TestMCPComposerPreservesSubgroupMiddleware(t *testing.T) {
-	t.Parallel()
-	app := application.New()
-	var routes *router.Router
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		routes = compose.Use(bootstrap.Router())
-		group := routes.With(func(next router.Handler) router.Handler {
-			return func(writer http.ResponseWriter, request *http.Request) error {
-				writer.Header().Set("X-MCP-Group", "true")
-
-				return next(writer, request)
-			}
-		})
-		compose.Use(bootstrap.MCP(group))
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
-		}
-	})
-	public := httptest.NewServer(routes)
-	t.Cleanup(public.Close)
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, public.URL+"/mcp", strings.NewReader(
-			"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}"))
+// freeAddress reserves and releases a loopback port for HTTP_ADDR.
+func freeAddress(t *testing.T) string {
+	t.Helper()
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Accept", "application/json, text/event-stream")
-		request.Header.Set("MCP-Protocol-Version", "2025-06-18")
+	address := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return address
+}
+
+// TestComposeDebugStartsWithoutToken protects local development MCP without
+// requiring authentication secrets or a configured telemetry driver.
+func TestComposeDebugStartsWithoutToken(t *testing.T) {
+	t.Setenv("HTTP_ADDR", freeAddress(t))
+	t.Setenv("ARKOREN_MCP_TOKEN", "")
+	t.Setenv("APP_DEBUG", "true")
+	app, err := application.Start(t.Context(), server.App, server.Compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown(t, app)
+}
+
+// TestMCPMountsOnSharedRouter checks that the MCP provider mounts /mcp on the
+// provider's router only when used, behind the router's middleware, and that
+// the router serves the welcome page at the root.
+func TestMCPMountsOnSharedRouter(t *testing.T) {
+	t.Parallel()
+	var routes *router.Router
+	app, err := application.Start(t.Context(), testApp(true), func(compose *application.Composer) {
+		routes = compose.Use(bootstrap.Router)
+		response := httptest.NewRecorder()
+		routes.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("diagnostics mounted before MCP: %d", response.Code)
+		}
+		compose.Use(bootstrap.MCP)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown(t, app)
+	public := httptest.NewServer(routes)
+	t.Cleanup(public.Close)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, public.URL+"/mcp", strings.NewReader(
+		"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("MCP-Protocol-Version", "2025-06-18")
 	client := &http.Client{Timeout: 5 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
@@ -531,71 +500,47 @@ func TestMCPComposerPreservesSubgroupMiddleware(t *testing.T) {
 			t.Fatalf("missing %s in catalog: %s", name, body)
 		}
 	}
-	if response.Header.Get("X-MCP-Group") != "true" {
-		t.Fatal("MCP bypassed subgroup middleware")
-	}
 	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, public.URL+"/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	missing, err := client.Do(request)
+	welcome, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		missing.Body.Close()
+		welcome.Body.Close()
 	})
-	welcome, err := io.ReadAll(missing.Body)
-	if err != nil || missing.StatusCode != http.StatusOK || !strings.Contains(missing.Header.Get("Content-Type"), "text/html") {
-		t.Fatalf("welcome page = %d %s, error = %v", missing.StatusCode, welcome, err)
+	page, err := io.ReadAll(welcome.Body)
+	if err != nil || welcome.StatusCode != http.StatusOK || !strings.Contains(welcome.Header.Get("Content-Type"), "text/html") {
+		t.Fatalf("welcome page = %d %s, error = %v", welcome.StatusCode, page, err)
 	}
 }
 
-// TestServerFactoryDefersConfiguration checks even environment-derived server
-// construction happens inside composition, not while obtaining the callback.
-func TestServerFactoryDefersConfiguration(t *testing.T) {
-	t.Setenv("HTTP_ADDR", "invalid-address")
-	feature := bootstrap.Server(http.NotFoundHandler())
-	t.Setenv("HTTP_ADDR", "127.0.0.1:0")
-	app := application.New()
-	var listener *server.Server
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		listener = compose.Use(feature)
-		if listener.Addr() != "127.0.0.1:0" {
-			t.Fatalf("server started during composition: %s", listener.Addr())
-		}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
-		}
-	})
-	if listener.Addr() == "127.0.0.1:0" {
-		t.Fatal("returned server handle did not observe startup")
-	}
-}
-
-// TestRouterFactoryDefersConstruction checks the factory produces the complete
-// shared router only when the enclosing composition invokes it.
-func TestRouterFactoryDefersConstruction(t *testing.T) {
+// TestRouterProviderBuildsOnce checks that one composition shares one router,
+// separate applications get separate routers, and the provider mounts only the
+// three probes and the welcome page (feature routes belong to feature providers).
+func TestRouterProviderBuildsOnce(t *testing.T) {
 	t.Parallel()
-	feature := bootstrap.Router()
-	var routes *router.Router
-	app := application.New()
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		routes = compose.Use(feature)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
+	var routers []*router.Router
+	for range 2 {
+		app, err := application.Start(t.Context(), testApp(false), func(compose *application.Composer) {
+			first := compose.Use(bootstrap.Router)
+			if first != compose.Use(bootstrap.Router) {
+				t.Fatal("one composition built two routers")
+			}
+			routers = append(routers, first)
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	if len(routes.Routes()) != 4 {
-		t.Fatalf("registered routes = %v", routes.Routes())
+		shutdown(t, app)
+	}
+	if routers[0] == routers[1] {
+		t.Fatal("separate applications shared a router")
+	}
+	if len(routers[0].Routes()) != 4 {
+		t.Fatalf("registered routes = %v", routers[0].Routes())
 	}
 }
 
@@ -603,26 +548,24 @@ func TestRouterFactoryDefersConstruction(t *testing.T) {
 // tool calls without an exporter, including rejection of incoming trace IDs.
 func TestDebugTelemetryCapturesRequestsAndLogs(t *testing.T) {
 	t.Parallel()
-	app := application.New(func(app *application.Builder) {
-		app.Debug(true)
-	})
 	var routes *router.Router
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		routes = compose.Use(bootstrap.Router())
+	app, err := application.Start(t.Context(), testApp(true), func(compose *application.Composer) {
+		logger := compose.App().Logger()
+
+		routes = compose.Use(bootstrap.Router)
 		routes.Get("/logged", func(writer http.ResponseWriter, request *http.Request) error {
-			app.Logger().InfoContext(request.Context(), "local request marker")
+			logger.InfoContext(request.Context(), "local request marker")
 
 			return nil
 		})
-		compose.UseDebug(bootstrap.MCP(routes))
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
+		if compose.App().Debug() {
+			compose.Use(bootstrap.MCP)
 		}
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown(t, app)
 	if app.Telemetry().Driver() != nil {
 		t.Fatal("debug capture configured an export driver")
 	}
@@ -670,19 +613,17 @@ func callDiagnostic(t *testing.T, routes *router.Router, name string) string {
 // records telemetry nor exposes diagnostics when debug composition is skipped.
 func TestDebugDisabledLeavesTelemetryInactive(t *testing.T) {
 	t.Parallel()
-	app := application.New()
 	var routes *router.Router
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		routes = compose.Use(bootstrap.Router())
-		compose.UseDebug(bootstrap.MCP(routes))
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
+	app, err := application.Start(t.Context(), testApp(false), func(compose *application.Composer) {
+		routes = compose.Use(bootstrap.Router)
+		if compose.App().Debug() {
+			compose.Use(bootstrap.MCP)
 		}
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown(t, app)
 	response := httptest.NewRecorder()
 	routes.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
 	if response.Header().Get("traceresponse") != "" {
@@ -700,18 +641,21 @@ func TestDebugDisabledLeavesTelemetryInactive(t *testing.T) {
 	}
 }
 
-// TestApplicationReadsEnvironmentWhenApplied checks that acquiring the policy
-// does not snapshot APP_DEBUG and that only the exact true value enables it.
-func TestApplicationReadsEnvironmentWhenApplied(t *testing.T) {
-	t.Setenv("APP_DEBUG", "false")
-	policy := bootstrap.Application()
-	t.Setenv("APP_DEBUG", "true")
-	if !application.New(policy).Debug() {
-		t.Fatal("debug not enabled")
-	}
-	t.Setenv("APP_DEBUG", "false")
-	if application.New(policy).Debug() {
-		t.Fatal("debug not disabled")
+// TestApplicationReadsEnvironmentWhenBuilt checks that building the provider's
+// application reads APP_DEBUG each time and only the exact true value enables it.
+func TestApplicationReadsEnvironmentWhenBuilt(t *testing.T) {
+	for value, want := range map[string]bool{"true": true, "false": false, "1": false} {
+		t.Setenv("APP_DEBUG", value)
+		app, err := application.Start(t.Context(), server.App)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if app.Debug() != want {
+			t.Fatalf("APP_DEBUG=%s: debug = %t, want %t", value, app.Debug(), want)
+		}
+		if err := app.Shutdown(t.Context()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 `
@@ -841,7 +785,7 @@ func TestNewMakeCommandsRespectOverrides(t *testing.T) {
 	}
 
 	output, err := runNewMake(t, dir, "check", "build", "run", "test-race", "docker-build", "docker-run",
-		"GO=./record", "DOCKER=./record", "IMAGE=custom:dev", "PORT=9090")
+		"GO=./record", "DOCKER=./record", "ARKOREN=./record", "IMAGE=custom:dev", "PORT=9090")
 
 	if err != nil {
 		t.Fatalf("make: %v\n%s", err, output)
@@ -854,13 +798,25 @@ func TestNewMakeCommandsRespectOverrides(t *testing.T) {
 	}
 
 	contains(t, string(content),
-		"vet ./...|", "test ./...|", "build -o bin/server ./cmd/server|",
+		"vet ./...|", "check|", "test ./...|", "build -o bin/server ./cmd/server|",
 		"test -race ./...|1", "build -t custom:dev .|",
 		"run --rm -p 127.0.0.1:9090:8080 -e HTTP_ADDR=:8080 -e APP_DEBUG=false custom:dev|",
 	)
 
 	if strings.Contains(string(content), "mod tidy") || strings.Contains(string(content), "-count=1") {
 		t.Fatalf("recipes rewrite dependencies or bypass caching:\n%s", content)
+	}
+}
+
+// TestNewMakeLayoutNeedsArkorenCommand explains how to install the missing CLI
+// instead of failing with a shell error.
+func TestNewMakeLayoutNeedsArkorenCommand(t *testing.T) {
+	t.Parallel()
+
+	output, err := runNewMake(t, newMakeDirectory(t), "layout", "ARKOREN=arkoren-not-installed")
+
+	if err == nil || !strings.Contains(string(output), "go install arkoren.dev/cmd/arkoren@latest") {
+		t.Fatalf("layout = %v\n%s", err, output)
 	}
 }
 
@@ -946,7 +902,7 @@ func TestNewRouterRecoversHandlerPanics(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	if code := run(t.Context(), []string{"new", ".", "--no-agent-files"}, env); code != 0 {
+	if code := run(t.Context(), []string{"new", ".", "--no-agent-files", "--skip-tidy"}, env); code != 0 {
 		t.Fatalf("scaffolding exit = %d", code)
 	}
 
@@ -1040,7 +996,7 @@ func main() {
 	})
 	var routes *router.Router
 	if err := app.Start(context.Background(), func(compose *application.Composer) {
-		routes = compose.Use(bootstrap.Router())
+		routes = compose.Use(bootstrap.Router)
 		routes.Get("/panic", func(http.ResponseWriter, *http.Request) error {
 			panic("private-panic-value")
 		})
@@ -1081,7 +1037,7 @@ func TestNewConditionalsPreserveSpacing(t *testing.T) {
 	t.Parallel()
 
 	for _, path := range []string{
-		"go.mod", "README.md", "internal/bootstrap/bootstrap.go",
+		"go.mod", "README.md", "cmd/server/main.go",
 		"internal/bootstrap/router.go", "internal/bootstrap/server.go",
 	} {
 		definition, err := template.ParseFS(newTemplates, "templates/"+path+".tmpl")
@@ -1164,43 +1120,33 @@ func TestNewIgnoresKeepDependencyInputs(t *testing.T) {
 	}
 }
 
-// TestNewBootstrapSeparatesResponsibilities keeps constructors separate from
-// the composition root.
-func TestNewBootstrapSeparatesResponsibilities(t *testing.T) {
+// TestNewBootstrapHoldsOnlyProviders keeps every exported bootstrap
+// declaration a provider variable and the welcome page inside the router.
+func TestNewBootstrapHoldsOnlyProviders(t *testing.T) {
 	t.Parallel()
-
-	composition := renderedNewSource(t, "internal/bootstrap/bootstrap.go")
-
-	requireNewNoConstructors(t, composition)
 
 	routing := renderedNewSource(t, "internal/bootstrap/router.go")
 
-	if !strings.Contains(routing, "app.WelcomeHandler()") {
-		t.Fatal("router does not mount the application welcome page")
-	}
+	contains(t, routing, "var Router = application.Provide(func(compose *application.Composer) *router.Router {",
+		`// Welcome page for a new project. Remove it once the application serves its own "/".`,
+		`routes.Get("/", app.WelcomeHandler(), application.WelcomeOperation)`)
 
-	serving := renderedNewSource(t, "internal/bootstrap/server.go")
+	contains(t, renderedNewSource(t, "internal/bootstrap/server.go"),
+		"var Server = application.Provide(func(compose *application.Composer) *server.Server {",
+		"listener := server.New(routes, func(listener *server.Builder)")
+	contains(t, renderedNewSource(t, "internal/bootstrap/logging.go"),
+		"var LogHandler = application.Provide(func(*application.Composer) func(slog.Leveler) slog.Handler {")
 
-	if !strings.Contains(serving, "listener := server.New(handler, func(listener *server.Builder)") {
-		t.Fatal("server does not own listener policy")
-	}
-}
+	for _, path := range []string{"logging", "router", "server", "mcp"} {
+		source := renderedNewSource(t, "internal/bootstrap/"+path+".go")
 
-// requireNewNoConstructors keeps route and server definitions out of the
-// composition file so lifecycle wiring remains easy to scan.
-func requireNewNoConstructors(t *testing.T, source string) {
-	t.Helper()
-
-	for _, declaration := range []string{
-		"func newRouter", "func newServer", "func provideRouter", "func provideServer",
-	} {
-		if strings.Contains(source, declaration) {
-			t.Fatalf("composition contains %s", declaration)
+		if strings.Contains(source, "\nfunc ") {
+			t.Fatalf("bootstrap/%s.go declares a top-level function", path)
 		}
 	}
 }
 
-// TestNewRouterAnnotatesExistingRoutes checks the router opts in
+// TestNewRouterAnnotatesExistingRoutes checks the router provider opts in
 // to metadata without automatically publishing documentation or operator info.
 func TestNewRouterAnnotatesExistingRoutes(t *testing.T) {
 	t.Parallel()
@@ -1208,14 +1154,13 @@ func TestNewRouterAnnotatesExistingRoutes(t *testing.T) {
 	source := renderedNewSource(t, "internal/bootstrap/router.go")
 
 	contains(t, source,
-		`routes.Get("/", app.WelcomeHandler(), application.WelcomeOperation)`,
 		"routes.Get(application.LivePath, app.LiveHandler(), application.LiveOperation)",
 		"routes.Get(application.ReadyPath, app.ReadyHandler(), application.ReadyOperation)",
 		"routes.Get(application.StartupPath, app.StartupHandler(), application.StartupOperation)",
 	)
 
 	if strings.Count(source, "routes.Get(") != 4 {
-		t.Fatal("router added routes beyond the welcome page and probes")
+		t.Fatal("router added routes beyond the probes and the welcome page")
 	}
 
 	unwanted := strings.Contains(source, "OpenAPIHandler") || strings.Contains(source, "InfoHandler") ||
@@ -1226,25 +1171,25 @@ func TestNewRouterAnnotatesExistingRoutes(t *testing.T) {
 	}
 }
 
-// TestNewApplicationConstructionIsSeparate keeps settings in bootstrap and
-// construction in the executable. Bootstrap receives this application, not a
-// container-owned replacement or an error-returning application factory.
-func TestNewApplicationConstructionIsSeparate(t *testing.T) {
+// TestNewApplicationIsAProvider keeps settings in the process root's App
+// provider and construction in application.Run, not in the executable.
+func TestNewApplicationIsAProvider(t *testing.T) {
 	t.Parallel()
 
 	source := renderedNewSource(t, "cmd/server/main.go")
 
 	contains(t, source,
 		`"arkoren.dev/core/application"`,
-		"app := application.New(bootstrap.Application())",
+		"application.Run(ctx, server.App, server.Compose)",
 	)
 
-	if strings.Contains(source, "app.Name(") {
-		t.Fatal("main owns application identity instead of bootstrap")
+	if strings.Contains(source, "app.Name(") || strings.Contains(source, "application.New(") {
+		t.Fatal("main owns application construction instead of the process root")
 	}
 
-	contains(t, renderedNewSource(t, "internal/bootstrap/app.go"),
-		"func Application() application.BuilderFunc",
+	contains(t, renderedNewSource(t, "internal/bootstrap/server/app.go"),
+		"package server",
+		"var App = application.Provide(func(compose *application.Composer) *application.Application {",
 		`app.Name("hello")`,
 		`app.Debug(os.Getenv("APP_DEBUG") == "true")`,
 	)
@@ -1255,12 +1200,12 @@ func TestNewApplicationConstructionIsSeparate(t *testing.T) {
 func TestNewLoggerFactoryPreservesOutputPolicy(t *testing.T) {
 	t.Parallel()
 
-	contains(t, renderedNewSource(t, "internal/bootstrap/app.go"), "app.LogHandler(Logger())")
+	contains(t, renderedNewSource(t, "internal/bootstrap/server/app.go"), "app.LogHandler(compose.Use(bootstrap.LogHandler))")
 
 	source := renderedNewSource(t, "internal/bootstrap/logging.go")
 
 	contains(t, source,
-		"func Logger() func(slog.Leveler) slog.Handler",
+		"var LogHandler = application.Provide(func(*application.Composer) func(slog.Leveler) slog.Handler {",
 		"!isatty.IsTerminal(os.Stderr.Fd())",
 		"slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})",
 		"tint.NewTextHandler(os.Stderr, &tint.Options{",
@@ -1271,51 +1216,59 @@ func TestNewLoggerFactoryPreservesOutputPolicy(t *testing.T) {
 }
 
 // TestNewBootstrapComposesSuppliedApplication protects the startup boundary:
-// main executes the lifecycle while helpers register work through the composer.
+// main executes the lifecycle while providers register work through the composer.
 func TestNewBootstrapComposesSuppliedApplication(t *testing.T) {
 	t.Parallel()
 
-	source := renderedNewSource(t, "internal/bootstrap/bootstrap.go")
+	source := renderedNewSource(t, "cmd/server/main.go")
+	compose := renderedNewSource(t, "internal/bootstrap/server/compose.go")
 
-	contains(t, source,
-		"func Compose(compose *application.Composer) {", "routes := compose.Use(Router())",
-		"compose.UseDebug(MCP(routes))", "compose.Use(Server(routes))",
+	contains(t, source, `"example.com/hello/internal/bootstrap/server"`, "application.Run(ctx, server.App, server.Compose)")
+	contains(t, compose,
+		"package server", "func Compose(compose *application.Composer) {",
+		"if compose.App().Debug() {", "compose.Use(bootstrap.MCP)", "compose.Use(bootstrap.Server)",
 	)
 
+	if strings.Contains(source, "func Compose") || strings.Contains(source, "bootstrap.") {
+		t.Fatal("main declares the process graph instead of importing it from internal/bootstrap/server")
+	}
+
 	if strings.Contains(source, "func New(") {
-		t.Fatal("bootstrap still creates the application")
+		t.Fatal("main still creates components")
 	}
 
 	if strings.Contains(source, "app.OnStart(") || strings.Contains(source, "app.OnStop(") || strings.Contains(source, "app.Go(") {
 		t.Fatal("composition still owns component lifecycle bindings")
 	}
 
-	for _, path := range []string{"internal/bootstrap/server.go"} {
-		component := renderedNewSource(t, path)
+	component := renderedNewSource(t, "internal/bootstrap/server.go")
 
-		contains(t, component, "compose.Cleanup(listener.Stop)", "compose.Startup(listener.Start)", "compose.Run(listener.Serve)")
-	}
-
-	contains(t, renderedNewSource(t, "cmd/server/main.go"), "app.Run(ctx, bootstrap.Compose)")
+	contains(t, component, "compose.Cleanup(listener.Stop)", "compose.Startup(listener.Start)", "compose.Run(listener.Serve)")
 }
 
-// TestNewManualBootstrapUsesPublicConstructors keeps direct composition small.
-func TestNewManualBootstrapUsesPublicConstructors(t *testing.T) {
+// TestNewComposeOrdersProviders keeps diagnostics before the server, which
+// serves the router only after everything is mounted.
+func TestNewComposeOrdersProviders(t *testing.T) {
 	t.Parallel()
 
-	source := renderedNewSource(t, "internal/bootstrap/bootstrap.go")
+	source := renderedNewSource(t, "internal/bootstrap/server/compose.go")
 
-	contains(t, source, "routes := compose.Use(Router())", "compose.Use(Server(routes))", "compose.UseDebug(MCP(routes))")
+	diagnostics := strings.Index(source, "compose.Use(bootstrap.MCP)")
+	serve := strings.Index(source, "compose.Use(bootstrap.Server)")
+
+	if diagnostics < 0 || diagnostics > serve {
+		t.Fatal("Compose does not use diagnostics before the server")
+	}
 }
 
 // TestNewServerOwnsPolicy keeps listener settings beside lifecycle registration,
-// with environment access deferred until composition invokes the factory.
+// with environment access deferred until composition builds the Server provider.
 func TestNewServerOwnsPolicy(t *testing.T) {
 	t.Parallel()
 
 	source := renderedNewSource(t, "internal/bootstrap/server.go")
 
-	contains(t, source, "func Server(handler http.Handler) application.Factory[*server.Server]",
+	contains(t, source, "var Server = application.Provide(func(compose *application.Composer) *server.Server {", "routes := compose.Use(Router)",
 		`listener.Addr(os.Getenv("HTTP_ADDR"))`)
 
 	for _, obsolete := range []string{"type Config", "func Load", "HTTPAddr"} {
@@ -1376,7 +1329,7 @@ func TestNewMainReturnsLifecycleError(t *testing.T) {
 	source := renderedNewSource(t, "cmd/server/main.go")
 
 	contains(t, source,
-		"app := application.New(", "return app.Run(ctx, bootstrap.Compose)",
+		"return application.Run(ctx, server.App, server.Compose)",
 		"func run() error", "if run() != nil {", "os.Exit(1)",
 	)
 
@@ -1489,10 +1442,9 @@ func requireNewBlockReturnSpacing(t *testing.T, body *ast.BlockStmt, positions *
 
 // newSecurityRuntimeTest verifies the generated router's security policies using
 // real middleware. The fixture is not emitted into consumer projects.
-const newSecurityRuntimeTest = `package bootstrap_test
+const newSecurityRuntimeTest = `package server_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1506,23 +1458,19 @@ import (
 // securityRouter composes the generated router and a test-only write endpoint.
 func securityRouter(t *testing.T) *router.Router {
 	t.Helper()
-	app := application.New()
 	var routes *router.Router
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		routes = compose.Use(bootstrap.Router())
+	app, err := application.Start(t.Context(), testApp(false), func(compose *application.Composer) {
+		routes = compose.Use(bootstrap.Router)
 		routes.Post("/write", func(writer http.ResponseWriter, _ *http.Request) error {
 			writer.WriteHeader(http.StatusNoContent)
 
 			return nil
 		})
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
-		}
-	})
+	shutdown(t, app)
 
 	return routes
 }
@@ -1593,19 +1541,15 @@ func TestRouterRejectsCrossOriginWrites(t *testing.T) {
 // TestRouterCSRFRejectionsAreTraced keeps blocked requests inside telemetry.
 func TestRouterCSRFRejectionsAreTraced(t *testing.T) {
 	t.Parallel()
-	app := application.New()
 	var routes *router.Router
-	if err := app.Start(t.Context(), func(compose *application.Composer) {
-		routes = compose.Use(bootstrap.Router())
+	app, err := application.Start(t.Context(), testApp(false), func(compose *application.Composer) {
+		routes = compose.Use(bootstrap.Router)
 		compose.Must(compose.MCPTools("app"))
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
-			t.Error(err)
-		}
-	})
+	shutdown(t, app)
 	request := httptest.NewRequest(http.MethodPost, "http://service.test/", nil)
 	request.Header.Set("Origin", "https://untrusted.test")
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -1672,7 +1616,7 @@ func TestRouterProbesRemainAccessible(t *testing.T) {
 
 // newStartupRuntimeTest verifies startup logging in the temporary generated
 // module without emitting application tests into consumer projects.
-const newStartupRuntimeTest = `package bootstrap
+const newStartupRuntimeTest = `package server_test
 
 import (
 	"context"
@@ -1687,10 +1631,12 @@ import (
 	"time"
 
 	"arkoren.dev/core/application"
+	"example.com/hello/internal/bootstrap/server"
 )
 
-// startupApplication records real lifecycle logs in a file safe for concurrent writes.
-func startupApplication(t *testing.T) (*application.Application, *os.File) {
+// startupApplication returns an application provider that records real
+// lifecycle logs in a file safe for concurrent writes.
+func startupApplication(t *testing.T) (*application.Provider[*application.Application], *os.File) {
 	t.Helper()
 	output, err := os.CreateTemp(t.TempDir(), "startup-logs")
 	if err != nil {
@@ -1701,9 +1647,11 @@ func startupApplication(t *testing.T) (*application.Application, *os.File) {
 			t.Error(err)
 		}
 	})
-	app := application.New(func(app *application.Builder) {
-		app.LogHandler(func(level slog.Leveler) slog.Handler {
-			return slog.NewJSONHandler(output, &slog.HandlerOptions{Level: level})
+	app := application.Provide(func(*application.Composer) *application.Application {
+		return application.New(func(app *application.Builder) {
+			app.LogHandler(func(level slog.Leveler) slog.Handler {
+				return slog.NewJSONHandler(output, &slog.HandlerOptions{Level: level})
+			})
 		})
 	})
 
@@ -1714,11 +1662,12 @@ func startupApplication(t *testing.T) (*application.Application, *os.File) {
 func TestStartupLogsBoundAddressAfterAppStarted(t *testing.T) {
 	t.Setenv("HTTP_ADDR", "127.0.0.1:0")
 	app, output := startupApplication(t)
-	if err := app.Start(t.Context(), Compose); err != nil {
+	started, err := application.Start(t.Context(), app, server.Compose)
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := app.Shutdown(context.Background()); err != nil {
+		if err := started.Shutdown(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
@@ -1729,7 +1678,7 @@ func TestStartupLogsBoundAddressAfterAppStarted(t *testing.T) {
 	address := startupAddressFromLogs(t, string(content))
 	client := &http.Client{Timeout: 5 * time.Second}
 	t.Cleanup(client.CloseIdleConnections)
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+address, nil)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+address+application.LivePath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1783,7 +1732,7 @@ func TestStartupFailureAfterBindOmitsAddress(t *testing.T) {
 	t.Setenv("HTTP_ADDR", "127.0.0.1:0")
 	app, output := startupApplication(t)
 	failure := errors.New("later startup failed")
-	err := app.Start(t.Context(), Compose, func(compose *application.Composer) {
+	_, err := application.Start(t.Context(), app, server.Compose, func(compose *application.Composer) {
 		compose.Startup(func(context.Context) error {
 			return failure
 		})
@@ -1805,7 +1754,7 @@ func TestCompositionFailureOmitsAddress(t *testing.T) {
 	t.Setenv("HTTP_ADDR", "127.0.0.1:0")
 	app, output := startupApplication(t)
 	failure := errors.New("later composition failed")
-	err := app.Start(t.Context(), Compose, func(compose *application.Composer) {
+	_, err := application.Start(t.Context(), app, server.Compose, func(compose *application.Composer) {
 		compose.Require(failure)
 	})
 	if !errors.Is(err, failure) {

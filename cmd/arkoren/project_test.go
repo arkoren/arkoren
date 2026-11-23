@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -324,14 +326,14 @@ func TestNewDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(module) != "module "+name+"\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.1.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
+	if string(module) != "module "+name+"\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.19.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
 		t.Fatalf("go.mod = %q", module)
 	}
 
 	inventory := []string{
-		"cmd/server/main.go", "internal/bootstrap/bootstrap.go", "internal/bootstrap/mcp.go",
-		"internal/bootstrap/router.go", "internal/bootstrap/server.go",
-		"internal/bootstrap/app.go", "internal/bootstrap/logging.go", ".env", ".env.example", "go.mod", "README.md",
+		"cmd/server/main.go", "internal/bootstrap/server/app.go", "internal/bootstrap/server/compose.go", "internal/bootstrap/server.go", "internal/bootstrap/mcp.go",
+		"internal/bootstrap/router.go",
+		"internal/bootstrap/logging.go", ".env", ".env.example", "go.mod", "README.md",
 		"Dockerfile", "Makefile", ".dockerignore", ".gitignore", ".editorconfig",
 	}
 
@@ -369,7 +371,13 @@ func TestNewDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := len(inventory) + 2 + len(bundle.Files)
+	structure, err := skill.LoadNamedBundle(t.Context(), skillSource, "arkoren-structure")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := len(inventory) + 2 + len(bundle.Files) + 1 + len(structure.Files)
 
 	if count != want {
 		t.Fatalf("files = %d, want %d", count, want)
@@ -483,7 +491,7 @@ func TestNewNamedDestinationDefaultsModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(content) != "module momentum\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.1.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
+	if string(content) != "module momentum\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.19.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
 		t.Fatalf("go.mod = %q", content)
 	}
 }
@@ -574,11 +582,11 @@ func TestNewCustomFolderAndModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(content), `"example.com/team/service/v2/internal/bootstrap"`) {
+	if !strings.Contains(string(content), `"example.com/team/service/v2/internal/bootstrap/server"`) {
 		t.Fatalf("wrong imports: %s", content)
 	}
 
-	content, err = os.ReadFile(filepath.Join(env.Dir, "nested/my-api/internal/bootstrap/app.go"))
+	content, err = os.ReadFile(filepath.Join(env.Dir, "nested/my-api/internal/bootstrap/server/app.go"))
 
 	if err != nil {
 		t.Fatal(err)
@@ -1036,13 +1044,15 @@ func testNewGeneratedProject(t *testing.T) {
 	t.Helper()
 
 	env := scaffoldEnvironment(t)
-	args := []string{"hello", "--module", "example.com/hello"}
+	args := []string{"hello", "--module", "example.com/hello", "--skip-tidy"}
 
 	if err := execute(t.Context(), append([]string{"new"}, args...), env); err != nil {
 		t.Fatal(err)
 	}
 
 	destination := filepath.Join(env.Dir, "hello")
+	useCheckoutModules(t, destination)
+
 	command := exec.CommandContext(t.Context(), "make", "build")
 	command.Dir = destination
 	command.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=readonly")
@@ -1067,6 +1077,49 @@ func testNewGeneratedProject(t *testing.T) {
 	}
 
 	testNewExecutableStartupFailure(t, destination)
+}
+
+// useCheckoutModules points the generated project's arkoren.dev modules at this
+// checkout and resolves third-party dependencies with go mod tidy. The template
+// pins the core release that ships with this CLI, which does not exist on the
+// module proxy until the release is published, so the test builds against the
+// checkout's own source instead; the scheduled audit exercises the published pin.
+func useCheckoutModules(t *testing.T, destination string) {
+	t.Helper()
+
+	checkout, err := filepath.Abs("../..")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(destination, "go.mod")
+	module, err := os.ReadFile(path)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replaced := string(module)
+
+	for _, name := range []string{
+		"core", "ark/iam", "ark/mcp", "ark/oauth", "driver/aes", "driver/bcrypt", "driver/sqlite",
+		"foundation/collection", "foundation/key", "foundation/problem", "foundation/query", "foundation/totp", "foundation/validate",
+	} {
+		replaced += fmt.Sprintf("\nreplace arkoren.dev/%s => %s\n", name, strconv.Quote(filepath.ToSlash(filepath.Join(checkout, name))))
+	}
+
+	if err := os.WriteFile(path, []byte(replaced), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = destination
+	command.Env = append(os.Environ(), "GOWORK=off")
+
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy with checkout modules: %v\n%s", err, output)
+	}
 }
 
 // testNewExecutableStartupFailure runs the built command with an invalid
@@ -1188,7 +1241,7 @@ func TestScaffoldPlanExecutionRejectsNestedFileParent(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	err := runNew(t.Context(), []string{".", "--skills-dir", "internal/bootstrap/app.go", "--yes"}, env)
+	err := runNew(t.Context(), []string{".", "--skills-dir", "internal/bootstrap/logging.go", "--yes"}, env)
 
 	requireNewUsage(t, err)
 
@@ -1233,7 +1286,7 @@ func TestScaffoldPlanExecutionRejectsCaseFoldedNestedParent(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	err := runNew(t.Context(), []string{"hello", "--skills-dir", "INTERNAL/BOOTSTRAP/APP.GO", "--yes"}, env)
+	err := runNew(t.Context(), []string{"hello", "--skills-dir", "INTERNAL/BOOTSTRAP/LOGGING.GO", "--yes"}, env)
 
 	requireNewUsage(t, err)
 
@@ -1255,7 +1308,7 @@ func TestScaffoldPlanAllowsSharedDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, path := range []string{"internal/bootstrap/app.go", "internal/bootstrap/arkoren/SKILL.md"} {
+	for _, path := range []string{"internal/bootstrap/logging.go", "internal/bootstrap/arkoren/SKILL.md"} {
 		if _, err := os.Stat(filepath.Join(env.Dir, "hello", filepath.FromSlash(path))); err != nil {
 			t.Fatal(err)
 		}

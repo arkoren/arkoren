@@ -3,6 +3,8 @@ package password_test
 import (
 	"context"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,6 +21,10 @@ import (
 	"arkoren.dev/core/service/cache/memorycache"
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/hash"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/mail/mailtest"
+	"arkoren.dev/core/service/queue"
+	"arkoren.dev/core/service/queue/queuetest"
 	"arkoren.dev/driver/bcrypt/bcrypthash"
 	"arkoren.dev/foundation/key"
 
@@ -87,6 +93,44 @@ func (users *fakeUsers) Rotate(_ context.Context, subject string) error {
 	users.rotated = append(users.rotated, subject)
 
 	return users.driver.Put(auth.UserRecord{Subject: subject, Version: strconv.Itoa(users.versions[subject])})
+}
+
+// resetPage is the page of the application that reset links open.
+const resetPage = "https://app.example.com/reset-password"
+
+// newMailer returns a mailer over fake with a default sender.
+func newMailer(fake *mailtest.Fake) *mail.Mailer {
+	return mail.New(fake, func(mailer *mail.Builder) {
+		mailer.From(mail.Address{Email: "noreply@example.com"})
+	})
+}
+
+// failingQueue returns a dispatcher whose every dispatch fails, as a queue that
+// is down would.
+func failingQueue() *queue.Dispatcher {
+	fake := queuetest.New()
+	fake.FailWith(errors.New("queue down"))
+
+	return queue.NewDispatcher(fake)
+}
+
+// inlineQueue is a dispatcher driver that records each reset job and runs its
+// work at once through handle, as a queue worker would later, so the tests stay
+// synchronous. The consumer path is covered by its own tests.
+type inlineQueue struct {
+	record func(password.ResetRequest)
+	handle func(context.Context, password.ResetRequest) error
+}
+
+// Dispatch decodes the stored reset request, records it and runs the worker.
+func (driver *inlineQueue) Dispatch(ctx context.Context, message queue.Message) error {
+	var request password.ResetRequest
+	if err := json.Unmarshal(message.Payload, &request); err != nil {
+		return err
+	}
+	driver.record(request)
+
+	return driver.handle(ctx, request)
 }
 
 // system is a verifier wired to a guard and a running server.
@@ -176,6 +220,13 @@ func newSignedSystem(t *testing.T, db *database.Database, instance string, signe
 	sent := &[]password.ResetMessage{}
 	dispatched := &[]password.ResetRequest{}
 	var sentMu sync.Mutex
+	worker := &inlineQueue{record: func(request password.ResetRequest) {
+		sentMu.Lock()
+		defer sentMu.Unlock()
+
+		*dispatched = append(*dispatched, request)
+	}}
+	mailer := newMailer(mailtest.New())
 	var verifier *password.Verifier
 	verifier, err = password.NewVerifier(provider, db, store, testClientIP, hasher, password.Users{
 		Lookup: users.Lookup,
@@ -187,19 +238,16 @@ func newSignedSystem(t *testing.T, db *database.Database, instance string, signe
 		passwords.Taken(func(ctx context.Context, identifier string) error {
 			return verifier.RequestReset(ctx, password.ResetRequest{Identifier: identifier, Notice: true})
 		})
-		passwords.Reset(signer, func(ctx context.Context, request password.ResetRequest) error {
-			sentMu.Lock()
-			*dispatched = append(*dispatched, request)
-			sentMu.Unlock()
+		passwords.Queue(queue.NewDispatcher(worker))
+		passwords.Reset(signer, mailer, resetPage, func(reset *password.ResetBuilder) {
+			reset.Email(func(message password.ResetMessage, href string) mail.Message {
+				sentMu.Lock()
+				defer sentMu.Unlock()
 
-			return verifier.SendReset(ctx, request)
-		}, func(_ context.Context, message password.ResetMessage) error {
-			sentMu.Lock()
-			defer sentMu.Unlock()
+				*sent = append(*sent, message)
 
-			*sent = append(*sent, message)
-
-			return nil
+				return mail.NewMessage(mail.Recipients{To: []mail.Address{{Email: message.Address}}}, mail.Body{Text: href})
+			})
 		})
 		if configure != nil {
 			configure(passwords)
@@ -208,6 +256,7 @@ func newSignedSystem(t *testing.T, db *database.Database, instance string, signe
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
+	worker.handle = verifier.SendReset
 	migrateUp(t, db, verifier.Migrations()...)
 	guard, err := auth.NewGuard(provider, store, func(policy *auth.GuardBuilder) {
 		policy.StepUp(verifier.Credential())

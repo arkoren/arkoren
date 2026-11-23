@@ -1,0 +1,11 @@
+package migrations
+
+import "arkoren.dev/core/service/database/migrate"
+
+// All returns the application's own migrations in the order they run. A
+// bootstrap Migrator provider adds All() together with each ark's Migrations().
+// Append new migrations at the end; reordering or removing a shipped migration
+// breaks databases that already applied it.
+func All() []migrate.Definition {
+	return []migrate.Definition{}
+}

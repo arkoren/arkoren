@@ -1,0 +1,24 @@
+package {{.Package}}
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+
+	"{{.Module}}/internal/bootstrap"
+)
+
+// App is the {{.Process}} process's application. The first application.Run or
+// application.Start that receives it builds the application from these
+// settings, before composition and startup. The service name is {{.Service}}:
+// the module's last path element and the process name, so telemetry and logs
+// tell the processes of one project apart.
+//
+// Debug is enabled only when APP_DEBUG is exactly "true".
+var App = application.Provide(func(compose *application.Composer) *application.Application {
+	return application.New(func(app *application.Builder) {
+		app.Name("{{.Service}}")
+		app.Debug(os.Getenv("APP_DEBUG") == "true")
+		app.LogHandler(compose.Use(bootstrap.LogHandler))
+	})
+})

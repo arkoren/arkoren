@@ -30,15 +30,20 @@
 // # Email verification
 //
 // Verification is off until [Builder.Verification] gives the directory a core
-// link.Signer, a dispatch function and a deliver function. A verification link is
-// a value signed for the path "/email/verify" and the subject, bound to the
-// user's current email and verified flag ([link.Bind]) and expiring after
-// [Builder.VerifyTTL]; nothing is stored. [Directory.RequestVerification] (what
-// the resend route and a registration call) hands a [VerifyRequest] to dispatch
-// inside the request; the worker later runs [Directory.SendVerification], which
-// signs the link and calls deliver with a [VerifyMessage]. deliver may run more
-// than once for one request. [Directory.Verify] verifies the link against the
-// user's current state and then runs a conditional update that matches only the
+// link.Signer, a [mail.Mailer] and the application page the link opens, and
+// [Builder.Queue] a dispatcher. A verification link is a value signed for the
+// path "/email/verify" and the subject, bound to the user's current email and
+// verified flag ([link.Bind]) and expiring after [Builder.VerifyTTL]; nothing is
+// stored. [Directory.RequestVerification] (what the resend route and a
+// registration call) stores a [VerifyRequest] as a job on the dispatcher inside
+// the request; the worker, which registers the job with
+// [Directory.RegisterJobs], later runs [Directory.SendVerification], which signs
+// the link and sends the verification email through the mailer. The send may run
+// more than once for one request. The email is a short plain-text message;
+// [VerificationBuilder.Email] replaces it. The job runs on the queue "iam", named
+// "iam-email-verification" plus "-<instance>" for a named [Builder.Instance].
+//
+// [Directory.Verify] verifies the link against the user's current state and then runs a conditional update that matches only the
 // unverified user with that email, so a link works once: the second click, and a
 // click after the email changed, are [ErrInvalidToken], and [EmailVerified] is
 // published only when a row changed.

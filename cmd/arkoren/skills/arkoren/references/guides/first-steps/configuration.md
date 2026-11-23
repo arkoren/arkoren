@@ -100,7 +100,7 @@ concurrently with construction.
 ## Environment Settings
 
 Read values beside the code that constructs their consumer. In the generated
-`internal/bootstrap/server.go`, the existing factory callback imports `os` and
+`internal/bootstrap/listener.go`, the existing `Listen` function imports `os` and
 constructs its listener with:
 
 ```go
@@ -109,9 +109,31 @@ listener := server.New(handler, func(listener *server.Builder) {
 })
 ```
 
-The factory reads `HTTP_ADDR` when composition invokes its callback, not when
-`Server(handler)` returns the factory. Empty or unset values preserve `:8080`.
+`Listen` reads `HTTP_ADDR` when composition runs it. Empty or unset values
+preserve `:8080`.
 Later environment changes do not reconfigure that listener.
+
+The application's own settings follow the same rule. Declare the application as
+a provider, read the environment inside it, and take handles such as a log
+handler or telemetry from ordinary providers with `compose.Use`. With your own
+`LogHandler` provider, whose value is a `func(slog.Leveler) slog.Handler`
+factory, and `Telemetry` provider, whose value is a `*telemetry.Telemetry`:
+
+```go
+var App = application.Provide(func(compose *application.Composer) *application.Application {
+	return application.New(func(app *application.Builder) {
+		app.Name("shop")
+		app.Debug(os.Getenv("APP_DEBUG") == "true")
+		app.LogHandler(compose.Use(LogHandler))
+		app.Telemetry(compose.Use(Telemetry))
+	})
+})
+```
+
+The process entry point then builds and runs it with
+`application.Run(ctx, App, Compose)`, as
+[Composition](../application/composition.md#build-the-application-from-a-provider)
+describes.
 
 Core packages do not load your application environment or files. The starter's
 executable separately imports `godotenv/autoload`, which reads `.env` during

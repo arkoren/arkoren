@@ -60,16 +60,20 @@ another start or stop for its handle.
 
 ## Supervise Running Work
 
-Use application `Run` for an ordinary service. With your service-lifetime context
-`ctx` and existing composition callback `compose`, import
-`arkoren.dev/core/application`:
+Use `application.Run` for an ordinary service. With your service-lifetime context
+`ctx`, your application provider `App` and existing composition callback
+`compose`, import `arkoren.dev/core/application`:
 
 ```go
-app := application.New()
-err := app.Run(ctx, compose)
+err := application.Run(ctx, App, compose)
 ```
 
-`Run` composes, starts, waits for the runner group or caller cancellation, then
+[Composition](composition.md#build-the-application-from-a-provider) shows `App`.
+Cleanup registered by providers while the application is built belongs to the
+application and follows the rules below. To run an application you construct
+yourself, call the `Run` method of `application.New()` with the same `compose`.
+
+`Run` builds the application, composes, starts, waits for the runner group or caller cancellation, then
 shuts down. Handle `err` at the executable boundary. Caller cancellation alone
 after successful startup is a normal stop; startup, runner, and shutdown failures
 are returned.
@@ -240,7 +244,8 @@ if err != nil {
 defer unsubscribe()
 ```
 
-Now run the application in that same function:
+Now run the application in that same function, where `app` is the
+application whose events you observe:
 
 ```go
 err = app.Run(ctx, compose)

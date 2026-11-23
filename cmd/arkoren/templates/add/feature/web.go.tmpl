@@ -1,0 +1,43 @@
+package web
+
+import (
+	"net/http"
+
+	"arkoren.dev/core/http/response"
+	"arkoren.dev/core/http/router"
+
+	"{{.Module}}/internal/{{.Feature}}"
+)
+
+// Handlers serves the {{.Feature}} feature's HTTP routes over its Service. It
+// knows no path prefix: the provider in internal/bootstrap/{{.Feature}}.go
+// registers it on a router prefixed with the feature's path.
+type Handlers struct {
+	service *{{.Feature}}.Service
+}
+
+// NewHandlers builds the handlers over service. It does no I/O and registers
+// nothing; call Register to mount the routes.
+func NewHandlers(service *{{.Feature}}.Service) *Handlers {
+	return &Handlers{service: service}
+}
+
+// Register mounts the {{.Feature}} routes on routes, behind the Problems
+// middleware so domain errors become problem responses. Paths are relative:
+// the caller passes a router that already carries the feature's prefix, so a
+// handler never hard-codes it. It registers GET / as a placeholder; replace it
+// with the feature's real routes.
+func (handlers *Handlers) Register(routes *router.Router) {
+	routes.Use(Problems)
+
+	routes.Get("/", handlers.List)
+}
+
+// List handles the feature's collection route. It responds with an empty JSON
+// list until it calls the Service. Handlers read input with the request package
+// (a body through request.ParseJSON against a validate schema declared in
+// schemas.go), write with the response package, and return domain errors for
+// Problems to map.
+func (handlers *Handlers) List(writer http.ResponseWriter, r *http.Request) error {
+	return response.JSON(writer, http.StatusOK, []any{})
+}

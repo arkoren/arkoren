@@ -1,0 +1,11 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/queue"
+)
+
+// Dispatcher sends jobs through Queue.
+var Dispatcher = application.Provide(func(compose *application.Composer) *queue.Dispatcher {
+	return queue.NewDispatcher(compose.Use(Queue))
+})

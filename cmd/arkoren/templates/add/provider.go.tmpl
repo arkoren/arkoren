@@ -1,0 +1,16 @@
+package bootstrap
+
+import "arkoren.dev/core/application"
+
+// {{.Name}} is the process's one shared {{.Words}}, built by the first
+// compose.Use({{.Name}}) of a composition and returned unchanged afterwards.
+//
+// TODO: replace the placeholder struct{} result with the real resource. Call
+// Use on dependencies first, then a blank line, then construct the resource
+// and register its lifecycle (compose.Startup, compose.Cleanup, compose.Run).
+// Read settings from the environment inside this function. Providers only
+// construct and register lifecycle: mount routes and handlers from registration
+// functions called by Compose.
+var {{.Name}} = application.Provide(func(compose *application.Composer) struct{} {
+	return struct{}{}
+})

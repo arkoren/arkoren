@@ -98,6 +98,21 @@ For this mail fake, validation and context checks happen before consuming the in
 
 Other fakes have their own validation, recording, and scripting order. Check that package's contract before interpreting an attempted operation as accepted. Telemetry records observations rather than injecting operation failures.
 
+## Replace Providers
+
+To test a whole process with a fake in place of a real service, pass `application.Start` a test root provider that supplies the fake and then returns the production root. The root is built first, so the supplied value exists before anything uses the provider, and the provider's own build, with its startup and cleanup, never runs:
+
+```go
+root := application.Provide(func(composer *application.Composer) *application.Application {
+	composer.Supply(bootstrap.Mailer, mail.New(mailtest.New()))
+
+	return composer.Use(server.App)
+})
+app, err := application.Start(t.Context(), root, server.Compose)
+```
+
+Keep a reference to the fake you wrap so the test can read `Sent()` afterwards. [Application Composition](../application/composition.md#replace-a-provider-in-tests) states when `Supply` panics. When a library sends its email from a queue job, as the [identity module](../iam/email-links.md) does, wait for the worker before asserting: drain a `queuetest` fake, or use a mail driver that signals when it sent.
+
 ## Separate Execution
 
 A queue dispatch assertion checks a request to enqueue work. To test its handler as well, register that handler on a real consumer and explicitly drain the queue fake. Import `arkoren.dev/core/service/queue` and its `queuetest` subpackage. Inside your test, construct `fake := queuetest.New()` and pass `queue.NewDispatcher(fake)` to the application operation that dispatches your declared `SendReceipt` job. After that operation succeeds, register its `sendReceipt` handler and drain:

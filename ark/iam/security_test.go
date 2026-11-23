@@ -166,7 +166,7 @@ func TestMailGoesToTheStoredAddress(t *testing.T) {
 		if got := sys.box.lastReset(t).Address; got != "bob@gmail.com" {
 			t.Fatalf("reset sent to %q, want the stored bob@gmail.com", got)
 		}
-		if got := sys.box.dispatchedResets; len(got) != 1 || got[0].Identifier != "bob@gmaİl.com" {
+		if got := sys.box.dispatchedResets(t); len(got) != 1 || got[0].Identifier != "bob@gmaİl.com" {
 			t.Fatalf("dispatched = %+v, want the identifier exactly as typed", got)
 		}
 	})

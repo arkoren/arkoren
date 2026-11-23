@@ -19,7 +19,8 @@ import (
 // Render discovers templates in lexical order and mirrors their layout in
 // memory, removing only the .tmpl suffix from each output-relative path.
 // Every .go file must pass gofmt before any writes can start.
-// templates contains templates/; source contains skills/arkoren/.
+// templates contains templates/; source contains skills/<name>/ for each
+// managed skill.
 func Render(ctx context.Context, options Options, templates fs.FS, source fs.FS) ([]files.File, error) {
 	data := map[string]string{
 		"Module":    options.Module,
@@ -40,6 +41,12 @@ func Render(ctx context.Context, options Options, templates fs.FS, source fs.FS)
 
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+
+		// templates/add holds the files of `arkoren add`, rendered one at a
+		// time by the layout package; they are not part of a new project.
+		if entry.IsDir() && path == "templates/add" {
+			return fs.SkipDir
 		}
 
 		if entry.IsDir() || !strings.HasSuffix(path, ".tmpl") {
@@ -91,11 +98,14 @@ func Render(ctx context.Context, options Options, templates fs.FS, source fs.FS)
 			return 0
 		}
 
-		if filepath.Base(left.Path) == skill.SkillManifestName {
-			return 1
-		}
+		leftManifest := filepath.Base(left.Path) == skill.SkillManifestName
+		rightManifest := filepath.Base(right.Path) == skill.SkillManifestName
 
-		if filepath.Base(right.Path) == skill.SkillManifestName {
+		if leftManifest != rightManifest {
+			if leftManifest {
+				return 1
+			}
+
 			return -1
 		}
 
@@ -105,22 +115,28 @@ func Render(ctx context.Context, options Options, templates fs.FS, source fs.FS)
 	return inventory, nil
 }
 
-// RenderSkill prefixes the same installation bytes used by skills install.
+// RenderSkill prefixes the same installation bytes used by skills install,
+// for every managed skill in [skill.Names], each under its own directory.
 func RenderSkill(ctx context.Context, dir string, source fs.FS) ([]files.File, error) {
-	bundle, err := skill.LoadBundle(ctx, source)
+	var inventory []files.File
 
-	if err != nil {
-		return nil, err
-	}
+	for _, name := range skill.Names {
+		bundle, err := skill.LoadNamedBundle(ctx, source, name)
 
-	inventory, err := skill.Files(bundle)
+		if err != nil {
+			return nil, err
+		}
 
-	if err != nil {
-		return nil, err
-	}
+		installed, err := skill.Files(bundle)
 
-	for index := range inventory {
-		inventory[index].Path = filepath.Join(filepath.FromSlash(dir), "arkoren", filepath.FromSlash(inventory[index].Path))
+		if err != nil {
+			return nil, err
+		}
+
+		for _, file := range installed {
+			file.Path = filepath.Join(filepath.FromSlash(dir), name, filepath.FromSlash(file.Path))
+			inventory = append(inventory, file)
+		}
 	}
 
 	return inventory, nil

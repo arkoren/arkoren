@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"runtime/debug"
 	"slices"
 	"sync"
@@ -93,6 +94,45 @@ func New(logger *slog.Logger, timeout time.Duration,
 	return &Runtime{logger: logger, shutdownTimeout: timeout, signal: signal,
 		startTelemetry: start, shutdownTelemetry: stop, monitor: monitor,
 		discardChecks: discardChecks, state: StateNew}
+}
+
+// NewPending constructs an idle execution that has no application yet, for a
+// composition that builds the application itself. Failures reach stderr
+// through a text logger, because the application's logger does not exist until
+// the root provider has run; signals and telemetry hooks are no-ops. Call
+// [Runtime.Adopt] once the application exists to take over its hooks.
+func NewPending() *Runtime {
+	return New(slog.New(slog.NewTextHandler(os.Stderr, nil)), 0,
+		func(context.Context, string, error) {},
+		func(context.Context) error { return nil },
+		func(context.Context) error { return nil },
+		func() func(context.Context) error { return nil },
+		func() {})
+}
+
+// Adopt replaces this runtime's logger, hooks and shutdown timeout with those
+// of donor, the execution an application built with [New] owns, so that
+// registrations already made on this runtime (cleanups, startups, runners)
+// are run by that application. It fails with [ErrInvalidPhase] when donor has
+// left [StateNew], which happens when a root provider returns an application
+// that already started. The donor must not be used afterwards.
+func (runtime *Runtime) Adopt(donor *Runtime) error {
+	if state, _ := donor.Snapshot(); state != StateNew {
+		return fmt.Errorf("adopt application: %w", ErrInvalidPhase)
+	}
+
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+
+	runtime.logger = donor.logger
+	runtime.signal = donor.signal
+	runtime.startTelemetry = donor.startTelemetry
+	runtime.shutdownTelemetry = donor.shutdownTelemetry
+	runtime.monitor = donor.monitor
+	runtime.discardChecks = donor.discardChecks
+	runtime.shutdownTimeout = donor.shutdownTimeout
+
+	return nil
 }
 
 // Snapshot returns the phase and successful startup timestamp atomically.

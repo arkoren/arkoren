@@ -1,10 +1,11 @@
 GO ?= go
 DOCKER ?= docker
+ARKOREN ?= arkoren
 IMAGE ?= {{.Name}}
 PORT ?= 8080
 
 .DEFAULT_GOAL := help
-.PHONY: help run build fmt fmt-check vet test test-race check docker-build docker-run
+.PHONY: help run build fmt fmt-check vet layout test test-race check docker-build docker-run
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -25,13 +26,17 @@ fmt-check: ## Check Go formatting without modifying files.
 vet: ## Run Go static analysis.
 	$(GO) vet ./...
 
+layout: ## Check the project layout rules (needs the arkoren CLI; override ARKOREN).
+	@command -v $(ARKOREN) >/dev/null || { echo "$(ARKOREN) not found: go install arkoren.dev/cmd/arkoren@latest" >&2; exit 1; }
+	$(ARKOREN) check
+
 test: ## Run tests with Go's normal caching.
 	$(GO) test ./...
 
 test-race: ## Run race tests (requires a C compiler).
 	CGO_ENABLED=1 $(GO) test -race ./...
 
-check: fmt-check vet test ## Check formatting, static analysis, and tests.
+check: fmt-check vet layout test ## Check formatting, static analysis, layout rules, and tests.
 
 docker-build: ## Build the container image (override IMAGE).
 	$(DOCKER) build -t "$(IMAGE)" .

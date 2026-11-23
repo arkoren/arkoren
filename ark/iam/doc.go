@@ -23,12 +23,13 @@
 //
 //	scheme := totp.New("Acme") // the name authenticator apps show for this account
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {
+//		identity.Queue(dispatcher) // the module's emails are queue jobs
 //		identity.Password(hasher, func(passwords *password.Builder) {
 //			passwords.Registration(true) // off by default
-//			passwords.Reset(signer, dispatchReset, deliverReset)
+//			passwords.Reset(signer, mailer, "https://app.example.com/reset-password")
 //		})
 //		identity.Directory(func(accounts *account.Builder) {
-//			accounts.Verification(signer, dispatchVerification, deliverVerification)
+//			accounts.Verification(signer, mailer, "https://app.example.com/verify-email")
 //		})
 //		identity.TwoFactor(scheme, cipher)
 //		identity.Tokens()
@@ -46,7 +47,10 @@
 //	if err != nil {
 //		return err
 //	}
-//	if err := migrator.Add(identity.Migrations()...); err != nil { // enabled features only
+//	if err := migrator.Add(identity.Migrations()...); err != nil { // every feature, enabled or not
+//		return err
+//	}
+//	if err := identity.RegisterJobs(consumer); err != nil { // in the process that sends the emails
 //		return err
 //	}
 //	web := routes.With(identity.Middleware()) // session, guard and token authenticators
@@ -76,30 +80,38 @@
 //
 // # Email links
 //
-// The module never sends mail and starts no goroutine for it. Password reset
+// The module queues its own jobs on the application's dispatcher and sends
+// through the application's mailer; it starts no goroutine. Password reset
 // ([password.Builder.Reset]) and email verification ([account.Builder.Verification])
-// each take a signer from core's http/link package and two functions of the
-// application: dispatch, called inside the request, stores the work durably (a
-// queue job, a workflow run, an outbox row) or returns an error; deliver, called
-// later by the worker, renders and sends the email from a [password.ResetMessage]
-// or an [account.VerifyMessage]. The worker hands each stored request to
-// [IAM.SendReset] or [IAM.SendVerification], which have the shape of a queue
-// handler:
+// each take a signer from core's http/link package, a [mail.Mailer] and the
+// address of the application page the link opens. [Builder.Queue] gives the
+// module its dispatcher: a registration, a resend or a forgot-password request
+// stores one job from inside the request and returns, and [IAM.RegisterJobs]
+// registers the handlers that write and send the emails on the consumer of the
+// process that runs the worker. The jobs belong to the module: the application
+// declares no job, handler or send function, and a feature enabled in a later
+// release registers its handler through the same call. The jobs run on the queue
+// [QueueName] and their names carry the [Builder.Instance], so instances share a
+// queue and a consumer without crossing. Enabling Reset or Verification without
+// [Builder.Queue] fails [New] with [ErrInvalidConfig].
+//
+// The emails are short plain-text messages with a default subject and wording.
+// [password.ResetBuilder.Email] and [account.VerificationBuilder.Email] replace
+// one with the application's own, a function of the message and the page link.
 //
 //	signer, err := link.New(secret, func(links *link.Builder) {
 //		links.Origin("https://app.example.com")
 //	})
-//	resetJob := queue.NewJob[password.ResetRequest]("send-reset")
-//	dispatchReset := func(ctx context.Context, request password.ResetRequest) error {
-//		return dispatcher.Dispatch(ctx, resetJob, request)
-//	}
-//	deliverReset := func(ctx context.Context, message password.ResetMessage) error {
-//		href := message.Link("https://app.example.com/reset-password")
-//		_, err := mailer.Send(ctx, resetEmail(message.Address, href, message.Notice))
-//		return err
-//	}
-//	// after iam.New:
-//	err = consumer.Handle(resetJob, identity.SendReset)
+//	identity, err := iam.New(db, store, func(identity *iam.Builder) {
+//		identity.Queue(dispatcher)
+//		identity.Password(hasher, func(passwords *password.Builder) {
+//			passwords.Reset(signer, mailer, "https://app.example.com/reset-password", func(reset *password.ResetBuilder) {
+//				reset.Email(resetEmail) // optional; the default wording otherwise
+//			})
+//		})
+//	})
+//	// in the process that runs the worker:
+//	err = identity.RegisterJobs(consumer)
 //
 // A link is a signed value bound to the state its action changes, so there are
 // no token tables: a reset link is bound to the user's password hash and stops
@@ -108,9 +120,16 @@
 // the URL fragment; the page reads location.hash and posts it as the token of
 // POST /password/reset or POST /email/verify.
 //
-// Forgot-password dispatches the identifier exactly as typed, whether or not the
-// user exists, and answers 202; a dispatch error is a 500. deliver may run more
-// than once for one request, because a failing deliver is retried by the queue.
+// Forgot-password stores its job with the identifier exactly as typed, whether or
+// not the user exists, and answers 202; a dispatch error is a 500. The worker
+// looks the user up. A failing send is retried by the queue, so one request may
+// send more than once, and an email the mailer rejects as malformed fails the
+// job permanently.
+//
+// [IAM.RegisterJobs] cannot see a queue restriction on the consumer: one built
+// with queue.ConsumerBuilder.Queues must list [QueueName], or stored jobs wait
+// unconsumed. Deploy the workers that register the jobs before enabling a new
+// email feature on the servers that store them.
 //
 // # Routes
 //
@@ -151,8 +170,8 @@
 //   - Register, when enabled, answers an empty 202 and logs nobody in, whether or not the address
 //     was taken; for a taken one it creates nothing. With the built-in users
 //     (which need [password.Builder.Reset] for registration) and Verification it
-//     dispatches the same work on both paths: a verification for a new address and
-//     a reset notice to the owner of a taken one; with only Reset it dispatches
+//     stores the same work on both paths: a verification job for a new address and
+//     a reset notice job for the owner of a taken one; with only Reset it stores
 //     nothing. A failed dispatch is logged. It runs within the registration
 //     throttle.
 //   - Every POST, PUT and PATCH route requires the media type application/json
@@ -162,7 +181,7 @@
 //     not CSRF protection: mount core's csrf.Middleware next to
 //     [IAM.Middleware].
 //   - Forgot-password and resend answer an empty 202 once their work is
-//     dispatched, so neither the answer nor its timing says whether the user
+//     stored, so neither the answer nor its timing says whether the user
 //     exists. Mail goes to the address stored with the user, never to the text of
 //     the request.
 //   - A password change keeps the caller, ends the user's other logins and

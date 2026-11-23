@@ -1,0 +1,41 @@
+package jobs
+
+import (
+	"context"
+
+	"arkoren.dev/core/service/queue"
+
+	"{{.Module}}/internal/{{.Feature}}"
+)
+
+// Payload is the data a Process job carries. Replace it with the job's fields.
+type Payload struct{}
+
+// Process is the {{.Feature}} job definition. Producers dispatch it with their
+// dispatcher; Handlers.Register attaches the function that runs it. A job that
+// the feature root dispatches belongs in the root package instead, because the
+// root cannot import this child.
+var Process = queue.NewJob[Payload]("{{.Feature}}-process")
+
+// Handlers runs the {{.Feature}} feature's queue jobs over its Service.
+type Handlers struct {
+	service *{{.Feature}}.Service
+}
+
+// NewHandlers builds the handlers over service. It does no I/O and registers
+// nothing; call Register to attach them to a consumer.
+func NewHandlers(service *{{.Feature}}.Service) *Handlers {
+	return &Handlers{service: service}
+}
+
+// Register attaches the job handlers to consumer. It returns the consumer's
+// error for a duplicate or invalid registration.
+func (handlers *Handlers) Register(consumer *queue.Consumer) error {
+	return consumer.Handle(Process, handlers.Process)
+}
+
+// Process runs one Process job. It currently does nothing; call the Service
+// here and return queue.Permanent(err) for failures a retry cannot fix.
+func (handlers *Handlers) Process(ctx context.Context, payload Payload) error {
+	return nil
+}

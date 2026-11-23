@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +15,11 @@ import (
 	"arkoren.dev/foundation/totp"
 
 	"arkoren.dev/core/auth"
+	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/cache/memorycache"
 	"arkoren.dev/core/service/database"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/queue"
 
 	"arkoren.dev/ark/iam"
 	"arkoren.dev/ark/iam/account"
@@ -402,38 +408,93 @@ func TestMustAcceptPanicsForUnregisteredMethod(t *testing.T) {
 	}
 }
 
-// TestMigrationsOnlyForEnabledFeatures verifies Migrations lists the groups of
-// the enabled features and Ping names the migrations when they have not run.
-func TestMigrationsOnlyForEnabledFeatures(t *testing.T) {
+// migrationGroups lists the migration groups of identity in order, without the
+// shared prefix.
+func migrationGroups(identity *iam.IAM) string {
+	seen := []string{}
+	for _, definition := range identity.Migrations() {
+		group := strings.TrimPrefix(definition.Group(), "arkoren.dev:ark/access:")
+		if len(seen) == 0 || seen[len(seen)-1] != group {
+			seen = append(seen, group)
+		}
+	}
+
+	return strings.Join(seen, ",")
+}
+
+// TestMigrationsListEveryFeatureWhateverIsEnabled verifies Migrations ships the
+// groups of every feature in dependency order for the instance, however few
+// features are enabled, so turning one on later needs no new migrator call.
+func TestMigrationsListEveryFeatureWhateverIsEnabled(t *testing.T) {
 	t.Parallel()
 
-	groups := func(identity *iam.IAM) string {
-		seen := []string{}
-		for _, definition := range identity.Migrations() {
-			group := strings.TrimPrefix(definition.Group(), "arkoren.dev:ark/access:")
-			if len(seen) == 0 || seen[len(seen)-1] != group {
-				seen = append(seen, group)
-			}
-		}
-
-		return strings.Join(seen, ",")
-	}
-	all, err := newFacade(t, func(identity *iam.Builder) {
-		identity.Password(hasher(), registration)
-		identity.TwoFactor(totp.New("Example"), cipher(t))
-		identity.Tokens()
-		identity.Provider(fakeProvider{name: "fake"}, signUp)
-		identity.Instance("tenant_a")
-	})
+	passwordOnly, err := newFacade(t, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if got, want := groups(all), "account:tenant_a,password:tenant_a,twofactor:tenant_a,apitoken:tenant_a,federation:tenant_a"; got != want {
+	if got, want := migrationGroups(passwordOnly), "account,password,twofactor,apitoken,federation,permission"; got != want {
 		t.Errorf("groups = %s, want %s", got, want)
 	}
-	passwordOnly, _ := newFacade(t, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
-	if got, want := groups(passwordOnly), "account,password"; got != want {
+	named, err := newFacade(t, func(identity *iam.Builder) { identity.Instance("tenant_a") })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got, want := migrationGroups(named), "account:tenant_a,password:tenant_a,twofactor:tenant_a,apitoken:tenant_a,federation:tenant_a,permission:tenant_a"; got != want {
 		t.Errorf("groups = %s, want %s", got, want)
+	}
+}
+
+// TestMigrationsOmitBuiltInUsersWithOwnUsers verifies the application's own
+// users are the one structural choice that removes a group.
+func TestMigrationsOmitBuiltInUsersWithOwnUsers(t *testing.T) {
+	t.Parallel()
+
+	own, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) { identity.Users(ownUsersWithoutCreate(t)) })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got, want := migrationGroups(own), "password,twofactor,apitoken,federation,permission"; got != want {
+		t.Errorf("groups = %s, want %s", got, want)
+	}
+}
+
+// TestMigrationsKeepShippedIdentities pins every shipped migration id, which are
+// append-only: renaming one would make an application's migrator treat a
+// migrated database as new.
+func TestMigrationsKeepShippedIdentities(t *testing.T) {
+	t.Parallel()
+
+	identity, err := newFacade(t, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var ids []string
+	for _, definition := range identity.Migrations() {
+		ids = append(ids, definition.ID())
+	}
+	want := []string{
+		"arkoren.dev:ark/access:account/users-create-table",
+		"arkoren.dev:ark/access:password/hashes-create-table",
+		"arkoren.dev:ark/access:twofactor/secrets-create-table",
+		"arkoren.dev:ark/access:twofactor/recovery-codes-create-table",
+		"arkoren.dev:ark/access:apitoken/api-tokens-create-table",
+		"arkoren.dev:ark/access:federation/links-create-table",
+		"arkoren.dev:ark/access:federation/links-add-claims",
+		"arkoren.dev:ark/access:permission/permission-grants-create-table",
+	}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("migration ids = %v, want %v", ids, want)
+	}
+}
+
+// TestPingChecksOnlyEnabledFeatures verifies readiness names the migrations when
+// an enabled feature's tables are missing and ignores features that are off.
+func TestPingChecksOnlyEnabledFeatures(t *testing.T) {
+	t.Parallel()
+
+	passwordOnly, err := newFacade(t, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
 	if err := passwordOnly.Ping(context.Background()); !errors.Is(err, iam.ErrNotMigrated) {
 		t.Errorf("Ping before migrating error = %v, want ErrNotMigrated", err)
@@ -490,38 +551,205 @@ func TestRegisterTakenAddressNotifiesTheOwner(t *testing.T) {
 	})
 }
 
-// TestSendWorkersForwardToThePackages verifies the facade's worker methods send
-// for a known user, send nothing and return nil for an unknown one, and report a
-// missing feature as a configuration error.
-func TestSendWorkersForwardToThePackages(t *testing.T) {
+// TestJobsSendResetForKnownUsersOnly verifies the worker the facade registers
+// sends a reset email for a known user and nothing, without an error, for an
+// unknown one, so a forgot request reveals nothing in the queue either.
+func TestJobsSendResetForKnownUsersOnly(t *testing.T) {
 	t.Parallel()
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
-		ctx := testContext(t)
 		sys := newApp(t, db, instance, func(identity *iam.Builder) { identity.Password(hasher(), registration) })
 		register(t, sys.client, "ada@example.com")
-		if err := sys.identity.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"}); err != nil {
-			t.Fatalf("SendReset: %v", err)
+		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
+		sys.client.NewDevice().Post("/password/forgot", `{"email":"nobody@example.com"}`)
+		if got := len(sys.box.dispatchedResets(t)); got != 2 {
+			t.Fatalf("stored %d reset jobs, want 2: a forgot request stores one whether or not the user exists", got)
 		}
-		if err := sys.identity.SendReset(ctx, password.ResetRequest{Identifier: "nobody@example.com"}); err != nil {
-			t.Fatalf("SendReset for an unknown user = %v, want nil", err)
+		if resets, _ := sys.box.counts(t); resets != 1 {
+			t.Fatalf("reset emails = %d, want 1: only the known user is sent one", resets)
 		}
-		if resets, _ := sys.box.counts(); resets != 1 {
-			t.Fatalf("reset emails = %d, want 1", resets)
+		sys.box.mail.AssertSentCount(t, 2) // the verification of the registration and the reset
+	})
+}
+
+// TestDefaultEmailsCarryLinksThatWork verifies the default reset and
+// verification emails go to the stored address with the page link and a signed
+// value in its fragment, and that the value works.
+func TestDefaultEmailsCarryLinksThatWork(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newAppWith(t, db, instance, wire{reset: true, verify: true, defaultEmail: true}, func(identity *iam.Builder) {
+			identity.Password(hasher(), registration)
+		})
+		register(t, sys.client, "ada@example.com")
+		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
+		sys.box.drain(t)
+		sent := sys.box.mail.Sent()
+		if len(sent) != 2 {
+			t.Fatalf("sent %d emails, want a verification and a reset", len(sent))
 		}
-		if err := sys.identity.SendVerification(ctx, account.VerifyRequest{Subject: "missing"}); err != nil {
-			t.Fatalf("SendVerification for an unknown subject = %v, want nil", err)
+		for index, base := range []string{verifyPage, resetPage} {
+			message := sent[index]
+			if len(message.To()) != 1 || message.To()[0].Email != "ada@example.com" || message.Subject() == "" {
+				t.Fatalf("email %d = to %v subject %q, want the stored address and a subject", index, message.To(), message.Subject())
+			}
+			fragment := linkFragment(t, message.TextBody(), base)
+			if index == 0 {
+				if reply := sys.client.Post("/email/verify", `{"token":"`+fragment+`"}`); reply.Status != http.StatusNoContent {
+					t.Fatalf("verify with the emailed value = %d %s", reply.Status, reply.Body)
+				}
+
+				continue
+			}
+			if reply := sys.client.NewDevice().Post("/password/reset", `{"token":"`+fragment+`","password":"reset horse ok"}`); reply.Status != http.StatusNoContent {
+				t.Fatalf("reset with the emailed value = %d %s", reply.Status, reply.Body)
+			}
 		}
-		bare, err := newFacadeWith(t, wire{})
-		if err != nil {
-			t.Fatalf("New: %v", err)
+	})
+}
+
+// linkFragment returns the decoded fragment of the link that starts with base in
+// body, which is what a front end posts back as the token.
+func linkFragment(t *testing.T, body, base string) string {
+	t.Helper()
+
+	_, after, found := strings.Cut(body, base+"#")
+	if !found {
+		t.Fatalf("body %q has no link to %s", body, base)
+	}
+	encoded := strings.Fields(after)[0]
+	token, err := url.QueryUnescape(encoded)
+	if err != nil {
+		t.Fatalf("unescape %q: %v", encoded, err)
+	}
+
+	return token
+}
+
+// TestJobNamesCarryTheInstance verifies the jobs of a named instance are named
+// after it and run on the queue "iam", so two instances share one consumer.
+func TestJobNamesCarryTheInstance(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, _ string) {
+		sys := newApp(t, db, "tenant_a", func(identity *iam.Builder) { identity.Password(hasher(), registration) })
+		register(t, sys.client, "ada@example.com")
+		sys.client.NewDevice().Post("/password/forgot", `{"email":"ada@example.com"}`)
+		var names []string
+		for _, message := range sys.box.queue.Dispatched() {
+			if message.Queue != iam.QueueName {
+				t.Fatalf("job %s on queue %q, want %q", message.Name, message.Queue, iam.QueueName)
+			}
+			names = append(names, message.Name)
 		}
-		if err := bare.SendReset(ctx, password.ResetRequest{}); !errors.Is(err, iam.ErrInvalidConfig) {
-			t.Fatalf("SendReset without Password = %v, want ErrInvalidConfig", err)
+		want := []string{"iam-email-verification-tenant-a", "iam-password-reset-tenant-a"}
+		if !slices.Equal(names, want) {
+			t.Fatalf("job names = %v, want %v", names, want)
 		}
-		if err := bare.SendVerification(ctx, account.VerifyRequest{}); !errors.Is(err, account.ErrInvalidConfig) {
-			t.Fatalf("SendVerification without Verification = %v, want account.ErrInvalidConfig", err)
+	})
+}
+
+// TestTwoInstancesShareOneConsumer verifies the jobs of two instances register
+// on one consumer without a duplicate name.
+func TestTwoInstancesShareOneConsumer(t *testing.T) {
+	t.Parallel()
+
+	box := newBox(t, both)
+	first, err := construct(box, memoryDatabase(t), cache.New(memorycache.New()), box.verification(), func(identity *iam.Builder) {
+		identity.Instance("one")
+	})
+	if err != nil {
+		t.Fatalf("first instance: %v", err)
+	}
+	second, err := iam.New(memoryDatabase(t), cache.New(memorycache.New()), func(identity *iam.Builder) {
+		identity.ClientIP(testClientIP)
+		identity.Queue(box.dispatcher)
+		identity.Instance("two")
+		box.verification()(identity)
+	})
+	if err != nil {
+		t.Fatalf("second instance: %v", err)
+	}
+	if err := second.RegisterJobs(box.consumer); err != nil {
+		t.Fatalf("RegisterJobs of a second instance = %v, want nil", err)
+	}
+	if err := first.RegisterJobs(box.consumer); !errors.Is(err, queue.ErrDuplicateName) {
+		t.Fatalf("RegisterJobs twice for one instance = %v, want ErrDuplicateName", err)
+	}
+}
+
+// TestRegisterJobsWithoutEmailFeaturesRegistersNothing verifies a facade with
+// no reset and no verification handles no job.
+func TestRegisterJobsWithoutEmailFeaturesRegistersNothing(t *testing.T) {
+	t.Parallel()
+
+	box := newBox(t, wire{})
+	if _, err := construct(box, memoryDatabase(t), cache.New(memorycache.New())); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := box.queue.Drain(testContext(t), box.consumer); !errors.Is(err, queue.ErrNoQueues) {
+		t.Fatalf("Drain = %v, want ErrNoQueues: no job is registered", err)
+	}
+}
+
+// TestResetWithoutQueueFailsConstruction verifies enabling password reset without
+// Builder.Queue is an invalid configuration, not a route that fails later.
+func TestResetWithoutQueueFailsConstruction(t *testing.T) {
+	t.Parallel()
+
+	box := newBox(t, both)
+	_, err := iam.New(memoryDatabase(t), cache.New(memorycache.New()), func(identity *iam.Builder) {
+		identity.ClientIP(testClientIP)
+		identity.Password(hasher(), func(passwords *password.Builder) {
+			passwords.Reset(box.signer, box.mailer, resetPage)
+		})
+	})
+	if !errors.Is(err, iam.ErrInvalidConfig) {
+		t.Fatalf("New = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// TestVerificationWithoutQueueFailsConstruction verifies enabling email
+// verification without Builder.Queue is an invalid configuration.
+func TestVerificationWithoutQueueFailsConstruction(t *testing.T) {
+	t.Parallel()
+
+	box := newBox(t, both)
+	_, err := iam.New(memoryDatabase(t), cache.New(memorycache.New()), func(identity *iam.Builder) {
+		identity.ClientIP(testClientIP)
+		identity.Directory(func(accounts *account.Builder) {
+			accounts.Verification(box.signer, box.mailer, verifyPage)
+		})
+	})
+	if !errors.Is(err, iam.ErrInvalidConfig) {
+		t.Fatalf("New = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// TestInvalidCustomEmailFailsPermanently verifies an email the
+// mailer rejects as malformed settles the job as failed instead of retrying
+// forever.
+func TestInvalidCustomEmailFailsPermanently(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newAppWith(t, db, instance, both, func(identity *iam.Builder) {
+			identity.Directory(func(accounts *account.Builder) {
+				accounts.Verification(buildingBox.signer, buildingBox.mailer, verifyPage, func(verification *account.VerificationBuilder) {
+					verification.Email(func(account.VerifyMessage, string) mail.Message {
+						return mail.NewMessage(mail.Recipients{}, mail.Body{})
+					})
+				})
+			})
+			identity.Password(hasher(), registration)
+		})
+		register(t, sys.client, "ada@example.com")
+		sys.box.drain(t)
+		if got := len(sys.box.queue.Failed()); got != 1 {
+			t.Fatalf("failed jobs = %d, want 1 permanent failure", got)
 		}
+		sys.box.mail.AssertNothingSent(t)
 	})
 }
 

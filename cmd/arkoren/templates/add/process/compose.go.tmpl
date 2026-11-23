@@ -1,0 +1,15 @@
+package {{.Package}}
+
+import (
+	"arkoren.dev/core/application"
+)
+
+// Compose is the explicit list of what the {{.Process}} process runs. Add a
+// feature with `arkoren add feature NAME --process {{.Process}}`, which inserts
+// its compose.Use lines here, or write them by hand. compose.Use builds a
+// bootstrap provider on first use and returns the same value afterwards; each
+// provider makes its component live. Conditions are plain if statements. List
+// feature providers first and the provider that serves the process last. This
+// package may import the internal/bootstrap package; internal/bootstrap never
+// imports it.
+func Compose(compose *application.Composer) {}

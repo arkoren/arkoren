@@ -1,0 +1,46 @@
+package flow
+
+import (
+	"time"
+
+	"arkoren.dev/core/service/workflow"
+
+	"{{.Module}}/internal/{{.Feature}}"
+)
+
+// Input is the data a Flow run starts with. Replace it with the run's fields.
+type Input struct{}
+
+// Output is the result of a Flow run. Replace it with the run's result.
+type Output struct{}
+
+// Flow is the {{.Feature}} workflow definition. Its function must be
+// deterministic: use the workflow Context for time, randomness and side
+// effects so a driver can replay it. MaxDuration is required before the
+// workflow is registered.
+var Flow = workflow.New("{{.Feature}}-flow", run, func(definition *workflow.Builder) {
+	definition.MaxDuration(24 * time.Hour)
+})
+
+// run is the Flow body. It currently returns an empty Output.
+func run(ctx *workflow.Context, input Input) (Output, error) {
+	return Output{}, nil
+}
+
+// Workflows is the {{.Feature}} feature's set of workflow definitions. A
+// workflow engine is built from definitions rather than registered on, so this
+// surface has no Register method: it hands them over with Definitions.
+type Workflows struct {
+	service *{{.Feature}}.Service
+}
+
+// NewWorkflows builds the workflows over service. It does no I/O.
+func NewWorkflows(service *{{.Feature}}.Service) *Workflows {
+	return &Workflows{service: service}
+}
+
+// Definitions returns the workflow definitions to pass to workflow.NewRegistry
+// or workflow.Handlers when the process builds its workflow engine.
+func (workflows *Workflows) Definitions() []workflow.Definition {
+	return []workflow.Definition{Flow}
+}

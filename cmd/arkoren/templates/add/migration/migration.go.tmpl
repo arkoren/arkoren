@@ -1,0 +1,40 @@
+package migrations
+
+import (
+	"arkoren.dev/core/service/database/migrate"
+	"arkoren.dev/foundation/query/schema"
+)
+{{if .Create}}
+// {{.Name}}Up creates the {{.Table}} table.
+//
+// TODO: declare the table's columns. Keep schema changes in exported
+// schema-builder operations like this one, never dialect SQL.
+var {{.Name}}Up = schema.Create("{{.Table}}", func(table *schema.Table) {
+	table.ID()
+	table.Timestamps()
+})
+
+// {{.Name}}Down reverses {{.Name}}Up and destroys the table's data.
+var {{.Name}}Down = schema.Drop("{{.Table}}")
+
+// {{.Name}} is the "{{.ID}}" migration. All lists it in the order migrations
+// run; the application's migrator is the only code that executes it.
+var {{.Name}} = migrate.NewMigration("{{.ID}}", func(migration *migrate.MigrationBuilder) {
+	migration.Up(migrate.Schema({{.Name}}Up))
+	migration.Down(migrate.Schema({{.Name}}Down))
+})
+{{else}}
+// {{.Name}}Up is the schema change of the "{{.ID}}" migration.
+//
+// TODO: name the table and declare the change. An empty Alter fails when the
+// migration runs, so the stub never applies by accident. Keep schema changes in
+// exported schema-builder operations like this one, never dialect SQL.
+var {{.Name}}Up = schema.Alter("{{.Table}}", func(table *schema.Table) {})
+
+// {{.Name}} is the "{{.ID}}" migration. All lists it in the order migrations
+// run; the application's migrator is the only code that executes it. Add a
+// Down step with the reverse operation when the change can be undone.
+var {{.Name}} = migrate.NewMigration("{{.ID}}", func(migration *migrate.MigrationBuilder) {
+	migration.Up(migrate.Schema({{.Name}}Up))
+})
+{{end}}
