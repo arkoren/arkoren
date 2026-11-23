@@ -148,10 +148,10 @@ single operation cannot describe. Annotate only the behavior you actually serve:
   actual media types and headers. Use `MediaResponse`, not `JSONResponse`, for
   binary or text output. The [response declarations](operations.md#describe-responses)
   show the pattern.
-- Mounted [MCP endpoints](../mcp-server/first-server.md) remain a separate protocol.
+- [MCP endpoints](../mcp-server/first-server.md) remain a separate protocol.
   Export does not traverse their handlers or infer internal operations. Leave
-  mounts and catch-all routes unannotated or hidden; visible annotated opaque
-  paths fail export.
+  protocol routes and catch-all routes unannotated or hidden; visible annotated
+  opaque paths fail export.
 
 For every integration, match the body, headers, statuses, and security policy to
 the configured handler and middleware. A static annotation or diagnostic route

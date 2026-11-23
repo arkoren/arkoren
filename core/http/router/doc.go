@@ -10,9 +10,11 @@
 // Forwarded request contexts must retain the original context's values, which
 // carry lifecycle hooks and middleware state; derive them from request.Context.
 //
-// [Router.Mount] serves a standard [http.Handler] under a prefix, which is
-// stripped, inside the router's middleware. [Router.MCPTools] returns a live
-// route listing for explicit MCP registration; callers own access policy.
+// A foreign [http.Handler] that expects its own path prefix is adapted by the
+// application with [HTTP], for example
+// routes.Any("/debug/pprof/{path...}", router.HTTP(http.StripPrefix("/debug/pprof", handler))).
+// [Router.MCPTools] returns a live route listing for explicit MCP
+// registration; callers own access policy.
 //
 // [Router.Routes] lists the registered routes with their handler functions,
 // for route listings and inspection tools. It returns an eager collection
@@ -22,7 +24,7 @@
 // [Router.OpenAPI] without changing request execution. Export emits OpenAPI
 // 3.2.1 JSON from annotated, nonhidden registrations only; schemas are rendered
 // at declaration time, never evaluated or remotely fetched. Opaque catch-all
-// routes and mounts must be omitted or hidden. [Router.OpenAPIHandler] caches
+// routes must be omitted or hidden. [Router.OpenAPIHandler] caches
 // export on its first request; applications own route setup and access policy.
 //
 // Example:

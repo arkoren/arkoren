@@ -5,7 +5,7 @@ import (
 	"arkoren.dev/core/application"
 )
 
-// MCP mounts read-only application, route, and telemetry diagnostics at /mcp
+// MCP registers read-only application, route, and telemetry diagnostics at /mcp
 // on the shared router and returns the endpoint. Application-owned bounded
 // capture keeps recent traces, logs, and metrics in memory; nothing is exported
 // to an external backend.
@@ -13,7 +13,7 @@ import (
 // Compose uses MCP only when application debug is enabled
 // (if compose.App().Debug()). The tools read the router's routes when called,
 // so the order of MCP and feature providers in Compose does not matter.
-// Endpoint construction errors abort composition before mounting. The endpoint
+// Endpoint construction errors abort composition before registration. The endpoint
 // shares the HTTP server's listener and router middleware; it does not start or
 // own a separate listener.
 //
@@ -37,7 +37,7 @@ var MCP = application.Provide(func(compose *application.Composer) *mcpserver.Ser
 		listener.Tools(routes.MCPTools("http")...)
 	}))
 
-	routes.Mount("/mcp", endpoint)
+	routes.Group("/mcp", endpoint.Register)
 
 	return endpoint
 })

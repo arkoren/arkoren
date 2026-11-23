@@ -142,15 +142,21 @@ related calls together rather than putting every call on its own line.
 A multiline callback body does not require a break before its method call.
 Ordinary mutable builders prefer one setting action per line.
 
-**Package routes.** Opaque protocol endpoints (OAuth server, MCP, webhooks)
-implement `http.Handler` and are attached with `router.Mount(prefix, handler)`.
-A package that adds ordinary application routes exposes one `XHandler()` method
-per route plus `Register(r *router.Router)` (or `Register<Set>` when one type
-owns several route sets, e.g. `Application.RegisterProbes`). `Register`
-registers sensible default paths and operations, applies no middleware or
-prefix of its own, and is used preferably as `routes.Group("/", pkg.Register)`.
-Its signature stays `func(*router.Router)` so the method value works as a group
-callback and as a direct call.
+**Package routes.** Every package that serves HTTP registers its routes on a
+router: one `XHandler()` method per route, where custom paths make sense, plus
+`Register(r *router.Router)` (or `Register<Set>` when one type owns several
+route sets, e.g. `Application.RegisterProbes`). `Register` registers sensible
+default paths and operations, applies no middleware or prefix of its own, and is
+used as `routes.Group(prefix, pkg.Register)`, behind whatever middleware the
+group carries. Its signature stays `func(*router.Router)` so the method value
+works as a group callback and as a direct call. Protocol endpoints register
+exact methods and are not `http.Handler` values: the MCP server registers
+`POST` at the group path (`routes.Group("/mcp", endpoint.Register)`) and the
+router answers every other method with 405. Packages whose routes are coupled by
+fixed relative asset names (`swagger.Viewer`) offer `Register` only, with no
+per-route handler methods. Only applications adapt foreign `http.Handler`
+values, with `router.HTTP` (plus `http.StripPrefix` on a catch-all route when
+the handler needs its prefix removed). There is no `Mount`.
 
 Every public API takes one of three shapes.
 

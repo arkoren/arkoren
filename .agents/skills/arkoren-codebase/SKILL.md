@@ -254,18 +254,23 @@ unsigned hints requiring authenticated resource lookup, not authenticated
 reconciliation, and fulfillment; these integrations introduce no billing ark or
 driver-owned tables. See the consumer payments guides for supported profiles.
 
-**Package routes** follow the rule in `arkoren-go` (API shapes): opaque
-protocol endpoints are `http.Handler` values attached with `router.Mount`;
-ordinary routes come as `XHandler()` methods plus `Register`/`Register<Set>`
-(`Application.RegisterProbes`), with no middleware or prefix of their own. The
-generated starter will use `RegisterProbes` after the next core release.
+**Package routes** follow the rule in `arkoren-go` (API shapes): every package
+serving HTTP offers `XHandler()` methods where custom paths make sense plus
+`Register`/`Register<Set>` (`Application.RegisterProbes`, `mcpserver.Server`,
+`swagger.Viewer`), attached as `routes.Group(prefix, pkg.Register)` with no
+middleware or prefix of their own. Protocol endpoints register exact methods
+(MCP: `POST`); only applications adapt foreign handlers with `router.HTTP`.
+`router.Router` has no `Mount`. The generated starter will use `RegisterProbes`
+after the next core release.
 
 **HTTP documentation** belongs to the router's actual registrations. Optional
 operation callbacks describe requests and responses; they do not change handler,
 validation, error-mapping, or authentication behavior. Keep the public route-list
 and MCP diagnostic wire shapes unchanged. OpenAPI JSON and Swagger UI handlers
-are explicitly registered by the application. The Swagger UI package lives at
-`core/http/swagger`, with pinned frontend assets and no third-party Go dependency.
+are explicitly registered by the application (`swagger.New(url)` returns a
+`Viewer` whose `Register` adds four exact GET routes with relative asset URLs).
+The Swagger UI package lives at `core/http/swagger`, with pinned frontend assets
+and no third-party Go dependency.
 Keep its assets and rendering out of router imports. Document schema-export
 limitations instead of claiming that annotations enforce wire conformance.
 
@@ -286,7 +291,7 @@ handlers own resource Gate checks for all transports. Policies filter complete,
 unpaginated discovery and guard calls before decode; failures fail closed even
 when wrapping `ToolError`. Keep SDK imports in adapter/composition and authenticate
 outer HTTP with `auth.Middleware(auth.Bearer(verifyAccessToken))` followed by
-`auth.Require()` before `routes.Mount("/mcp", endpoint)`; attach the same
+`auth.Require()` before `routes.Group("/mcp", endpoint.Register)`; attach the same
 concrete application user type to the identity's record in the verifier that
 policy lookups read. Optional
 `gate.Require(canUseMCP)` controls endpoint admission, not resource access.

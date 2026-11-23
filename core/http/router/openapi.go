@@ -96,7 +96,7 @@ func newOpenAPI(configure []OpenAPIBuilderFunc) OpenAPIBuilder {
 // OpenAPI exports only annotated, nonhidden routes as deterministic OpenAPI
 // 3.2.1 JSON. It reads the entire router tree, using final group paths and
 // synthesizing required string parameters for otherwise undescribed wildcards.
-// Catch-alls and mounts are opaque and must be omitted or hidden. Declaration
+// Catch-alls are opaque and must be omitted or hidden. Declaration
 // errors, duplicate IDs and equivalent path templates return contextual errors.
 // Schemas remain inline and references are neither rewritten nor fetched.
 // Registration must finish before exporting concurrently.

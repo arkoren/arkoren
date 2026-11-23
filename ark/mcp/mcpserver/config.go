@@ -19,8 +19,8 @@ import (
 //	if err != nil {
 //		return err
 //	}
-//	mux := http.NewServeMux()
-//	mux.Handle("/mcp", server)
+//	routes := router.New()
+//	routes.Group("/mcp", server.Register)
 type Builder struct {
 	// tools preserves registration order and is detached on publication.
 	tools []mcp.Tool
@@ -42,8 +42,8 @@ type Builder struct {
 //	if err != nil {
 //		return err
 //	}
-//	mux := http.NewServeMux()
-//	mux.Handle("/mcp", server)
+//	routes := router.New()
+//	routes.Group("/mcp", server.Register)
 type BuilderFunc = func(*Builder)
 
 // Tools appends managed definitions in order, copying the supplied slice.
@@ -61,8 +61,8 @@ type BuilderFunc = func(*Builder)
 //	if err != nil {
 //		return err
 //	}
-//	mux := http.NewServeMux()
-//	mux.Handle("/mcp", server)
+//	routes := router.New()
+//	routes.Group("/mcp", server.Register)
 func (listener *Builder) Tools(tools ...mcp.Tool) *Builder {
 	listener.tools = append(slices.Clone(listener.tools), tools...)
 
@@ -81,8 +81,8 @@ func (listener *Builder) Tools(tools ...mcp.Tool) *Builder {
 //	if err != nil {
 //		return err
 //	}
-//	mux := http.NewServeMux()
-//	mux.Handle("/mcp", server)
+//	routes := router.New()
+//	routes.Group("/mcp", server.Register)
 func (listener *Builder) Logger(logger *slog.Logger) *Builder {
 	listener.logger = logger
 
@@ -101,8 +101,8 @@ func (listener *Builder) Logger(logger *slog.Logger) *Builder {
 //	if err != nil {
 //		return err
 //	}
-//	mux := http.NewServeMux()
-//	mux.Handle("/mcp", server)
+//	routes := router.New()
+//	routes.Group("/mcp", server.Register)
 func (listener *Builder) Telemetry(service *telemetry.Telemetry) *Builder {
 	listener.telemetry = service
 

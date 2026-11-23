@@ -239,7 +239,7 @@ func callEncodedOutput(t *testing.T, tool mcp.Tool) encodedOutput {
 
 	recorded := httptest.NewRecorder()
 
-	managed(t, tool).ServeHTTP(recorded, request)
+	handlerOf(managed(t, tool)).ServeHTTP(recorded, request)
 
 	if recorded.Code != http.StatusOK {
 		t.Fatalf("HTTP status = %d: %s", recorded.Code, recorded.Body)
@@ -280,7 +280,7 @@ func TestProtocolPreservesRawJSONNumbers(t *testing.T) {
 		action.Input(validate.Map[string, jsontext.Value]()).Output(validate.Map[string, jsontext.Value]())
 	})
 
-	handler, wire := captureProtocol(managed(t, tool))
+	handler, wire := captureProtocol(handlerOf(managed(t, tool)))
 	session := connect(t, handler, "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{
@@ -328,7 +328,7 @@ func TestProtocolCapturesExactSchemaNumbers(t *testing.T) {
 	clear(report.OutputSchema)
 	retained.Input(validate.Struct[numericRequest]()).Output(validate.Struct[numericRequest]())
 
-	handler, wire := captureProtocol(managed(t, tool))
+	handler, wire := captureProtocol(handlerOf(managed(t, tool)))
 	session := connect(t, handler, "2026-07-28")
 
 	if _, err := session.ListTools(t.Context(), nil); err != nil {
@@ -367,7 +367,7 @@ func TestOutputValidatorResourceLimitStaysInternal(t *testing.T) {
 		action.Output(validate.Map[string, jsontext.Value]())
 	})
 
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: tool.Name()})
 

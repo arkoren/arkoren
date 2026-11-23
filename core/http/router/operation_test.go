@@ -119,9 +119,6 @@ func TestOperationCallbacksAllEntries(t *testing.T) {
 		func(routes *router.Router, configure ...router.OperationBuilderFunc) {
 			routes.Any("/x", metadataHandler, configure...)
 		},
-		func(routes *router.Router, configure ...router.OperationBuilderFunc) {
-			routes.Mount("/x", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), configure...)
-		},
 	}
 
 	for _, register := range registrations {

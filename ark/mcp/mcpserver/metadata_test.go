@@ -21,7 +21,7 @@ func TestListReportsNativeCLIMetadata(t *testing.T) {
 	}, func(action *mcp.ToolBuilder[message, message]) {
 		action.CLI("diagnostics", "show").Positional("text").Example("Hello", `{"text":"hello"}`)
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	listed, err := session.ListTools(t.Context(), nil)
 
@@ -49,7 +49,7 @@ func TestCallReportsSafeFailureOutsideOutput(t *testing.T) {
 	tool := mcp.NewTool("failure", func(context.Context, mcp.NoInput) (message, error) {
 		return message{}, mcp.ToolFailure("unavailable", "capture disabled", jsontext.Value(`{"retry":true}`))
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: tool.Name()})
 
@@ -96,7 +96,7 @@ func TestInputFailureReportsOnlyPointersAndMessages(t *testing.T) {
 			"/name": {{Code: "required", Message: "Name is required"}},
 		})
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: tool.Name()})
 
@@ -128,7 +128,7 @@ func TestInputSchemaOperationalFailureStaysPrivate(t *testing.T) {
 			})
 		}))
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{
 		Name: tool.Name(), Arguments: map[string]any{"text": "valid"},
@@ -173,7 +173,7 @@ func TestOutputEncodingFailureOverridesSafeMarker(t *testing.T) {
 	}, func(action *mcp.ToolBuilder[mcp.NoInput, failedEncoding]) {
 		action.Output(validate.Struct[failedEncoding]())
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: tool.Name()})
 
@@ -214,7 +214,7 @@ func TestProtocolMetadataPreservesJSONNumbers(t *testing.T) {
 		action.CLI("numbers", "read").Example("Exact identifier", `{"id":9007199254740993}`)
 	})
 
-	handler, wire := captureProtocol(managed(t, tool))
+	handler, wire := captureProtocol(handlerOf(managed(t, tool)))
 	session := connect(t, handler, "2026-07-28")
 
 	if _, err := session.ListTools(t.Context(), nil); err != nil {
