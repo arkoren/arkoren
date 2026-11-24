@@ -1119,7 +1119,7 @@ func useCheckoutModules(t *testing.T, destination string) {
 	replaced := string(module)
 
 	for _, name := range []string{
-		"core", "ark/iam", "ark/mcp", "ark/oauth", "driver/aes", "driver/bcrypt", "driver/sqlite",
+		"core", "ark/iam", "ark/mcp", "ark/oauth", "driver/aes", "driver/argon2", "driver/sqlite",
 		"foundation/collection", "foundation/key", "foundation/problem", "foundation/query", "foundation/totp", "foundation/validate",
 	} {
 		replaced += fmt.Sprintf("\nreplace arkoren.dev/%s => %s\n", name, strconv.Quote(filepath.ToSlash(filepath.Join(checkout, name))))
