@@ -54,7 +54,7 @@
 //		return err
 //	}
 //	web := routes.With(identity.Middleware()) // session, guard and token authenticators
-//	web.Group("/", identity.Register)
+//	web.Group("/auth", identity.Register)
 //
 //	api := routes.With(identity.Middleware(), auth.Require())
 //	api.Get("/posts", listPosts)
@@ -143,7 +143,7 @@
 //	Two-factor  POST /two-factor/setup · POST /two-factor · DELETE /two-factor · POST /two-factor/recovery-codes
 //	Tokens      GET /tokens · POST /tokens (personal) · DELETE /tokens/{id} · POST /device-tokens · DELETE /device-tokens/current (device)
 //	Sessions    GET /sessions · DELETE /sessions/{id} · DELETE /sessions
-//	Providers   GET /auth/<name> · GET|POST /auth/<name>/callback · GET /auth/<name>/nonce · POST /auth/<name>/native
+//	Providers   GET /<name> · GET|POST /<name>/callback · GET /<name>/nonce · POST /<name>/native
 //	Connections GET /connections · POST /connections/{provider} · DELETE /connections/{id}
 //	Permissions GET /me/permissions (SelfService) · GET /users/{subject}/permissions · PUT|DELETE /users/{subject}/permissions/{name} · PUT|DELETE /users/{subject}/roles/{name} (Management)
 //	Account     GET /account (Account) · DELETE /account

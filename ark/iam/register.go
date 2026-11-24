@@ -25,8 +25,8 @@ import (
 //	            tokens), POST /device-tokens, DELETE /device-tokens/current
 //	            (device tokens)
 //	Sessions    GET /sessions, DELETE /sessions/{id}, DELETE /sessions (always)
-//	Providers   GET /auth/<name>, GET and POST /auth/<name>/callback, and for
-//	            native providers GET /auth/<name>/nonce, POST /auth/<name>/native
+//	Providers   GET /<name>, GET and POST /<name>/callback, and for
+//	            native providers GET /<name>/nonce, POST /<name>/native
 //	Connections GET /connections, POST /connections/{provider},
 //	            DELETE /connections/{id}
 //	Permissions GET /me/permissions (with SelfService), GET /users/{subject}/permissions,
@@ -59,11 +59,12 @@ import (
 // the application's own routes and IAM's share one identification step and
 // installing it twice (or forgetting it here) cannot happen by accident.
 //
-// The routes live at the paths above, at the root. The connect handler
-// redirects to the absolute path "/auth/<name>" and the providers' callbacks
-// are registered there, so r must not carry a path prefix: under a prefix the
-// redirects would point at routes that do not exist, and nothing reports it.
-// To serve other paths, register the XHandler methods yourself; for another
+// The routes live at the paths above, relative to r: grouped under a prefix,
+// as in routes.Group("/auth", identity.Register), they serve /auth/login and
+// /auth/google/callback. Every path, the providers' included, is relative to
+// the mount, and the connect handler redirects to the login route beside it by
+// reading the prefix from the request, so any prefix works. Register each
+// provider's callback URL with the prefix. To serve other paths, register the XHandler methods yourself; for another
 // connect target use [federation.Links.ConnectHandler] on [IAM.Links]. The
 // XHandler methods stay public for custom paths, for a single feature, and
 // for per-route middleware. The connect, token, two-factor setup and enable
@@ -78,7 +79,7 @@ import (
 // Example:
 //
 //	web := routes.With(identity.Middleware())
-//	web.Group("/", identity.Register)
+//	web.Group("/auth", identity.Register)
 func (identity *IAM) Register(r *router.Router) {
 	identity.registerPassword(r)
 	identity.registerLogin(r)

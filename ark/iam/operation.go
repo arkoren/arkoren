@@ -196,7 +196,7 @@ func providerFailures(operation *router.OperationBuilder) {
 	operation.Response(http.StatusServiceUnavailable, "The provider is not started")
 }
 
-// ProviderLoginOperation describes [Provider.LoginHandler] at "/auth/<name>":
+// ProviderLoginOperation describes [Provider.LoginHandler] at "/<name>":
 // it needs no identity, redirects (302) to the provider and remembers the
 // optional local return_to target in a sealed cookie. The query parameter
 // fresh=1 asks the provider to authenticate the user again.
@@ -219,7 +219,7 @@ func ProviderLoginOperation(operation *router.OperationBuilder) {
 }
 
 // ProviderCallbackOperation describes [Provider.CallbackHandler] at
-// "/auth/<name>/callback", registered for GET and POST. It verifies the
+// "/<name>/callback", registered for GET and POST. It verifies the
 // provider's answer, begins the login on the guard and redirects (302) to the
 // return target, or to the challenge page when a second factor is required. It
 // carries no operation ID because one registration covers both methods.
@@ -247,7 +247,7 @@ func ProviderCallbackOperation(operation *router.OperationBuilder) {
 }
 
 // ProviderNonceOperation describes [NativeProvider.NonceHandler] at
-// "/auth/<name>/nonce". It needs the session cookie and answers 200 with the
+// "/<name>/nonce". It needs the session cookie and answers 200 with the
 // single-use nonce the mobile app puts in its ID token request; the answer is
 // not cacheable.
 //
@@ -267,7 +267,7 @@ func ProviderNonceOperation(operation *router.OperationBuilder) {
 }
 
 // ProviderNativeOperation describes [NativeProvider.NativeHandler] at
-// "/auth/<name>/native". The body carries the app's ID token, which is verified
+// "/<name>/native". The body carries the app's ID token, which is verified
 // against the nonce of the session; a complete login is 204 and a parked one 202
 // with the second-factor methods, both with the session cookie.
 //

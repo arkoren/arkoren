@@ -398,9 +398,13 @@ func (identity *IAM) ListConnectionsHandler() router.Handler {
 }
 
 // ConnectHandler returns the handler of POST /connections/{provider}: it starts
-// connecting the provider to the logged-in user and redirects (303) to
-// "/auth/<name>"; see [federation.Links.ConnectHandler]. It panics unless
-// [Builder.Provider] is used.
+// connecting the provider to the logged-in user and redirects (303) to the
+// provider's login route, "/<name>" beside the route itself: the prefix is the
+// path of the request before "/connections/", so a handler mounted at "/auth"
+// redirects to "/auth/<name>". A handler registered on a custom path that has
+// no "/connections/" segment redirects to "/<name>". See
+// [federation.Links.ConnectHandler]. It panics unless [Builder.Provider] is
+// used.
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
 // [Users.Verified] with your own users).
@@ -411,7 +415,17 @@ func (identity *IAM) ListConnectionsHandler() router.Handler {
 func (identity *IAM) ConnectHandler() router.Handler {
 	need(identity.links != nil, "ConnectHandler", "Builder.Provider")
 
-	return identity.links.ConnectHandler(identity.guard, identity.connectTargets())
+	return func(w http.ResponseWriter, r *http.Request) error {
+		targets := identity.connectTargets(mountPrefix(r.URL.Path))
+
+		for _, target := range targets {
+			if err := response.ValidateRedirectTarget(target); err != nil {
+				return err
+			}
+		}
+
+		return identity.links.ConnectHandler(identity.guard, targets)(w, r)
+	}
 }
 
 // DeleteConnectionHandler returns the handler of DELETE /connections/{id}; see
