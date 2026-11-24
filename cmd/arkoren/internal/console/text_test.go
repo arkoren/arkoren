@@ -196,7 +196,8 @@ Type  not_configured
 
 Next steps
   1. Pass the endpoint with --url
-  2. See usage  arkoren --help`
+  2. See usage
+        arkoren --help`
 
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
@@ -223,7 +224,8 @@ Changes
   - It does another
 
 Next steps
-  1. Trust the root  arkoren certificate root trust root.pem`
+  1. Trust the root
+        arkoren certificate root trust root.pem`
 
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
@@ -248,7 +250,7 @@ func TestTextColorsStepCommands(t *testing.T) {
 
 	got := string(console.Text([]byte(`{"next_steps":[{"text":"Enter the project","command":"cd app"}]}`), true))
 
-	if !strings.Contains(got, "1. Enter the project  "+console.ColorKey+"cd app"+console.ColorReset) {
+	if !strings.Contains(got, "1. Enter the project\n        "+console.ColorKey+"cd app"+console.ColorReset) {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -322,8 +324,50 @@ func TestTextColorsChangeActions(t *testing.T) {
 	}
 }
 
-// TestTextNumbersNextSteps prints a heading and numbered lines, aligning the
-// commands of the steps that have one.
+// TestTextNextStepsWithoutCommandStayOnOneLine keeps a text-only step as its
+// numbered line, with no empty command line after it.
+func TestTextNextStepsWithoutCommandStayOnOneLine(t *testing.T) {
+	t.Parallel()
+
+	got := string(console.Text([]byte(`{"next_steps":[{"text":"Open the browser"},{"text":"Sign in"}]}`), false))
+
+	want := "Next steps\n  1. Open the browser\n  2. Sign in"
+
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTextNextStepsKeepCommandIndentPastNine right-aligns the numbers of a long
+// list while every command keeps the same indent.
+func TestTextNextStepsKeepCommandIndentPastNine(t *testing.T) {
+	t.Parallel()
+
+	var raw strings.Builder
+
+	raw.WriteString(`{"next_steps":[`)
+
+	for index := range 10 {
+		if index > 0 {
+			raw.WriteString(",")
+		}
+
+		raw.WriteString(`{"text":"Step","command":"run"}`)
+	}
+
+	raw.WriteString("]}")
+
+	got := string(console.Text([]byte(raw.String()), false))
+
+	for _, want := range []string{" 1. Step\n        run\n", " 9. Step\n        run\n", "10. Step\n        run"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestTextNumbersNextSteps prints a heading and numbered lines, each command on
+// its own indented line below the step that has one.
 func TestTextNumbersNextSteps(t *testing.T) {
 	t.Parallel()
 
@@ -332,8 +376,10 @@ func TestTextNumbersNextSteps(t *testing.T) {
 	want := `✓ Done
 
 Next steps
-  1. Enter the project      cd app
-  2. Start the application  make run
+  1. Enter the project
+        cd app
+  2. Start the application
+        make run
   3. Open the browser`
 
 	if got != want {
