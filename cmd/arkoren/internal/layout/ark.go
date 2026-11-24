@@ -24,8 +24,8 @@ import (
 // using the version the release plan proposes. Core is not listed: the project's
 // own core requirement, set by `arkoren new`, already provides it.
 var modulePins = map[string]string{
-	"arkoren.dev/ark/iam":         "v0.5.0",
-	"arkoren.dev/ark/oauth":       "v0.7.0",
+	"arkoren.dev/ark/iam":         "v0.6.1",
+	"arkoren.dev/ark/oauth":       "v0.8.0",
 	"arkoren.dev/driver/aes":      "v0.1.0",
 	"arkoren.dev/driver/bcrypt":   "v0.1.0",
 	"arkoren.dev/driver/sqlite":   "v0.1.0",

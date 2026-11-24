@@ -322,7 +322,7 @@ func TestAddArkIAMDryRunReportsPlan(t *testing.T) {
 		t.Fatalf("last edit = %v", last)
 	}
 
-	if requires := changesWith(report, "require"); requires[0]["path"] != "arkoren.dev/ark/iam@v0.5.0" {
+	if requires := changesWith(report, "require"); requires[0]["path"] != "arkoren.dev/ark/iam@v0.6.1" {
 		t.Fatalf("requires = %v", requires)
 	}
 

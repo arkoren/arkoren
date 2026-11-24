@@ -23,7 +23,7 @@ func Tidy(ctx context.Context, folder string) error {
 //
 // Example:
 //
-//	err := scaffold.Get(ctx, root, []string{"arkoren.dev/ark/iam@v0.5.0"})
+//	err := scaffold.Get(ctx, root, []string{"arkoren.dev/ark/iam@v0.6.1"})
 func Get(ctx context.Context, folder string, modules []string) error {
 	return goCommand(ctx, folder, "go get "+strings.Join(modules, " "), append([]string{"get"}, modules...)...)
 }

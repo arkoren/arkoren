@@ -30,7 +30,7 @@ func TestAddOAuthWritesTheClientProvider(t *testing.T) {
 		t.Fatalf("google.go:\n%s", google)
 	}
 
-	if !slices.Equal(plan.Requires, []string{"arkoren.dev/ark/oauth@v0.7.0", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/foundation/key@v0.1.1"}) {
+	if !slices.Equal(plan.Requires, []string{"arkoren.dev/ark/oauth@v0.8.0", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/foundation/key@v0.1.1"}) {
 		t.Fatalf("requires = %v", plan.Requires)
 	}
 

@@ -90,7 +90,7 @@ func TestAddArkTextOutputNumbersNextSteps(t *testing.T) {
 
 	for _, fragment := range []string{
 		"→ Would add ark iam\n\nChanges\n  create ",
-		"\n  require  arkoren.dev/ark/iam@v0.5.0\n",
+		"\n  require  arkoren.dev/ark/iam@v0.6.1\n",
 		"\n\nNext steps\n  1. Create the LinkSigner key, then set LINK_KEY_FILE=link.key in .env;",
 		"\n  5. Start the server: ",
 	} {
