@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	"strings"
+	"time"
 )
 
 // ANSI escape sequences of the color palette. The five colors are the basic
@@ -31,6 +32,10 @@ type Style struct {
 	// Text translates the document into human-readable text with [Text]
 	// instead of laying out JSON; [Format] applies it, [Render] ignores it.
 	Text bool
+
+	// Now is the time relative timestamps in text are measured against; the
+	// zero value means the current time. Tests set it for deterministic output.
+	Now time.Time
 }
 
 // frame is the position inside one open object or array during [Render].

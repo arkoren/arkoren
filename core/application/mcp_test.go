@@ -278,7 +278,7 @@ func TestMCPInfoIncludesBuildAndPairedRuntimeSizes(t *testing.T) {
 		t.Fatalf("uptime=%+v, err=%v", info.Info, err)
 	}
 
-	if info.Runtime.SysBytes == 0 || info.Runtime.Sys == "" || info.Runtime.Goroutines < 1 {
+	if info.Runtime.SysBytes == 0 || info.Runtime.Goroutines < 1 {
 		t.Fatalf("runtime=%+v", info.Runtime)
 	}
 }

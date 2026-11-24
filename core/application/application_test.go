@@ -1967,7 +1967,7 @@ func TestEventCursorPreservesWireFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, field := range []string{"items", "truncated", "cursor", "dropped", "has_more", "instance_changed"} {
+	for _, field := range []string{"items", "truncated", "cursor", "dropped", "instance_changed"} {
 		if _, present := page[field]; !present {
 			t.Fatalf("event page omitted %q: %s", field, encoded)
 		}

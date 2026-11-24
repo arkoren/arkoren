@@ -218,8 +218,8 @@ enforce output schemas, or repair precision lost in application values; see
 [Number Precision](calling-tools.md#number-precision).
 
 Follow emits individual records rather than page envelopes or persisted cursor
-checkpoints. Notice fields include `dropped`, `instance_changed`, and
-`truncated`; consumers must handle them alongside records. See
+checkpoints. Notice fields are `dropped` and `instance_changed`; consumers must
+handle them alongside records. See
 [Waiting and Following](waiting-and-following.md) for gaps and restart behavior.
 
 ## Report Fields
@@ -269,6 +269,11 @@ failure is an error, never a result flag.
 | `certificate check` | `certificate`, optional `key` and `key_matched`, and `not_checked` (`expiry`, `trust`). |
 | Root trust/untrust | `action`, `target`, `sha256`. |
 | `--version` | No summary: `version`; verbose adds `module`, `go_version`, `revision`, `revision_at` and `modified`, not dependency or compiler-setting dumps. |
+
+On a terminal every RFC 3339 timestamp prints as `2026-11-23 10:00:01 (5s ago)`
+or `(in 59m)` (seconds, minutes, `1h5m`, days), and a number member such as
+`duration_ms` or `heap_alloc_bytes` prints in readable units (`12.5ms`,
+`1.2 MB`) under the label without its suffix. JSON keeps the exact values.
 
 On a terminal the summary is a bold headline: green `✓`, red `✗` when `ok` is
 false, yellow `→` for a preview. Empty values are omitted from the text, short

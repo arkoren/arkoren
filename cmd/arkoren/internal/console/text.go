@@ -2,12 +2,14 @@ package console
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json/jsontext"
 	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -37,9 +39,13 @@ const (
 	maxTableWidth = 140
 )
 
-// fractionalSeconds matches an RFC 3339 timestamp with a fraction of a second,
-// such as Go's nanosecond time encoding. The fraction is noise to a reader.
-var fractionalSeconds = regexp.MustCompile(`^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\.\d+(Z|[+-]\d\d:\d\d)$`)
+// stampPattern matches an RFC 3339 timestamp, with or without a fraction of a
+// second, so that ordinary strings are never parsed as times.
+var stampPattern = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$`)
+
+// stampLayout is how a timestamp prints: seconds precision, the zone shown by
+// the relative part that follows.
+const stampLayout = "2006-01-02 15:04:05"
 
 // node is one decoded JSON value. Object members keep their document order and
 // scalars keep their exact text, so the translation never reorders or rounds.
@@ -49,6 +55,10 @@ type node struct {
 
 	// text is a scalar's display text: unquoted strings, raw numbers.
 	text string
+
+	// when is the parsed time of a string that is an RFC 3339 timestamp, and
+	// the zero time for every other value. [node.stamped] turns it into text.
+	when time.Time
 
 	// keys holds an object's member names, parallel to items.
 	keys []string
@@ -64,12 +74,19 @@ type node struct {
 // with nothing left prints nothing. A top-level object with a "summary" string,
 // or the single member "error" or "warning" holding a "message", starts with a
 // marked headline; see [textWriter.document]. An object with an "items" array
-// is a list: see [listing]. Members named "<name>_ms" or "<name>_bytes" are
-// omitted when the object also has a string member "<name>", which says the
-// same thing for people ("duration_ms" beside "duration"), and RFC 3339
-// timestamps lose their fractional seconds. The result has no trailing
-// newline. Invalid JSON is returned unchanged, like [Render].
+// is a list: see [listing]. Every RFC 3339 timestamp prints as
+// "2026-11-23 10:00:01 (5s ago)" or "(in 59m)", relative to the current time;
+// use [TextAt] to choose the clock. A number member named "<name>_ms" or
+// "<name>_bytes" prints in readable units under the label "<name>" ("duration_ms":
+// 12.5 becomes "Duration  12.5ms"). The result has no trailing newline.
+// Invalid JSON is returned unchanged, like [Render].
 func Text(raw []byte, color bool) []byte {
+	return TextAt(raw, color, time.Now())
+}
+
+// TextAt is [Text] with an explicit clock: now is what relative times such as
+// "5s ago" are measured against, so callers and tests control it.
+func TextAt(raw []byte, color bool, now time.Time) []byte {
 	decoder := jsontext.NewDecoder(bytes.NewReader(raw))
 	root, err := decodeNode(decoder)
 
@@ -77,7 +94,7 @@ func Text(raw []byte, color bool) []byte {
 		return raw
 	}
 
-	root, note := listing(root)
+	root, note := listing(root.stamped(now))
 
 	writer := &textWriter{color: color}
 	writer.document(root.pruned())
@@ -93,11 +110,11 @@ func Text(raw []byte, color bool) []byte {
 // listing separates the bookkeeping of a list wrapper from its records. An
 // object with an "items" array, such as {"items": [...], "truncated": false},
 // prints its items as a bare table or list without an "Items" heading, and
-// hides the bookkeeping while it is at rest: truncated, has_more and
-// instance_changed false, dropped zero, and the continuation cursor. When
-// truncated or has_more is true, the returned note, printed dim under the
-// items, says more exist and names the cursor if the wrapper carries one.
-// Other objects are returned unchanged with no note.
+// hides the bookkeeping while it is at rest: truncated and instance_changed
+// false, dropped zero, and the continuation cursor. When truncated is true (or
+// has_more, which older servers send for a continuation page), the returned
+// note, printed dim under the items, says more exist and names the cursor if
+// the wrapper carries one. Other objects are returned unchanged with no note.
 func listing(root node) (node, string) {
 	if root.kind != '{' || member(root, "items").kind != '[' {
 		return root, ""
@@ -114,11 +131,12 @@ func listing(root node) (node, string) {
 	}
 
 	cursor := member(root, "cursor").text
+	more := member(root, "has_more").kind == 't' || member(root, "truncated").kind == 't'
 
 	switch {
-	case member(root, "has_more").kind == 't' && cursor != "":
-		return root.without(hidden...), "… more results (continue with cursor " + cursor + ")"
-	case member(root, "has_more").kind == 't' || member(root, "truncated").kind == 't':
+	case more && cursor != "":
+		return root.without(hidden...), "… more results (narrow the query, or continue with cursor " + cursor + ")"
+	case more:
 		return root.without(hidden...), "… more results (narrow the query or use --verbose)"
 	}
 
@@ -129,7 +147,7 @@ func listing(root node) (node, string) {
 // style asks for it, laid-out JSON otherwise.
 func Format(raw []byte, look Style) []byte {
 	if look.Text {
-		return Text(raw, look.Color)
+		return TextAt(raw, look.Color, cmp.Or(look.Now, time.Now()))
 	}
 
 	return Render(raw, look)
@@ -202,8 +220,77 @@ func scalarNode(kind byte, value jsontext.Value) (node, error) {
 	}
 
 	unquoted, err := jsontext.AppendUnquote(nil, value)
+	text := string(unquoted)
 
-	return node{kind: kind, text: fractionalSeconds.ReplaceAllString(string(unquoted), "$1$2")}, err
+	if stampPattern.MatchString(text) {
+		if when, parseErr := time.Parse(time.RFC3339Nano, text); parseErr == nil {
+			return node{kind: kind, text: text, when: when}, err
+		}
+	}
+
+	return node{kind: kind, text: text}, err
+}
+
+// stamped returns a copy of the value in which every timestamp's text is the
+// absolute time and its distance from now: "2026-11-23 10:00:01 (5s ago)".
+func (value node) stamped(now time.Time) node {
+	if !value.when.IsZero() {
+		value.text = value.when.Format(stampLayout) + " (" + relative(value.when.Sub(now)) + ")"
+
+		return value
+	}
+
+	if len(value.items) == 0 {
+		return value
+	}
+
+	items := make([]node, len(value.items))
+
+	for index, item := range value.items {
+		items[index] = item.stamped(now)
+	}
+
+	value.items = items
+
+	return value
+}
+
+// relative words a signed distance from now compactly, rounded to whole
+// seconds: "now" within half a second,
+// then "5s ago", "in 59m", "1h5m ago" and "2d ago". Seconds, minutes and days
+// use one unit; hours add the leftover minutes.
+func relative(delta time.Duration) string {
+	delta = delta.Round(time.Second)
+
+	if delta == 0 {
+		return "now"
+	}
+
+	if delta < 0 {
+		return span(-delta) + " ago"
+	}
+
+	return "in " + span(delta)
+}
+
+// span formats a positive distance in the units described at [relative].
+func span(distance time.Duration) string {
+	switch {
+	case distance < time.Minute:
+		return fmt.Sprintf("%ds", distance/time.Second)
+	case distance < time.Hour:
+		return fmt.Sprintf("%dm", distance/time.Minute)
+	case distance < 24*time.Hour:
+		hours, minutes := distance/time.Hour, distance%time.Hour/time.Minute
+
+		if minutes == 0 {
+			return fmt.Sprintf("%dh", hours)
+		}
+
+		return fmt.Sprintf("%dh%dm", hours, minutes)
+	}
+
+	return fmt.Sprintf("%dd", distance/(24*time.Hour))
 }
 
 // empty reports a value that text output omits: null, an empty string, or a
@@ -245,30 +332,100 @@ func (value node) pruned() node {
 	}
 
 	if kept.kind == '{' {
-		return kept.withoutTwins()
+		return kept.humanized()
 	}
 
 	return kept
 }
 
-// withoutTwins drops the machine-readable twin of a human-readable member: a
-// "<name>_ms" or "<name>_bytes" member beside a string member "<name>".
-func (value node) withoutTwins() node {
-	var twins []string
+// humanized makes an object's machine-oriented members readable. A number
+// member "<name>_ms" or "<name>_bytes" becomes "<name>" in readable units
+// ("duration_ms": 12.5 prints as "Duration  12.5ms"), unless the object already
+// has a member "<name>": a string twin from an older server wins and the number
+// is dropped, and a number twin keeps the suffix. An "age" or "next_in" string
+// beside a timestamp repeats what the relative time says and is dropped.
+func (value node) humanized() node {
+	stamp := slices.ContainsFunc(value.items, func(item node) bool {
+		return !item.when.IsZero()
+	})
+	kept := node{kind: value.kind}
 
-	for _, key := range value.keys {
-		for _, suffix := range []string{"_ms", "_bytes"} {
-			if name, ok := strings.CutSuffix(key, suffix); ok && member(value, name).kind == '"' {
-				twins = append(twins, key)
+	for index, key := range value.keys {
+		item := value.items[index]
+
+		if stamp && item.kind == '"' && (key == "age" || key == "next_in") {
+			continue
+		}
+
+		if name, unit, ok := unitSuffix(key); ok && item.kind == '0' {
+			if member(value, name).kind == '"' {
+				continue
 			}
+
+			if member(value, name).kind == 'x' {
+				key, item.text = name, readable(item.text, unit)
+			}
+		}
+
+		kept.keys = append(kept.keys, key)
+		kept.items = append(kept.items, item)
+	}
+
+	return kept
+}
+
+// unitSuffix splits a member name ending in "_ms" or "_bytes".
+func unitSuffix(key string) (name, unit string, ok bool) {
+	for _, unit := range []string{"ms", "bytes"} {
+		if name, found := strings.CutSuffix(key, "_"+unit); found && name != "" {
+			return name, unit, true
 		}
 	}
 
-	if twins == nil {
-		return value
+	return "", "", false
+}
+
+// readable prints a number of milliseconds or bytes in a human unit: "182ms",
+// "12.5ms", "1.5s", "14µs", "512 B", "1.2 MB" (decimal prefixes). Text that is
+// not a number is returned unchanged.
+func readable(number, unit string) string {
+	amount, err := strconv.ParseFloat(number, 64)
+
+	if err != nil {
+		return number
 	}
 
-	return value.without(twins...)
+	if unit == "bytes" {
+		return byteText(amount)
+	}
+
+	duration := time.Duration(amount * float64(time.Millisecond))
+
+	switch {
+	case duration >= time.Second:
+		return duration.Round(10 * time.Millisecond).String()
+	case duration >= time.Millisecond:
+		return strings.TrimSuffix(strconv.FormatFloat(amount, 'f', 1, 64), ".0") + "ms"
+	}
+
+	return duration.Round(time.Microsecond).String()
+}
+
+// byteText formats a byte count with decimal prefixes and one decimal place.
+func byteText(amount float64) string {
+	prefixes := []string{"B", "KB", "MB", "GB", "TB", "PB", "EB"}
+	prefix := 0
+
+	for amount >= 1000 && prefix < len(prefixes)-1 {
+		amount /= 1000
+		prefix++
+	}
+
+	if prefix == 0 {
+		return strconv.FormatFloat(amount, 'f', 0, 64) + " B"
+	}
+
+	return strconv.FormatFloat(amount, 'f', 1, 64) + " " + prefixes[prefix]
 }
 
 // without returns an object without the named members.
@@ -287,8 +444,9 @@ func (value node) without(names ...string) node {
 	return kept
 }
 
-// inline reports whether a value fits on one line: a scalar, an empty
-// container, or a short list of scalars.
+// inline reports whether a value fits on one line as a label's value: a
+// scalar, an empty container, or a short list of scalars. A flat object is a
+// section in a block but a "key=value" cell in a table; see [node.short].
 func (value node) inline() bool {
 	switch value.kind {
 	case '{':
@@ -300,9 +458,9 @@ func (value node) inline() bool {
 	return true
 }
 
-// short reports whether an array can be comma-joined on one line: at most
+// short reports whether an array or object can be joined on one line: at most
 // maxInlineItems scalars, none containing a space, whose joined text fits in
-// maxInlineWidth runes.
+// maxInlineWidth runes. An object's members print as "key=value".
 func (value node) short() bool {
 	if len(value.items) > maxInlineItems {
 		return false
@@ -310,12 +468,16 @@ func (value node) short() bool {
 
 	width := 0
 
-	for _, item := range value.items {
+	for index, item := range value.items {
 		if item.kind == '{' || item.kind == '[' || strings.Contains(item.text, " ") {
 			return false
 		}
 
 		width += utf8.RuneCountInString(item.text) + 2
+
+		if value.kind == '{' {
+			width += utf8.RuneCountInString(value.keys[index]) + 1
+		}
 	}
 
 	return width-2 <= maxInlineWidth
@@ -385,7 +547,7 @@ func (value node) tabular() bool {
 		}
 
 		for _, member := range item.items {
-			if !member.inline() {
+			if !member.inline() && (member.kind != '{' || !member.short()) {
 				return false
 			}
 		}
@@ -746,11 +908,15 @@ func cell(value node) (string, string) {
 		return value.text, colorFalse
 	case 'x':
 		return "", ""
-	case '[':
+	case '[', '{':
 		texts := make([]string, len(value.items))
 
 		for index, item := range value.items {
 			texts[index], _ = cell(item)
+
+			if value.kind == '{' {
+				texts[index] = safe(value.keys[index]) + "=" + texts[index]
+			}
 		}
 
 		return strings.Join(texts, ", "), ""

@@ -113,8 +113,9 @@ might report:
 {"instance_changed":true}
 ```
 
-Consumers must distinguish notices from application records. A notice can also
-contain `truncated: true`, and one notice can combine fields. A replaced or reset
+Consumers must distinguish notices from application records. One notice can
+combine fields. A page that stopped at its limit is drained immediately, with
+no notice. A replaced or reset
 store establishes a fresh tail rather than replaying the new generation's
 history.
 

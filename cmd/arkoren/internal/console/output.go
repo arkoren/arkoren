@@ -76,7 +76,13 @@ func (env Environment) OutputStyle() Style {
 
 	raw := env.Presentation.JSON || env.Presentation.Compact
 
-	return Style{Indent: !env.Presentation.Compact, Color: color, Text: env.IsTerminal && !raw}
+	look := Style{Indent: !env.Presentation.Compact, Color: color, Text: env.IsTerminal && !raw}
+
+	if env.Now != nil {
+		look.Now = env.Now()
+	}
+
+	return look
 }
 
 // WriteJSON encodes before writing and checks short writes on both boundaries.

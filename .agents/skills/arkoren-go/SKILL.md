@@ -955,7 +955,11 @@ Commands write no text of their own, except help, prompts, raw key exports and
 - **Follow** output is NDJSON. **Remote tool results** pass through unchanged
   and use the generic renderer. Shipped MCP list tools return
   `{items, truncated[, cursor]}`; the renderer prints that as a bare table, so
-  new shipped tools keep that wrapper and flat item records.
+  new shipped tools keep that wrapper and flat item records. A cursor list
+  signals more records with `truncated` alone, never a second flag. Tools emit
+  absolute RFC 3339 times only, plain numbers (`duration_ms`, `heap_alloc_bytes`)
+  and no relative or derived duplicates such as `age`, `next_in` or a duration
+  string; the CLI adds "(5s ago)" and readable units. Omit empty containers.
 
 **Report types.** A report is a struct whose fields follow reading order, never
 `map[string]any`; shared types (`Change`, `Action`) live in `console`. Add no

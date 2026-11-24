@@ -63,14 +63,8 @@ type traceSummary struct {
 	// Start is when the earliest span started.
 	Start time.Time `json:"start"`
 
-	// Age is how long before the response Start was, such as "12s ago".
-	Age string `json:"age"`
-
 	// DurationMS is the root span's duration in milliseconds.
 	DurationMS float64 `json:"duration_ms"`
-
-	// Duration is DurationMS as text, such as "182.1ms".
-	Duration validate.Duration `json:"duration"`
 
 	// SpanCount is the number of recorded spans.
 	SpanCount int `json:"span_count"`
@@ -105,8 +99,8 @@ type traceView struct {
 	Roots []spanView `json:"roots"`
 
 	// OrphanLogs are the trace's log records whose span is not among the
-	// recorded spans, oldest first; never null.
-	OrphanLogs []logView `json:"orphan_logs"`
+	// recorded spans, oldest first; omitted when there are none.
+	OrphanLogs []logView `json:"orphan_logs,omitempty"`
 }
 
 // spanView is one finished span with its logs and child spans.
@@ -137,28 +131,23 @@ type spanView struct {
 	// Start is when the span started.
 	Start time.Time `json:"start"`
 
-	// Age is how long before the response Start was, such as "12s ago".
-	Age string `json:"age"`
-
 	// DurationMS is the span duration in milliseconds.
 	DurationMS float64 `json:"duration_ms"`
 
-	// Duration is DurationMS as text, such as "182.1ms".
-	Duration validate.Duration `json:"duration"`
-
-	// Attrs are the span attributes.
-	Attrs map[string]any `json:"attrs"`
+	// Attrs are the span attributes; omitted when there are none.
+	Attrs map[string]any `json:"attrs,omitempty"`
 
 	// Events are the span events in order; recorded errors are "exception".
-	Events []spanEventView `json:"events"`
+	// Omitted when there are none.
+	Events []spanEventView `json:"events,omitempty"`
 
-	// Logs are the log records written inside this span, oldest first; never
-	// null.
-	Logs []logView `json:"logs"`
+	// Logs are the log records written inside this span, oldest first;
+	// omitted when there are none.
+	Logs []logView `json:"logs,omitempty"`
 
 	// Children are the spans started inside this one, ordered by start;
-	// never null.
-	Children []spanView `json:"children"`
+	// omitted when there are none.
+	Children []spanView `json:"children,omitempty"`
 }
 
 // spanEventView is a timestamped annotation on a [spanView].
@@ -169,8 +158,8 @@ type spanEventView struct {
 	// Time is when the event was recorded.
 	Time time.Time `json:"time"`
 
-	// Attrs are the event attributes.
-	Attrs map[string]any `json:"attrs"`
+	// Attrs are the event attributes; omitted when there are none.
+	Attrs map[string]any `json:"attrs,omitempty"`
 }
 
 // logView is one log record. It is the item of the
@@ -178,9 +167,6 @@ type spanEventView struct {
 type logView struct {
 	// Time is the record time.
 	Time time.Time `json:"time"`
-
-	// Age is how long before the response Time was, such as "12s ago".
-	Age string `json:"age"`
 
 	// Level is "debug", "info", "warn", or "error".
 	Level string `json:"level"`
@@ -194,8 +180,8 @@ type logView struct {
 	// SpanID is the span the record was logged in; it joins [spanView.SpanID].
 	SpanID string `json:"span_id,omitzero"`
 
-	// Attrs are the record attributes.
-	Attrs map[string]any `json:"attrs"`
+	// Attrs are the record attributes; omitted when there are none.
+	Attrs map[string]any `json:"attrs,omitempty"`
 }
 
 // metricView is one instrument and its aggregates.
@@ -215,7 +201,8 @@ type metricView struct {
 	// Kind is "counter", "up_down_counter", "histogram", or "gauge".
 	Kind string `json:"kind"`
 
-	// Keys are the label keys; each point's Values follow this order.
+	// Keys are the label keys of the instrument; each point's Labels holds one
+	// value per key.
 	Keys []string `json:"keys"`
 
 	// Points are the aggregates, one per label combination.
@@ -224,8 +211,9 @@ type metricView struct {
 
 // pointView is the aggregate of one label combination of a [metricView].
 type pointView struct {
-	// Values are the label values, one per key of the metric.
-	Values []string `json:"values"`
+	// Labels maps each label key of the metric to this point's value; omitted
+	// for an instrument without labels.
+	Labels map[string]string `json:"labels,omitempty"`
 
 	// Count is the number of recordings.
 	Count uint64 `json:"count"`
@@ -413,16 +401,14 @@ func (driver *Driver) MCPTools(prefix string) []mcp.Tool {
 }
 
 // summarizeTrace reduces a retained group to its diagnostic summary.
-func summarizeTrace(group *tracegroup.Group, root Span, now time.Time) traceSummary {
+func summarizeTrace(group *tracegroup.Group, root Span) traceSummary {
 	rootDuration := root.End.Sub(root.Start)
 	ordered := group.ByStart()
 	summary := traceSummary{
 		TraceID:    group.ID.String(),
 		Name:       root.Name,
 		Start:      ordered[0].Start,
-		Age:        diagnostic.Age(now, ordered[0].Start),
 		DurationMS: diagnostic.Millis(rootDuration),
-		Duration:   diagnostic.DurationText(rootDuration),
 		SpanCount:  len(group.Spans),
 		Status:     diagnostic.StatusOK,
 	}
@@ -458,7 +444,7 @@ func listTraces(driver *Driver, input tracesInput) diagnostic.List[traceSummary]
 
 	for _, group := range tracegroup.Groups(driver.Spans()) {
 		root := group.Root()
-		summary := summarizeTrace(group, root, now)
+		summary := summarizeTrace(group, root)
 
 		if !matchesTraceSummary(summary, input, now) {
 			continue
@@ -504,9 +490,8 @@ func findTrace(driver *Driver, id string) (traceView, error) {
 		return traceView{}, err
 	}
 
-	now := time.Now()
 	ordered := match.ByStart()
-	logsBySpan, orphanLogs := correlateLogs(driver.Logs(), match, now)
+	logsBySpan, orphanLogs := correlateLogs(driver.Logs(), match)
 	trace := traceView{
 		TraceID:    match.ID.String(),
 		Roots:      []spanView{},
@@ -524,7 +509,7 @@ func findTrace(driver *Driver, id string) (traceView, error) {
 
 	var build func(span Span) spanView
 	build = func(span Span) spanView {
-		node := spanNode(span, now)
+		node := spanNode(span)
 
 		if logs := logsBySpan[span.Context.SpanID]; logs != nil {
 			node.Logs = logs
@@ -573,7 +558,7 @@ func lookupTrace(spans []Span, id string) (*tracegroup.Group, error) {
 
 // correlateLogs joins retained trace logs to known spans. Records from
 // unfinished or evicted spans remain visible as orphans, in capture order.
-func correlateLogs(logs []Log, group *tracegroup.Group, now time.Time) (map[telemetry.SpanID][]logView, []logView) {
+func correlateLogs(logs []Log, group *tracegroup.Group) (map[telemetry.SpanID][]logView, []logView) {
 	known := make(map[telemetry.SpanID]bool, len(group.Spans))
 
 	for _, span := range group.Spans {
@@ -589,18 +574,18 @@ func correlateLogs(logs []Log, group *tracegroup.Group, now time.Time) (map[tele
 		}
 
 		if !known[log.Context.SpanID] {
-			orphans = append(orphans, logRecord(log, now))
+			orphans = append(orphans, logRecord(log))
 			continue
 		}
 
-		bySpan[log.Context.SpanID] = append(bySpan[log.Context.SpanID], logRecord(log, now))
+		bySpan[log.Context.SpanID] = append(bySpan[log.Context.SpanID], logRecord(log))
 	}
 
 	return bySpan, orphans
 }
 
 // spanNode converts a ring span to its diagnostic DTO, without logs and children.
-func spanNode(span Span, now time.Time) spanView {
+func spanNode(span Span) spanView {
 	duration := span.End.Sub(span.Start)
 	node := spanView{
 		SpanID:            span.Context.SpanID.String(),
@@ -610,13 +595,9 @@ func spanNode(span Span, now time.Time) spanView {
 		Status:            spanStatusName(span.Status),
 		StatusDescription: span.StatusDescription,
 		Start:             span.Start,
-		Age:               diagnostic.Age(now, span.Start),
 		DurationMS:        diagnostic.Millis(duration),
-		Duration:          diagnostic.DurationText(duration),
 		Attrs:             attrMap(span.Attrs),
 		Events:            make([]spanEventView, 0, len(span.Events)),
-		Logs:              []logView{},
-		Children:          []spanView{},
 	}
 
 	if !span.Parent.SpanID.IsZero() {
@@ -703,7 +684,13 @@ func listMetrics(driver *Driver, input metricsInput) diagnostic.List[metricView]
 		}
 
 		for _, point := range metric.Points {
-			wire.Points = append(wire.Points, pointView(point))
+			labels := make(map[string]string, len(metric.Keys))
+
+			for index, key := range metric.Keys {
+				labels[key] = point.Values[index]
+			}
+
+			wire.Points = append(wire.Points, pointView{Labels: labels, Count: point.Count, Sum: point.Sum, Last: point.Last})
 		}
 
 		items = append(items, wire)
@@ -712,12 +699,10 @@ func listMetrics(driver *Driver, input metricsInput) diagnostic.List[metricView]
 	return diagnostic.List[metricView]{Items: items}
 }
 
-// logRecord converts a ring entry to its wire form, with its age relative to
-// now.
-func logRecord(log Log, now time.Time) logView {
+// logRecord converts a ring entry to its wire form.
+func logRecord(log Log) logView {
 	record := logView{
 		Time:    log.Time,
-		Age:     diagnostic.Age(now, log.Time),
 		Level:   levelName(log.Level),
 		Message: log.Message,
 		Attrs:   attrMap(log.Attrs),

@@ -47,6 +47,9 @@ type Environment struct {
 
 	// Presentation carries formatting options for local results.
 	Presentation Globals
+
+	// Now is the clock for relative times in text output; nil uses time.Now.
+	Now func() time.Time
 }
 
 // Globals holds the global flags of one run.

@@ -47,6 +47,6 @@ func (driver *Driver) pollLogs(ctx context.Context, name string, input logsInput
 
 	return diagnostic.Poll(ctx, diagnostic.CursorRequest{Key: name + string(filters), Cursor: input.Cursor, Wait: input.Wait.Std(), Limit: input.Limit},
 		diagnostic.Feed[Log, logView]{Snapshot: driver.logSnapshot, Match: filter.matches,
-			Render: func(record Log) logView { return logRecord(record, time.Now()) },
+			Render: logRecord,
 		})
 }

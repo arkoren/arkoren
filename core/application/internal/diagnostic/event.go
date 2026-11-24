@@ -21,8 +21,6 @@ const defaultEventLimit = 100
 type EventView struct {
 	// ReceivedAt is when capture received the event; the wire name stays time.
 	ReceivedAt time.Time `json:"time"`
-	// Age is human-readable time since receipt.
-	Age string `json:"age"`
 	// Name identifies the event topic.
 	Name string `json:"name"`
 	// PayloadType identifies the Go payload type without retaining its value.
@@ -181,8 +179,6 @@ func (ring *Ring) tool(group string) mcp.Tool {
 					return nameMatches && ageMatches
 				},
 				Render: func(item EventView) EventView {
-					item.Age = diagnostic.Age(time.Now(), item.ReceivedAt)
-
 					return item
 				},
 			})
