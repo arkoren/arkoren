@@ -35,13 +35,13 @@ var modulePins = map[string]string{
 
 // IAMFeatures lists the values `arkoren add ark iam --with` accepts, in the order
 // the generated code presents them.
-var IAMFeatures = []string{"reset", "verification", "two-factor", "tokens", "permissions", "account", "google", "github"}
+var IAMFeatures = []string{"reset", "verification", "two-factor", "tokens", "permissions", "account"}
 
 // iamFeatureKeys maps each --with value to the template field that turns its
 // part of the generated code on.
 var iamFeatureKeys = map[string]string{
 	"reset": "Reset", "verification": "Verification", "two-factor": "TwoFactor", "tokens": "Tokens",
-	"permissions": "Permissions", "account": "Account", "google": "Google", "github": "GitHub",
+	"permissions": "Permissions", "account": "Account",
 }
 
 // iamFragment is a provider file of `add ark iam` that exists only when its
@@ -62,9 +62,6 @@ var iamFragments = []iamFragment{
 	{"tokens", "iam/token_scopes", "token_scopes", "TokenScopes"},
 	{"permissions", "iam/roles", "roles", "Roles"},
 	{"account", "iam/account_view", "account_view", "AccountView"},
-	{"google", "oauth/google", "google", "Google"},
-	{"github", "oauth/github", "github", "GitHub"},
-	{"github", "iam/github_sign_up", "github_sign_up", "GitHubSignUp"},
 }
 
 // arkPrerequisite is a shared provider that generated files use through
@@ -80,8 +77,9 @@ type arkPrerequisite struct {
 type IAMOptions struct {
 	// With lists the optional features to enable, a subset of [IAMFeatures]:
 	// reset (password reset and registration), verification (email
-	// verification), two-factor, tokens, permissions, account (GET /account),
-	// google and github (sign-in clients). Password login is always on.
+	// verification), two-factor, tokens, permissions and account (GET
+	// /auth/account). Password login is always on. Sign-in clients are not
+	// features: add them with [Project.AddOAuth] before or after the module.
 	With []string
 	// Process names the process root internal/bootstrap/<process> that runs the
 	// identity jobs, which send the module's emails. Empty selects "server". It
@@ -90,9 +88,12 @@ type IAMOptions struct {
 	Process string
 }
 
-// iamSelection is the validated feature set of one [Project.AddIAM] call.
+// iamSelection is the validated feature set of one [Project.AddIAM] call, and
+// the sign-in clients that internal/bootstrap already declares, which the
+// generated IAM provider passes to identity.Provider.
 type iamSelection struct {
-	with []string
+	with    []string
+	clients []oauthClient
 }
 
 // has reports whether feature was selected.
@@ -106,13 +107,9 @@ func (selection iamSelection) jobs() bool {
 	return selection.has("reset") || selection.has("verification")
 }
 
-// oauth reports whether the selection includes a sign-in client.
-func (selection iamSelection) oauth() bool {
-	return selection.has("google") || selection.has("github")
-}
-
 // data returns the template fields of the generated files: one "true" per
-// selected feature, Jobs when email is sent, and the issuer name authenticator
+// selected feature, Jobs when email is sent, one per declared sign-in client
+// (named for its provider, such as Google), and the issuer name authenticator
 // apps show.
 func (selection iamSelection) data(issuer string) map[string]string {
 	data := map[string]string{"Issuer": issuer}
@@ -123,6 +120,10 @@ func (selection iamSelection) data(issuer string) map[string]string {
 
 	if selection.jobs() {
 		data["Jobs"] = "true"
+	}
+
+	for _, client := range selection.clients {
+		data[client.identifier] = "true"
 	}
 
 	return data
@@ -167,96 +168,113 @@ func (selection iamSelection) prerequisites() []arkPrerequisite {
 		required = append(required, arkPrerequisite{"TwoFactorKey", "two_factor_key"})
 	}
 
-	if selection.oauth() {
-		required = append(required, arkPrerequisite{"OAuthKey", "oauth_key"})
-	}
-
 	return required
 }
 
-// steps lists what `add ark iam` cannot do itself, as next steps without commands.
+// environment returns the .env variables the selection can default safely,
+// given the local base URL of the server: DATABASE_URL when database says
+// the command writes the Database provider, the reset and verification page
+// addresses, and the redirect URL of each declared sign-in client. Secrets and
+// key paths are never defaulted.
+func (selection iamSelection) environment(database bool) func(baseURL string) []envVariable {
+	return func(baseURL string) []envVariable {
+		var variables []envVariable
+
+		if database {
+			variables = append(variables, envVariable{"DATABASE_URL", "file:app.db"})
+		}
+
+		if selection.has("reset") {
+			variables = append(variables, envVariable{"PASSWORD_RESET_URL", baseURL + "/reset-password"})
+		}
+
+		if selection.has("verification") {
+			variables = append(variables, envVariable{"EMAIL_VERIFY_URL", baseURL + "/verify-email"})
+		}
+
+		for _, client := range selection.clients {
+			variables = append(variables, client.redirect(baseURL))
+		}
+
+		return variables
+	}
+}
+
+// steps lists what only the reader can do before the server starts, then the
+// command that starts it: the key files the selection loads, and notes on email
+// delivery. The environment, migrations and routes need no step.
 func (selection iamSelection) steps() []console.Step {
-	steps := []console.Step{
-		{Text: "Add compose.Require(migrator.Add(compose.Use(IAM).Migrations()...)) to the Migrator provider; the migrate process builds IAM, " +
-			"so it needs the same environment as the server (database, keys, URLs) before it runs the migrations"},
-		{Text: "Set DATABASE_URL, for example file:app.db for SQLite"},
-	}
-
-	if selection.has("reset") {
-		steps = append(steps, console.Step{Text: "Set PASSWORD_RESET_URL to the absolute address of the page that reads the reset link from the URL fragment"})
-	}
-
-	if selection.has("verification") {
-		steps = append(steps, console.Step{Text: "Set EMAIL_VERIFY_URL to the absolute address of the page that reads the verification link from the URL fragment"})
-	}
+	var steps []console.Step
 
 	if selection.jobs() {
-		steps = append(steps, keyStep("LinkSigner", "LINK_KEY_FILE"),
+		steps = append(steps, keyStep("LinkSigner", "LINK_KEY_FILE", "link.key"),
 			console.Step{Text: "IAMJobs sends the emails in the process whose Compose lists it; with the memory queue that is the process that serves HTTP, " +
 				"so move IAMJobs and Work to a worker when you swap the Queue driver, and deploy workers before enabling a new email feature"},
 			console.Step{Text: "Replace the logging Mailer with a delivering driver before production"})
 	}
 
 	if selection.has("two-factor") {
-		steps = append(steps, keyStep("TwoFactorKey", "TWO_FACTOR_KEY_FILE"))
+		steps = append(steps, keyStep("TwoFactorKey", "TWO_FACTOR_KEY_FILE", "two-factor.key"))
 	}
 
-	if selection.oauth() {
-		steps = append(steps, keyStep("OAuthKey", "OAUTH_KEY_FILE"))
-	}
-
-	for _, provider := range []string{"google", "github"} {
-		if selection.has(provider) {
-			steps = append(steps, oauthEnvironmentStep(provider))
-		}
-	}
-
-	return steps
+	return append(steps, console.Step{
+		Text:    "Start the server: it applies the migrations first and serves the identity routes under /auth, such as POST /auth/login",
+		Command: "make run",
+	})
 }
 
-// keyStep tells how to provision the key file one provider loads. It has no
-// command because the file name is the reader's choice.
-func keyStep(provider, variable string) console.Step {
-	return console.Step{Text: "Create the " + provider + " key file with `arkoren key generate shared --out FILE` and set " + variable +
-		" to it, the same file for every process"}
-}
-
-// oauthEnvironmentStep names the environment variables of one sign-in client.
-func oauthEnvironmentStep(provider string) console.Step {
-	upper := strings.ToUpper(provider)
-
-	return console.Step{Text: "Set " + upper + "_CLIENT_ID, " + upper + "_CLIENT_SECRET and " + upper + "_REDIRECT_URL (the absolute address of the " +
-		provider + " callback route) in the environment of every process that serves HTTP"}
+// keyStep tells how to provision the key file one provider loads: the command
+// creates it, and the reader then points variable at it. The path is never
+// written to .env, and the file stays out of version control.
+func keyStep(provider, variable, file string) console.Step {
+	return console.Step{
+		Text:    "Create the " + provider + " key, then set " + variable + "=" + file + " in .env; every process loads the same file, which stays out of version control",
+		Command: "arkoren key generate shared --out " + file,
+	}
 }
 
 // AddIAM plans the identity module of ark/iam: internal/bootstrap/iam.go with
 // the IAM, IAMRouter and, when reset or verification is selected, IAMJobs
 // providers; one fragment provider file per selected feature (PasswordReset,
-// EmailVerification, TokenScopes, Roles, AccountView, and for the sign-in
-// clients Google, GitHub and GitHubSignUp), each returning the construction
-// callback the facade passes to its package; and every shared provider the
-// generated code uses that internal/bootstrap does not declare yet (Database,
-// Cache, Hasher, and as selected LinkSigner, Mailer, Queue, Dispatcher,
-// Consumer, Work, TwoFactorKey, OAuthKey), written with local defaults. A
-// provider that already exists, found by name, is left alone and used.
+// EmailVerification, TokenScopes, Roles, AccountView), each returning the
+// construction callback the facade passes to its package; and every shared
+// provider the generated code uses that internal/bootstrap does not declare yet
+// (Database, Cache, Hasher, and as selected LinkSigner, Mailer, Queue,
+// Dispatcher, Consumer, Work, TwoFactorKey), written with local defaults. A
+// provider that already exists, found by name, is left alone and used. A
+// sign-in client that internal/bootstrap already declares (see [Project.AddOAuth])
+// is passed to identity.Provider in iam.go.
 //
-// It inserts compose.Use(bootstrap.IAMRouter) into the Compose of the server
-// process and, for the jobs, compose.Use(bootstrap.IAMJobs) and
-// compose.Use(bootstrap.Work) into the Compose of options.Process, skipping
-// providers the Compose already uses. The plan lists the modules it needs with
-// their pinned versions ([Plan.Requires]) and the steps it cannot do itself
-// ([Plan.Steps]): adding the migrations to the Migrator, and the environment and
-// key files.
+// The module's migrations apply when the server starts. Without a Migrator
+// provider, the plan writes one (migrate.New over Database with the
+// application's migrations.All and IAM.Migrations, plus internal/migrations
+// when it has no All) and a Migrate provider whose Startup callback runs
+// Migrator.Up, which holds the migration lock, so replicas are safe. With a
+// Migrator, the plan inserts IAM.Migrations into it, and only when that is
+// impossible leaves a step.
 //
-// It returns a usage error for an unknown feature, for a provider the module
-// declares that internal/bootstrap already declares, for an existing target
-// file, or when a process has no Compose to edit. It never changes the project.
+// It inserts compose.Use(bootstrap.Migrate) when the plan writes it and
+// compose.Use(bootstrap.IAMRouter) into the Compose of the server process, and,
+// for the jobs, compose.Use(bootstrap.IAMJobs) and compose.Use(bootstrap.Work)
+// into the Compose of options.Process, skipping providers the Compose already
+// uses. The routes are mounted under /auth. It appends to .env the variables
+// with safe local defaults it lacks ([Plan.Edit]): DATABASE_URL when it writes
+// the Database provider, the reset and verification page addresses and the
+// declared clients' redirect URLs, derived from HTTP_ADDR, never a secret or a
+// key path. The plan lists the modules it needs with their pinned versions
+// ([Plan.Requires]) and the steps only the reader can do ([Plan.Steps]): key
+// files and starting the server.
+//
+// It returns a usage error for an unknown feature (a sign-in provider such as
+// google points to `add ark oauth`), for a provider the module declares that
+// internal/bootstrap already declares, for an existing target file, or when a
+// process has no Compose to edit. It never changes the project.
 //
 // Example:
 //
 //	plan, err := project.AddIAM(layout.IAMOptions{With: []string{"reset", "tokens"}}, templates)
 func (project *Project) AddIAM(options IAMOptions, templates fs.FS) (*Plan, error) {
-	selection, err := newIAMSelection(options.With)
+	selection, err := project.newIAMSelection(options.With)
 
 	if err != nil {
 		return nil, err
@@ -269,30 +287,57 @@ func (project *Project) AddIAM(options IAMOptions, templates fs.FS) (*Plan, erro
 	}
 
 	plan := &Plan{}
+	writesDatabase := !project.declares("internal/bootstrap", "Database")
 
 	if err := project.renderIAM(plan, templates, selection); err != nil {
 		return nil, err
 	}
 
-	if err := project.planIAMUses(plan, selection, routes, worker); err != nil {
+	writesMigrate, err := project.planMigrator(plan, templates)
+
+	if err != nil {
 		return nil, err
 	}
 
-	plan.Steps = selection.steps()
+	if err := project.planIAMUses(plan, selection, routes, worker, writesMigrate); err != nil {
+		return nil, err
+	}
+
+	if _, err := project.planEnv(plan, selection.environment(writesDatabase)); err != nil {
+		return nil, err
+	}
+
+	plan.Steps = append(plan.Steps, selection.steps()...)
 
 	return plan, project.planRequires(plan)
 }
 
-// newIAMSelection validates the --with values and returns the selection. An
-// unknown value is a usage error that lists the accepted ones.
-func newIAMSelection(with []string) (iamSelection, error) {
+// newIAMSelection validates the --with values and returns the selection with the
+// sign-in clients internal/bootstrap declares. An unknown value is a usage
+// error that lists the accepted ones; a sign-in provider, which moved to
+// [Project.AddOAuth], also gets the command that adds it.
+func (project *Project) newIAMSelection(with []string) (iamSelection, error) {
 	for _, feature := range with {
+		if client, found := findOAuthClient(feature); found {
+			return iamSelection{}, console.Fail(console.TypeUsage,
+				[]console.Step{{Text: "Add the " + client.name + " sign-in client; add ark iam wires every declared client", Command: "arkoren add ark oauth " + client.name}},
+				"%q is not an add ark iam feature: sign-in providers are added with add ark oauth", feature)
+		}
+
 		if !slices.Contains(IAMFeatures, feature) {
 			return iamSelection{}, console.UsageError("unknown feature %q for add ark iam; --with accepts %s", feature, strings.Join(IAMFeatures, ", "))
 		}
 	}
 
-	return iamSelection{with: with}, nil
+	selection := iamSelection{with: with}
+
+	for _, client := range oauthClients {
+		if project.declares("internal/bootstrap", client.identifier) && (client.signUp == "" || project.declares("internal/bootstrap", client.signUp)) {
+			selection.clients = append(selection.clients, client)
+		}
+	}
+
+	return selection, nil
 }
 
 // iamProcesses checks that no provider the selection declares exists yet and
@@ -318,12 +363,19 @@ func (project *Project) iamProcesses(selection iamSelection, process string) (ro
 	return routes, worker, nil
 }
 
-// planIAMUses plans the Compose insertions of the selection: IAMRouter into the
-// server's file routes and, for the jobs, IAMJobs and Work into the file worker.
-// When both are one file, one edit inserts all three, because two edits planned
-// from the same original content cannot both be applied.
-func (project *Project) planIAMUses(plan *Plan, selection iamSelection, routes, worker string) error {
-	providers := []string{"IAMRouter"}
+// planIAMUses plans the Compose insertions of the selection: Migrate when the
+// plan writes it, then IAMRouter, into the server's file routes and, for the
+// jobs, IAMJobs and Work into the file worker. When both are one file, one edit
+// inserts all of them, because two edits planned from the same original content
+// cannot both be applied.
+func (project *Project) planIAMUses(plan *Plan, selection iamSelection, routes, worker string, migrate bool) error {
+	var providers []string
+
+	if migrate {
+		providers = append(providers, "Migrate")
+	}
+
+	providers = append(providers, "IAMRouter")
 
 	if selection.jobs() && worker == routes {
 		providers = append(providers, "IAMJobs", "Work")
@@ -352,48 +404,6 @@ func (project *Project) renderIAM(plan *Plan, templates fs.FS, selection iamSele
 	}
 
 	return project.renderPrerequisites(plan, templates, selection.prerequisites())
-}
-
-// AddOAuth plans one OAuth sign-in client of ark/oauth: internal/bootstrap/<provider>.go,
-// a provider named for it (Google, GitHub) that builds the client from its
-// environment, registers its startup and returns it, plus the OAuthKey provider
-// when internal/bootstrap does not declare one. It does not change the IAM
-// provider: the plan's notes say to pass the client to identity.Provider.
-//
-// It returns a usage error for an unknown provider (google and github are
-// supported) or when the provider already exists. It never changes the project.
-//
-// Example:
-//
-//	plan, err := project.AddOAuth("google", templates)
-func (project *Project) AddOAuth(provider string, templates fs.FS) (*Plan, error) {
-	identifier := map[string]string{"google": "Google", "github": "GitHub"}[provider]
-
-	if identifier == "" {
-		return nil, console.UsageError("unknown OAuth provider %q; add ark oauth supports google and github", provider)
-	}
-
-	if project.declares("internal/bootstrap", identifier) {
-		return nil, console.UsageError("internal/bootstrap already declares %s", identifier)
-	}
-
-	plan := &Plan{}
-
-	if err := project.render(plan, templates, "add/ark/oauth/"+provider+".go", "internal/bootstrap/"+provider+".go", nil); err != nil {
-		return nil, err
-	}
-
-	if err := project.renderPrerequisites(plan, templates, []arkPrerequisite{{"OAuthKey", "oauth_key"}}); err != nil {
-		return nil, err
-	}
-
-	plan.Steps = []console.Step{
-		oauthEnvironmentStep(provider),
-		keyStep("OAuthKey", "OAUTH_KEY_FILE"),
-		{Text: "Pass the client to the identity module in internal/bootstrap/iam.go with identity.Provider(compose.Use(" + identifier + "))"},
-	}
-
-	return plan, project.planRequires(plan)
 }
 
 // renderPrerequisites appends to plan the file of every shared provider in

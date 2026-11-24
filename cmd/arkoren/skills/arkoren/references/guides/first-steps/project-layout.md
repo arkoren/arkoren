@@ -96,15 +96,20 @@ the router. Reading `Compose` tells you what the process does; adding a feature
 to a process is one line. The conditional is a plain `if` on
 `compose.App().Debug()` or `compose.App().Environment()`.
 
-A migration process uses one provider that registers a runner applying the
-application's migrations. [`application.Run`](../application/overview.md) then
-shuts down cleanly once its only runner returns without error:
+A migration process registers one runner that applies the application's
+migrations. [`application.Run`](../application/overview.md) then shuts down
+cleanly once its only runner returns without error, even when the process also
+registers health checks:
 
 ```go
 func Compose(compose *application.Composer) {
-	compose.Use(bootstrap.Migrate)
+	compose.Run(compose.Use(bootstrap.Migrator).Up)
 }
 ```
+
+A project that runs a single server can apply migrations at startup instead:
+`arkoren add ark iam` writes a `Migrate` provider whose `Startup` callback runs
+`Migrator.Up` and lists it in the server's `Compose`.
 
 ## Bootstrap
 

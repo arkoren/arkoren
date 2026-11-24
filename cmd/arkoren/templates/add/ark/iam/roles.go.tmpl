@@ -10,7 +10,7 @@ import (
 // that can be assigned to users. It defines one administrator role. Holders of
 // the users:manage permission may grant and revoke roles through the management
 // routes, never beyond what they hold, and the last administrator cannot lose
-// the role. Users read their own permissions through GET /me/permissions.
+// the role. Users read their own permissions through GET /auth/me/permissions.
 // Replace the placeholder with the roles and permissions of the application and
 // check them in handlers with gate.HasPermission and gate.HasRole.
 var Roles = application.Provide(func(*application.Composer) permission.BuilderFunc {

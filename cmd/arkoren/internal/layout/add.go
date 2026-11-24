@@ -465,28 +465,37 @@ func (project *Project) planEdit(plan *Plan, rel string, edit func([]byte) ([]by
 // declares reports whether a non-test file of the package in dir declares a
 // top-level function, variable, constant or type called name.
 func (project *Project) declares(dir, name string) bool {
+	return project.declaringSource(dir, name) != nil
+}
+
+// declaringSource returns the non-test file of the package in dir that declares
+// a top-level function, variable, constant or type called name, or nil.
+func (project *Project) declaringSource(dir, name string) *source {
 	for _, src := range project.packageSources(dir) {
 		for _, decl := range src.file.Decls {
 			switch decl := decl.(type) {
 			case *ast.FuncDecl:
 				if decl.Recv == nil && decl.Name.Name == name {
-					return true
+					return src
 				}
 			case *ast.GenDecl:
-				for _, spec := range decl.Specs {
-					switch spec := spec.(type) {
-					case *ast.ValueSpec:
-						if slices.ContainsFunc(spec.Names, func(ident *ast.Ident) bool { return ident.Name == name }) {
-							return true
-						}
-					case *ast.TypeSpec:
-						if spec.Name.Name == name {
-							return true
-						}
-					}
+				if slices.ContainsFunc(decl.Specs, func(spec ast.Spec) bool { return specDeclares(spec, name) }) {
+					return src
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+// specDeclares reports whether a var, const or type spec declares name.
+func specDeclares(spec ast.Spec, name string) bool {
+	switch spec := spec.(type) {
+	case *ast.ValueSpec:
+		return slices.ContainsFunc(spec.Names, func(ident *ast.Ident) bool { return ident.Name == name })
+	case *ast.TypeSpec:
+		return spec.Name.Name == name
 	}
 
 	return false

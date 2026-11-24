@@ -91,8 +91,8 @@ func TestAddArkTextOutputNumbersNextSteps(t *testing.T) {
 	for _, fragment := range []string{
 		"→ Would add ark iam\n\nChanges\n  create ",
 		"\n  require  arkoren.dev/ark/iam@v0.5.0\n",
-		"\n\nNext steps\n   1. Add compose.Require(",
-		"\n  10. Set GITHUB_CLIENT_ID",
+		"\n\nNext steps\n  1. Create the LinkSigner key, then set LINK_KEY_FILE=link.key in .env;",
+		"\n  5. Start the server: ",
 	} {
 		if !strings.Contains(got, fragment) {
 			t.Fatalf("output lacks %q:\n%s", fragment, got)

@@ -122,8 +122,8 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 Apply the enabled [migrations](overview.md#prepare-storage) and
 [register the facade](overview.md#register-routes) once with session and CSRF
 protection. The client
-name makes `GET /auth/work` the login entry point and
-`/auth/work/callback` the callback. Offer a link to `/auth/work` on your login
+name makes `GET /work` below the identity mount (`/auth/work` at `/auth`) the
+login entry point and `/work/callback` the callback. Offer a link to `/auth/work` on your login
 page. The browser goes to the provider, then returns to IAM: a connected or
 successfully claimed identity starts a local login, subject to any local
 two-factor challenge. An unknown identity otherwise receives `403`
