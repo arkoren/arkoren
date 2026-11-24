@@ -7,14 +7,17 @@ import (
 	"io"
 )
 
-// ErrorReport contains actionable diagnostics without repeating the message
-// across protocol title/detail fields. Optional context is omitted when absent.
+// ErrorReport contains diagnostics without repeating the message across
+// protocol title/detail fields. Optional context is omitted when absent. What
+// to do about the failure is never part of it: see [ErrorDocument].
 type ErrorReport struct {
-	// Message is the safe explanation of the failure.
+	// Message is the safe explanation of the failure. It states what went
+	// wrong, never what to do; that belongs in next_steps.
 	Message string `json:"message"`
 
-	// Type is an advertised failure classification, when available.
-	Type string `json:"type,omitzero"`
+	// Type classifies the failure and is always set: one of the Type
+	// constants, or a type a remote tool advertised.
+	Type string `json:"type"`
 
 	// Status is an actual HTTP failure Status, never a tool classification.
 	Status int `json:"status,omitzero"`
@@ -27,9 +30,6 @@ type ErrorReport struct {
 
 	// Details contains safe nonvalidation tool context.
 	Details jsontext.Value `json:"details,omitzero"`
-
-	// Hint suggests the next useful action.
-	Hint string `json:"hint,omitzero"`
 
 	// Destination is the local directory whose existing files blocked an action.
 	Destination string `json:"destination,omitzero"`
@@ -64,7 +64,7 @@ func (env Environment) DiagnosticStyle() Style {
 }
 
 // OutputStyle applies formatting without resolving inspector configuration.
-// A terminal gets translated text unless -json or -compact asks for JSON;
+// A terminal gets translated text unless --json or --compact asks for JSON;
 // any other destination always gets JSON, so scripts and agents can parse it.
 func (env Environment) OutputStyle() Style {
 	color := env.IsTerminal && !env.Presentation.NoColor
@@ -76,7 +76,7 @@ func (env Environment) OutputStyle() Style {
 
 	raw := env.Presentation.JSON || env.Presentation.Compact
 
-	look := Style{Indent: !env.Presentation.Compact, Color: color, Text: env.IsTerminal && !raw}
+	look := Style{Indent: !env.Presentation.Compact, Color: color, Text: env.IsTerminal && !raw, Dir: env.Dir}
 
 	if env.Now != nil {
 		look.Now = env.Now()

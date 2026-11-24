@@ -150,11 +150,13 @@ type Project struct {
 }
 
 // errNotConforming is the usage error for a directory without the layout. It
-// names the missing piece and points at the skill that defines the layout.
+// names the missing piece; its steps say what the layout needs and where it is
+// defined.
 func errNotConforming(reason string) error {
-	return console.UsageError(
-		"not an Arkoren project layout: %s; the layout needs go.mod, cmd/<process>/main.go and internal/bootstrap "+
-			"(see the arkoren-structure skill; arkoren new creates it)", reason)
+	return console.Fail(console.TypeUsage, []console.Step{
+		{Text: "Run the command in the project root, which needs go.mod, cmd/<process>/main.go and internal/bootstrap"},
+		{Text: "Create a conforming project with arkoren new DIR; the arkoren-structure skill defines the layout"},
+	}, "not an Arkoren project layout: %s", reason)
 }
 
 // Load reads the project in dir. A project conforms when dir holds go.mod,

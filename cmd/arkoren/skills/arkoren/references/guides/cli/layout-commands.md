@@ -164,7 +164,8 @@ you swap the queue driver. The module's pinned version is fetched with `go get`
 before `go mod tidy`, so tidy does not pick a newer release; `--skip-tidy` leaves
 both for you, and the report lists each module as a `require` change.
 
-The report also lists `next_steps` (a numbered list on a terminal), the work the command cannot do: add
+The report also lists `next_steps` (a numbered list on a terminal, each a
+`text` sentence), the work the command cannot do: add
 `compose.Use(IAM).Migrations()...` to your `Migrator` (the migrate process then
 builds `IAM` and needs the same environment as the server), set the environment
 variables and key files, and replace the logging mailer before production.
@@ -187,14 +188,15 @@ Add `--dry-run` to any `add` command to print the plan and write nothing:
 
 `changes` holds one `create` per new file and one `edit` per inserted line, whose
 `detail` is that line. `add ark` also reports a `require` change per pinned
-module and `next_steps`; a run that executed `go mod tidy` ends with a `tidy`
+module and `next_steps` objects with a `text` and, only when one command does
+the step, a `command`; a run that executed `go mod tidy` ends with a `tidy`
 change for `go.mod`. Without `--dry-run` the summary is "Added feature orders".
 
 Without it the command prints the same report after writing. `add` never
 overwrites: if any target path exists, including a feature directory, it fails
-with exit 2 before writing. It changes existing code only by inserting lines
+with a `file_conflict` error and exit 1 before writing. It changes existing code only by inserting lines
 into `Compose` (and its imports) or into the `All` list, formatted with gofmt,
-and refuses with exit 2 when `Compose` is missing, takes no named
+and refuses with a `usage` error (exit 2) when `Compose` is missing, takes no named
 `*application.Composer`, or another package is already imported as `bootstrap`.
 If the file changed between planning and writing, it stops without writing.
 Review the diff with your version control after any `add`.
@@ -206,8 +208,8 @@ arkoren check
 ```
 
 The command prints one report: a `summary` ("No layout violations" or "3 layout
-violations"), `ok`, and `violations`, an array that is empty for a conforming
-project. Each violation has `file`, `line`, `rule` and a `message` naming the fix. It exits 1 when there are violations, so it can gate a build.
+violations"), `ok`, and `problems`, an array that is empty for a conforming
+project. Each problem has `rule`, `path`, `line` and a `message` naming the fix. It exits 1 when there are violations, so it can gate a build.
 Projects created with `arkoren new` run it as part of `make check`; the target
 needs the `arkoren` command on `PATH` (override with `make check ARKOREN=...`).
 

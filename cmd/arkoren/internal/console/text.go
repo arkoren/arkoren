@@ -87,6 +87,14 @@ func Text(raw []byte, color bool) []byte {
 // TextAt is [Text] with an explicit clock: now is what relative times such as
 // "5s ago" are measured against, so callers and tests control it.
 func TextAt(raw []byte, color bool, now time.Time) []byte {
+	return textIn(raw, color, now, "")
+}
+
+// textIn is [TextAt] that also shortens what a reader does not need exactly:
+// 64-digit hexadecimal revisions and fingerprints print as their first 12
+// digits, and paths under dir print relative to it (see [node.abbreviated]).
+// An empty dir leaves paths alone.
+func textIn(raw []byte, color bool, now time.Time, dir string) []byte {
 	decoder := jsontext.NewDecoder(bytes.NewReader(raw))
 	root, err := decodeNode(decoder)
 
@@ -94,7 +102,7 @@ func TextAt(raw []byte, color bool, now time.Time) []byte {
 		return raw
 	}
 
-	root, note := listing(root.stamped(now))
+	root, note := listing(root.stamped(now).abbreviated(workingDirectories(dir), ""))
 
 	writer := &textWriter{color: color}
 	writer.document(root.pruned())
@@ -147,7 +155,7 @@ func listing(root node) (node, string) {
 // style asks for it, laid-out JSON otherwise.
 func Format(raw []byte, look Style) []byte {
 	if look.Text {
-		return TextAt(raw, look.Color, cmp.Or(look.Now, time.Now()))
+		return textIn(raw, look.Color, cmp.Or(look.Now, time.Now()), look.Dir)
 	}
 
 	return Render(raw, look)
@@ -505,17 +513,6 @@ func (value node) changes() bool {
 	return true
 }
 
-// steps reports whether an array is a non-empty list of strings.
-func (value node) steps() bool {
-	if value.kind != '[' || len(value.items) == 0 {
-		return false
-	}
-
-	return !slices.ContainsFunc(value.items, func(item node) bool {
-		return item.kind != '"'
-	})
-}
-
 // columns returns the member names of an array of objects in first-seen order.
 func (value node) columns() []string {
 	var columns []string
@@ -608,80 +605,6 @@ func (writer *textWriter) gap() {
 	}
 }
 
-// document writes a whole translated document. A top-level object with a
-// "summary" string gets a bold headline marked "✓" in green, "✗" in red when
-// "ok" is false, or "→" in yellow when "dry_run" is true, and the members
-// summary, ok and dry_run are not repeated below it. A document that is only
-// {"error": {...}} or {"warning": {...}} with a "message" starts with a red "✗"
-// or yellow "!" headline, then the remaining members, and a dim "hint" last.
-// Every other document is written generically by [textWriter.value].
-func (writer *textWriter) document(root node) {
-	if root.kind != '{' {
-		writer.value(root, 0)
-
-		return
-	}
-
-	if summary := member(root, "summary"); summary.kind == '"' {
-		mark, color := "✓", colorTrue
-
-		switch {
-		case member(root, "ok").kind == 'f':
-			mark, color = "✗", colorFalse
-		case member(root, "dry_run").kind == 't':
-			mark, color = "→", ColorNumber
-		}
-
-		writer.headline(mark, color, summary.text)
-		writer.body(root.without("summary", "ok", "dry_run"))
-
-		return
-	}
-
-	if len(root.items) != 1 || (root.keys[0] != "error" && root.keys[0] != "warning") {
-		writer.value(root, 0)
-
-		return
-	}
-
-	details := root.items[0]
-	message := member(details, "message")
-
-	if details.kind != '{' || message.kind != '"' {
-		writer.value(root, 0)
-
-		return
-	}
-
-	if root.keys[0] == "error" {
-		writer.headline("✗", colorFalse, message.text)
-	} else {
-		writer.headline("!", ColorNumber, message.text)
-	}
-
-	writer.body(details.without("message", "hint"))
-
-	if hint := member(details, "hint"); hint.kind == '"' {
-		writer.gap()
-		writer.line(0, writer.paint(colorDim, safe(hint.text)))
-	}
-}
-
-// headline writes the bold, colored first line of a report.
-func (writer *textWriter) headline(mark, color, message string) {
-	writer.line(0, writer.paint(colorBold+color, mark+" "+safe(message)))
-}
-
-// body writes the members that follow a headline after one blank line.
-func (writer *textWriter) body(rest node) {
-	if len(rest.items) == 0 {
-		return
-	}
-
-	writer.gap()
-	writer.object(rest, 0)
-}
-
 // changes writes file changes as lines of aligned action, path and detail
 // columns. The action is colored by kind and the detail is dim.
 func (writer *textWriter) changes(value node, depth int) {
@@ -726,17 +649,16 @@ func actionColor(action string) string {
 
 // section writes the value under a member heading. Directly below a top-level
 // object, "changes" and "next_steps" use their dedicated layouts when the
-// value has the matching shape; everything else is generic.
+// value has the matching shape, and "warnings" prints as marked lines without
+// a heading; everything else is generic.
 func (writer *textWriter) section(key string, value node, depth int) {
 	switch {
 	case depth == 1 && key == "changes" && value.changes():
 		writer.changes(value, depth)
 	case depth == 1 && key == "next_steps" && value.steps():
-		width := len(strconv.Itoa(len(value.items)))
-
-		for index, item := range value.items {
-			writer.line(depth, fmt.Sprintf("%*d. %s", width, index+1, safe(item.text)))
-		}
+		writer.steps(value, depth)
+	case depth == 0 && key == "warnings" && value.warnings():
+		writer.warnings(value)
 	default:
 		writer.value(value, depth)
 	}
@@ -777,8 +699,9 @@ func (writer *textWriter) object(value node, depth int) {
 		writer.pairs(value.keys[start:index], value.items[start:index], depth, width)
 		writer.gap()
 
-		// A top-level "items" array is the list itself, so it needs no heading.
-		bare := depth == 0 && value.keys[index] == "items" && member.kind == '['
+		// A top-level "items" array is the list itself, and top-level warnings are
+		// marked lines, so neither needs a heading.
+		bare := depth == 0 && member.kind == '[' && (value.keys[index] == "items" || value.keys[index] == "warnings" && member.warnings())
 		child := depth + 1
 
 		if bare {

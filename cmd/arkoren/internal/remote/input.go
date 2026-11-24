@@ -26,10 +26,10 @@ const maxIndex = 10000
 // separated into the base input, the positional arguments, and the path
 // flags in the order they were given.
 type opArgs struct {
-	// input is the value of -input: inline JSON, @file, or - for stdin.
+	// input is the value of --input: inline JSON, @file, or - for stdin.
 	input string
 
-	// hasInput distinguishes an explicit empty -input from an omitted flag.
+	// hasInput distinguishes an explicit empty --input from an omitted flag.
 	hasInput bool
 
 	// body retains already-materialized input bytes. Nil means input still names
@@ -59,7 +59,7 @@ type origin struct {
 	// pointer is the escaped JSON Pointer of the value supplied by this source.
 	pointer string
 
-	// label is how the user wrote it: "-address.city" or "<invoice>".
+	// label is how the user wrote it: "--address.city" or "<invoice>".
 	label string
 }
 
@@ -127,7 +127,7 @@ func parseOpArgs(root *Schema, operation string, args []string) (opArgs, error) 
 				index++
 				value = args[index]
 			default:
-				return parsed, console.UsageError("flag -%s needs a value", name)
+				return parsed, console.UsageError("flag --%s needs a value", name)
 			}
 		}
 
@@ -200,13 +200,13 @@ func unknownFlag(root *Schema, operation, name string, cause error) error {
 	hint := "run 'arkoren " + operation + " --help' to list them"
 
 	if near := closest(name, paths, 3); len(near) > 0 {
-		hint = "did you mean -" + strings.Join(near, ", -") + "?"
+		hint = "did you mean --" + strings.Join(near, ", --") + "?"
 	}
 
-	return console.UsageError("unknown flag -%s for %s (%v); %s", name, operation, cause, hint)
+	return console.UsageError("unknown flag --%s for %s (%v); %s", name, operation, cause, hint)
 }
 
-// buildInput combines the base -input, the positional arguments, and the path
+// buildInput combines the base --input, the positional arguments, and the path
 // flags into one JSON object. Positionals fill the property names listed in
 // positional in order, then flags apply in command-line order, so a later
 // source overrides an earlier one at the same path. Values are converted by
@@ -226,11 +226,11 @@ func buildInput(root *Schema, positional []string, args opArgs, dir string, stdi
 		tree, err = parseTree(raw)
 
 		if err != nil {
-			return nil, console.UsageError("-input is not valid JSON: %v", err)
+			return nil, console.UsageError("invalid value for flag --input: not valid JSON: %v", err)
 		}
 
 		if _, ok := tree.(map[string]any); !ok {
-			return nil, console.UsageError("-input must be a JSON object")
+			return nil, console.UsageError("invalid value for flag --input: must be a JSON object")
 		}
 	}
 
@@ -279,10 +279,10 @@ func buildInput(root *Schema, positional []string, args opArgs, dir string, stdi
 		path, _, err := root.flagPath(flag.name)
 
 		if err != nil {
-			return nil, console.UsageError("-%s: %v", flag.name, err)
+			return nil, console.UsageError("invalid value for flag --%s: %v", flag.name, err)
 		}
 
-		if err := apply(path, flag.value, "-"+flag.name); err != nil {
+		if err := apply(path, flag.value, "--"+flag.name); err != nil {
 			return nil, err
 		}
 	}
@@ -313,7 +313,7 @@ func (args opArgs) inputBytes(dir string, stdin io.Reader) ([]byte, error) {
 	return readInputSource(args.input, dir, stdin)
 }
 
-// readInputSource returns the text of an -input value.
+// readInputSource returns the text of an --input value.
 func readInputSource(source, dir string, stdin io.Reader) ([]byte, error) {
 	switch {
 	case source == "-":
@@ -334,7 +334,7 @@ func readInputSource(source, dir string, stdin io.Reader) ([]byte, error) {
 		data, err := os.ReadFile(path)
 
 		if err != nil {
-			return nil, console.UsageError("-input: %v", err)
+			return nil, console.UsageError("invalid value for flag --input: %v", err)
 		}
 
 		return data, nil

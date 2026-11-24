@@ -183,7 +183,7 @@ func parseWaitArgument(args []string, index int) (string, string, int, error) {
 	}
 
 	if index+1 == len(args) {
-		return "", "", index, console.UsageError("-%s needs a value", name)
+		return "", "", index, console.UsageError("flag --%s needs a value", name)
 	}
 
 	return name, args[index+1], index + 1, nil
@@ -321,7 +321,7 @@ func conditionWaitTimeout(raw any) (time.Duration, error) {
 	duration, err := time.ParseDuration(value)
 
 	if err != nil || duration < 0 {
-		return 0, console.UsageError("-timeout: want a non-negative duration")
+		return 0, console.UsageError("invalid value for flag --timeout: want a non-negative duration")
 	}
 
 	return cmp.Or(duration, waitDefaultTimeout), nil
@@ -410,7 +410,7 @@ func (session *Session) Remote(ctx context.Context, command string, args []strin
 	conn, err := active.connectForDiscovery(ctx)
 
 	if err != nil {
-		return WaitError(ctx, budget, "connecting to the inspector", err)
+		return unknownWithoutCatalog(command, WaitError(ctx, budget, "connecting to the inspector", err))
 	}
 
 	conn.configureRequests(ctx, session.requestTimeout())
@@ -449,6 +449,28 @@ func (session *Session) Remote(ctx context.Context, command string, args []strin
 	err = active.invoke(ctx, conn, operation, input)
 
 	return WaitError(ctx, budget, "waiting for "+command, err)
+}
+
+// unknownWithoutCatalog answers a command that could not be looked up because
+// the catalog is unreadable (no URL, or the inspector is unreachable). A bare
+// word cannot be an extension operation, so it is reported as an unknown
+// command, with the steps that connect plus the local help, instead of a
+// connection failure the user did not ask about. A qualified name, or any other
+// failure, keeps its connection error.
+func unknownWithoutCatalog(command string, err error) error {
+	if strings.Contains(command, ":") {
+		return err
+	}
+
+	failure := DescribeError(err, false, nil)
+
+	if failure.Error.Type != console.TypeNotConfigured && failure.Error.Type != console.TypeUnreachable {
+		return err
+	}
+
+	steps := append(failure.NextSteps, console.Step{Text: "List the local commands", Command: "arkoren --help"})
+
+	return console.Fail(console.TypeUsage, steps, "unknown command %q", command)
 }
 
 // connectForDiscovery applies a known leading wait budget only to discovery.

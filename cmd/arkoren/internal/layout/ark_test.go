@@ -5,12 +5,24 @@ import (
 	"strings"
 	"testing"
 
+	"arkoren.dev/cmd/arkoren/internal/console"
 	"arkoren.dev/cmd/arkoren/internal/files"
 	"arkoren.dev/cmd/arkoren/internal/layout"
 )
 
 // allIAMFeatures selects every optional feature of add ark iam.
 var allIAMFeatures = layout.IAMFeatures
+
+// stepTexts joins the text of every step, one per line.
+func stepTexts(steps []console.Step) string {
+	texts := make([]string, len(steps))
+
+	for index, step := range steps {
+		texts[index] = step.Text
+	}
+
+	return strings.Join(texts, "\n")
+}
 
 // created returns the project-relative slash paths a plan creates.
 func created(plan *layout.Plan) []string {
@@ -200,7 +212,7 @@ func TestAddIAMRefusesExistingFile(t *testing.T) {
 
 	_, err := load(t, root).AddIAM(layout.IAMOptions{}, templates)
 
-	requireUsage(t, err, "internal/bootstrap/database.go already exists")
+	requireConflict(t, err, "internal/bootstrap/database.go already exists")
 }
 
 // TestAddIAMRefusesUnknownFeature lists the accepted features.
@@ -239,7 +251,7 @@ func TestAddIAMReportsWhatItCannotDo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	notes := strings.Join(plan.Notes, "\n")
+	notes := stepTexts(plan.Steps)
 
 	for _, want := range []string{
 		"Migrations()", "DATABASE_URL", "PASSWORD_RESET_URL", "EMAIL_VERIFY_URL", "LINK_KEY_FILE", "TWO_FACTOR_KEY_FILE", "OAUTH_KEY_FILE",
@@ -274,8 +286,8 @@ func TestAddOAuthWritesTheClientProvider(t *testing.T) {
 		t.Fatalf("requires = %v", plan.Requires)
 	}
 
-	if !strings.Contains(strings.Join(plan.Notes, "\n"), "identity.Provider(compose.Use(Google))") {
-		t.Fatalf("notes = %v", plan.Notes)
+	if !strings.Contains(stepTexts(plan.Steps), "identity.Provider(compose.Use(Google))") {
+		t.Fatalf("steps = %v", plan.Steps)
 	}
 }
 

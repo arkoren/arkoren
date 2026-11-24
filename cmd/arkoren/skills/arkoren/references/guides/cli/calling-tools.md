@@ -122,7 +122,8 @@ Ordinary calls do not retry automatically. An input-required MCP response fails
 with exit 1 after one call, without a successful stdout result. The CLI does not
 fulfill the request, continue automatically, or replay the handler.
 
-Errors appear on stderr as text on a terminal, otherwise as JSON with an `error` object. Server validation
+Errors appear on stderr as text on a terminal, otherwise as JSON with an `error`
+object and the steps that resolve it in a top-level `next_steps`. Server validation
 failures can include JSON pointers and the flags or arguments that supplied
 them. Choose `--verbose` on the original invocation if you need complete
 captured safe diagnostics; never replay a mutation merely to get more detail.

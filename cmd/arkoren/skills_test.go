@@ -173,7 +173,7 @@ func TestSkillsInstallIncludesStructureSkill(t *testing.T) {
 	}
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
-	if document["summary"] != "Installed 2 skills" || skillEntry(document, "arkoren-structure")["state"] != "installed" {
+	if !strings.HasPrefix(document["summary"].(string), "Installed 2 skills (") || skillEntry(document, "arkoren-structure")["state"] != "installed" {
 		t.Fatalf("result = %v", document)
 	}
 }
@@ -293,8 +293,10 @@ func TestSkillsStatusMissingNeverWrites(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	if err := runSkills(t.Context(), []string{"status"}, env); err != nil {
-		t.Fatal(err)
+	err := runSkills(t.Context(), []string{"status"}, env)
+
+	if exit, ok := errors.AsType[*console.ExitError](err); !ok || exit.Code != console.ExitFailure || exit.Err != nil {
+		t.Fatalf("missing skills must exit 1 after their report: %v", err)
 	}
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
@@ -325,7 +327,7 @@ func TestSkillsInstallRejectsUnmanagedFiles(t *testing.T) {
 
 	err := runSkills(t.Context(), []string{"install"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	if !strings.Contains(err.Error(), "unmanaged") {
 		t.Fatal(err)
@@ -346,7 +348,7 @@ func TestSkillsUpdateRequiresManagedInstall(t *testing.T) {
 
 	err := runSkills(t.Context(), []string{"update"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	if !strings.Contains(err.Error(), "no managed installation") {
 		t.Fatal(err)
@@ -396,7 +398,7 @@ func TestSkillsHelpSkipsPathValidation(t *testing.T) {
 func TestSkillsInvalidArgumentsAreUsageErrors(t *testing.T) {
 	t.Parallel()
 
-	for _, args := range [][]string{nil, {"remove"}, {"install", "extra"}, {"install", "--force"}, {"status", "--dir="}} {
+	for _, args := range [][]string{{"remove"}, {"install", "extra"}, {"install", "--force"}, {"status", "--dir="}} {
 		env := scaffoldEnvironment(t)
 
 		requireNewUsage(t, runSkills(t.Context(), args, env))
@@ -427,7 +429,7 @@ func TestSkillsStatusReportsEditsWithoutFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if code := run(t.Context(), []string{"skills", "status", "--verbose"}, env); code != console.ExitOK {
+	if code := run(t.Context(), []string{"skills", "status", "--verbose"}, env); code != console.ExitFailure {
 		t.Fatalf("exit=%d: %s", code, env.Stderr)
 	}
 
@@ -459,7 +461,7 @@ func TestSkillsUpdateDryRunPreservesInstalledRevision(t *testing.T) {
 		t.Fatalf("dry-run changed installed revision: %+v, %v", installed, err)
 	}
 
-	contains(t, env.Stdout.(*bytes.Buffer).String(), `"action": "write"`, `"path": "arkoren/SKILL.md"`)
+	contains(t, env.Stdout.(*bytes.Buffer).String(), `"action": "write"`, `"path": ".agents/skills/arkoren/SKILL.md"`)
 }
 
 // TestSkillsInstallDifferentRevisionRequiresExplicitUpdate avoids implicit upgrades.
@@ -472,9 +474,9 @@ func TestSkillsInstallDifferentRevisionRequiresExplicitUpdate(t *testing.T) {
 
 	err := runSkills(t.Context(), []string{"install"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
-	if !strings.Contains(err.Error(), "run arkoren skills update") {
+	if !strings.Contains(err.Error(), "another revision is installed") {
 		t.Fatal(err)
 	}
 }
@@ -548,7 +550,7 @@ func TestSkillsUpdateProtectsModifiedAPIPage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runSkills(t.Context(), []string{"update"}, env))
+	requireNewConflict(t, runSkills(t.Context(), []string{"update"}, env))
 
 	content, err := os.ReadFile(path)
 

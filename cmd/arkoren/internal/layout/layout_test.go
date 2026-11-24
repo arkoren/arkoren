@@ -82,14 +82,41 @@ func read(t *testing.T, root, rel string) string {
 	return string(content)
 }
 
-// requireUsage fails unless err is a usage error containing text.
+// requireUsage fails unless err is a usage error whose message or steps
+// contain text.
 func requireUsage(t *testing.T, err error, text string) {
+	t.Helper()
+
+	requireFailure(t, err, console.TypeUsage, text)
+}
+
+// requireConflict fails unless err is a file conflict whose message or steps
+// contain text.
+func requireConflict(t *testing.T, err error, text string) {
+	t.Helper()
+
+	requireFailure(t, err, console.TypeFileConflict, text)
+}
+
+// requireFailure fails unless err is a failure of the given type, with the exit
+// code of that type, whose message or steps contain text.
+func requireFailure(t *testing.T, err error, errorType, text string) {
 	t.Helper()
 
 	exit, ok := errors.AsType[*console.ExitError](err)
 
-	if !ok || exit.Code != console.ExitUsage || !strings.Contains(err.Error(), text) {
-		t.Fatalf("error = %v, want usage error containing %q", err, text)
+	if !ok || exit.Type != errorType || exit.Code != console.ExitCodeFor(errorType) {
+		t.Fatalf("error = %v, want a %s failure", err, errorType)
+	}
+
+	words := err.Error()
+
+	for _, step := range exit.Steps {
+		words += "\n" + step.Text + " " + step.Command
+	}
+
+	if !strings.Contains(words, text) {
+		t.Fatalf("error = %v with steps %v, want it to contain %q", err, exit.Steps, text)
 	}
 }
 
@@ -259,7 +286,7 @@ func TestAddFeatureRefusesExistingDirectory(t *testing.T) {
 
 	_, err = load(t, root).AddFeature(layout.FeatureOptions{Name: "orders"}, templates)
 
-	requireUsage(t, err, "already exists")
+	requireConflict(t, err, "already exists")
 }
 
 // TestAddFeatureRefusesDeclaredProvider reports a bootstrap name clash before

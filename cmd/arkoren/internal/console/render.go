@@ -36,6 +36,10 @@ type Style struct {
 	// Now is the time relative timestamps in text are measured against; the
 	// zero value means the current time. Tests set it for deterministic output.
 	Now time.Time
+
+	// Dir is the working directory. Text output prints paths under it
+	// relative to it; JSON always keeps them exact. Empty disables shortening.
+	Dir string
 }
 
 // frame is the position inside one open object or array during [Render].

@@ -964,24 +964,36 @@ guides for provider qualifications and migration examples.
 
 **Rendering.** Every CLI-authored document is JSON. Only `console.Format`,
 reached through `env.Result` or `WriteJSON`, turns it into text, and only when
-the destination stream is a terminal; `-json`, `-compact` or a pipe keep JSON.
+the destination stream is a terminal; `--json`, `--compact` or a pipe keep JSON.
 Commands write no text of their own, except help, prompts, raw key exports and
-`map --text`. Keep stdout failure precedence.
+`map --text`. Keep stdout failure precedence. Text shortens what a reader does
+not need exactly and JSON never does: a 64-character revision or fingerprint
+prints as its first 12 characters, and a path under the working directory
+prints relative to it (`console.Style.Dir`); a step's `command` stays exact.
 
 **Shapes.** Each command uses exactly one.
 
 - **Local actions** (`new`, `add *`, `skills install|update`, `key generate`,
   `certificate generate`, trust) use the result envelope in this order:
-  `summary`, `ok` or `dry_run`, command fields, `changes`, `next_steps`.
-  `changes` holds `console.Change` records whose action is one of
-  `create|edit|remove|write|require|tidy`. A dry-run summary starts with "Would".
+  `summary`, `ok` or `dry_run`, command fields, `changes`, `warnings`,
+  `next_steps`. `changes` holds `console.Change` records whose action is one of
+  `create|edit|remove|write|require|tidy`; every file a command changes is a
+  change, never a counter such as `written_files`. A change path is
+  project-relative for project files and absolute for any other file. A dry-run
+  summary starts with "Would" and must predict the real outcome: a preview that
+  would fail on conflicts says "Would fail: ...", sets `ok` false, lists the
+  conflicts as `problems` and ends with the exit status the real run would have.
 - **Local checks and reports** (`check`, `key check`, `certificate check`,
-  `skills status`, `status`) use `summary`, plus `ok` when there is a verdict,
-  and no `changes`.
+  `skills status`) always carry `ok` and `problems`, an empty array when ok. A
+  `console.Problem` is `{rule or field, path, line, message}`. Invalid material
+  or a stale installation is a problem with `ok` false and exit 1; only a
+  failure to read a file the user named is an error. `status` reports health in
+  `ok`; `state` is a lifecycle word and `status` an outcome. `type` is only an
+  error type; key commands say `kind`.
 - **Listings and inventories** (`tools`, `map`, `--version`) are plain data
   with no summary.
-- **Errors** are `{"error": ErrorReport}` and **warnings** are
-  `{"warning": {message, ...}}`, both on stderr.
+- **Errors** are `{"error": ErrorReport, "next_steps": [...]}` on stderr, and
+  **warnings** are `{"warnings": [...]}`.
 - **Follow** output is NDJSON. **Remote tool results** pass through unchanged
   and use the generic renderer. Shipped MCP list tools return
   `{items, truncated[, cursor]}`; the renderer prints that as a bare table, so
@@ -991,18 +1003,64 @@ Commands write no text of their own, except help, prompts, raw key exports and
   and no relative or derived duplicates such as `age`, `next_in` or a duration
   string; the CLI adds "(5s ago)" and readable units. Omit empty containers.
 
+**Next steps.** `next_steps` is always a top-level array of `console.Step`
+(`{text, command}`), on successes and errors, never nested. `text` is one
+imperative sentence. `command` is present only when a single exact, pasteable
+command performs the step; quote values with `console.Quote`. A step that needs
+a value or judgment from the reader is text only. When a nested state reports an
+error (`tools` with an unreachable or unconfigured inspector) keep the nested
+error data and hoist its steps to the top-level `next_steps`.
+
+**Warnings.** A `console.Warning` (`{message, details}`) is something a
+successful command left alone, such as unchanged system trust. It is a top-level
+`warnings` member, rendered `! message` with details as bullets, never a step.
+The trust commands' stderr document is the same shape.
+
+**Errors.** `error.message` says what went wrong and never what to do; every
+remedy is a step. `error.type` is always set from the closed list below, and the
+exit code follows the type (`console.ExitCodeFor`). A remote tool's own type
+passes through, except `usage`, `not_configured` and `unauthorized`, which would
+change the exit code and become `tool_error`.
+
+| Type | Meaning | Exit |
+| --- | --- | --- |
+| `usage` | Unknown command, missing or surplus argument, unknown or malformed flag | 2 |
+| `not_configured` | A required setting such as the inspector URL is absent | 2 |
+| `unreachable` | The inspector did not answer | 1 |
+| `unauthorized` | HTTP 401 | 4 |
+| `invalid_input` | The server rejected the request, or a named file is missing | 1 |
+| `file_conflict` | Existing files block a local action; nothing was written | 1 |
+| `tool_error` | A remote tool or protocol failure without a type of its own | 1 |
+| `internal` | An unexpected local failure | 1 |
+
+Return failures with `console.Fail(type, steps, format, args...)` or
+`console.UsageError`; `remote.DescribeError` classifies everything else
+(`ToolFailure` marks remote-path failures as `tool_error`). Do not hand-write a
+type or an exit code. A usage error names the argument or flag at fault and the
+accepted values, never echoes a pasted value, and gets a "See usage" step with
+`arkoren <command> --help` unless it supplies its own. Bare command groups print
+their help to stdout and exit 0. An abbreviated default view ends its steps with
+the same command line plus `--verbose` (`console.VerboseStep`; a bearer token
+in the line is replaced by `$ARKOREN_MCP_TOKEN`).
+
+**Flags.** Messages, steps, help text and guides spell flags with two dashes
+(`--url`, `--dry-run`); single-letter flags keep one (`-f`). The parser still
+accepts a single dash.
+
 **Report types.** A report is a struct whose fields follow reading order, never
-`map[string]any`; shared types (`Change`, `Action`) live in `console`. Add no
-field that is always true or false: a failure is an error. Long lists stay
-lists of plain values. Default reports use counts and concise diagnostics, and
-`--verbose` adds file inventories, schemas and safe build identifiers. Keep
-conflict paths as data, not comma-joined messages; previews print one stdout
-report with their exit verdict. Preserve remote payloads, raw exports,
-redaction and trust warnings in every mode.
+`map[string]any`; shared types (`Change`, `Action`, `Step`, `Warning`,
+`Problem`) live in `console`. Add no field that is always true or false, except
+`ok` on a check: a failure is otherwise an error. Long lists stay lists of plain
+values. Default reports use counts and concise diagnostics, and `--verbose` adds
+file inventories, schemas and safe build identifiers. Keep conflict paths as
+data, not comma-joined messages; previews print one stdout report with their
+exit verdict. Preserve remote payloads, raw exports, redaction and trust
+warnings in every mode.
 
 **Adding a command.** Pick one shape, add a text-mode golden test
-(`cmd/arkoren/terminal_test.go`), and update the field description in the CLI
-guide under `cmd/arkoren/skills/arkoren/references/guides/cli/`.
+(`cmd/arkoren/terminal_test.go`) and a JSON shape test, and update the field
+description in the CLI guide under
+`cmd/arkoren/skills/arkoren/references/guides/cli/`.
 
 ## Tests
 

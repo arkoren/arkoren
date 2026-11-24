@@ -575,7 +575,7 @@ func TestToolsRejectsTargetsBeforeConfiguration(t *testing.T) {
 		t.Fatalf("exit = %d; stdout = %s; stderr = %s", code, &stdout, &stderr)
 	}
 
-	contains(t, stderr.String(), "tools takes no arguments")
+	contains(t, stderr.String(), "too many arguments", "arkoren tools takes no arguments")
 }
 
 // TestLocalHelpDoesNotOfferJSON preserves the framework's human-only help.
@@ -586,7 +586,7 @@ func TestLocalHelpDoesNotOfferJSON(t *testing.T) {
 
 	page := newRig(t).run("key", "generate", "--help").expectOK(t).stdout
 
-	if strings.Count(page, "--json") != 1 || !strings.Contains(page, "--json                      Print results and errors as JSON") {
+	if strings.Count(page, "   --json ") != 1 || !strings.Contains(page, "--json                      Print results and errors as JSON") {
 		t.Fatalf("local help offers JSON discovery beyond the global flag: %s", page)
 	}
 }
@@ -753,7 +753,7 @@ func TestStaticCLIKeyGenerateHelpRetainsLeaf(t *testing.T) {
 			t.Fatalf("exit = %d; stderr = %s", code, &stderr)
 		}
 
-		contains(t, stdout.String(), "arkoren key generate", "TYPE", "--out", "mode 0600", "stdout")
+		contains(t, stdout.String(), "arkoren key generate", "KIND", "--out", "mode 0600", "stdout")
 
 		if strings.Contains(stdout.String(), "--format") {
 			t.Fatalf("leaf help includes unrelated flags: %s", &stdout)
@@ -809,7 +809,7 @@ func TestLiteralHelpDoesNotBypassCertificateApproval(t *testing.T) {
 		t.Fatalf("exit = %d; stdout = %s; stderr = %s", code, &stdout, &stderr)
 	}
 
-	contains(t, stderr.String(), "approval accepts only bare --yes")
+	contains(t, stderr.String(), "invalid value for flag --yes", "bare --yes")
 }
 
 // TestStaticCLIParserRedactsUnknownFlags keeps arbitrary flag names out of
@@ -820,7 +820,7 @@ func TestStaticCLIParserRedactsUnknownFlags(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	code := run(t.Context(), []string{"new", "billing", "--bearer-private-token"}, console.Environment{
+	code := run(t.Context(), []string{"new", "billing", "--" + strings.Repeat("bearer-private-token-", 3)}, console.Environment{
 		Stdout: &stdout, Stderr: &stderr,
 	})
 
@@ -1273,11 +1273,11 @@ func TestHelpOperationShowsFlagsExamplesAndOutput(t *testing.T) {
 		"arkoren billing:record-payment [flags] [invoice] [cents]",
 		"Kind: action",
 		"Follow: no",
-		"-address.city", "(required)", "-labels.<key>", "-items.<n>.sku", "-tags", "array of string",
+		"--address.city", "(required)", "--labels.<key>", "--items.<n>.sku", "--tags", "array of string",
 		"(one of eur, usd)", `(default "eur")`,
-		"share a name with a global flag, so only -input can set them: token",
-		"arkoren billing:record-payment INV-1 500 -address.city Paris -items.0.qty 2 -items.0.sku A -labels.env prod -tags a -tags b",
-		`arkoren billing:record-payment -input '{"address":{"city":"Paris"}`,
+		"share a name with a global flag, so only --input can set them: token",
+		"arkoren billing:record-payment INV-1 500 --address.city Paris --items.0.qty 2 --items.0.sku A --labels.env prod --tags a --tags b",
+		`arkoren billing:record-payment --input '{"address":{"city":"Paris"}`,
 		"Output (JSON Schema):")
 }
 
@@ -1448,7 +1448,7 @@ func TestURLIsRequired(t *testing.T) {
 	rg.runWith(t.Context(), runOptions{
 		env: map[string]string{},
 	}, "public:routes").expectFail(t, 2,
-		"no inspector URL: pass -url, or set ARKOREN_MCP_URL in your shell or ./.env")
+		"no inspector URL is configured", "not_configured", "Pass the endpoint with --url", "Or set ARKOREN_MCP_URL in your shell or ./.env")
 }
 
 // TestURLWithQueryOrFragmentIsUsage checks invalid inspection roots.
@@ -1541,7 +1541,7 @@ func TestUnknownCommandSuggests(t *testing.T) {
 
 	rg.run("statu").expectFail(t, 2, `unknown command "statu"`, "did you mean status")
 	rg.run("billin:payments").expectFail(t, 2, "did you mean billing:payments")
-	rg.run("billing").expectFail(t, 2, "unknown command", "<extension>:<operation>")
+	rg.run("billing").expectFail(t, 2, "unknown command", "arkoren tools")
 }
 
 // TestOperationRunsWithDefaultsApplied checks positional read filters.
@@ -1617,7 +1617,7 @@ func TestValidationErrorNamesTheFlag(t *testing.T) {
 	rg := newRig(t)
 
 	rg.run("billing:record-payment", "-input", `{"invoice":"I"}`, "-cents", "0").expectFail(t, 1,
-		"Invalid input", "-cents", "run 'arkoren billing:record-payment --help'")
+		"Invalid input", "-cents", "arkoren billing:record-payment --help")
 	rg.run("billing:record-payment", "INV", "0").expectFail(t, 1, "<cents>")
 }
 
@@ -1646,7 +1646,7 @@ func TestUnauthorizedIsExitFour(t *testing.T) {
 		inspector.Token("secret")
 	})
 
-	rg.run("public:routes").expectFail(t, 4, "pass -token or set ARKOREN_MCP_TOKEN")
+	rg.run("public:routes").expectFail(t, 4, "unauthorized", "Pass --token, or set ARKOREN_MCP_TOKEN")
 	rg.run("public:routes", "-token", "wrong").expectFail(t, 4)
 	rg.run("-token", "secret", "public:routes").expectOK(t)
 
@@ -1664,7 +1664,7 @@ func TestRemoteHelpUnauthorizedIsExitFour(t *testing.T) {
 		inspector.Token("secret")
 	})
 
-	rg.run("public:routes", "--help").expectFail(t, console.ExitAuth, "pass -token")
+	rg.run("public:routes", "--help").expectFail(t, console.ExitAuth, "Pass --token")
 	rg.run("public:routes", "--help", "--token", "secret").expectOK(t)
 }
 
@@ -1677,7 +1677,7 @@ func TestToolsUnauthorizedIsExitFour(t *testing.T) {
 		inspector.Token("secret")
 	})
 
-	rg.run("tools", "--json").expectFail(t, console.ExitAuth, "pass -token")
+	rg.run("tools", "--json").expectFail(t, console.ExitAuth, "Pass --token")
 }
 
 // TestUnreachableIsExitOneWithAHint checks connection-failure guidance.
@@ -1690,7 +1690,7 @@ func TestUnreachableIsExitOneWithAHint(t *testing.T) {
 
 	output := rg.run("public:routes")
 
-	output.expectFail(t, 1, "cannot reach the inspector at", rg.env[remote.EnvURL], "start the admin server", "forward the admin port")
+	output.expectFail(t, 1, "cannot reach the inspector at", rg.env[remote.EnvURL], "unreachable", "Start the admin server", "Forward the admin port")
 
 	if strings.Contains(output.stderr, "initialize") || strings.Contains(output.stderr, "rejected by transport") {
 		t.Fatalf("diagnostic leaked SDK wrappers: %s", output.stderr)
@@ -3128,7 +3128,7 @@ func TestExistingProjectConflictIsConcise(t *testing.T) {
 	text := env.Stderr.(*bytes.Buffer).String()
 	diagnostic := errorDocument(t, text)
 
-	if code != console.ExitUsage || env.Stdout.(*bytes.Buffer).Len() != 0 || len(text) > 1200 {
+	if code != console.ExitFailure || env.Stdout.(*bytes.Buffer).Len() != 0 || len(text) > 1200 {
 		t.Fatalf("exit = %d; stdout = %s; diagnostic length = %d", code, env.Stdout, len(text))
 	}
 
@@ -3164,7 +3164,7 @@ func TestVerboseProjectConflictListsPaths(t *testing.T) {
 	diagnostic := errorDocument(t, env.Stderr.(*bytes.Buffer).String())
 	paths := diagnostic["conflicts"].([]any)
 
-	if code != console.ExitUsage || len(paths) < 100 || len(paths) != int(diagnostic["conflict_count"].(float64)) {
+	if code != console.ExitFailure || len(paths) < 100 || len(paths) != int(diagnostic["conflict_count"].(float64)) {
 		t.Fatalf("exit = %d; conflicts = %d", code, len(paths))
 	}
 
@@ -3241,7 +3241,7 @@ func TestConflictingPreviewPrintsOneReport(t *testing.T) {
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 
-	if code != console.ExitUsage || document["conflict_count"] != float64(1) || env.Stderr.(*bytes.Buffer).Len() != 0 {
+	if code != console.ExitFailure || document["conflict_count"] != float64(1) || document["ok"] != false || env.Stderr.(*bytes.Buffer).Len() != 0 {
 		t.Fatalf("exit = %d; preview = %v; stderr = %s", code, document, env.Stderr)
 	}
 
@@ -3277,7 +3277,12 @@ func TestSkillStatusSummarizesManyEdits(t *testing.T) {
 	code := run(t.Context(), []string{"skills", "status"}, env)
 
 	output := result{code: code, stdout: env.Stdout.(*bytes.Buffer).String()}
-	document := output.expectOK(t).json(t)
+
+	if code != console.ExitFailure {
+		t.Fatalf("modified skills must exit 1: %d", code)
+	}
+
+	document := output.json(t)
 
 	primary := skillEntry(document, "arkoren")
 
@@ -3293,7 +3298,7 @@ func TestSkillStatusSummarizesManyEdits(t *testing.T) {
 
 	code = run(t.Context(), []string{"skills", "status", "--verbose"}, env)
 
-	document = (result{code: code, stdout: env.Stdout.(*bytes.Buffer).String()}).expectOK(t).json(t)
+	document = (result{code: code, stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 
 	if len(skillEntry(document, "arkoren")["modified_files"].([]any)) != 100 {
 		t.Fatal("verbose status omitted modified files")
@@ -4506,7 +4511,7 @@ func TestInputSparseArrayIndexIsUsage(t *testing.T) {
 func TestInputUnknownFlagSuggestsNames(t *testing.T) {
 	t.Parallel()
 
-	newRig(t).run("billing:record-payment", "INV", "5", "-adress.city", "x").expectFail(t, 2, "unknown flag -adress.city", "did you mean -address.city")
+	newRig(t).run("billing:record-payment", "INV", "5", "-adress.city", "x").expectFail(t, 2, "unknown flag --adress.city", "did you mean --address.city")
 }
 
 // TestInputUnknownFlagWithoutNearNameListsProperties checks fallback guidance.
@@ -5483,7 +5488,7 @@ func TestLocalReportsHonorCompactNoColor(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"new", "preview", "--dry-run", "--no-agent-files"},
-		{"skills", "status"},
+		{"skills", "install", "--dry-run"},
 		{"key", "generate", "shared", "--out", "fixture.key"},
 		{"key", "check", "shared", "fixture.key"},
 		{"certificate", "root", "generate", "--name", "Fixture", "--cert", "fixture.pem", "--key", "fixture-key.pem"},
@@ -5518,7 +5523,7 @@ func TestLocalReportsUseTerminalStyle(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"new", "preview", "--dry-run", "--no-agent-files"},
-		{"skills", "status"},
+		{"skills", "install", "--dry-run"},
 		{"key", "generate", "shared", "--out", "fixture.key"},
 		{"key", "check", "shared", "fixture.key"},
 		{"certificate", "root", "generate", "--name", "Fixture", "--cert", "fixture.pem", "--key", "fixture-key.pem"},
@@ -5620,8 +5625,8 @@ func TestSkillMutationsPrintOneJSONResult(t *testing.T) {
 			t.Fatal("completed mutation dumped its per-file plan")
 		}
 
-		if _, ok := primary["written_files"]; !ok {
-			t.Fatal("completed mutation omitted file counts")
+		if _, ok := primary["written_files"]; ok {
+			t.Fatal("completed mutation kept per-skill file counters")
 		}
 	}
 }
@@ -5675,11 +5680,11 @@ func TestJSONErrorRetainsValidationContext(t *testing.T) {
 
 	diagnostic := errorDocument(t, output.stderr)
 
-	if diagnostic["type"] != "invalid_input" || diagnostic["sources"].(map[string]any)["/address/city"] != "-address (at /city)" {
+	if diagnostic["type"] != "invalid_input" || diagnostic["sources"].(map[string]any)["/address/city"] != "--address (at /city)" {
 		t.Fatalf("diagnostic = %v", diagnostic)
 	}
 
-	if len(diagnostic["fields"].(map[string]any)["/address/city"].([]any)) == 0 || diagnostic["hint"] == "" {
+	if len(diagnostic["fields"].(map[string]any)["/address/city"].([]any)) == 0 || diagnostic["hint"] != nil || diagnostic["next_steps"] == nil {
 		t.Fatalf("diagnostic = %v", diagnostic)
 	}
 }
@@ -5692,7 +5697,7 @@ func TestJSONErrorEscapesMultilineMessages(t *testing.T) {
 	var output bytes.Buffer
 	message := "first\nsecond\t\"quoted\""
 
-	printError(&output, errors.New(message), console.Style{}, false)
+	report(console.Environment{Stderr: &output, Presentation: console.Globals{Compact: true}}, errors.New(message))
 
 	if errorDocument(t, output.String())["message"] != message || strings.Count(output.String(), "\n") != 1 {
 		t.Fatalf("diagnostic = %q", output.String())
@@ -5838,7 +5843,7 @@ func TestErrorReportsOmitDuplicateProtocolFields(t *testing.T) {
 		Details: []byte(`{"fields":{"/amount":["too large"]},"limit":9007199254740993}`),
 	}
 
-	printError(&output, failure, console.Style{}, true)
+	report(console.Environment{Stderr: &output, Presentation: console.Globals{Verbose: true}}, failure)
 
 	diagnostic := errorDocument(t, output.String())
 
@@ -6660,6 +6665,9 @@ type runOptions struct {
 	// terminal makes stdout a terminal.
 	terminal bool
 
+	// errorTerminal makes stderr a terminal, so errors print as text.
+	errorTerminal bool
+
 	// inputTerminal enables local interactive prompts independently of stdout.
 	inputTerminal bool
 
@@ -6717,6 +6725,7 @@ func (rig *rig) runWith(ctx context.Context, options runOptions, args ...string)
 		},
 		Dir:           rig.dir,
 		IsTerminal:    options.terminal,
+		ErrorTerminal: options.errorTerminal,
 		InputTerminal: options.inputTerminal,
 	})
 
@@ -6770,16 +6779,26 @@ func (result result) expectFail(t *testing.T, code int, fragments ...string) {
 	}
 }
 
-// errorDocument requires exactly one JSON error document on stderr.
+// errorDocument requires exactly one JSON error document on stderr, with an
+// error type, and returns the error members plus the top-level next_steps.
 func errorDocument(t *testing.T, text string) map[string]any {
 	t.Helper()
 
 	var document struct {
-		Error map[string]any `json:"error"`
+		Error     map[string]any `json:"error"`
+		NextSteps []any          `json:"next_steps"`
 	}
 
 	if err := json.Unmarshal([]byte(text), &document); err != nil || document.Error == nil {
 		t.Fatalf("stderr is not one JSON error object: %v\n%s", err, text)
+	}
+
+	if document.Error["type"] == nil || document.Error["type"] == "" {
+		t.Fatalf("error has no type:\n%s", text)
+	}
+
+	if document.NextSteps != nil {
+		document.Error["next_steps"] = document.NextSteps
 	}
 
 	return document.Error
@@ -6841,7 +6860,7 @@ func TestQualifiedCommandsRequireExactlyOneColon(t *testing.T) {
 func TestOldTwoWordInvocationIsRejected(t *testing.T) {
 	t.Parallel()
 
-	newRig(t).run("billing", "payments").expectFail(t, console.ExitUsage, "unknown command", "<extension>:<operation>")
+	newRig(t).run("billing", "payments").expectFail(t, console.ExitUsage, "unknown command", "arkoren tools")
 }
 
 // TestToolsRejectsTargets keeps catalog discovery separate from command help.
@@ -7098,10 +7117,10 @@ func TestHealthWaitHelpListsFailFastAlias(t *testing.T) {
 
 	rg := newRig(t)
 
-	contains(t, rg.run("app:ready", "--help").expectOK(t).stdout, "-fail_fast", "-fail-fast")
-	contains(t, rg.run("app:healthy", "--help").expectOK(t).stdout, "-fail-fast")
+	contains(t, rg.run("app:ready", "--help").expectOK(t).stdout, "--fail_fast", "--fail-fast")
+	contains(t, rg.run("app:healthy", "--help").expectOK(t).stdout, "--fail-fast")
 
-	rg.run("app:started", "--wait", "--fail-fast").expectFail(t, 2, "unknown flag -fail-fast")
+	rg.run("app:started", "--wait", "--fail-fast").expectFail(t, 2, "unknown flag --fail-fast")
 }
 
 // TestWaitDiscoveryDoesNotStealInputFlagValues verifies token ownership through

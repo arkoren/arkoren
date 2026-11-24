@@ -18,7 +18,7 @@ func skillsCLICommand(env console.Environment) *cli.Command {
 	// Extra positionals fail before bundle inspection or any filesystem change.
 	action := func(ctx context.Context, command *cli.Command) error {
 		if command.Args().Present() {
-			return console.UsageError("skills takes no positional arguments after its subcommand")
+			return console.UsageError("too many arguments: %s takes no arguments, only flags", command.FullName())
 		}
 
 		return skill.Manage(ctx, skill.Options{
@@ -41,9 +41,6 @@ func skillsCLICommand(env console.Environment) *cli.Command {
 			{Name: "install", Usage: "Install into an empty directory or matching installation", Action: action},
 			{Name: "update", Usage: "Update a managed installation, preserving unrelated files", Action: action},
 			{Name: "status", Usage: "Show bundled and installed revisions and local modifications", Action: action},
-		},
-		Action: func(context.Context, *cli.Command) error {
-			return console.UsageError("usage: arkoren skills install|update|status [--dir PATH] [--dry-run]")
 		},
 	}
 }

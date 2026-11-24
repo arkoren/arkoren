@@ -174,58 +174,59 @@ func (selection iamSelection) prerequisites() []arkPrerequisite {
 	return required
 }
 
-// notes lists what `add ark iam` cannot do itself.
-func (selection iamSelection) notes() []string {
-	notes := []string{
-		"add compose.Require(migrator.Add(compose.Use(IAM).Migrations()...)) to the Migrator provider; the migrate process builds IAM, " +
-			"so it needs the same environment as the server (database, keys, URLs) before it runs the migrations",
-		"set DATABASE_URL, for example file:app.db for SQLite",
+// steps lists what `add ark iam` cannot do itself, as next steps without commands.
+func (selection iamSelection) steps() []console.Step {
+	steps := []console.Step{
+		{Text: "Add compose.Require(migrator.Add(compose.Use(IAM).Migrations()...)) to the Migrator provider; the migrate process builds IAM, " +
+			"so it needs the same environment as the server (database, keys, URLs) before it runs the migrations"},
+		{Text: "Set DATABASE_URL, for example file:app.db for SQLite"},
 	}
 
 	if selection.has("reset") {
-		notes = append(notes, "set PASSWORD_RESET_URL to the absolute address of the page that reads the reset link from the URL fragment")
+		steps = append(steps, console.Step{Text: "Set PASSWORD_RESET_URL to the absolute address of the page that reads the reset link from the URL fragment"})
 	}
 
 	if selection.has("verification") {
-		notes = append(notes, "set EMAIL_VERIFY_URL to the absolute address of the page that reads the verification link from the URL fragment")
+		steps = append(steps, console.Step{Text: "Set EMAIL_VERIFY_URL to the absolute address of the page that reads the verification link from the URL fragment"})
 	}
 
 	if selection.jobs() {
-		notes = append(notes, keyNote("LinkSigner", "LINK_KEY_FILE"),
-			"IAMJobs sends the emails in the process whose Compose lists it; with the memory queue that is the process that serves HTTP, "+
-				"so move IAMJobs and Work to a worker when you swap the Queue driver, and deploy workers before enabling a new email feature",
-			"replace the logging Mailer with a delivering driver before production")
+		steps = append(steps, keyStep("LinkSigner", "LINK_KEY_FILE"),
+			console.Step{Text: "IAMJobs sends the emails in the process whose Compose lists it; with the memory queue that is the process that serves HTTP, " +
+				"so move IAMJobs and Work to a worker when you swap the Queue driver, and deploy workers before enabling a new email feature"},
+			console.Step{Text: "Replace the logging Mailer with a delivering driver before production"})
 	}
 
 	if selection.has("two-factor") {
-		notes = append(notes, keyNote("TwoFactorKey", "TWO_FACTOR_KEY_FILE"))
+		steps = append(steps, keyStep("TwoFactorKey", "TWO_FACTOR_KEY_FILE"))
 	}
 
 	if selection.oauth() {
-		notes = append(notes, keyNote("OAuthKey", "OAUTH_KEY_FILE"))
+		steps = append(steps, keyStep("OAuthKey", "OAUTH_KEY_FILE"))
 	}
 
 	for _, provider := range []string{"google", "github"} {
 		if selection.has(provider) {
-			notes = append(notes, oauthEnvironmentNote(provider))
+			steps = append(steps, oauthEnvironmentStep(provider))
 		}
 	}
 
-	return notes
+	return steps
 }
 
-// keyNote tells how to provision the key file one provider loads.
-func keyNote(provider, variable string) string {
-	return "create the " + provider + " key file with `arkoren key generate shared --out FILE` and set " + variable +
-		" to it, the same file for every process"
+// keyStep tells how to provision the key file one provider loads. It has no
+// command because the file name is the reader's choice.
+func keyStep(provider, variable string) console.Step {
+	return console.Step{Text: "Create the " + provider + " key file with `arkoren key generate shared --out FILE` and set " + variable +
+		" to it, the same file for every process"}
 }
 
-// oauthEnvironmentNote names the environment variables of one sign-in client.
-func oauthEnvironmentNote(provider string) string {
+// oauthEnvironmentStep names the environment variables of one sign-in client.
+func oauthEnvironmentStep(provider string) console.Step {
 	upper := strings.ToUpper(provider)
 
-	return "set " + upper + "_CLIENT_ID, " + upper + "_CLIENT_SECRET and " + upper + "_REDIRECT_URL (the absolute address of the " +
-		provider + " callback route) in the environment of every process that serves HTTP"
+	return console.Step{Text: "Set " + upper + "_CLIENT_ID, " + upper + "_CLIENT_SECRET and " + upper + "_REDIRECT_URL (the absolute address of the " +
+		provider + " callback route) in the environment of every process that serves HTTP"}
 }
 
 // AddIAM plans the identity module of ark/iam: internal/bootstrap/iam.go with
@@ -244,7 +245,7 @@ func oauthEnvironmentNote(provider string) string {
 // compose.Use(bootstrap.Work) into the Compose of options.Process, skipping
 // providers the Compose already uses. The plan lists the modules it needs with
 // their pinned versions ([Plan.Requires]) and the steps it cannot do itself
-// ([Plan.Notes]): adding the migrations to the Migrator, and the environment and
+// ([Plan.Steps]): adding the migrations to the Migrator, and the environment and
 // key files.
 //
 // It returns a usage error for an unknown feature, for a provider the module
@@ -277,7 +278,7 @@ func (project *Project) AddIAM(options IAMOptions, templates fs.FS) (*Plan, erro
 		return nil, err
 	}
 
-	plan.Notes = selection.notes()
+	plan.Steps = selection.steps()
 
 	return plan, project.planRequires(plan)
 }
@@ -309,8 +310,9 @@ func (project *Project) iamProcesses(selection iamSelection, process string) (ro
 	worker = project.composeFile(process)
 
 	if routes == "" || (selection.jobs() && worker == "") {
-		return "", "", console.UsageError("no Compose to edit in internal/bootstrap/server or internal/bootstrap/%s; "+
-			"create the process with arkoren add process NAME", process)
+		return "", "", console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Create the process with arkoren add process NAME"}},
+			"no Compose to edit in internal/bootstrap/server or internal/bootstrap/%s", process)
 	}
 
 	return routes, worker, nil
@@ -385,10 +387,10 @@ func (project *Project) AddOAuth(provider string, templates fs.FS) (*Plan, error
 		return nil, err
 	}
 
-	plan.Notes = []string{
-		oauthEnvironmentNote(provider),
-		keyNote("OAuthKey", "OAUTH_KEY_FILE"),
-		"pass the client to the identity module in internal/bootstrap/iam.go with identity.Provider(compose.Use(" + identifier + "))",
+	plan.Steps = []console.Step{
+		oauthEnvironmentStep(provider),
+		keyStep("OAuthKey", "OAUTH_KEY_FILE"),
+		{Text: "Pass the client to the identity module in internal/bootstrap/iam.go with identity.Provider(compose.Use(" + identifier + "))"},
 	}
 
 	return plan, project.planRequires(plan)

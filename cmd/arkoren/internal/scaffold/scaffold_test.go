@@ -61,8 +61,8 @@ func requireNewUsage(t *testing.T, err error) {
 
 	exit, ok := errors.AsType[*console.ExitError](err)
 
-	if !ok || exit.Code != console.ExitUsage {
-		t.Fatalf("error = %v, want usage error", err)
+	if !ok || exit.Code != console.ExitFailure {
+		t.Fatalf("error = %v, want a failure that exits 1", err)
 	}
 }
 

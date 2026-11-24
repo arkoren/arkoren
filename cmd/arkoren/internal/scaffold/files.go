@@ -51,8 +51,8 @@ func Inspect(ctx context.Context, folder string, inventory []files.File) ([]stri
 }
 
 // newResult is the JSON result of `arkoren new`, in the local action envelope.
-// A dry run and a real run share it; only the summary wording, dry_run, the
-// conflict fields and next_steps differ.
+// A dry run and a real run share it; only the summary wording, dry_run, ok,
+// the conflict fields and next_steps differ.
 type newResult struct {
 	// Summary reads "Created project <module> in <destination>", or "Would
 	// create project <module> in <destination> (<n> files)" for a dry run.
@@ -60,6 +60,10 @@ type newResult struct {
 
 	// DryRun reports that nothing was written.
 	DryRun bool `json:"dry_run,omitzero"`
+
+	// OK is false, and only then present, for a dry run whose summary says it
+	// would fail because existing paths block creation.
+	OK *bool `json:"ok,omitzero"`
 
 	// Module is the Go module path of the project.
 	Module string `json:"module"`
@@ -82,7 +86,7 @@ type newResult struct {
 	Changes []console.Change `json:"changes,omitzero"`
 
 	// NextSteps lists how to run the new project.
-	NextSteps []string `json:"next_steps,omitzero"`
+	NextSteps []console.Step `json:"next_steps,omitzero"`
 }
 
 // newChanges lists the inventory as create changes.
@@ -96,6 +100,15 @@ func newChanges(inventory []files.File) []console.Change {
 	return changes
 }
 
+// pluralPaths words a count of blocking paths: "path" or "paths".
+func pluralPaths(count int) string {
+	if count == 1 {
+		return "path"
+	}
+
+	return "paths"
+}
+
 // printNewPlan summarizes effective inputs and file counts. Full filenames are
 // opt-in because a bundled skill can contribute hundreds of generated paths.
 func printNewPlan(env console.Environment, options Options, inventory []files.File, conflicts []string) error {
@@ -106,6 +119,13 @@ func printNewPlan(env console.Environment, options Options, inventory []files.Fi
 		Destination:   options.Folder,
 		FileCount:     len(inventory),
 		ConflictCount: len(conflicts),
+	}
+
+	if len(conflicts) > 0 {
+		failing := false
+		report.OK = &failing
+		report.Summary = fmt.Sprintf("Would fail: %d existing %s block creating project %s in %s",
+			len(conflicts), pluralPaths(len(conflicts)), options.Module, options.Folder)
 	}
 
 	if env.Presentation.Verbose {

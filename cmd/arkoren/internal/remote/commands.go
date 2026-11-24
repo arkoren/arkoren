@@ -36,8 +36,12 @@ type inspectorState struct {
 	// obtaining application identity requires an explicit tool invocation.
 	App map[string]any `json:"app,omitzero"`
 
-	// Error says why the state is not ok.
+	// Error says why the state is not ok. Its remedies are not nested: the
+	// command lists them in its top-level next_steps.
 	Error console.ErrorReport `json:"error,omitzero"`
+
+	// steps resolve Error; the report hoists them to its next_steps.
+	steps []console.Step
 }
 
 // probe connects without failing the command: it returns the connection when
@@ -49,7 +53,8 @@ func (session *Session) probe(ctx context.Context) (conn *connection, state insp
 	if session.settings.url.value == "" {
 		return nil, inspectorState{
 			State: StateNotConfigured,
-			Error: console.ErrorReport{Message: noURLMessage},
+			Error: console.ErrorReport{Message: noURLMessage, Type: console.TypeNotConfigured},
+			steps: NoURLSteps(),
 		}, nil
 	}
 
@@ -63,25 +68,22 @@ func (session *Session) probe(ctx context.Context) (conn *connection, state insp
 		}, nil
 	}
 
+	doc := DescribeError(err, session.flags.Verbose, session.env.Invocation)
+
 	if _, ok := errors.AsType[*unreachableError](err); ok {
-		return nil, inspectorState{
-			State: StateUnreachable,
-			Error: DescribeError(err, session.flags.Verbose),
-		}, nil
+		return nil, inspectorState{State: StateUnreachable, Error: doc.Error, steps: doc.NextSteps}, nil
 	}
 
 	if exit, ok := errors.AsType[*console.ExitError](err); ok && exit.Code == console.ExitUsage {
 		return nil, inspectorState{}, err
 	}
 
-	return nil, inspectorState{
-		State: stateError,
-		Error: DescribeError(err, session.flags.Verbose),
-	}, err
+	return nil, inspectorState{State: stateError, Error: doc.Error, steps: doc.NextSteps}, err
 }
 
-// noURLMessage is the usage error text for a missing URL.
-const noURLMessage = "no inspector URL: pass -url, or set " + EnvURL + " in your shell or ./.env"
+// noURLMessage says the inspector URL is missing; [NoURLSteps] say how to
+// supply it.
+const noURLMessage = "no inspector URL is configured"
 
 // Tools prints JSON discovery after static argument validation. Discovery
 // failures retain their exit policy after the catalog state is written.
@@ -93,7 +95,7 @@ func (session *Session) Tools(ctx context.Context) error {
 		return failure
 	}
 
-	report := ToolsReport{Inspector: state, Tools: []ToolSummary{}}
+	report := ToolsReport{Inspector: state, Tools: []ToolSummary{}, NextSteps: state.steps}
 
 	if conn != nil {
 		report.Tools = SummarizeTools(conn.Catalog, session.flags.Verbose)
@@ -113,6 +115,10 @@ type ToolsReport struct {
 
 	// Tools is sorted by command; verbose mode adds invocation schemas and hints.
 	Tools []ToolSummary `json:"tools"`
+
+	// NextSteps resolves an inspector error: the remedies of Inspector.Error,
+	// hoisted so every document lists steps at its top level.
+	NextSteps []console.Step `json:"next_steps,omitzero"`
 }
 
 // ToolSummary is the information needed to choose a tool before reading help.
@@ -281,6 +287,10 @@ type StatusReport struct {
 
 	// TokenSource identifies the credential source; empty sources are omitted.
 	TokenSource string `json:"token_source,omitzero"`
+
+	// NextSteps resolves a failed health call: the remedies of the error in
+	// Health, hoisted to the top level.
+	NextSteps []console.Step `json:"next_steps,omitzero"`
 }
 
 // statusSummary names the connected application from its identity members, or
@@ -344,8 +354,10 @@ func (session *Session) Status(ctx context.Context) error {
 		healthy := err == nil && healthVerdict("health", health) == nil
 
 		if err != nil {
-			health, _ = json.Marshal(map[string]console.ErrorReport{"error": DescribeError(err, session.flags.Verbose)}, json.Deterministic(true))
+			doc := DescribeError(err, session.flags.Verbose, session.env.Invocation)
+			health, _ = json.Marshal(map[string]console.ErrorReport{"error": doc.Error}, json.Deterministic(true))
 			report.Health = health
+			report.NextSteps = doc.NextSteps
 		} else {
 			report.Health = SummarizeHealth(health, session.flags.Verbose)
 		}

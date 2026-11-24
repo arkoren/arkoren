@@ -13,6 +13,19 @@ import (
 	"arkoren.dev/cmd/arkoren/internal/files"
 )
 
+// The conflicts of a plan that are not about a particular file. They state the
+// obstacle only; the report's next steps say how to resolve each.
+const (
+	// conflictUnmanaged is a skill directory with files Arkoren did not create.
+	conflictUnmanaged = "unmanaged skill directory"
+
+	// conflictNoInstallation is an update of a skill that was never installed.
+	conflictNoInstallation = "no managed installation"
+
+	// conflictOtherRevision is an install over a different installed revision.
+	conflictOtherRevision = "another revision is installed"
+)
+
 // Installation describes ownership and deviations from installed hashes.
 type Installation struct {
 	// Manifest is nil when the directory has no valid ownership record.
@@ -99,9 +112,9 @@ func NewPlan(
 
 	if installed.Manifest == nil {
 		if installed.unmanaged {
-			plan.Conflicts = []string{"unmanaged skill directory; move it aside before installing"}
+			plan.Conflicts = []string{conflictUnmanaged}
 		} else if operation == "update" {
-			plan.Conflicts = []string{"no managed installation; run arkoren skills install"}
+			plan.Conflicts = []string{conflictNoInstallation}
 		}
 	} else {
 		plan.guards = maps.Clone(installed.Manifest.Files)
@@ -109,7 +122,7 @@ func NewPlan(
 		plan.Conflicts = slices.Clone(installed.Modified)
 
 		if operation == "install" && installed.Manifest.Revision != bundle.Manifest.Revision {
-			plan.Conflicts = append(plan.Conflicts, "another revision is installed; run arkoren skills update")
+			plan.Conflicts = append(plan.Conflicts, conflictOtherRevision)
 		}
 	}
 

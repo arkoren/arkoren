@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/urfave/cli/v3"
@@ -51,8 +52,13 @@ func rootCLICommand(env console.Environment, flags console.Globals) *cli.Command
 	})
 	// Walk reaches every leaf because urfave does not inherit OnUsageError.
 	// The callback cannot fail; parser errors never print framework diagnostics.
+	// Every command group prints its own help when run bare.
 	_ = root.Walk(func(command *cli.Command) error {
 		command.OnUsageError = staticCLIUsageError
+
+		if command != root && len(command.Commands) > 0 && command.Action == nil {
+			command.Action = groupAction
+		}
 
 		return nil
 	})
@@ -184,14 +190,14 @@ func localHelpArgs(root *cli.Command, args []string) []string {
 // toolsCLICommand owns whole-catalog discovery. Its native help is offline;
 // the action resolves configuration only after rejecting positional arguments.
 // Its result contains endpoint context and callable tool summaries. The
-// global -json flag, not a local one, selects JSON on a terminal.
+// global --json flag, not a local one, selects JSON on a terminal.
 func toolsCLICommand(env console.Environment, flags console.Globals) *cli.Command {
 	return &cli.Command{
 		Name:  "tools",
 		Usage: "List remote tool commands, descriptions, and capabilities",
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Present() {
-				return console.UsageError("tools takes no arguments; run 'arkoren NAME --help' for command usage")
+				return console.UsageError("too many arguments: %s takes no arguments", command.FullName())
 			}
 
 			session, err := remote.NewSession(env, flags)
@@ -200,7 +206,7 @@ func toolsCLICommand(env console.Environment, flags console.Globals) *cli.Comman
 				return err
 			}
 
-			return session.Tools(ctx)
+			return remote.ToolFailure(session.Tools(ctx))
 		},
 	}
 }
@@ -214,7 +220,7 @@ func statusCLICommand(env console.Environment, flags console.Globals) *cli.Comma
 		Usage: "Show inspector identity, protocol, health, and configuration sources",
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Present() {
-				return console.UsageError("status takes no arguments")
+				return console.UsageError("too many arguments: %s takes no arguments", command.FullName())
 			}
 
 			session, err := remote.NewSession(env, flags)
@@ -223,14 +229,131 @@ func statusCLICommand(env console.Environment, flags console.Globals) *cli.Comma
 				return err
 			}
 
-			return session.Status(ctx)
+			return remote.ToolFailure(session.Status(ctx))
 		},
 	}
 }
 
-// staticCLIUsageError replaces parser messages with a value-free diagnostic.
-// Framework errors may quote credentials supplied as unknown flags or malformed
-// values; neither their text nor wrapped cause is safe to report to the user.
-func staticCLIUsageError(_ context.Context, command *cli.Command, _ error, _ bool) error {
-	return console.UsageError("invalid arguments for %s; run '%s --help' for usage", command.FullName(), command.FullName())
+// groupAction is the action of a command that only groups subcommands. Run bare
+// it prints its help to stdout and succeeds, like the top-level command; an
+// argument that names no subcommand is a usage error listing the accepted ones.
+func groupAction(_ context.Context, command *cli.Command) error {
+	if !command.Args().Present() {
+		return cli.ShowSubcommandHelp(command)
+	}
+
+	names := make([]string, 0, len(command.Commands))
+
+	for _, subcommand := range command.Commands {
+		if !subcommand.Hidden && subcommand.Name != "help" {
+			names = append(names, subcommand.Name)
+		}
+	}
+
+	return console.UsageError("unknown command %q for %s: accepted commands are %s",
+		command.Args().First(), command.FullName(), strings.Join(names, ", "))
+}
+
+// requireArguments checks the positionals of a command whose declared arguments
+// are optional to urfave, so the message can name the one at fault: names are
+// the declared argument names in order and values what each received (empty
+// when absent). Anything left in command.Args() is surplus.
+func requireArguments(command *cli.Command, names, values []string) error {
+	for index, name := range names {
+		if values[index] == "" {
+			return console.UsageError("missing argument %s", name)
+		}
+	}
+
+	if command.Args().Present() {
+		takes := "no arguments"
+
+		if len(names) > 0 {
+			takes = strings.Join(names, " ")
+		}
+
+		return console.UsageError("too many arguments: %s takes %s", command.FullName(), takes)
+	}
+
+	return nil
+}
+
+// Framework usage failures quote the offending token, and a mistyped flag may
+// hold a credential, so the messages below are rebuilt from the flag or argument
+// name alone, never from a value.
+var (
+	unknownFlagPattern  = regexp.MustCompile(`^flag provided but not defined: -+([^=\s]+)`)
+	missingValuePattern = regexp.MustCompile(`^flag needs an argument: -+([^=\s]+)`)
+	invalidFlagPattern  = regexp.MustCompile(`for flag -*([A-Za-z0-9][A-Za-z0-9._-]*)`)
+	invalidArgPattern   = regexp.MustCompile(`for argument ([A-Za-z0-9_]+)`)
+)
+
+// staticCLIUsageError replaces parser messages with a value-free diagnostic
+// that names the flag or argument at fault and, where the command knows them,
+// the accepted flags. Framework errors may quote credentials supplied as
+// unknown flags or malformed values; neither their text nor wrapped cause is
+// safe to report to the user.
+func staticCLIUsageError(_ context.Context, command *cli.Command, cause error, _ bool) error {
+	text := cause.Error()
+
+	if match := unknownFlagPattern.FindStringSubmatch(text); match != nil {
+		return console.UsageError("unknown flag %s for %s: %s", flagLabel(match[1]), command.FullName(), acceptedFlags(command))
+	}
+
+	if match := missingValuePattern.FindStringSubmatch(text); match != nil {
+		return console.UsageError("flag %s needs a value", flagLabel(match[1]))
+	}
+
+	if match := invalidFlagPattern.FindStringSubmatch(text); match != nil {
+		return console.UsageError("invalid value for flag %s", flagLabel(match[1]))
+	}
+
+	if match := invalidArgPattern.FindStringSubmatch(text); match != nil {
+		return console.UsageError("invalid value for argument %s", match[1])
+	}
+
+	if strings.Contains(text, "can't duplicate this flag") {
+		return console.UsageError("a flag of %s was given more than once", command.FullName())
+	}
+
+	return console.UsageError("invalid arguments for %s", command.FullName())
+}
+
+// maxFlagNameRunes bounds the unknown flag name that a usage error echoes. Real
+// flag names are short words; a longer token is more likely a pasted credential
+// than a typo, so it is reported only as "a flag".
+const maxFlagNameRunes = 24
+
+// flagLabel spells an unknown flag for a usage error: "--name" when the name
+// looks like one, otherwise "(an unrecognized long token)" so a credential
+// pasted where a flag belongs never reaches the terminal or a log.
+func flagLabel(name string) string {
+	if len([]rune(name)) > maxFlagNameRunes {
+		return "(an unrecognized long token)"
+	}
+
+	return "--" + name
+}
+
+// acceptedFlags lists the flags a command and its parent groups declare,
+// excluding the global flags that every command takes, as "accepted flags are
+// --a, --b" or "it takes no flags".
+func acceptedFlags(command *cli.Command) string {
+	var names []string
+
+	lineage := command.Lineage()
+
+	for _, current := range lineage[:len(lineage)-1] {
+		for _, flag := range current.Flags {
+			if flag.Names()[0] != "help" {
+				names = append(names, "--"+flag.Names()[0])
+			}
+		}
+	}
+
+	if len(names) == 0 {
+		return "it takes no flags"
+	}
+
+	return "accepted flags are " + strings.Join(names, ", ")
 }
