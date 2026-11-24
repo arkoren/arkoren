@@ -278,6 +278,8 @@ func keyCheckCLICommand(env console.Environment) *cli.Command {
 		Name:      "check",
 		Usage:     "Validate local key material without displaying private bytes",
 		ArgsUsage: "KIND FILE",
+		Description: "Reads FILE and checks that it holds a valid key of KIND: shared, signing or exchange. " +
+			"Invalid material is reported as a problem with exit 1; private bytes are never printed.",
 		Arguments: []cli.Argument{
 			&cli.StringArg{Name: "KIND", Destination: &kind},
 			&cli.StringArg{Name: "FILE", Destination: &path},
@@ -301,6 +303,8 @@ func keyPublicCLICommand(env console.Environment) *cli.Command {
 		Name:      "public",
 		Usage:     "Export a signing or exchange public key as SPKI PEM or signing-only VAPID",
 		ArgsUsage: "KIND FILE",
+		Description: "Reads the private key in FILE and prints its public half. KIND is signing or exchange; " +
+			"--format vapid is available for signing keys only. Shared keys have no public half.",
 		Arguments: []cli.Argument{
 			&cli.StringArg{Name: "KIND", Destination: &kind},
 			&cli.StringArg{Name: "FILE", Destination: &path},

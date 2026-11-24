@@ -1015,6 +1015,56 @@ func TestRemoteHelpHonorsNoColorEnvironment(t *testing.T) {
 	}
 }
 
+// TestBareGroupHelpIsBoldOnTerminals keeps the help a command group prints when
+// run without arguments styled like its --help page, at every nesting depth.
+func TestBareGroupHelpIsBoldOnTerminals(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{{"add"}, {"add", "ark"}, {"key"}, {"skills"}, {"certificate"}, {"certificate", "root"}} {
+		var stdout, stderr bytes.Buffer
+
+		code := run(t.Context(), args, console.Environment{
+			Stdout: &stdout, Stderr: &stderr, IsTerminal: true, Dir: t.TempDir(),
+			Env: func(string) (string, bool) { return "", false },
+		})
+
+		if code != console.ExitOK || stderr.Len() != 0 {
+			t.Fatalf("%v: exit = %d; stderr = %s", args, code, &stderr)
+		}
+
+		contains(t, stdout.String(), "\x1b[1mNAME:\x1b[0m", "\x1b[1mUSAGE:\x1b[0m", "\x1b[1mCOMMANDS:\x1b[0m")
+	}
+}
+
+// TestLeafHelpDescribesEveryLocalCommand requires each local command's help to
+// carry a DESCRIPTION, so flags and arguments are never the only explanation.
+func TestLeafHelpDescribesEveryLocalCommand(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"new"}, {"check"}, {"map"}, {"tools"}, {"status"},
+		{"add", "feature"}, {"add", "process"}, {"add", "provider"}, {"add", "migration"},
+		{"add", "ark", "iam"}, {"add", "ark", "oauth"},
+		{"skills", "install"}, {"skills", "update"}, {"skills", "status"},
+		{"key", "generate"}, {"key", "check"}, {"key", "public"},
+		{"certificate", "generate"}, {"certificate", "check"}, {"certificate", "root", "generate"},
+		{"certificate", "root", "trust"}, {"certificate", "root", "untrust"},
+	} {
+		var stdout, stderr bytes.Buffer
+
+		code := run(t.Context(), append(args, "--help"), console.Environment{
+			Stdout: &stdout, Stderr: &stderr, Dir: t.TempDir(),
+			Env: func(string) (string, bool) { return "", false },
+		})
+
+		if code != console.ExitOK {
+			t.Fatalf("%v: exit = %d; stderr = %s", args, code, &stderr)
+		}
+
+		contains(t, stdout.String(), "DESCRIPTION:")
+	}
+}
+
 // TestHelpHeadingsAreBoldOnTerminals preserves generated root help while
 // distinguishing its headings from the unstyled command content.
 func TestHelpHeadingsAreBoldOnTerminals(t *testing.T) {

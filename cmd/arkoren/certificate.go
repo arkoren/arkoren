@@ -251,7 +251,9 @@ func certificateRootGenerateCLICommand(env console.Environment) *cli.Command {
 
 	return &cli.Command{
 		Name: "generate", Flags: flags,
-		Usage:        "Generate a local root certificate and private key without installing trust",
+		Usage: "Generate a local root certificate and private key without installing trust",
+		Description: "Writes a new root certificate to --cert and its private key to --key, named by --name. " +
+			"Existing files are never overwritten. Install trust separately with certificate root trust.",
 		ArgValidator: certificateNoArguments,
 		Action: func(ctx context.Context, command *cli.Command) error {
 			return generateCertificateRoot(ctx, command.String("name"), paths, env)
@@ -287,7 +289,9 @@ func certificateGenerateCLICommand(env console.Environment) *cli.Command {
 
 	return &cli.Command{
 		Name: "generate", Flags: flags,
-		Usage:        "Issue a server certificate with DNS or IP SANs; never installs trust",
+		Usage: "Issue a server certificate with DNS or IP SANs; never installs trust",
+		Description: "Signs a server certificate with the root given by --ca-cert and --ca-key and writes it to --cert " +
+			"with its private key in --key. Repeat --dns and --ip for each subject alternative name.",
 		ArgValidator: certificateNoArguments,
 		Action: func(ctx context.Context, _ *cli.Command) error {
 			return generateCertificateServer(ctx, options, env)
