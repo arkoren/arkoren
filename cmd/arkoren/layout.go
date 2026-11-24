@@ -33,11 +33,15 @@ func addCLICommand(env console.Environment) *cli.Command {
 			Flags:     append(flags, dryRun, skipTidy),
 			Action: func(ctx context.Context, command *cli.Command) error {
 				if argsUsage == "" && command.Args().Present() {
-					return console.UsageError("add %s takes no arguments; usage: arkoren add %s [flags]", name, name)
+					return console.UsageError("too many arguments: %s takes no arguments", command.FullName())
 				}
 
-				if argsUsage != "" && command.Args().Len() != 1 {
-					return console.UsageError("add %s requires exactly one %s; usage: arkoren add %s %s [flags]", name, argsUsage, name, argsUsage)
+				if argsUsage != "" && command.Args().Len() == 0 {
+					return console.UsageError("missing argument %s", argsUsage)
+				}
+
+				if argsUsage != "" && command.Args().Len() > 1 {
+					return console.UsageError("too many arguments: %s takes one %s", command.FullName(), argsUsage)
 				}
 
 				project, err := layout.Load(ctx, env.Dir)
@@ -172,7 +176,7 @@ type addResult struct {
 	Changes []console.Change `json:"changes,omitzero"`
 
 	// NextSteps lists the steps the command could not do itself.
-	NextSteps []string `json:"next_steps,omitzero"`
+	NextSteps []console.Step `json:"next_steps,omitzero"`
 }
 
 // addSummary names an add operation and its argument: "Added feature orders"
@@ -199,7 +203,7 @@ func addSummary(command *cli.Command) string {
 // create change, each inserted line an edit change whose detail is that line,
 // each pinned module a require change, and go.mod a tidy change when tidied.
 func addReport(summary string, plan *layout.Plan, dryRun, tidied bool) addResult {
-	report := addResult{Summary: summary, DryRun: dryRun, NextSteps: plan.Notes}
+	report := addResult{Summary: summary, DryRun: dryRun, NextSteps: plan.Steps}
 
 	for _, path := range files.Paths(plan.Create) {
 		report.Changes = append(report.Changes, console.Change{Action: console.ActionCreate, Path: path})
@@ -223,7 +227,8 @@ func addReport(summary string, plan *layout.Plan, dryRun, tidied bool) addResult
 }
 
 // checkResult is the JSON result of `arkoren check`: a verdict in the local
-// check envelope, with each violation as file, line, rule and message.
+// check envelope, with each violation as a problem naming its rule, message,
+// file and line.
 type checkResult struct {
 	// Summary reads "No layout violations", "1 layout violation" or "3 layout
 	// violations".
@@ -232,17 +237,19 @@ type checkResult struct {
 	// OK is false when there is at least one violation; it is always present.
 	OK bool `json:"ok"`
 
-	// Violations lists every broken rule; it is an empty array when OK.
-	Violations []layout.Violation `json:"violations"`
+	// Problems lists every broken rule; it is an empty array when OK.
+	Problems []console.Problem `json:"problems"`
 }
 
-// checkReport summarizes violations. It substitutes an empty slice for nil so
-// the JSON always carries an array.
+// checkReport summarizes violations as problems. The problem list is never
+// nil, so the JSON always carries an array.
 func checkReport(violations []layout.Violation) checkResult {
-	report := checkResult{Summary: "No layout violations", OK: true, Violations: violations}
+	report := checkResult{Summary: "No layout violations", OK: true, Problems: make([]console.Problem, 0, len(violations))}
 
-	if violations == nil {
-		report.Violations = []layout.Violation{}
+	for _, violation := range violations {
+		report.Problems = append(report.Problems, console.Problem{
+			Rule: violation.Rule, Message: violation.Message, Path: violation.File, Line: violation.Line,
+		})
 	}
 
 	if len(violations) > 0 {
@@ -264,12 +271,12 @@ func checkCLICommand(env console.Environment) *cli.Command {
 	return &cli.Command{
 		Name:  "check",
 		Usage: "Check the project against the layout rules",
-		Description: "Reports import-direction, bootstrap-shape, naming and Composer.Use violations with file:line, as JSON when piped, and exits 1 " +
+		Description: "Reports import-direction, bootstrap-shape, naming and Composer.Use violations as problems with file and line, as JSON when piped, and exits 1 " +
 			"if there are any. Works from source without building. Run it in the project root. " +
 			"See the arkoren-structure skill for the rules.",
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Present() {
-				return console.UsageError("check takes no arguments")
+				return console.UsageError("too many arguments: %s takes no arguments", command.FullName())
 			}
 
 			project, err := layout.Load(ctx, env.Dir)
@@ -305,7 +312,7 @@ func mapCLICommand(env console.Environment) *cli.Command {
 		Flags: []cli.Flag{&cli.BoolFlag{Name: "text", Usage: "Print compact text lines instead of JSON"}},
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Present() {
-				return console.UsageError("map takes no arguments")
+				return console.UsageError("too many arguments: %s takes no arguments", command.FullName())
 			}
 
 			project, err := layout.Load(ctx, env.Dir)

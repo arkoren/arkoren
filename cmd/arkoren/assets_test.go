@@ -108,7 +108,7 @@ func TestNewAgentFileCollisionBlocksWholeScaffold(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 	entries, err := os.ReadDir(env.Dir)
 
@@ -128,7 +128,7 @@ func TestNewAgentSkillCollisionBlocksWholeScaffold(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 	if _, err := os.Stat(filepath.Join(env.Dir, "go.mod")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("skill collision partially wrote scaffold: %v", err)

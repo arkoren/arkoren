@@ -308,6 +308,18 @@ func requireNewUsage(t *testing.T, err error) {
 	}
 }
 
+// requireNewConflict checks the file-conflict contract: a failure of type
+// file_conflict that exits 1, like every failure that is not usage or auth.
+func requireNewConflict(t *testing.T, err error) {
+	t.Helper()
+
+	exit, ok := errors.AsType[*console.ExitError](err)
+
+	if !ok || exit.Type != console.TypeFileConflict || exit.Code != console.ExitFailure {
+		t.Fatalf("error = %v, want a file conflict", err)
+	}
+}
+
 // TestNewDefaults checks the application files, agent bundle, and basename default.
 // No go command is invoked: ordinary scaffold tests remain fully offline.
 func TestNewDefaults(t *testing.T) {
@@ -403,7 +415,7 @@ func TestNewContainerFileCollisionsNeverOverwrite(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+		requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 		content, err := os.ReadFile(path)
 
@@ -430,7 +442,7 @@ func TestNewRequiresDestination(t *testing.T) {
 
 	requireNewUsage(t, err)
 
-	if !strings.Contains(err.Error(), "arkoren new DIR [flags]") || !strings.Contains(err.Error(), "use .") {
+	if !strings.Contains(err.Error(), "missing argument DIR") || !strings.Contains(err.Error(), "for the current one") {
 		t.Fatalf("missing destination guidance: %v", err)
 	}
 
@@ -658,7 +670,7 @@ func TestNewCollisionNeverOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 	content, err := os.ReadFile(path)
 
@@ -693,8 +705,8 @@ func TestNewNonemptyRequiresTerminal(t *testing.T) {
 
 	requireNewUsage(t, err)
 
-	if !strings.Contains(err.Error(), "--yes") {
-		t.Fatalf("missing automation hint: %v", err)
+	if exit, ok := errors.AsType[*console.ExitError](err); !ok || len(exit.Steps) != 1 || !strings.Contains(exit.Steps[0].Text, "--yes") {
+		t.Fatalf("missing automation step: %v", err)
 	}
 }
 
@@ -872,7 +884,7 @@ func TestNewDryRunReportsCollisions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--dry-run", "--verbose"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--dry-run", "--verbose"}, env))
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 
@@ -892,8 +904,8 @@ func TestNewRejectsSymlinkDestinations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{"linked", "--yes"}, env))
-	requireNewUsage(t, runNew(t.Context(), []string{"linked/child", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{"linked", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{"linked/child", "--yes"}, env))
 }
 
 // TestNewRejectsSymlinkGeneratedParent detects an internal symlink during
@@ -907,7 +919,7 @@ func TestNewRejectsSymlinkGeneratedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 	if _, err := os.Stat(filepath.Join(env.Dir, "go.mod")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("preflight wrote go.mod: %v", err)
@@ -925,7 +937,7 @@ func TestNewRejectsDanglingGeneratedSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 }
 
 // TestNewRejectsApplicationSymlink extends no-overwrite protection to the
@@ -944,7 +956,7 @@ func TestNewRejectsApplicationSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 	if _, err := os.Stat(filepath.Join(env.Dir, "go.mod")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("preflight wrote go.mod: %v", err)
@@ -1013,7 +1025,7 @@ func TestNewChecksumCollisionRejectsBeforeWriting(t *testing.T) {
 	}
 
 	err := execute(t.Context(), []string{"new", ".", "--yes"}, env)
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	entries, err := os.ReadDir(env.Dir)
 
@@ -1190,7 +1202,7 @@ func TestScaffoldPlanDryRunRejectsFileParent(t *testing.T) {
 
 	err := runNew(t.Context(), []string{"hello", "--skills-dir", "go.mod", "--dry-run", "--verbose"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 	conflicts := document["conflicts"].([]any)
@@ -1220,7 +1232,7 @@ func TestScaffoldPlanExecutionRejectsFileParent(t *testing.T) {
 
 	err := runNew(t.Context(), []string{"hello", "--skills-dir", "go.mod", "--yes"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	if !strings.Contains(err.Error(), "go.mod: generated file is also required as a directory") {
 		t.Fatalf("missing plan conflict: %v", err)
@@ -1243,7 +1255,7 @@ func TestScaffoldPlanExecutionRejectsNestedFileParent(t *testing.T) {
 
 	err := runNew(t.Context(), []string{".", "--skills-dir", "internal/bootstrap/logging.go", "--yes"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	entries, err := os.ReadDir(env.Dir)
 
@@ -1262,7 +1274,7 @@ func TestScaffoldPlanDryRunRejectsCaseFoldedFileParent(t *testing.T) {
 
 	err := runNew(t.Context(), []string{"hello", "--skills-dir", "GO.MOD", "--dry-run", "--verbose"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 	conflicts := document["conflicts"].([]any)
@@ -1288,7 +1300,7 @@ func TestScaffoldPlanExecutionRejectsCaseFoldedNestedParent(t *testing.T) {
 
 	err := runNew(t.Context(), []string{"hello", "--skills-dir", "INTERNAL/BOOTSTRAP/LOGGING.GO", "--yes"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	entries, err := os.ReadDir(env.Dir)
 

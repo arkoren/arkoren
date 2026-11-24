@@ -35,9 +35,10 @@ Success creates a self-signed ECDSA P-256 root and an unencrypted PKCS #8 privat
 key. Its default validity is 5 × 365 days, and it cannot issue intermediate CAs.
 Distribute only the public `root.pem`; keep `root-key.pem` private. The result
 has the `summary` "Generated root certificate", a `changes` list that creates
-the certificate and the private key (detail `private key`), and `next_steps`
-saying system trust was not changed and naming `arkoren certificate root trust`.
-It never contains the private contents.
+the certificate and the private key (detail `private key`), a `warnings` entry
+saying system trust was not changed, and `next_steps` whose last step carries the
+exact `arkoren certificate root trust` command. It never contains the private
+contents.
 
 Both destinations are required. Parent directories must already exist without
 symlinked parents. Existing outputs, including dangling symlinks, are refused;
@@ -237,7 +238,11 @@ and these errors do not produce a success receipt. Inspect the reported outcome
 before retrying. There is no certificate status command.
 
 All relative paths resolve from the working directory. Invalid usage exits 2;
-file, validation, trust, or output failures exit 1; success exits 0. Broken pipes
+file, trust, or output failures and a refused overwrite (`file_conflict`) exit 1;
+success exits 0. `certificate check` is a check: it always reports `ok` and
+`problems`, and material that does not parse or a key that does not match is
+`ok` false with a problem naming `cert` or `key`, exit 1, not a bare error. Only
+a file that cannot be read is an error. Broken pipes
 and short stdout writes fail even after files or trust changed. Continue with
 [TLS Certificates](../http-networking/certificates.md) for application loading
 and client-specific trust.

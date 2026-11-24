@@ -29,12 +29,12 @@
 //	arkoren [global flags] <command> --help
 //	arkoren [global flags] status
 //	arkoren --version
-//	arkoren [global flags] <native-tool-name> [-input JSON]
+//	arkoren [global flags] <native-tool-name> [--input JSON]
 //	arkoren [global flags] <extension>:<operation> [flags] [arguments]
 //
-// Remote operations require the MCP endpoint URL: -url, else ARKOREN_MCP_URL, else
+// Remote operations require the MCP endpoint URL: --url, else ARKOREN_MCP_URL, else
 // that key in ./.env. The bearer token is optional and found the same way
-// (-token, ARKOREN_MCP_TOKEN, ./.env). The value is an existing bearer API key,
+// (--token, ARKOREN_MCP_TOKEN, ./.env). The value is an existing bearer API key,
 // JWT, or OAuth access token accepted by the endpoint, not an inspection-specific
 // shared secret. The CLI does not log in, refresh tokens, manage cookies, or
 // configure mutual TLS automatically. Obtain credentials through the endpoint's
@@ -55,33 +55,37 @@
 //
 // Command results, including local operations and --version, are JSON
 // documents. On a terminal they are translated into aligned, colored text
-// (labeled lines, sections and tables); -json or -compact keeps JSON there,
+// (labeled lines, sections and tables); --json or --compact keeps JSON there,
 // and output that is not a terminal is always JSON. "arkoren tools" prints
 // command names, descriptions, and capabilities. Errors are the same kind of
-// document on stderr, judged by stderr's own terminal state. Follow emits
-// NDJSON. Help and interactive prompts remain text; explicit key exports remain
+// document on stderr, judged by stderr's own terminal state: {"error": {...},
+// "next_steps": [...]}, where error.type is always one of usage, not_configured,
+// unreachable, unauthorized, invalid_input, file_conflict, tool_error or
+// internal, and every remedy is a step ({text, command}) rather than part of the
+// message. Checks (check, key check, certificate check, skills status) always
+// report ok and problems. Follow emits NDJSON. Help and interactive prompts remain text; explicit key exports remain
 // raw PEM or base64 rather than JSON strings.
 // Default reports summarize incidental lists and diagnostics. --verbose adds
 // complete safe context, file inventories, schemas, and status/build details;
 // it does not change remote request bodies or successful tool payloads.
 //
 // A URL from implicit ./.env cannot receive a token from the environment or
-// -token: the CLI exits 2 before any network request. Pin the trusted URL with
-// -url or ARKOREN_MCP_URL, or explicitly approve a trusted file's URL with
-// -env-file path (including -env-file .env). An empty -env-file disables file
+// --token: the CLI exits 2 before any network request. Pin the trusted URL with
+// --url or ARKOREN_MCP_URL, or explicitly approve a trusted file's URL with
+// --env-file path (including --env-file .env). An empty --env-file disables file
 // loading. A URL and token both from the file still work. With no arguments,
 // the CLI prints offline help without reading configuration.
 //
 // An operation's flags are generated from its input schema. A flag is a
-// dotted path into the input JSON (-address.city Paris, -items.0.sku A,
-// -tag a -tag b), -input supplies a base object, and positional arguments
+// dotted path into the input JSON (--address.city Paris, --items.0.sku A,
+// --tag a --tag b), --input supplies a base object, and positional arguments
 // fill the operation's positional properties. Only value conversion is done
 // locally: the server is the sole validator, and its errors are mapped back
 // to the flag that set each value. Integer flags have no machine-size limit;
 // number flags accept JSON number syntax without floating-point conversion.
 // Exact numeric JSON is retained across supported SDK result/schema decoding
 // and through safe failure metadata; SDK protocol/decoding errors still fail.
-// Repeated -input flags read only the final source. Cancellation returns without
+// Repeated --input flags read only the final source. Cancellation returns without
 // closing caller-owned stdin; a blocked generic reader ends when its owner
 // releases input. Cursor follow never receives a condition-wait total deadline.
 // Before tool discovery, conventional-looking tokens provide only provisional
@@ -109,29 +113,33 @@
 //
 // The official MCP SDK negotiates protocol versions, including legacy response
 // forms. CLI metadata is optional: external tools remain directly invocable by
-// exact name, with -input for schemas outside the generated-flag subset. Only
+// exact name, with --input for schemas outside the generated-flag subset. Only
 // explicit metadata enables positional arguments or cursor polling.
 //
 // # Exit codes
 //
+// The code follows error.type:
+//
 //	0  success
-//	1  failure: unreachable, server error, 404 or 409 or 405, protocol
-//	   mismatch, stdout write failure, or "app:health" reports status "failing"
-//	2  usage: bad flag or value, unapproved project URL with a token,
-//	   missing URL, unknown command or operation
-//	4  authentication failed (401)
+//	1  unreachable, invalid_input, file_conflict,
+//	   tool_error, internal, stdout write failure, "app:health" reporting
+//	   status "failing", and any check reporting ok false
+//	2  usage and not_configured: bad flag or value, missing argument,
+//	   unapproved project URL with a token, missing URL, unknown command
+//	4  unauthorized: authentication failed (HTTP 401)
 package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/urfave/cli/v3"
 
 	"arkoren.dev/cmd/arkoren/internal/console"
 	"arkoren.dev/cmd/arkoren/internal/remote"
@@ -186,6 +194,7 @@ func main() {
 func run(ctx context.Context, args []string, env console.Environment) int {
 	output := &console.Output{Writer: env.Stdout}
 	env.Stdout = output
+	env.Invocation = args
 
 	flags, rest, err := parseGlobals(args)
 	env.Presentation = flags
@@ -201,33 +210,55 @@ func run(ctx context.Context, args []string, env console.Environment) int {
 	return report(env, err)
 }
 
-// report prints err to stderr and returns the exit code it stands for.
+// report prints err to stderr as an error document and returns the exit code
+// of its type, see [console.ExitCodeFor]. An [console.ExitError] without a
+// cause has already printed everything and only supplies its code. A usage
+// error that carries no steps gets a "See usage" step for the command that was
+// run.
 func report(env console.Environment, err error) int {
 	if err == nil {
 		return console.ExitOK
 	}
 
-	if exit, ok := errors.AsType[*console.ExitError](err); ok {
-		if exit.Err != nil {
-			printError(env.Stderr, exit.Err, env.DiagnosticStyle(), env.Presentation.Verbose)
-		}
-
+	if exit, ok := errors.AsType[*console.ExitError](err); ok && exit.Err == nil {
 		return exit.Code
 	}
 
-	printError(env.Stderr, err, env.DiagnosticStyle(), env.Presentation.Verbose)
+	document := remote.DescribeError(err, env.Presentation.Verbose, env.Invocation)
 
-	if failure, ok := errors.AsType[*remote.APIError](err); ok && failure.Status == 401 {
-		return console.ExitAuth
+	if document.Error.Type == console.TypeUsage && len(document.NextSteps) == 0 {
+		document.NextSteps = []console.Step{usageStep(env)}
 	}
 
-	return console.ExitFailure
+	// Final diagnostics cannot report their own write failure.
+	_ = console.WriteJSON(env.Stderr, document, env.DiagnosticStyle())
+
+	return console.ExitCodeFor(document.Error.Type)
 }
 
-// printError writes one JSON diagnostic using stderr's presentation. Writes are
-// best effort because reporting their failure would recurse on the same sink.
-func printError(out io.Writer, err error, presentation console.Style, verbose bool) {
-	_ = console.WriteJSON(out, map[string]console.ErrorReport{"error": remote.DescribeError(err, verbose)}, presentation) // Final diagnostics cannot report their own write failure.
+// usageStep points at the help of the command that was run: the longest leading
+// run of local command names, else the remote operation named first, else the
+// top-level help.
+func usageStep(env console.Environment) console.Step {
+	flags, rest, _ := parseGlobals(env.Invocation)
+	command := []string{"arkoren"}
+	root := rootCLICommand(env, flags)
+
+	for _, name := range rest {
+		root = root.Command(name)
+
+		if root == nil {
+			break
+		}
+
+		command = append(command, name)
+	}
+
+	if len(command) == 1 && len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		command = append(command, rest[0])
+	}
+
+	return console.Step{Text: "See usage", Command: strings.Join(append(command, "--help"), " ")}
 }
 
 // execute extracts reserved globals before constructing the static command tree.
@@ -257,7 +288,7 @@ func executeParsed(ctx context.Context, rest []string, env console.Environment, 
 	}
 
 	if root.Command(rest[0]) != nil || strings.HasPrefix(rest[0], "-") {
-		if flags.Help {
+		if flags.Help || groupInvocation(root, rest) {
 			styleCLIHelp(root, env, flags.NoColor)
 		}
 
@@ -270,7 +301,21 @@ func executeParsed(ctx context.Context, rest []string, env console.Environment, 
 		return err
 	}
 
-	return session.Remote(ctx, rest[0], rest[1:])
+	return remote.ToolFailure(session.Remote(ctx, rest[0], rest[1:]))
+}
+
+// groupInvocation reports that rest names a command group and nothing else, so
+// running it prints that group's help.
+func groupInvocation(root *cli.Command, rest []string) bool {
+	for _, name := range rest {
+		root = root.Command(name)
+
+		if root == nil {
+			return false
+		}
+	}
+
+	return len(root.Commands) > 0
 }
 
 // parseGlobals extracts the global flags from anywhere in args and returns
@@ -301,7 +346,7 @@ func parseGlobals(args []string) (console.Globals, []string, error) {
 
 		if def.Value != "" && !hasValue {
 			if index+1 >= len(args) {
-				return flags, nil, console.UsageError("flag -%s needs a value", name)
+				return flags, nil, console.UsageError("flag --%s needs a value", name)
 			}
 
 			index++
@@ -319,7 +364,7 @@ func parseGlobals(args []string) (console.Globals, []string, error) {
 			timeout, err := time.ParseDuration(value)
 
 			if err != nil {
-				return flags, nil, console.UsageError("-request-timeout: expected a duration such as 10s")
+				return flags, nil, console.UsageError("invalid value for flag --request-timeout: expected a duration such as 10s")
 			}
 
 			flags.Timeout = timeout
@@ -331,7 +376,7 @@ func parseGlobals(args []string) (console.Globals, []string, error) {
 				var err error
 
 				if enabled, err = parseBool(value); err != nil {
-					return flags, nil, console.UsageError("-%s: %v", name, err)
+					return flags, nil, console.UsageError("invalid value for flag --%s: %v", name, err)
 				}
 			}
 

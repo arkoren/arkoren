@@ -87,8 +87,9 @@ func addUses(rel string, content []byte, module string, providers []string) ([]b
 	}
 
 	if param == "" {
-		return nil, nil, console.UsageError("%s has no func Compose(compose *application.Composer); "+
-			"arkoren add inserts compose.Use calls only into that function", rel)
+		return nil, nil, console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Declare func Compose(compose *application.Composer) in " + rel + "; arkoren add inserts compose.Use calls only there"}},
+			"%s has no func Compose(compose *application.Composer)", rel)
 	}
 
 	bootstrapPath := module + "/internal/bootstrap"

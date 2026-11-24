@@ -31,7 +31,7 @@ type GlobalFlagDef struct {
 }
 
 // GlobalFlagDefs is every global flag. A property of an operation's input
-// that has one of these names can only be set with -input.
+// that has one of these names can only be set with --input.
 var GlobalFlagDefs = []GlobalFlagDef{
 	{
 		Names: []string{"url"},
@@ -56,7 +56,7 @@ var GlobalFlagDefs = []GlobalFlagDef{
 	{
 		Names: []string{"compact"},
 		Value: "",
-		Doc:   "Print each JSON document on one line (implies -json)",
+		Doc:   "Print each JSON document on one line (implies --json)",
 	},
 	{
 		Names: []string{"verbose"},
@@ -110,7 +110,7 @@ func writeExtensionHelp(out io.Writer, manifest *Catalog, extension *Group, colo
 }
 
 // WriteOperationHelp writes the full help of one operation: usage, flags
-// generated from the input schema, examples as command lines and as -input
+// generated from the input schema, examples as command lines and as --input
 // JSON, and the output schemas.
 // run's stdout boundary retains write errors; a failed flush stops rendering.
 func WriteOperationHelp(out io.Writer, extension string, operation *Operation, color bool) {
@@ -159,7 +159,7 @@ func WriteOperationHelp(out io.Writer, extension string, operation *Operation, c
 	for _, example := range operation.Examples {
 		fmt.Fprintf(out, "  %s\n", example.Description)
 		fmt.Fprintf(out, "    %s\n", exampleCommand(command, operation.Positional, example.Input))
-		fmt.Fprintf(out, "    %s -input %s\n", command, shellQuote(string(CompactJSON(example.Input))))
+		fmt.Fprintf(out, "    %s --input %s\n", command, shellQuote(string(CompactJSON(example.Input))))
 	}
 
 	fmt.Fprintf(out, "\n%s\n%s\n", helpLabel("Output (JSON Schema):", color), indentSchema(operation.Output, color))
@@ -176,12 +176,12 @@ func helpLabel(label string, color bool) string {
 }
 
 // writeInputFlags renders the supported schema subset and reserved-name advice.
-// Unsupported schema constructs remain available through whole-object -input.
+// Unsupported schema constructs remain available through whole-object --input.
 func writeInputFlags(out io.Writer, root *Schema, color bool) error {
 	table := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	flags := root.flags("", 0)
 
-	fmt.Fprintln(out, "\n"+helpLabel("Flags (each sets that path of the input; -input takes the whole object as JSON):", color))
+	fmt.Fprintln(out, "\n"+helpLabel("Flags (each sets that path of the input; --input takes the whole object as JSON):", color))
 
 	if len(flags) == 0 {
 		fmt.Fprintln(out, "  none")
@@ -202,10 +202,10 @@ func writeInputFlags(out io.Writer, root *Schema, color bool) error {
 	}
 
 	if len(shadowed) > 0 {
-		fmt.Fprintf(out, "\nThese properties share a name with a global flag, so only -input can set them: %s\n", strings.Join(shadowed, ", "))
+		fmt.Fprintf(out, "\nThese properties share a name with a global flag, so only --input can set them: %s\n", strings.Join(shadowed, ", "))
 	}
 
-	fmt.Fprintln(out, "\nGlobal flags: -input, -f, -json, -compact, -verbose, -request-timeout, -url, -token, -no-color, -env-file (run 'arkoren --help' for global flag usage).")
+	fmt.Fprintln(out, "\nGlobal flags: --input, -f, --json, --compact, --verbose, --request-timeout, --url, --token, --no-color, --env-file (run 'arkoren --help' for global flag usage).")
 
 	return nil
 }
@@ -233,7 +233,7 @@ func inputFlagDescription(info flagInfo) string {
 // inputFlagSpelling advertises kebab aliases only when the input resolver would
 // map them back to this exact property and no global flag reserves the name.
 func inputFlagSpelling(root *Schema, info flagInfo) string {
-	spelling := "-" + info.path
+	spelling := "--" + info.path
 	alias := strings.ReplaceAll(info.path, "_", "-")
 
 	if alias == info.path || isGlobalName(alias) {
@@ -243,7 +243,7 @@ func inputFlagSpelling(root *Schema, info flagInfo) string {
 	path, _, err := root.flagPath(alias)
 
 	if err == nil && strings.Join(path, ".") == info.path {
-		return spelling + ", -" + alias
+		return spelling + ", --" + alias
 	}
 
 	return spelling
@@ -331,7 +331,7 @@ func exampleCommand(command string, positional []string, input jsontext.Value) s
 	members, ok := tree.(map[string]any)
 
 	if err != nil || !ok {
-		return command + " -input " + shellQuote(string(CompactJSON(input)))
+		return command + " --input " + shellQuote(string(CompactJSON(input)))
 	}
 
 	parts := []string{command}
@@ -412,9 +412,9 @@ func flagsFor(prefix string, node any) []string {
 	case jsontext.Value:
 		switch string(typed) {
 		case "true":
-			return []string{"-" + prefix}
+			return []string{"--" + prefix}
 		case "false":
-			return []string{"-" + prefix + "=false"}
+			return []string{"--" + prefix + "=false"}
 		}
 
 		return []string{flagText(prefix, scalarText(typed))}
@@ -424,13 +424,13 @@ func flagsFor(prefix string, node any) []string {
 }
 
 // flagText renders one flag with its value, quoted for a shell. A value that
-// starts with a dash uses the -name=value form so it is not read as a flag.
+// starts with a dash uses the --name=value form so it is not read as a flag.
 func flagText(name, value string) string {
 	if strings.HasPrefix(value, "-") {
-		return "-" + name + "=" + shellQuote(value)
+		return "--" + name + "=" + shellQuote(value)
 	}
 
-	return "-" + name + " " + shellQuote(value)
+	return "--" + name + " " + shellQuote(value)
 }
 
 // shellQuote quotes text for a POSIX shell only when it needs it.

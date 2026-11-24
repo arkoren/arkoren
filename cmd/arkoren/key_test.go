@@ -80,10 +80,14 @@ func TestKeyCheckRejectsNon32ByteSecrets(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err := execute(t.Context(), []string{"key", "check", "shared", "invalid.key"}, env)
+		env.Stdout.(*bytes.Buffer).Reset()
 
-		if !errors.Is(err, key.ErrInvalid) || env.Stdout.(*bytes.Buffer).Len() != 0 {
-			t.Fatalf("shared accepted %d bytes or printed success: %v", size, err)
+		err := execute(t.Context(), []string{"key", "check", "shared", "invalid.key"}, env)
+		exit, failed := errors.AsType[*console.ExitError](err)
+
+		if !failed || exit.Code != console.ExitFailure || exit.Err != nil ||
+			!strings.Contains(env.Stdout.(*bytes.Buffer).String(), `"ok": false`) {
+			t.Fatalf("shared accepted %d bytes or reported success: %v\n%s", size, err, env.Stdout)
 		}
 	}
 }
@@ -186,7 +190,8 @@ func TestKeyPublicAndCheck(t *testing.T) {
 
 	document := (result{stdout: output.String()}).json(t)
 
-	if document["category"] != "signing" || document["summary"] != "Valid signing key" || document["path"] != filepath.Join(env.Dir, "vapid.pem") || len(document) != 3 {
+	if document["kind"] != "signing" || document["ok"] != true || document["summary"] != "Valid signing key" ||
+		document["path"] != filepath.Join(env.Dir, "vapid.pem") || len(document["problems"].([]any)) != 0 || len(document) != 5 {
 		t.Fatal("validation output leaked material")
 	}
 }
@@ -269,7 +274,7 @@ func TestKeyRejectsUsage(t *testing.T) {
 	t.Parallel()
 
 	for _, args := range [][]string{
-		{}, {"generate"}, {"generate", "rsa", "--out", "key"}, {"generate", "shared", "--force"},
+		{"generate"}, {"generate", "rsa", "--out", "key"}, {"generate", "shared", "--force"},
 		{"generate", "shared", "--out", "key", "extra"}, {"public", "shared", "key"},
 		{"check", "signing"}, {"unknown", "signing", "key"},
 		{"public", "exchange", "missing", "--format", "vapid"},
@@ -300,9 +305,12 @@ func TestKeyInvalidFileDoesNotEchoContents(t *testing.T) {
 	}
 
 	err := runKey(t.Context(), []string{"check", "shared", "bad"}, env)
+	exit, failed := errors.AsType[*console.ExitError](err)
+	report := env.Stdout.(*bytes.Buffer).String()
 
-	if !errors.Is(err, key.ErrInvalid) || strings.Contains(err.Error(), "sensitive-invalid-content") {
-		t.Fatalf("unsafe validation error: %v", err)
+	if !failed || exit.Code != console.ExitFailure || strings.Contains(report, "sensitive-invalid-content") ||
+		!strings.Contains(report, `"ok": false`) || !strings.Contains(report, `"problems"`) {
+		t.Fatalf("unsafe validation report: %v\n%s", err, report)
 	}
 }
 

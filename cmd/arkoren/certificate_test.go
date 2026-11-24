@@ -250,7 +250,7 @@ func TestCertificateRejectsUsageBeforeEffects(t *testing.T) {
 	t.Parallel()
 
 	for _, args := range [][]string{
-		{}, {"root"}, {"unknown"}, {"root", "unknown"},
+		{"unknown"}, {"root", "unknown"},
 		{"root", "generate", "--cert", "root.pem", "--key", "root-key.pem"},
 		{"root", "generate", "--name", "Root", "--cert", "root.pem"},
 		{"root", "generate", "--name", "Root", "--cert", "root.pem", "--key", "-"},
@@ -343,12 +343,15 @@ func TestCertificateMismatchedPairFails(t *testing.T) {
 	}
 
 	err = runCertificate(t.Context(), []string{"check", "--cert", "root.pem", "--key", "wrong-key.pem"}, env)
+	exit, failed := errors.AsType[*console.ExitError](err)
+	report := env.Stdout.(*bytes.Buffer).String()
 
-	if err == nil || env.Stdout.(*bytes.Buffer).Len() != 0 {
-		t.Fatalf("mismatched pair check = %v", err)
+	if !failed || exit.Code != console.ExitFailure || exit.Err != nil || !strings.Contains(report, `"ok": false`) ||
+		!strings.Contains(report, `"field": "key"`) {
+		t.Fatalf("mismatched pair check = %v\n%s", err, report)
 	}
 
-	if strings.Contains(err.Error(), "PRIVATE KEY") {
+	if strings.Contains(report, "PRIVATE KEY") {
 		t.Fatal("private PEM leaked")
 	}
 }
@@ -365,13 +368,14 @@ func TestCertificateMalformedMaterialSecretFree(t *testing.T) {
 	}
 
 	err := runCertificate(t.Context(), []string{"check", "--cert", "bad.pem"}, env)
+	report := env.Stdout.(*bytes.Buffer).String()
 
-	if err == nil {
-		t.Fatal("accepted malformed certificate")
+	if exit, failed := errors.AsType[*console.ExitError](err); !failed || exit.Code != console.ExitFailure || !strings.Contains(report, `"ok": false`) {
+		t.Fatalf("accepted malformed certificate: %v\n%s", err, report)
 	}
 
-	if strings.Contains(err.Error(), "sensitive-invalid-material") || env.Stdout.(*bytes.Buffer).Len() != 0 {
-		t.Fatalf("unsafe error/output: %v", err)
+	if strings.Contains(report, "sensitive-invalid-material") {
+		t.Fatalf("unsafe output: %s", report)
 	}
 }
 

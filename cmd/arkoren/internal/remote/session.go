@@ -3,6 +3,7 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,10 @@ func NewSession(env console.Environment, flags console.Globals) (*Session, error
 	found, err := resolveSettings(flags.URL, flags.Token, flags.EnvFile, env.Env, env.Dir)
 
 	if err != nil {
+		if _, typed := errors.AsType[*console.ExitError](err); typed {
+			return nil, err
+		}
+
 		return nil, console.UsageError("%v", err)
 	}
 
@@ -38,9 +43,9 @@ type Session struct {
 	wait *WaitBudget
 }
 
-// style returns how to print results: text on a terminal unless -json or
-// -compact, JSON indented unless -compact, and colored only on a terminal
-// that has not opted out with -no-color or NO_COLOR.
+// style returns how to print results: text on a terminal unless --json or
+// --compact, JSON indented unless --compact, and colored only on a terminal
+// that has not opted out with --no-color or NO_COLOR.
 func (session *Session) style() console.Style {
 	env := session.env
 	env.Presentation = session.flags
@@ -66,7 +71,7 @@ func (session *Session) print(raw []byte) {
 // usage error that tells how to set it.
 func (session *Session) client() (*Client, error) {
 	if session.settings.url.value == "" {
-		return nil, console.UsageError("%s", noURLMessage)
+		return nil, console.Fail(console.TypeNotConfigured, NoURLSteps(), "%s", noURLMessage)
 	}
 
 	base, err := ParseBaseURL(session.settings.url.value)
@@ -181,7 +186,8 @@ func (manifest *Catalog) resolveQualified(word string) (*Group, *Operation, erro
 	extensionName, operationName, _ := strings.Cut(word, ":")
 
 	if extensionName == "" || operationName == "" || strings.Contains(operationName, ":") {
-		return nil, nil, console.UsageError("invalid command %q: use <extension>:<operation> with one colon and nonempty names", word)
+		return nil, nil, console.Fail(console.TypeUsage, []console.Step{{Text: "List the commands", Command: "arkoren tools"}},
+			"invalid command %q: expected <extension>:<operation> with one colon and nonempty names", word)
 	}
 
 	extension := manifest.extension(extensionName)
@@ -195,11 +201,13 @@ func (manifest *Catalog) resolveQualified(word string) (*Group, *Operation, erro
 	if len(operations) == 0 {
 		names := operationCommands(extension)
 
-		return nil, nil, console.UsageError("unknown operation %q of %s%s; run 'arkoren %s: --help' to list operations", operationName, extensionName, suggest(word, names), extensionName)
+		return nil, nil, console.Fail(console.TypeUsage, []console.Step{{Text: "List the operations of " + extensionName, Command: "arkoren " + extensionName + ": --help"}},
+			"unknown operation %q of %s%s", operationName, extensionName, suggest(word, names))
 	}
 
 	if len(operations) > 1 {
-		return nil, nil, console.UsageError("ambiguous command %q; use an exact native tool name from 'arkoren tools'", word)
+		return nil, nil, console.Fail(console.TypeUsage, []console.Step{{Text: "Use an exact native tool name from the list", Command: "arkoren tools"}},
+			"ambiguous command %q: several tools advertise it", word)
 	}
 
 	return extension, operations[0], nil
@@ -214,7 +222,8 @@ func (manifest *Catalog) unknownCommand(word string) error {
 		names = append(names, operationCommands(&extension)...)
 	}
 
-	return console.UsageError("unknown command %q%s; use <extension>:<operation> or run 'arkoren tools' to list the commands", word, suggest(word, names))
+	return console.Fail(console.TypeUsage, []console.Step{{Text: "List the commands", Command: "arkoren tools"}},
+		"unknown command %q%s", word, suggest(word, names))
 }
 
 // operationCommands returns the executable qualified names of an extension's

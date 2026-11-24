@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"arkoren.dev/cmd/arkoren/internal/console"
 )
 
 // Environment variable names, which are also the only keys read from a .env
@@ -20,11 +22,11 @@ const (
 )
 
 // defaultEnvFile is the file read, relative to the working directory, when
-// -env-file is not given.
+// --env-file is not given.
 const defaultEnvFile = ".env"
 
 // Where a setting came from, as shown by status and version. A custom
-// -env-file is reported by its path instead of [fromDotEnv].
+// --env-file is reported by its path instead of [fromDotEnv].
 const (
 	fromFlag   = "flag"
 	fromEnv    = "env"
@@ -36,7 +38,7 @@ type setting struct {
 	// value is the setting's text; empty means unset.
 	value string
 
-	// from is [fromFlag], [fromEnv], [fromDotEnv], or the -env-file path.
+	// from is [fromFlag], [fromEnv], [fromDotEnv], or the --env-file path.
 	from string
 }
 
@@ -115,8 +117,10 @@ func resolveSettings(flagURL, flagToken string, envFile *string, env func(string
 
 	if envFile == nil && found.url.from == fromDotEnv &&
 		(found.token.from == fromFlag || found.token.from == fromEnv) {
-		return settings{}, errors.New("inspector URL from implicit ./.env cannot use an environment or flag token; " +
-			"pin the trusted URL with -url or ARKOREN_MCP_URL, or approve a trusted file with -env-file PATH")
+		return settings{}, console.Fail(console.TypeUsage, []console.Step{
+			{Text: "Pin the trusted URL with --url or " + EnvURL},
+			{Text: "Or approve a trusted file with --env-file PATH"},
+		}, "inspector URL from implicit ./.env cannot use an environment or flag token")
 	}
 
 	return found, nil

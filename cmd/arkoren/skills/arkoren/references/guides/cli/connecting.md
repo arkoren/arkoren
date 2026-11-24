@@ -83,8 +83,11 @@ URL and token independently select their first nonempty value:
 | Credential | `--token` | `ARKOREN_MCP_TOKEN` environment variable | `ARKOREN_MCP_TOKEN` in `./.env` |
 
 Empty values do not clear lower-precedence values. `ARKOREN_INSPECT_TOKEN` is
-not an alias. Without a URL, tool calls and `status` fail with exit 2; `tools`
-instead reports `inspector.state: "not configured"`.
+not an alias. Without a URL, tool calls and `status` fail with a `not_configured` error and
+exit 2, whose `next_steps` say how to set the URL; `tools` instead reports
+`inspector.state: "not configured"` and lists the same steps at its top level.
+A bare word that is not a local command, with no URL or no answer, is reported as
+an unknown command with those steps and `arkoren --help`.
 
 Only those two keys are read from the current directory's `.env`; parent
 directories are not searched. The file may be absent. Its syntax supports

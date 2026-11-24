@@ -104,7 +104,7 @@ func TestAddFeatureWritesFilesAndRegistration(t *testing.T) {
 	}
 }
 
-// TestAddRefusesExistingFile reports a usage error and keeps the file.
+// TestAddRefusesExistingFile reports a file conflict and keeps the file.
 func TestAddRefusesExistingFile(t *testing.T) {
 	t.Parallel()
 
@@ -112,8 +112,8 @@ func TestAddRefusesExistingFile(t *testing.T) {
 
 	if _, err := runLayout(t, env, "add", "process", "server"); err == nil {
 		t.Fatal("overwrote cmd/server")
-	} else {
-		requireNewUsage(t, err)
+	} else if exit, ok := errors.AsType[*console.ExitError](err); !ok || exit.Type != console.TypeFileConflict || exit.Code != console.ExitFailure {
+		t.Fatalf("error = %v, want a file conflict", err)
 	}
 }
 
@@ -140,8 +140,10 @@ func TestLayoutCommandsRefuseOtherDirectory(t *testing.T) {
 
 		requireNewUsage(t, err)
 
-		if !strings.Contains(err.Error(), "arkoren-structure") {
-			t.Fatalf("%v: error does not name the skill: %v", args, err)
+		exit, _ := errors.AsType[*console.ExitError](err)
+
+		if len(exit.Steps) == 0 || !strings.Contains(exit.Steps[len(exit.Steps)-1].Text, "arkoren-structure") {
+			t.Fatalf("%v: steps do not name the skill: %v", args, err)
 		}
 	}
 }
@@ -152,7 +154,7 @@ func TestCheckCleanProjectReportsOK(t *testing.T) {
 
 	report, err := runLayout(t, scaffoldedProject(t), "check")
 
-	if err != nil || report["ok"] != true || report["summary"] != "No layout violations" || len(report["violations"].([]any)) != 0 {
+	if err != nil || report["ok"] != true || report["summary"] != "No layout violations" || len(report["problems"].([]any)) != 0 {
 		t.Fatalf("report = %v, err = %v", report, err)
 	}
 }
@@ -179,9 +181,9 @@ func TestCheckViolationsExitWithFailure(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 
-	violation := report["violations"].([]any)[0].(map[string]any)
+	violation := report["problems"].([]any)[0].(map[string]any)
 
-	if report["ok"] != false || report["summary"] != "1 layout violation" || violation["rule"] != "banned-package-name" || violation["file"] != "internal/util/util.go" || violation["line"] != 1.0 {
+	if report["ok"] != false || report["summary"] != "1 layout violation" || violation["rule"] != "banned-package-name" || violation["path"] != "internal/util/util.go" || violation["line"] != 1.0 {
 		t.Fatalf("report = %v", report)
 	}
 }
@@ -316,7 +318,7 @@ func TestAddArkIAMDryRunReportsPlan(t *testing.T) {
 		t.Fatalf("requires = %v", requires)
 	}
 
-	if steps := report["next_steps"].([]any); !strings.Contains(steps[0].(string), "Migrations()") {
+	if steps := report["next_steps"].([]any); !strings.Contains(steps[0].(map[string]any)["text"].(string), "Migrations()") {
 		t.Fatalf("next_steps = %v", steps)
 	}
 

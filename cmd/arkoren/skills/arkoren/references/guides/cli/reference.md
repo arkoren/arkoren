@@ -27,11 +27,11 @@ Uppercase operands below are values you supply, not literal words.
 | `arkoren new DIR [flags]` | Create a starter and resolve Go dependencies; `--skip-tidy` creates files offline. Existing files are never overwritten. |
 | `arkoren add feature NAME [--web --jobs --flow --tools --events --schedules] [--process NAME]` | Create the plain-Go feature `internal/NAME` with the requested surfaces and its providers in `internal/bootstrap/NAME.go`, and add `compose.Use` lines to the `Compose` of `internal/bootstrap/PROCESS` (default `server`). |
 | `arkoren add process\|provider\|migration NAME` | Create `cmd/NAME` with its process root, a bootstrap provider, or a registered migration. All `add` forms accept `--dry-run` and `--skip-tidy`, never overwrite, and run `go mod tidy` when new files import an unrequired module. |
-| `arkoren check` | Report layout rule violations with file and line; exit 1 if there are any. |
+| `arkoren check` | Report layout rule violations as problems with file and line; exit 1 if there are any. |
 | `arkoren map [--text]` | Print processes with their `Compose` statements, providers by file, features and migrations from source. |
 | `arkoren skills install\|update\|status [flags]` | Manage the CLI's bundled documentation offline. |
-| `arkoren key generate TYPE --out FILE` | Generate `shared`, `signing`, or `exchange` private material. |
-| `arkoren key check TYPE FILE` | Validate stored key material without exporting it. |
+| `arkoren key generate KIND --out FILE` | Generate `shared`, `signing`, or `exchange` private material. |
+| `arkoren key check KIND FILE` | Validate stored key material without exporting it; exit 1 if it is invalid. |
 | `arkoren key public signing\|exchange FILE [--format pem]` | Export SPKI public-key PEM. |
 | `arkoren key public signing FILE --format vapid` | Export a VAPID public key. |
 | `arkoren certificate root generate --name NAME --cert FILE --key FILE` | Generate a root CA pair without installing trust. |
@@ -115,12 +115,13 @@ cleanup errors cannot replace a completed verdict or stdout failure.
 | `--yes` | Approve a nonempty directory, never a generated-file collision. |
 
 See [Creating a Project](../first-steps/creating-a-project.md) for filesystem
-safety and dependency setup. A conflicting preview prints one stdout report and
-exits 2. Non-preview conflicts go to stderr with `conflict_count` and
-`destination`; neither path writes files. Add `--verbose` for per-path lists.
+safety and dependency setup. A conflicting preview prints one stdout report with `ok` false and
+exits 1, the status the real run would have. Non-preview conflicts go to stderr
+as a `file_conflict` error with `conflict_count` and `destination`; neither path
+writes files. Add `--verbose` for per-path lists.
 
 `add`, `check` and `map` read the current directory, which must hold the project
-layout; otherwise they exit 2. See [Layout Commands](layout-commands.md) for
+layout; otherwise they fail with a `usage` error and exit 2. See [Layout Commands](layout-commands.md) for
 the flags, insertion points and rules. `map --text` prints text lines, the only
 local report that never goes through the JSON renderer.
 
@@ -129,8 +130,10 @@ local report that never goes through the JSON renderer.
 after the subcommand. They do not fetch from GitHub, read endpoint settings, or
 edit `AGENTS.md`. Install requires an empty destination or matching unchanged
 installation; update requires a managed installation. Local changes and
-new-path collisions fail with exit 2 before writes. Status reports differences
-without failing merely because files changed. See
+new-path collisions fail with a `file_conflict` error and exit 1 before writes;
+a preview that would fail reports `ok` false, the conflicts as `problems` and
+the same exit status. Status is a check: it reports `ok` and `problems` and
+exits 1 when any skill is missing, out of date or locally modified. See
 [Working with Agents](../agent-skills/working-with-agents.md) for recovery and
 ownership.
 
@@ -195,8 +198,8 @@ that reader.
 | `--follow` | Compact NDJSON records and loss notices on the same stdout stream. |
 | Help and interactive confirmation | Text. |
 | `key public` and `key generate --out -` | Raw PEM or base64, not JSON strings. |
-| Errors | On stderr: text on a terminal, otherwise, or with `--json`, JSON with an `error` object. |
-| Trust warning before mutation | On stderr even with `--yes`: text on a terminal, otherwise JSON with a `warning` object. |
+| Errors | On stderr: text on a terminal, otherwise, or with `--json`, JSON with an `error` object and top-level `next_steps`. |
+| Trust warning before mutation | On stderr even with `--yes`: text on a terminal, otherwise JSON with a top-level `warnings` array. |
 
 On a terminal, results and errors are translated into colored text: aligned
 labels, nested objects as headed sections, and arrays of flat objects as tables.
@@ -253,20 +256,32 @@ cached checks; external servers define their own role semantics.
 Local reports start with a `summary` sentence and use these fields rather than
 completion prose. Actions then list `changes` (each with `action` `create`,
 `edit`, `remove`, `write`, `require` or `tidy`, a `path`, and an optional
-`detail`) and `next_steps`; a preview says "Would …" and sets `dry_run`. A
-failure is an error, never a result flag.
+`detail`), optional `warnings` and `next_steps`; a preview says "Would …" and
+sets `dry_run`. A `path` is relative to the project for project files and
+absolute for any other file. A failure is an error, never a result flag; checks
+are the exception and always carry `ok`.
+
+`next_steps` is always a top-level array of `{text, command}` objects, on
+successes and errors alike. `text` is one imperative sentence; `command` is
+present only when a single exact, pasteable command performs the step.
+`warnings` is an array of `{message, details}` objects for what a command left
+alone, such as unchanged system trust. A check reports `ok` and a `problems`
+array of `{rule or field, message, path, line}` objects, empty when `ok`. Text
+output shortens 64-character revisions and fingerprints to 12 characters and
+prints paths under the working directory relative to it; JSON keeps both exact.
 
 | Command | Result fields after `summary` |
 | --- | --- |
-| `new` | `dry_run` (previews), `module`, `destination`, `file_count`, `conflict_count` (previews), then `next_steps` for a real run. Verbose adds `conflicts` and one `create` change per file. |
+| `new` | `dry_run` (previews), `ok` (only `false`, for a preview that would fail), `module`, `destination`, `file_count`, `conflict_count` (previews), then `next_steps` for a real run. Verbose adds `conflicts` and one `create` change per file. |
 | `add` | `dry_run`, `changes`: `create` per file, `edit` per inserted line, `require` per pinned module, `tidy` when run; `next_steps`. |
-| `check` | `ok` and `violations`, each with `file`, `line`, `rule`, `message`. |
+| `check` | `ok` and `problems`, each with `rule`, `path`, `line`, `message`. |
 | `map` | No summary: `module`, `processes`, `bootstrap`, `features`, `migrations`, `platform`; empty groups are omitted. |
-| `skills` | `dry_run` (previews) and `skills`, one entry per skill with `name`, `state`, `directory`, `installed_revision`, `bundled_revision`, `modified_file_count`; install/update add `written_files`, `removed_files`, `conflict_count`. Verbose adds `modified_files`, `conflicts` and `write`/`remove` changes. |
-| `key generate` to file | `category`, and a `create` change for the absolute `path`; no private contents. |
-| `key check` | `category`, absolute `path`. |
-| Certificate generation | `changes` creating the certificate and the private key; `next_steps` for a root. |
-| `certificate check` | `certificate`, optional `key` and `key_matched`, and `not_checked` (`expiry`, `trust`). |
+| `skills install\|update` | `dry_run` (previews), `ok` (only `false`, for a preview that would fail) and `skills`, one entry per skill with `name`, `state`, `directory`, `installed_revision`, `bundled_revision`, `modified_file_count`. Conflicts of a failing preview are `problems` with `next_steps`. The summary counts the files; verbose adds `modified_files` and a `create`, `write` or `remove` change per file. |
+| `skills status` | `ok`, `skills` as above, `problems` (an empty array when `ok`) and `next_steps` that install or update. |
+| `key generate` to file | `kind`, and a `create` change for the absolute `path`; no private contents. |
+| `key check` | `ok`, `kind`, absolute `path`, `problems`. |
+| Certificate generation | `changes` creating the certificate and the private key; for a root, a `warnings` entry that system trust is unchanged and `next_steps` including the trust command. |
+| `certificate check` | `ok`, `certificate`, optional `key` and `key_matched`, `not_checked` (`expiry`, `trust`) and `problems` naming the `cert` or `key` field. |
 | Root trust/untrust | `action`, `target`, `sha256`. |
 | `--version` | No summary: `version`; verbose adds `module`, `go_version`, `revision`, `revision_at` and `modified`, not dependency or compiler-setting dumps. |
 
@@ -283,13 +298,31 @@ more results exist; JSON keeps every field.
 
 ## Failure Diagnostics
 
-`error.message` is present in emitted error reports. Optional context includes
-`type`, actual HTTP `status`, safe `details`, and a `hint`; empty values and
-duplicate protocol title/detail messages are omitted. Validation `fields` retain
+An error is the document `{"error": {...}, "next_steps": [...]}`. `error.message`
+and `error.type` are always present; the message says what went wrong and never
+what to do, which is what `next_steps` is for. Optional context includes the
+actual HTTP `status` and safe `details`; empty values and duplicate protocol
+title/detail messages are omitted. When the default view abbreviates
+something, the last step repeats your command with `--verbose` added. Validation `fields` retain
 JSON pointers; `sources` map them to supplied flags or positionals where known.
-For example, `/address/city` can map to `-address.city`. Validation fields are
+For example, `/address/city` can map to `--address.city`. Validation fields are
 not duplicated in `details`. Embedded discovery and health errors use this same
-shape.
+shape, with their steps hoisted to the top-level `next_steps`.
+
+`error.type` is one of a closed list. A remote tool may report types of its own,
+which pass through, except that it can never use `usage`, `not_configured` or
+`unauthorized`; those become `tool_error`.
+
+| Type | Meaning | Exit |
+| --- | --- | --- |
+| `usage` | Unknown command, missing or surplus argument, unknown or malformed flag. The message names the argument or flag and the accepted values. | 2 |
+| `not_configured` | A required setting, such as the inspector URL, is absent. | 2 |
+| `unreachable` | The inspector did not answer. | 1 |
+| `unauthorized` | HTTP 401. | 4 |
+| `invalid_input` | The server rejected the request, or a named file is missing. | 1 |
+| `file_conflict` | Existing files block a local action; nothing was written. | 1 |
+| `tool_error` | A remote tool or protocol failure without a type of its own. | 1 |
+| `internal` | An unexpected local failure. | 1 |
 
 Default diagnostics bound long text and show at most three validation fields
 with one message each. `truncated`, `omitted_fields`, and `details_omitted` expose
@@ -316,9 +349,11 @@ precedence over all other verdicts, including clean follow cancellation.
 | Code | Meaning |
 | --- | --- |
 | `0` | Successful command or clean follow cancellation. A false immediate condition can still be a successful read. |
-| `1` | Connection, protocol, execution, structured tool failure, deadline, file/trust operation, or stdout failure; also a direct health-role report with `status: "failing"`, and `check` reporting violations. |
-| `2` | Invalid usage/configuration, unapproved file URL with an inherited token, missing required endpoint, unknown command, or ambiguous alias. |
-| `4` | Actual HTTP 401 authentication failure, not a tool failure with a similarly named code. |
+| `1` | Connection, protocol, execution, structured tool failure, deadline, file conflict, file/trust operation, or stdout failure; also a direct health-role report with `status: "failing"`, and any check that reports `ok` false (`check`, `key check`, `certificate check`, `skills status`). |
+| `2` | Error types `usage` and `not_configured`: invalid usage/configuration, unapproved file URL with an inherited token, missing required endpoint, unknown command, or ambiguous alias. |
+| `4` | Error type `unauthorized`: actual HTTP 401 authentication failure, not a tool failure with a similarly named code. |
+
+The code always follows `error.type` as the table above lists it.
 
 The direct health-role verdict applies after its report is printed; pending or
 stale health does not trigger that verdict. `status` does not apply the gate.

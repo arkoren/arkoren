@@ -42,7 +42,7 @@ For an application's encryption key, select a new explicit destination:
 arkoren key generate shared --out app-key.key
 ```
 
-Success reports the `summary` "Generated shared key", the `category`, and a
+Success reports the `summary` "Generated shared key", the `kind`, and a
 `changes` entry that creates the absolute `path`, never the private contents. There is no implicit destination or overwrite
 flag. Existing files and symlinks are refused, and missing parent directories
 fail.
@@ -83,8 +83,9 @@ Before configuring the application, check the file as its intended type:
 arkoren key check shared app-key.key
 ```
 
-Success prints `valid: true`, the selected `category`, and the absolute `path`,
-without the secret. Shared material must decode to exactly 32 bytes from padded
+Success prints `ok: true`, the selected `kind`, the absolute `path` and an empty
+`problems` array, without the secret. Material that does not parse is `ok: false`
+with a problem and exit 1; only a file that cannot be read is an error. Shared material must decode to exactly 32 bytes from padded
 standard base64. This checks representation and length, not entropy or
 deployment permissions.
 
@@ -138,7 +139,8 @@ incomplete output after confirming it is not deployed, or choose a fresh path.
 Do not regenerate keys on startup to hide a missing configuration file.
 
 Relative paths resolve from the command's working directory. Success exits 0;
-invalid usage exits 2; file, validation, or output failure exits 1. A broken pipe
+invalid usage exits 2; a refused overwrite, an unreadable file, invalid material
+or an output failure exits 1. A broken pipe
 or short stdout write is failure even if a file was already created. Inspect
 state before retrying rather than treating missing output as proof no key exists.
 

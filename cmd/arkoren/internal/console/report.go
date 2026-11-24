@@ -34,8 +34,10 @@ type Change struct {
 	// Action says what happened to Path.
 	Action Action `json:"action"`
 
-	// Path is a slash-separated, project-relative file path, or module@version
-	// for [ActionRequire].
+	// Path is a slash-separated file path: project-relative for files inside
+	// the project, absolute for any other file (a key or certificate written
+	// elsewhere), or module@version for [ActionRequire]. The text
+	// presentation shortens paths under the working directory.
 	Path string `json:"path"`
 
 	// Detail adds context such as the inserted line or "private key". It is

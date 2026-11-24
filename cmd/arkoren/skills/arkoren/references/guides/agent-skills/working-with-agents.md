@@ -136,7 +136,9 @@ Check the installed snapshot before changing it:
 arkoren skills status --verbose
 ```
 
-The report shows bundled and installed revisions and lists modified managed
+The report is a check: `ok` is false, with a `problems` entry and the step
+that fixes it, when a skill is missing, out of date or modified, and the command
+exits 1. It shows bundled and installed revisions and lists modified managed
 files, including files that are missing or unreadable. A missing installation
 has state `not installed`; a directory without an ownership manifest can be
 reported as `unmanaged`. Status does not write files or fail merely because
@@ -181,9 +183,11 @@ installing.
 During an update, Arkoren replaces unchanged managed files, adds new files, and
 removes unchanged obsolete managed files. Unrelated files remain. Local edits
 or deletions, unsafe symlinks, and collisions at new paths block the update
-before writes. There is no force-overwrite option. A conflicting dry run prints
-its report and exits 2; a conflicting non-preview operation reports an error on
-stderr and exits 2. Check exit status as well as the report. The
+before writes. There is no force-overwrite option. A conflicting dry run says in its
+summary that it would fail ("Would fail: 1 skill has conflicting files"), lists
+the blocking files as `problems` and exits 1, like the real run; a conflicting
+non-preview operation reports a `file_conflict` error on stderr and exits 1.
+Check exit status as well as the report. The
 [command reference](../cli/reference.md) describes output and option details.
 
 If local changes block an update, preserve them elsewhere and restore managed

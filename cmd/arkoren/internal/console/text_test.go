@@ -166,38 +166,119 @@ func TestTextColorsSuccessHeadline(t *testing.T) {
 	}
 }
 
-// TestTextWritesErrorHeadline prints the message in red, the members, and the
-// hint last and dim.
+// TestTextWritesErrorHeadline prints the message in red, then the error's
+// members.
 func TestTextWritesErrorHeadline(t *testing.T) {
 	t.Parallel()
 
-	got := string(console.Text([]byte(`{"error":{"message":"boom","hint":"retry","status":500}}`), true))
+	got := string(console.Text([]byte(`{"error":{"message":"boom","type":"tool_error","status":500}}`), true))
 
 	want := "\x1b[1m\x1b[31m✗ boom\x1b[0m\n\n" +
-		console.ColorKey + "Status" + console.ColorReset + "  " + console.ColorNumber + "500" + console.ColorReset + "\n\n" +
-		"\x1b[2mretry\x1b[0m"
+		console.ColorKey + "Type" + console.ColorReset + "    tool_error\n" +
+		console.ColorKey + "Status" + console.ColorReset + "  " + console.ColorNumber + "500" + console.ColorReset
 
 	if got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
 }
 
-// TestTextWritesWarningHeadline prints a yellow exclamation mark.
-func TestTextWritesWarningHeadline(t *testing.T) {
+// TestTextErrorSharesNextStepsWithSuccesses puts the steps beside the error,
+// not inside it, and prints them like a success's.
+func TestTextErrorSharesNextStepsWithSuccesses(t *testing.T) {
 	t.Parallel()
 
-	got := string(console.Text([]byte(`{"warning":{"message":"careful","action":"trust","effects":["It does one thing","It does another"]}}`), false))
+	raw := `{"error":{"message":"no inspector URL is configured","type":"not_configured"},"next_steps":[{"text":"Pass the endpoint with --url"},{"text":"See usage","command":"arkoren --help"}]}`
+	got := string(console.Text([]byte(raw), false))
 
-	want := `! careful
+	want := `✗ no inspector URL is configured
 
-Action  trust
+Type  not_configured
 
-Effects
-  - It does one thing
-  - It does another`
+Next steps
+  1. Pass the endpoint with --url
+  2. See usage  arkoren --help`
 
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTextWritesWarnings prints each warning as a marked line with its details
+// as bullets, between the changes and the next steps.
+func TestTextWritesWarnings(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"summary":"Generated root certificate","changes":[{"action":"create","path":"root.pem"}],` +
+		`"warnings":[{"message":"System trust was not changed","details":["It does one thing","It does another"]}],` +
+		`"next_steps":[{"text":"Trust the root","command":"arkoren certificate root trust root.pem"}]}`
+	got := string(console.Text([]byte(raw), false))
+
+	want := `✓ Generated root certificate
+
+Changes
+  create  root.pem
+
+! System trust was not changed
+  - It does one thing
+  - It does another
+
+Next steps
+  1. Trust the root  arkoren certificate root trust root.pem`
+
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTextWarningsAloneNeedNoHeadline prints the stderr trust document as
+// marked lines, without a heading.
+func TestTextWarningsAloneNeedNoHeadline(t *testing.T) {
+	t.Parallel()
+
+	got := string(console.Text([]byte(`{"warnings":[{"message":"careful","details":["Action: trust"]}]}`), false))
+
+	if got != "! careful\n  - Action: trust" {
+		t.Fatalf("got:\n%s", got)
+	}
+}
+
+// TestTextColorsStepCommands paints a step's command, not its text.
+func TestTextColorsStepCommands(t *testing.T) {
+	t.Parallel()
+
+	got := string(console.Text([]byte(`{"next_steps":[{"text":"Enter the project","command":"cd app"}]}`), true))
+
+	if !strings.Contains(got, "1. Enter the project  "+console.ColorKey+"cd app"+console.ColorReset) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// TestTextShortensDigestsAndPaths prints 12 characters of a 64-character
+// digest and paths under the working directory relative to it, but leaves
+// commands exact.
+func TestTextShortensDigestsAndPaths(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	digest := strings.Repeat("ab12", 16)
+	raw := `{"summary":"Created project in ` + dir + `/shop","sha256":"` + digest + `","directory":"` + dir + `",` +
+		`"elsewhere":"/opt/key.pem","next_steps":[{"text":"Enter the project","command":"cd ` + dir + `/shop"}]}`
+	got := string(console.Format([]byte(raw), console.Style{Text: true, Dir: dir}))
+
+	for _, want := range []string{
+		"✓ Created project in shop",
+		"SHA256     ab12ab12ab12",
+		"Directory  .",
+		"Elsewhere  /opt/key.pem",
+		"cd " + dir + "/shop",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output lacks %q:\n%s", want, got)
+		}
+	}
+
+	if strings.Contains(got, digest) {
+		t.Fatalf("digest was not shortened:\n%s", got)
 	}
 }
 
@@ -241,17 +322,19 @@ func TestTextColorsChangeActions(t *testing.T) {
 	}
 }
 
-// TestTextNumbersNextSteps prints a heading and numbered lines.
+// TestTextNumbersNextSteps prints a heading and numbered lines, aligning the
+// commands of the steps that have one.
 func TestTextNumbersNextSteps(t *testing.T) {
 	t.Parallel()
 
-	got := string(console.Text([]byte(`{"summary":"Done","next_steps":["cd app","make run"]}`), false))
+	got := string(console.Text([]byte(`{"summary":"Done","next_steps":[{"text":"Enter the project","command":"cd app"},{"text":"Start the application","command":"make run"},{"text":"Open the browser"}]}`), false))
 
 	want := `✓ Done
 
 Next steps
-  1. cd app
-  2. make run`
+  1. Enter the project      cd app
+  2. Start the application  make run
+  3. Open the browser`
 
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)

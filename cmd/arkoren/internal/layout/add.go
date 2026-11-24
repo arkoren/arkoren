@@ -60,9 +60,11 @@ type Plan struct {
 	// and go.mod does not require yet, each pinned by the CLI. Fetch them with
 	// go get before go mod tidy, so tidy does not resolve a newer release.
 	Requires []string
-	// Notes lists the steps the command could not do itself, such as adding
-	// migrations to an existing Migrator or setting environment variables.
-	Notes []string
+	// Steps lists what the command could not do itself, such as adding
+	// migrations to an existing Migrator or setting environment variables. Each
+	// is one imperative sentence; none has a command, because each needs a value
+	// or an edit only the reader can make.
+	Steps []console.Step
 }
 
 // Edit is one insertion into an existing file.
@@ -187,8 +189,9 @@ func (project *Project) AddFeature(options FeatureOptions, templates fs.FS) (*Pl
 	target := project.composeFile(process)
 
 	if target == "" {
-		return nil, console.UsageError("process %q not found: no Compose in internal/bootstrap/%s (create it with arkoren add process %s)",
-			process, process, process)
+		return nil, console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Create the process", Command: "arkoren add process " + console.Quote(process)}},
+			"process %q not found: no Compose in internal/bootstrap/%s", process, process)
 	}
 
 	uses := make([]string, 0, len(surfaces))
@@ -246,8 +249,9 @@ func (project *Project) AddProcess(name string, templates fs.FS) (*Plan, error) 
 	}
 
 	if !project.declares("internal/bootstrap", "LogHandler") {
-		return nil, console.UsageError("internal/bootstrap declares no LogHandler provider, which the new process's App uses; " +
-			"add one (arkoren new generates it in internal/bootstrap/logging.go)")
+		return nil, console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Add a LogHandler provider to internal/bootstrap; arkoren new generates one in internal/bootstrap/logging.go"}},
+			"internal/bootstrap declares no LogHandler provider, which the new process's App uses")
 	}
 
 	base := path.Base(project.Module)
@@ -372,7 +376,9 @@ func (project *Project) AddMigration(name string, templates fs.FS) (*Plan, error
 	}
 
 	if err := project.refuseExisting(dir + "/migrations.go"); err != nil {
-		return nil, console.UsageError("%s/migrations.go exists without an All function; add `func All() []migrate.Definition` first", dir)
+		return nil, console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Add func All() []migrate.Definition to " + dir + "/migrations.go"}},
+			"%s/migrations.go exists without an All function", dir)
 	}
 
 	if err := project.render(plan, templates, "add/migration/migrations.go", dir+"/migrations.go", data); err != nil {
@@ -402,7 +408,9 @@ func (project *Project) refuseExisting(rel string) error {
 	_, err := os.Lstat(filepath.Join(project.Root, filepath.FromSlash(rel)))
 
 	if err == nil {
-		return console.UsageError("%s already exists; arkoren add never overwrites", rel)
+		return console.Fail(console.TypeFileConflict,
+			[]console.Step{{Text: "Choose another name, or move the existing file aside; arkoren add never overwrites"}},
+			"%s already exists", rel)
 	}
 
 	if !errors.Is(err, fs.ErrNotExist) {
