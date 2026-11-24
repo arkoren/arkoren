@@ -20,9 +20,9 @@ import (
 	"arkoren.dev/ark/iam/permission"
 )
 
-// ownUsersWithoutCreate returns the application's users without a Create
+// ownUsersWithoutCreate configures the application's users without a Create
 // function, so nothing can create a user.
-func ownUsersWithoutCreate(t *testing.T) iam.Users {
+func ownUsersWithoutCreate(t *testing.T) (*auth.UserProvider, iam.UsersBuilderFunc) {
 	t.Helper()
 
 	users := newOwnUsers(t)
@@ -31,7 +31,9 @@ func ownUsersWithoutCreate(t *testing.T) iam.Users {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
 
-	return iam.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}
+	return provider, func(draft *iam.UsersBuilder) {
+		draft.Lookup(users.lookup).Rotate(users.rotate)
+	}
 }
 
 // TestRegistrationWithoutCreateIsIgnored verifies Registration(true) over users

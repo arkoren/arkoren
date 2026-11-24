@@ -61,7 +61,7 @@ type Builder struct {
 	instance        string
 	events          *event.Bus
 	dispatcher      *queue.Dispatcher
-	users           *Users
+	users           *UsersBuilder
 	directorySet    bool
 	directory       []account.BuilderFunc
 	accountOn       bool
@@ -167,15 +167,26 @@ func (identity *Builder) Queue(dispatcher *queue.Dispatcher) *Builder {
 }
 
 // Users replaces the built-in users table with the application's own; see
-// [Users]. Without it the facade uses the built-in directory, which identifies
-// users by email. It cannot be combined with [Builder.Directory]: [New] fails
-// with [ErrInvalidConfig].
+// [UsersBuilder]. provider serves the application's users to the guard (its
+// UserRecord.Version must change when [UsersBuilder.Rotate] runs). Without this
+// call the facade uses the built-in directory, which identifies users by email.
+// Later calls replace the earlier one. It cannot be combined with
+// [Builder.Directory]: [New] fails with [ErrInvalidConfig].
 //
 // Example:
 //
-//	identity.Users(iam.Users{Provider: provider, Lookup: lookup, Create: create, Rotate: rotate})
-func (identity *Builder) Users(users Users) *Builder {
-	identity.users = &users
+//	identity.Users(provider, func(users *iam.UsersBuilder) {
+//		users.Lookup(store.SubjectAndEmail)
+//		users.Rotate(store.BumpVersion)
+//		users.Verification(store.EmailVerified, store.MarkEmailVerified)
+//		users.Create(store.Create)
+//	})
+func (identity *Builder) Users(provider *auth.UserProvider, configure ...UsersBuilderFunc) *Builder {
+	settings := UsersBuilder{provider: provider}
+	for _, apply := range configure {
+		apply(&settings)
+	}
+	identity.users = &settings
 
 	return identity
 }

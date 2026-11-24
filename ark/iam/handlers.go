@@ -193,7 +193,7 @@ func (identity *IAM) ChangePasswordHandler() router.Handler {
 //
 // An unverified email is 403 [account.ErrEmailUnverified]: whoever registered
 // an address first must not attach this before its owner proves it (with your
-// own users, see [Users.Verified]).
+// own users, see [UsersBuilder.Verification]).
 //
 // Example:
 //
@@ -209,7 +209,7 @@ func (identity *IAM) SetupTwoFactorHandler() router.Handler {
 // enabled.
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
-// [Users.Verified] with your own users). Enabling ends the user's other logins.
+// [UsersBuilder.Verification] with your own users). Enabling ends the user's other logins.
 //
 // Example:
 //
@@ -264,7 +264,7 @@ func (identity *IAM) ListTokensHandler() router.Handler {
 // hold is 403 [apitoken.ErrScopeNotGranted].
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
-// [Users.Verified] with your own users).
+// [UsersBuilder.Verification] with your own users).
 //
 // Example:
 //
@@ -295,7 +295,7 @@ func (identity *IAM) DeleteTokenHandler() router.Handler {
 // enabled with [apitoken.Builder.DeviceTokens] (the default).
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
-// [Users.Verified] with your own users).
+// [UsersBuilder.Verification] with your own users).
 //
 // Example:
 //
@@ -407,7 +407,7 @@ func (identity *IAM) ListConnectionsHandler() router.Handler {
 // used.
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
-// [Users.Verified] with your own users).
+// [UsersBuilder.Verification] with your own users).
 //
 // Example:
 //
@@ -479,17 +479,17 @@ func (identity *IAM) DeleteAccountHandler() router.Handler {
 // With the built-in users it is [account.RequireVerified]: it judges by the
 // "email_verified" claim of the user the guard read from the directory for this
 // request, so a user who just verified passes at once. With [Builder.Users] it
-// asks [Users.Verified] for the user's current state on every request, so the
+// asks [UsersBuilder.Verification] for the user's current state on every request, so the
 // answer is as fresh as the application's own lookup; an error of that function
 // passes through. It panics at
 // composition only when there is neither the built-in directory nor
-// [Users.Verified].
+// [UsersBuilder.Verification].
 //
 // Example:
 //
 //	posts := web.With(auth.Require(), identity.RequireVerified())
 func (identity *IAM) RequireVerified() router.Middleware {
-	need(identity.verified != nil, "RequireVerified", "the built-in users table or Users.Verified")
+	need(identity.verified != nil, "RequireVerified", "the built-in users table or UsersBuilder.Verification")
 	if identity.directory != nil {
 		return account.RequireVerified()
 	}

@@ -229,7 +229,7 @@
 //     POST that leaves a ten-minute, single-use intent in the session. A user
 //     cannot remove their last way to log in (409).
 //   - Email verification never blocks login; protect routes with
-//     [IAM.RequireVerified], which also works with [Users.Verified].
+//     [IAM.RequireVerified], which also works with [UsersBuilder.Verification].
 //   - Device tokens unused past their idle limit, expired tokens and tokens a
 //     version change of the user ended are deleted by [IAM.Prune], which you
 //     schedule (it is func(context.Context) error); the token list already hides
@@ -249,14 +249,14 @@
 // the application's: a provider plus Lookup, Create and Rotate functions. No
 // users table is migrated, and the routes and handlers that need the directory
 // (email verification, account deletion) are absent or panic at composition,
-// and [IAM.RequireVerified] needs [Users.Verified]. The other packages work unchanged, because they only
+// and [IAM.RequireVerified] needs [UsersBuilder.Verification]. The other packages work unchanged, because they only
 // see subjects. Lookup returns the stored address mail goes to, Create gets
 // whether the provider verified the email and must fail on an existing
 // identifier, and the unverified-account rules above apply only when you give
-// [Users.Verified] and [Users.ProveEmail]; without them the application must
+// [UsersBuilder.Verification]; without it the application must
 // enforce the same rules itself. Registration and sign-up with a provider stay
 // off until [password.Builder.Registration] and [ProviderBuilder.SignUp] are
-// enabled, and each needs [Users.Create]; [New] fails without it. The
+// enabled, and each needs [UsersBuilder.Create]; [New] fails without it. The
 // application adds its own users in its own store, and [Builder.Directory],
 // which configures the built-in table, cannot be combined with Users.
 //
