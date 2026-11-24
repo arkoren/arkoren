@@ -174,6 +174,11 @@ func (composer *Composer) Run(fn func(context.Context) error) {
 // Empty names or nil callbacks panic with ErrNilFunc; duplicate names panic
 // with ErrDuplicateCheck and late registrations with ErrInvalidPhase.
 //
+// Checks do not keep the application alive: once every runner registered with
+// [Composer.Run] has returned, the application cancels the check monitor, waits
+// for it and ends, so a one-shot process with checks still exits. An
+// application with checks and no runners waits for its context or Shutdown.
+//
 //	composer.Check("database", connection.Ping)
 func (composer *Composer) Check(name string, fn func(context.Context) error) {
 	composer.scope.Check(name, fn, func() { application := composer.application; application.health.Add(name, fn) })

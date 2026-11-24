@@ -118,9 +118,11 @@ func (monitor *Monitor) MaxAge() time.Duration {
 	return monitor.interval * readinessStaleIntervals
 }
 
-// Runner returns the runner that keeps the readiness result
-// current. It is launched with the other runners and ends with them, so
-// shutdown waits for it.
+// Runner returns the runner that keeps the readiness result current, or nil
+// without registered checks. The runtime launches it beside the user runners
+// but does not count it as one: it stops when its context is canceled, which
+// the runtime does after the last user runner returns or on shutdown, and
+// shutdown waits for it. It never keeps a process alive on its own.
 func (monitor *Monitor) Runner() func(context.Context) error {
 	monitor.mu.Lock()
 

@@ -2037,3 +2037,142 @@ func TestStateStringUnknown(t *testing.T) {
 		t.Fatalf("String() = %q, want paused", got)
 	}
 }
+
+// runWithin runs app until it returns or the fake clock advances by limit,
+// reporting whether Run returned and its result. It must be called inside a
+// synctest bubble.
+func runWithin(ctx context.Context, app *application.Application, limit time.Duration, compose func(*application.Composer)) (bool, error) {
+	result := make(chan error, 1)
+
+	go func() {
+		result <- app.Run(ctx, compose)
+	}()
+
+	select {
+	case err := <-result:
+		return true, err
+	case <-time.After(limit):
+		return false, nil
+	}
+}
+
+// TestRunExitsWhenLastRunnerReturnsWithCheck ensures a registered check does
+// not keep a one-shot process alive after its only runner returns nil.
+func TestRunExitsWhenLastRunnerReturnsWithCheck(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		app := application.New()
+
+		returned, err := runWithin(t.Context(), app, time.Minute, func(compose *application.Composer) {
+			compose.Check("database", func(context.Context) error {
+				return nil
+			})
+			compose.Run(func(context.Context) error {
+				return nil
+			})
+		})
+
+		if !returned || err != nil {
+			t.Fatalf("Run returned = %v, err = %v; want a clean exit", returned, err)
+		}
+	})
+}
+
+// TestRunExitsWhenCheckFailsFirstThenPasses ensures a failing check pass does
+// not prevent exit and that the monitor goroutine is gone afterwards:
+// synctest fails the test when a goroutine in the bubble outlives it.
+func TestRunExitsWhenCheckFailsFirstThenPasses(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		app := application.New(func(app *application.Builder) {
+			app.ReadinessInterval(time.Second)
+		})
+
+		var calls atomic.Int64
+
+		returned, err := runWithin(t.Context(), app, time.Minute, func(compose *application.Composer) {
+			compose.Check("database", func(context.Context) error {
+				if calls.Add(1) == 1 {
+					return errors.New("not ready")
+				}
+
+				return nil
+			})
+			compose.Run(func(ctx context.Context) error {
+				time.Sleep(3 * time.Second)
+
+				return nil
+			})
+		})
+
+		if !returned || err != nil {
+			t.Fatalf("Run returned = %v, err = %v; want a clean exit", returned, err)
+		}
+
+		if calls.Load() < 2 {
+			t.Fatalf("check ran %d times, want a failing then a passing pass", calls.Load())
+		}
+	})
+}
+
+// TestRunWithChecksAndNoRunnersBlocksUntilCancel keeps a process that only
+// registers checks alive until its context ends.
+func TestRunWithChecksAndNoRunnersBlocksUntilCancel(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		app := application.New()
+		ctx, cancel := context.WithCancel(t.Context())
+
+		result := make(chan error, 1)
+
+		go func() {
+			result <- app.Run(ctx, func(compose *application.Composer) {
+				compose.Check("database", func(context.Context) error {
+					return nil
+				})
+			})
+		}()
+
+		time.Sleep(time.Hour)
+		synctest.Wait()
+
+		select {
+		case err := <-result:
+			t.Fatalf("Run returned early: %v", err)
+		default:
+		}
+
+		cancel()
+
+		if err := <-result; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// TestRunRunnerErrorStillCancelsWithCheck keeps the failure path: a runner
+// error ends the process with that error even when checks are registered.
+func TestRunRunnerErrorStillCancelsWithCheck(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		app := application.New()
+		boom := errors.New("boom")
+
+		returned, err := runWithin(t.Context(), app, time.Minute, func(compose *application.Composer) {
+			compose.Check("database", func(context.Context) error {
+				return nil
+			})
+			compose.Run(func(context.Context) error {
+				return boom
+			})
+		})
+
+		if !returned || !errors.Is(err, boom) {
+			t.Fatalf("Run returned = %v, err = %v; want %v", returned, err, boom)
+		}
+	})
+}
