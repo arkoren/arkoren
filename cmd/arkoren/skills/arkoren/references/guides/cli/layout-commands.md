@@ -161,7 +161,7 @@ client, and a later `add ark iam` wires every client it finds.
 
 Every shared provider the new code uses is written with a local default when
 `internal/bootstrap` does not declare one by name, and kept when it does:
-`Database` (SQLite), `Cache` (memory), `Hasher` (bcrypt), and with email
+`Database` (SQLite), `Cache` (memory), `Hasher` (Argon2id), and with email
 `LinkSigner`, `Mailer` (logs email), `Queue` (memory), `Dispatcher`, `Consumer`
 and `Work`, plus `TwoFactorKey` and `OAuthKey` as selected. Keys load from files
 named by environment variables, such as `LINK_KEY_FILE`; create them with

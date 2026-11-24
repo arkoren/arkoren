@@ -27,7 +27,7 @@ var modulePins = map[string]string{
 	"arkoren.dev/ark/iam":         "v0.6.1",
 	"arkoren.dev/ark/oauth":       "v0.8.0",
 	"arkoren.dev/driver/aes":      "v0.1.0",
-	"arkoren.dev/driver/bcrypt":   "v0.1.0",
+	"arkoren.dev/driver/argon2":   "v0.1.0",
 	"arkoren.dev/driver/sqlite":   "v0.1.0",
 	"arkoren.dev/foundation/key":  "v0.1.1",
 	"arkoren.dev/foundation/totp": "v0.2.0",

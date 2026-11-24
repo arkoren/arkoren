@@ -3,12 +3,13 @@ package bootstrap
 import (
 	"arkoren.dev/core/application"
 	"arkoren.dev/core/service/hash"
-	"arkoren.dev/driver/bcrypt/bcrypthash"
+	"arkoren.dev/driver/argon2/argon2hash"
 )
 
-// Hasher hashes and verifies passwords with bcrypt at its default cost. Raise
-// the cost, or swap in another driver such as argon2, here without touching
-// features.
+// Hasher hashes and verifies passwords with Argon2id at the library's default
+// cost (three iterations, 64 MiB, four lanes). Raise the cost, or swap in
+// another driver such as bcrypt, here without touching features. Bound request
+// concurrency, because each hash allocates its memory.
 var Hasher = application.Provide(func(*application.Composer) *hash.Hasher {
-	return hash.New(bcrypthash.New())
+	return hash.New(argon2hash.New())
 })
