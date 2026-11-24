@@ -3,7 +3,7 @@ module arkoren.dev/cmd/arkoren
 go 1.27
 
 require (
-	arkoren.dev/core v0.1.0
+	arkoren.dev/core v0.22.1
 	arkoren.dev/foundation/certificate v0.1.0
 	arkoren.dev/foundation/key v0.1.0
 	arkoren.dev/foundation/validate v0.1.0
