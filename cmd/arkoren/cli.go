@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"regexp"
 	"strings"
@@ -195,6 +196,8 @@ func toolsCLICommand(env console.Environment, flags console.Globals) *cli.Comman
 	return &cli.Command{
 		Name:  "tools",
 		Usage: "List remote tool commands, descriptions, and capabilities",
+		Description: "Asks the inspector at --url which tools it serves and lists each as a command you can run, " +
+			"with its description. --verbose adds schemas.",
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Present() {
 				return console.UsageError("too many arguments: %s takes no arguments", command.FullName())
@@ -218,6 +221,8 @@ func statusCLICommand(env console.Environment, flags console.Globals) *cli.Comma
 	return &cli.Command{
 		Name:  "status",
 		Usage: "Show inspector identity, protocol, health, and configuration sources",
+		Description: "Connects to the inspector at --url and reports its identity, protocol and health, and where " +
+			"the URL and token came from. --verbose adds build information.",
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Present() {
 				return console.UsageError("too many arguments: %s takes no arguments", command.FullName())
@@ -239,7 +244,12 @@ func statusCLICommand(env console.Environment, flags console.Globals) *cli.Comma
 // argument that names no subcommand is a usage error listing the accepted ones.
 func groupAction(_ context.Context, command *cli.Command) error {
 	if !command.Args().Present() {
-		return cli.ShowSubcommandHelp(command)
+		// ShowSubcommandHelp ignores CustomHelpTemplate, which carries the bold
+		// section labels, so print with the command's own template.
+		template := cmp.Or(command.CustomHelpTemplate, cli.SubcommandHelpTemplate)
+		cli.HelpPrinter(command.Root().Writer, template, command)
+
+		return nil
 	}
 
 	names := make([]string, 0, len(command.Commands))

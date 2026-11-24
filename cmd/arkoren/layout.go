@@ -26,14 +26,15 @@ func addCLICommand(env console.Environment) *cli.Command {
 	// subcommand declares one add operation. argsUsage names its positional
 	// argument, such as NAME, or ends in "..." when it takes one or more; empty
 	// means the operation takes none.
-	subcommand := func(name, usage, argsUsage string, flags []cli.Flag, plan func(*layout.Project, *cli.Command) (*layout.Plan, error)) *cli.Command {
+	subcommand := func(name, usage, description, argsUsage string, flags []cli.Flag, plan func(*layout.Project, *cli.Command) (*layout.Plan, error)) *cli.Command {
 		variadic := strings.HasSuffix(argsUsage, "...")
 
 		return &cli.Command{
-			Name:      name,
-			Usage:     usage,
-			ArgsUsage: argsUsage,
-			Flags:     append(flags, dryRun, skipTidy),
+			Name:        name,
+			Usage:       usage,
+			Description: description,
+			ArgsUsage:   argsUsage,
+			Flags:       append(flags, dryRun, skipTidy),
 			Action: func(ctx context.Context, command *cli.Command) error {
 				if argsUsage == "" && command.Args().Present() {
 					return console.UsageError("too many arguments: %s takes no arguments", command.FullName())
@@ -115,7 +116,11 @@ func addCLICommand(env console.Environment) *cli.Command {
 			"cmd/<process>/main.go and internal/bootstrap. When a new file imports a module go.mod does not require, " +
 			"it runs go mod tidy unless --skip-tidy is set. Use --dry-run to preview. See the arkoren-structure skill.",
 		Commands: []*cli.Command{
-			subcommand("feature", "Create internal/NAME with its bootstrap providers, used from a process's Compose", "NAME", featureFlags,
+			subcommand("feature", "Create internal/NAME with its bootstrap providers, used from a process's Compose",
+				"Writes internal/NAME (the package, its service and its store) and internal/bootstrap/NAME.go, whose providers a process "+
+					"root's Compose uses. Each surface flag adds the subpackage internal/NAME/<surface> with its providers and registers "+
+					"them in the --process root: web serves HTTP routes, jobs handles queued work, flow runs workflows and tools exposes MCP tools.",
+				"NAME", featureFlags,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					options := layout.FeatureOptions{Name: command.Args().First(), Process: command.String("process")}
 
@@ -127,15 +132,24 @@ func addCLICommand(env console.Environment) *cli.Command {
 
 					return project.AddFeature(options, newTemplates)
 				}),
-			subcommand("process", "Create cmd/NAME and its process root with App and an empty Compose", "NAME", nil,
+			subcommand("process", "Create cmd/NAME and its process root with App and an empty Compose",
+				"Writes cmd/NAME/main.go and internal/bootstrap/NAME with the process's App provider and an empty Compose. "+
+					"Add providers to it with compose.Use, or let add feature and add ark do it.",
+				"NAME", nil,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					return project.AddProcess(command.Args().First(), newTemplates)
 				}),
-			subcommand("provider", "Create a shared provider in internal/bootstrap", "NAME", nil,
+			subcommand("provider", "Create a shared provider in internal/bootstrap",
+				"Writes internal/bootstrap/NAME.go with a provider of that name, for a value several features or processes share. "+
+					"Use it from a Compose with compose.Use.",
+				"NAME", nil,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					return project.AddProvider(command.Args().First(), newTemplates)
 				}),
-			subcommand("migration", "Create an application migration and register it in All", "NAME", nil,
+			subcommand("migration", "Create an application migration and register it in All",
+				"Writes the numbered migration internal/migrations/NNNN_NAME.go and registers it in the All list the migrator applies "+
+					"at startup, creating internal/migrations/migrations.go when it is missing. Migrations are not run by this command.",
+				"NAME", nil,
 				func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 					return project.AddMigration(command.Args().First(), newTemplates)
 				}),
@@ -146,13 +160,33 @@ func addCLICommand(env console.Environment) *cli.Command {
 					"it needs and internal/bootstrap does not declare, and pins the ark's module version with go get. " +
 					"The result lists the steps it could not do itself under next_steps.",
 				Commands: []*cli.Command{
-					subcommand("iam", "Add the identity module (ark/iam): IAM, IAMRouter and a provider per --with feature", "", arkIAMFlags,
+					subcommand("iam", "Add the identity module (ark/iam): IAM, IAMRouter and a provider per --with feature",
+						"Wires ark/iam: users, password login and sessions, mounted under /auth. Writes internal/bootstrap/iam.go "+
+							"with the IAM and IAMRouter providers, one provider file per --with feature, and every shared provider "+
+							"it needs (Database, Cache, Hasher, Migrator) with local defaults when internal/bootstrap lacks them. "+
+							"Existing providers are reused. Migrations run when the server starts, and sign-in clients already "+
+							"declared by add ark oauth are passed to the module.\n\n"+
+							"Features for --with:\n"+
+							"   reset         password reset and registration, by email\n"+
+							"   verification  email verification, by email\n"+
+							"   two-factor    second factor at sign-in\n"+
+							"   tokens        personal API tokens with a scope catalog\n"+
+							"   permissions   roles and permissions\n"+
+							"   account       GET /auth/account for the signed-in user\n\n"+
+							"reset and verification send email through jobs, so the --process root also gets IAMJobs and Work.",
+						"", arkIAMFlags,
 						func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 							options := layout.IAMOptions{With: command.StringSlice("with"), Process: command.String("process")}
 
 							return project.AddIAM(options, newTemplates)
 						}),
-					subcommand("oauth", "Add OAuth sign-in clients (ark/oauth) for each PROVIDER: "+strings.Join(layout.OAuthProviders(), ", "), "PROVIDER...", nil,
+					subcommand("oauth", "Add OAuth sign-in clients (ark/oauth) for each PROVIDER: "+strings.Join(layout.OAuthProviders(), ", "),
+						"Writes internal/bootstrap/PROVIDER.go for each provider: a client built from <PROVIDER>_* environment "+
+							"variables. Client IDs and secrets stay yours to set; the redirect URL is appended to .env. When the IAM "+
+							"provider exists the clients are passed to it, otherwise run add ark iam afterwards. github also writes "+
+							"GitHubSignUp, which lets a first GitHub login create a user; the other providers sign in existing users only.\n\n"+
+							"Providers: "+strings.Join(layout.OAuthProviders(), ", "),
+						"PROVIDER...", nil,
 						func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
 							return project.AddOAuth(command.Args().Slice(), newTemplates)
 						}),
