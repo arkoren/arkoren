@@ -89,10 +89,11 @@ import (
 )
 
 // Compose is the explicit list of what the server process runs: feature
-// providers first (the identity router before the routes that need the user,
-// the identity jobs before the consumer that runs them), diagnostics only in
-// debug, and the HTTP server last.
+// providers first (the migrations before the routes, the identity router before
+// the routes that need the user, the identity jobs before the consumer that runs
+// them), diagnostics only in debug, and the HTTP server last.
 func Compose(compose *application.Composer) {
+	compose.Use(bootstrap.Migrate)
 	compose.Use(bootstrap.IAMRouter)
 	compose.Use(bootstrap.OrdersRoutes)
 	compose.Use(bootstrap.NotificationsListeners)
@@ -137,15 +138,17 @@ import (
 	"example.com/shop/internal/bootstrap"
 )
 
-// Compose runs pending migrations once. The process ends when they finish.
+// Compose runs pending migrations once, as the process's only runner: the
+// process ends when Up returns. The server applies them at startup through
+// bootstrap.Migrate; this process runs them to completion before a deploy.
 func Compose(compose *application.Composer) {
-	compose.Use(bootstrap.Migrate)
+	compose.Run(compose.Use(bootstrap.Migrator).Up)
 }
 ```
 
 ## Bootstrap providers
 
-Every exported declaration of `internal/bootstrap` is a provider variable that returns the component it makes live. A provider `Use`s its dependencies first, then constructs and registers lifecycle. `NewDatabase` is the one allowed exception: a value-returning constructor that opens a new pool on every call, so only providers call it. `Work` and `Migrate` register a runner and return the component, so `Compose` stays a list of `Use` calls. The generated `Router` also mounts the welcome page; it is trimmed here.
+Every exported declaration of `internal/bootstrap` is a provider variable that returns the component it makes live. A provider `Use`s its dependencies first, then constructs and registers lifecycle. `NewDatabase` is the one allowed exception: a value-returning constructor that opens a new pool on every call, so only providers call it. `Work` registers a runner and `Migrate` a startup callback, and each returns the component, so `Compose` stays a list of `Use` calls. The generated `Router` also mounts the welcome page; it is trimmed here.
 
 `internal/bootstrap/database.go`
 
@@ -238,9 +241,9 @@ import (
 	"example.com/shop/internal/migrations"
 )
 
-// Migrator holds the application's migrations and each ark's. IAM.Migrations
+// Migrator holds the application's own migrations and each ark's. IAM.Migrations
 // returns every feature's groups whichever are enabled, so building IAM here
-// means the migrate process needs IAM's settings (keys, URLs) too.
+// means a process that uses the migrator needs IAM's settings (keys, URLs) too.
 var Migrator = application.Provide(func(compose *application.Composer) *migrate.Migrator {
 	migrator := migrate.New(compose.Use(Database))
 	compose.Require(migrator.Add(migrations.All()...))
@@ -249,12 +252,18 @@ var Migrator = application.Provide(func(compose *application.Composer) *migrate.
 	return migrator
 })
 
-// Migrate runs pending migrations as a supervised runner and returns the
-// migrator. The migrate process ends when Up returns.
+// Migrate applies the pending migrations during startup, before the process
+// serves requests or reports ready, and returns the migrator. Up holds the
+// migration lock, so replicas starting together are safe: one applies the
+// migrations while the others wait. For production, take Migrate out of the
+// server's Compose and run the migrations in a dedicated process created with
+// `arkoren add process migrate`, whose Compose registers
+// compose.Run(compose.Use(bootstrap.Migrator).Up): the process ends when Up
+// returns, so a deploy runs it to completion before starting the new servers.
 var Migrate = application.Provide(func(compose *application.Composer) *migrate.Migrator {
 	migrator := compose.Use(Migrator)
 
-	compose.Run(migrator.Up)
+	compose.Startup(migrator.Up)
 
 	return migrator
 })
@@ -399,7 +408,9 @@ var NotificationsListeners = application.Provide(func(compose *application.Compo
 
 ## Identity
 
-`arkoren add ark iam --with reset,verification,two-factor,tokens,permissions,account,github` writes these files and inserts `compose.Use(bootstrap.IAMRouter)`, `IAMJobs` and `Work` into the server's `Compose`. Add `google` to `--with`, or run `arkoren add ark oauth google`, for a second sign-in client. The tests in this reference compare the files below with that command's output.
+`arkoren add ark oauth github` writes the `GitHub` client and its `GitHubSignUp` fragment, then `arkoren add ark iam --with reset,verification,two-factor,tokens,permissions,account` writes these files, wires the client it finds, inserts `compose.Use(bootstrap.Migrate)`, `IAMRouter`, `IAMJobs` and `Work` into the server's `Compose`, and appends `DATABASE_URL`, `PASSWORD_RESET_URL`, `EMAIL_VERIFY_URL` and `GITHUB_REDIRECT_URL` to `.env` with local defaults (never a secret or a key path). Run `arkoren add ark oauth google` (or `microsoft`, `apple`, `oidc`) after the module to add another sign-in client; it inserts the `identity.Provider` call itself. The routes are mounted under `/auth`, so login is `POST /auth/login` and the GitHub callback is `GET /auth/github/callback`. The module's migrations are listed in the `Migrator` shown under Bootstrap providers, and `Migrate` applies them when the server starts. The tests in this reference compare the files below with that command's output.
+
+The `Migrator` and `Migrate` providers in `internal/bootstrap/migrator.go`, and an empty `All` in `internal/migrations/migrations.go`, are written only when the project has no `Migrator`; with one, the command inserts `compose.Require(migrator.Add(compose.Use(IAM).Migrations()...))` into it. `Up` holds the migration lock, so replicas starting together are safe. For production, take `Migrate` out of the server's `Compose` and run the `migrate` process before the deploy.
 
 The `IAM` provider calls `iam.New` over `Database` and `Cache`, publishes the module's events on the application's bus and registers its readiness check. Each optional feature takes the settings of one fragment provider: `PasswordReset` returns the `password.BuilderFunc` that turns on registration and reset, `EmailVerification` the `account.BuilderFunc` for verification, and so on. A fragment provider returns a construction callback instead of a component, and `IAM` resolves it with `compose.Use` inside the facade's own callback, which runs once, synchronously, during composition. Plain settings stay `os.Getenv` inside their provider; only a real need turns one into a provider of its own.
 
@@ -423,9 +434,9 @@ import (
 // database and cache through providers and publishes its events on the
 // application's bus. Each optional feature is configured by the fragment
 // provider that its callback receives, so a feature's settings live in one
-// small file. The module does no I/O when built; the application runs
-// IAM.Migrations from the Migrator provider, and the readiness check registered
-// here fails until they have run.
+// small file. The module does no I/O when built; the Migrator provider adds
+// IAM.Migrations and the Migrate provider applies them at startup, and the
+// readiness check registered here fails until they have run.
 //
 // Sessions and counters live in the Cache provider. The default memory cache is
 // private to this process; use a shared cache driver before running more than
@@ -452,18 +463,19 @@ var IAM = application.Provide(func(compose *application.Composer) *iam.IAM {
 	return identity
 })
 
-// IAMRouter mounts the identity routes on the shared router and returns the
-// router that identifies users: it runs the session and authenticator
-// middleware before its routes. Routes that need the signed-in user mount on
-// this router instead of Router, and routes that must be signed in add
-// auth.Require to it. List it in the Compose of every process that serves HTTP,
+// IAMRouter mounts the identity routes under /auth on the shared router (so
+// POST /auth/login, GET /auth/sessions, GET /auth/github/callback and so on) and
+// returns the router that identifies users: it runs the session and
+// authenticator middleware before its routes. Routes that need the signed-in
+// user mount on this router instead of Router, and routes that must be signed in
+// add auth.Require to it. List it in the Compose of every process that serves HTTP,
 // before the providers whose routes need the user.
 var IAMRouter = application.Provide(func(compose *application.Composer) *router.Router {
 	identity := compose.Use(IAM)
 	routes := compose.Use(Router)
 
 	web := routes.With(identity.Middleware())
-	web.Group("/", identity.Register)
+	web.Group("/auth", identity.Register)
 
 	return web
 })
@@ -503,7 +515,7 @@ import (
 // Mailer provider and carry a link signed by LinkSigner to the page at
 // PASSWORD_RESET_URL, an absolute URL without a fragment, such as
 // https://app.example.com/reset-password. That page reads the signed value from
-// the fragment and posts it to POST /password/reset. Registration with the
+// the fragment and posts it to POST /auth/password/reset. Registration with the
 // built-in users requires reset, because the reset notice is how the owner of an
 // address someone else registered learns of it; remove the Registration call
 // when users are added another way.
@@ -536,7 +548,7 @@ import (
 // provider and carry a link signed by LinkSigner to the page at
 // EMAIL_VERIFY_URL, an absolute URL without a fragment, such as
 // https://app.example.com/verify-email. That page reads the signed value from
-// the fragment and posts it to POST /email/verify. Verification never blocks
+// the fragment and posts it to POST /auth/email/verify. Verification never blocks
 // login; protect routes that need a verified email with IAM.RequireVerified.
 var EmailVerification = application.Provide(func(compose *application.Composer) account.BuilderFunc {
 	signer := compose.Use(LinkSigner)
@@ -586,7 +598,7 @@ import (
 // that can be assigned to users. It defines one administrator role. Holders of
 // the users:manage permission may grant and revoke roles through the management
 // routes, never beyond what they hold, and the last administrator cannot lose
-// the role. Users read their own permissions through GET /me/permissions.
+// the role. Users read their own permissions through GET /auth/me/permissions.
 // Replace the placeholder with the roles and permissions of the application and
 // check them in handlers with gate.HasPermission and gate.HasRole.
 var Roles = application.Provide(func(*application.Composer) permission.BuilderFunc {
@@ -614,7 +626,7 @@ import (
 	"arkoren.dev/core/application"
 )
 
-// AccountView is the identity module's account settings: what GET /account tells
+// AccountView is the identity module's account settings: what GET /auth/account tells
 // the signed-in user beyond the subject and email facts, which is how the request
 // logged in, their permissions and their two-factor state.
 // The route never encodes application data; compose a GET /me from IAM.Account
@@ -1288,7 +1300,7 @@ func (listeners *Listeners) Placed(ctx context.Context, placement orders.Placeme
 
 ## Tests
 
-A handler test builds the surface with a fake and records a request on a plain router: no composer, no application. The process test starts the real `server.App` and `server.Compose` with `application.Start`, points the database at memory through the environment, runs the migrator in a `Startup` callback, and records a request on the shared router. To replace a provider's value, a test passes its own root provider to `application.Start`: it supplies the value with `compose.Supply` and then returns `compose.Use(server.App)`. The root is built first, so the supplied value exists before anything uses the provider, and the provider's own build, with its startup and cleanup, never runs. `compose.Supply` belongs to tests only; `arkoren check` flags it elsewhere.
+A handler test builds the surface with a fake and records a request on a plain router: no composer, no application. The process test starts the real `server.App` and `server.Compose` with `application.Start`, points the database at memory through the environment, applies the migrations through the `Migrate` provider of the server's `Compose`, and records a request on the shared router. To replace a provider's value, a test passes its own root provider to `application.Start`: it supplies the value with `compose.Supply` and then returns `compose.Use(server.App)`. The root is built first, so the supplied value exists before anything uses the provider, and the provider's own build, with its startup and cleanup, never runs. `compose.Supply` belongs to tests only; `arkoren check` flags it elsewhere.
 
 `internal/orders/web/web_test.go`
 
@@ -1371,8 +1383,6 @@ func TestPlaceOrder(t *testing.T) {
 
 	app, err := application.Start(t.Context(), server.App, server.Compose, func(compose *application.Composer) {
 		routes = compose.Use(bootstrap.Router)
-
-		compose.Startup(compose.Use(bootstrap.Migrator).Up)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1481,8 +1491,6 @@ func TestRegistrationEmailVerifiesTheAddress(t *testing.T) {
 
 	app, err := application.Start(t.Context(), root, server.Compose, func(compose *application.Composer) {
 		routes = compose.Use(bootstrap.Router)
-
-		compose.Startup(compose.Use(bootstrap.Migrator).Up)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1507,7 +1515,7 @@ func TestRegistrationEmailVerifiesTheAddress(t *testing.T) {
 
 	credentials := `{"email":"ada@example.com","password":"correct horse"}`
 
-	if response := post("/register", credentials, nil); response.StatusCode != http.StatusAccepted {
+	if response := post("/auth/register", credentials, nil); response.StatusCode != http.StatusAccepted {
 		t.Fatalf("register status = %d, want %d", response.StatusCode, http.StatusAccepted)
 	}
 
@@ -1528,7 +1536,7 @@ func TestRegistrationEmailVerifiesTheAddress(t *testing.T) {
 		}
 	}
 
-	login := post("/login", credentials, nil)
+	login := post("/auth/login", credentials, nil)
 	if login.StatusCode != http.StatusNoContent {
 		t.Fatalf("login status = %d, want %d", login.StatusCode, http.StatusNoContent)
 	}
@@ -1538,7 +1546,7 @@ func TestRegistrationEmailVerifiesTheAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if response := post("/email/verify", string(body), login.Cookies()); response.StatusCode != http.StatusNoContent {
+	if response := post("/auth/email/verify", string(body), login.Cookies()); response.StatusCode != http.StatusNoContent {
 		t.Fatalf("verify status = %d, want %d", response.StatusCode, http.StatusNoContent)
 	}
 }

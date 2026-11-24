@@ -25,7 +25,7 @@ func TestRegisterOnlyRegistersEnabledFeatures(t *testing.T) {
 		"twofactor": {{"POST", "/two-factor/setup"}, {"POST", "/two-factor"}, {"DELETE", "/two-factor"}, {"POST", "/two-factor/recovery-codes"},
 			{"POST", "/login/challenge"}, {"GET", "/login/pending"}},
 		"tokens":    {{"GET", "/tokens"}, {"POST", "/tokens"}, {"DELETE", "/tokens/abc"}, {"POST", "/device-tokens"}, {"DELETE", "/device-tokens/current"}},
-		"providers": {{"GET", "/auth/fake"}, {"GET", "/auth/fake/callback"}, {"GET", "/connections"}, {"POST", "/connections/fake"}, {"DELETE", "/connections/abc"}},
+		"providers": {{"GET", "/fake"}, {"GET", "/fake/callback"}, {"GET", "/connections"}, {"POST", "/connections/fake"}, {"DELETE", "/connections/abc"}},
 		"always":    {{"POST", "/logout"}, {"GET", "/sessions"}, {"DELETE", "/sessions"}, {"DELETE", "/sessions/abc"}, {"DELETE", "/account"}, {"POST", "/email/verify"}, {"POST", "/email/verify/resend"}},
 	}
 	features := map[string]iam.BuilderFunc{

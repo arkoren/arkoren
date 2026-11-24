@@ -313,16 +313,21 @@ func (runtime *Runtime) launch(ctx context.Context) error {
 	runtime.state = StateRunning
 	runtime.startedAt = time.Now()
 	runners := slices.Clone(runtime.runners)
-
-	if monitor := runtime.monitor(); monitor != nil {
-		runners = append(runners, monitor)
-	}
+	monitor := runtime.monitor()
 
 	var group sync.WaitGroup
 
 	for _, run := range runners {
 		group.Go(func() {
 			runtime.runOne(runContext, run)
+		})
+	}
+
+	var monitored sync.WaitGroup
+
+	if monitor != nil {
+		monitored.Go(func() {
+			runtime.runOne(runContext, monitor)
 		})
 	}
 
@@ -333,6 +338,10 @@ func (runtime *Runtime) launch(ctx context.Context) error {
 			<-runContext.Done()
 		}
 
+		// The user runners decide when the process is over: the health monitor
+		// only observes them, so stop it now and wait for it to drain.
+		cancel()
+		monitored.Wait()
 		close(runtime.done)
 	}()
 

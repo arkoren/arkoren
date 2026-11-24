@@ -112,11 +112,12 @@ IAM loads the session, but does not provide CSRF protection; use
 
 ```go
 web := routes.With(csrf.Middleware(), identity.Middleware())
-web.Group("/", identity.Register)
+web.Group("/auth", identity.Register)
 ```
 
-`GET /auth/google` starts Google login; both `GET` and `POST`
-`/auth/google/callback` are registered for its callback. Other clients follow the
+Mounted at `/auth`, `GET /auth/google` starts Google login; both `GET` and `POST`
+`/auth/google/callback` are registered for its callback. Providers are mounted
+at `/{name}` below the prefix you register at. Other clients follow the
 same name-based pattern. Names must be unique safe path segments containing
 only letters, digits, hyphens, and underscores, or `New` fails. A provider you
 never pass to `Provider` is not mounted at all.

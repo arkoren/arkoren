@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"arkoren.dev/cmd/arkoren/internal/console"
 	"arkoren.dev/cmd/arkoren/internal/remote"
@@ -1089,6 +1092,7 @@ func testNewGeneratedProject(t *testing.T) {
 	}
 
 	testNewExecutableStartupFailure(t, destination)
+	testAddIAMGeneratedServer(t, env, destination)
 }
 
 // useCheckoutModules points the generated project's arkoren.dev modules at this
@@ -1360,5 +1364,138 @@ func TestScaffoldPlanAllowsRootSkillsDirectory(t *testing.T) {
 
 	if err := runNew(t.Context(), []string{"hello", "--skills-dir", ".", "--dry-run"}, env); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// migrateCompose is the Compose of the migrate process the generated-project
+// test adds: the migrator's Up is its only runner, so the process ends when the
+// migrations finish.
+const migrateCompose = `package migrate
+
+import (
+	"arkoren.dev/core/application"
+
+	"example.com/hello/internal/bootstrap"
+)
+
+// Compose runs the pending migrations once.
+func Compose(compose *application.Composer) {
+	compose.Run(compose.Use(bootstrap.Migrator).Up)
+}
+`
+
+// testAddIAMGeneratedServer adds the identity module and a migrate process to
+// the generated project, builds both, and checks what a user sees without any
+// manual step: the migrate process exits 0 on its own, and the server started
+// from the project's .env answers POST /auth/login with 422 and GET
+// /auth/sessions with 401, the routes mounted under /auth.
+func testAddIAMGeneratedServer(t *testing.T, env console.Environment, destination string) {
+	t.Helper()
+
+	env.Dir = destination
+
+	for _, args := range [][]string{{"add", "ark", "iam", "--skip-tidy"}, {"add", "process", "migrate", "--skip-tidy"}} {
+		if err := execute(t.Context(), args, env); err != nil {
+			t.Fatalf("arkoren %v: %v", args, err)
+		}
+	}
+
+	compose := filepath.Join(destination, "internal/bootstrap/migrate/compose.go")
+
+	if err := os.WriteFile(compose, []byte(migrateCompose), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	binaries := t.TempDir()
+
+	for _, args := range [][]string{{"mod", "tidy"}, {"build", "-o", binaries, "./cmd/server", "./cmd/migrate"}} {
+		command := exec.CommandContext(t.Context(), "go", args...)
+		command.Dir = destination
+		command.Env = append(os.Environ(), "GOWORK=off")
+
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("go %v: %v\n%s", args, err, output)
+		}
+	}
+
+	// The binaries run in the project directory, so godotenv loads its .env.
+	migrate := exec.CommandContext(t.Context(), filepath.Join(binaries, "migrate"))
+	migrate.Dir = destination
+
+	if output, err := migrate.CombinedOutput(); err != nil {
+		t.Fatalf("migrate process did not exit 0: %v\n%s", err, output)
+	}
+
+	address := freeAddress(t)
+	server := exec.CommandContext(t.Context(), filepath.Join(binaries, "server"))
+	server.Dir = destination
+	server.Env = append(os.Environ(), "HTTP_ADDR="+address)
+
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		_ = server.Process.Kill() // The test is over: nothing is left to drain.
+		_ = server.Wait()         // The kill makes this report the signal, which is expected.
+	})
+
+	if status := requestUntilServed(t, http.MethodGet, "http://"+address+"/auth/sessions", ""); status != http.StatusUnauthorized {
+		t.Fatalf("GET /auth/sessions = %d, want 401", status)
+	}
+
+	if status := requestUntilServed(t, http.MethodPost, "http://"+address+"/auth/login", `{}`); status != http.StatusUnprocessableEntity {
+		t.Fatalf("POST /auth/login = %d, want 422", status)
+	}
+}
+
+// freeAddress returns a loopback address with a port nothing listens on now.
+func freeAddress(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	address := listener.Addr().String()
+
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return address
+}
+
+// requestUntilServed sends the request until the server accepts the connection,
+// for at most thirty seconds, and returns the status of the first answer.
+func requestUntilServed(t *testing.T, method, url, body string) int {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	for {
+		request, err := http.NewRequestWithContext(ctx, method, url, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		request.Header.Set("Content-Type", "application/json")
+
+		response, err := http.DefaultClient.Do(request)
+		if err == nil {
+			if err := response.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			return response.StatusCode
+		}
+
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s %s: no answer: %v", method, url, err)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }

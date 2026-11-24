@@ -17,9 +17,9 @@ import (
 // database and cache through providers and publishes its events on the
 // application's bus. Each optional feature is configured by the fragment
 // provider that its callback receives, so a feature's settings live in one
-// small file. The module does no I/O when built; the application runs
-// IAM.Migrations from the Migrator provider, and the readiness check registered
-// here fails until they have run.
+// small file. The module does no I/O when built; the Migrator provider adds
+// IAM.Migrations and the Migrate provider applies them at startup, and the
+// readiness check registered here fails until they have run.
 //
 // Sessions and counters live in the Cache provider. The default memory cache is
 // private to this process; use a shared cache driver before running more than
@@ -57,6 +57,15 @@ var IAM = application.Provide(func(compose *application.Composer) *iam.IAM {
 {{- if .GitHub}}
 		identity.Provider(compose.Use(GitHub), compose.Use(GitHubSignUp))
 {{- end}}
+{{- if .Microsoft}}
+		identity.Provider(compose.Use(Microsoft))
+{{- end}}
+{{- if .Apple}}
+		identity.Provider(compose.Use(Apple))
+{{- end}}
+{{- if .OIDC}}
+		identity.Provider(compose.Use(OIDC))
+{{- end}}
 {{- if .Account}}
 		identity.Account(compose.Use(AccountView))
 {{- end}}
@@ -67,18 +76,19 @@ var IAM = application.Provide(func(compose *application.Composer) *iam.IAM {
 	return identity
 })
 
-// IAMRouter mounts the identity routes on the shared router and returns the
-// router that identifies users: it runs the session and authenticator
-// middleware before its routes. Routes that need the signed-in user mount on
-// this router instead of Router, and routes that must be signed in add
-// auth.Require to it. List it in the Compose of every process that serves HTTP,
+// IAMRouter mounts the identity routes under /auth on the shared router (so
+// POST /auth/login, GET /auth/sessions, GET /auth/github/callback and so on) and
+// returns the router that identifies users: it runs the session and
+// authenticator middleware before its routes. Routes that need the signed-in
+// user mount on this router instead of Router, and routes that must be signed in
+// add auth.Require to it. List it in the Compose of every process that serves HTTP,
 // before the providers whose routes need the user.
 var IAMRouter = application.Provide(func(compose *application.Composer) *router.Router {
 	identity := compose.Use(IAM)
 	routes := compose.Use(Router)
 
 	web := routes.With(identity.Middleware())
-	web.Group("/", identity.Register)
+	web.Group("/auth", identity.Register)
 
 	return web
 })

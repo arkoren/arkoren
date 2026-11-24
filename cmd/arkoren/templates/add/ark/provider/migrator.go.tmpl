@@ -1,0 +1,35 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/database/migrate"
+
+	"{{.Module}}/internal/migrations"
+)
+
+// Migrator holds the application's own migrations and each ark's. IAM.Migrations
+// returns every feature's groups whichever are enabled, so building IAM here
+// means a process that uses the migrator needs IAM's settings (keys, URLs) too.
+var Migrator = application.Provide(func(compose *application.Composer) *migrate.Migrator {
+	migrator := migrate.New(compose.Use(Database))
+	compose.Require(migrator.Add(migrations.All()...))
+	compose.Require(migrator.Add(compose.Use(IAM).Migrations()...))
+
+	return migrator
+})
+
+// Migrate applies the pending migrations during startup, before the process
+// serves requests or reports ready, and returns the migrator. Up holds the
+// migration lock, so replicas starting together are safe: one applies the
+// migrations while the others wait. For production, take Migrate out of the
+// server's Compose and run the migrations in a dedicated process created with
+// `arkoren add process migrate`, whose Compose registers
+// compose.Run(compose.Use(bootstrap.Migrator).Up): the process ends when Up
+// returns, so a deploy runs it to completion before starting the new servers.
+var Migrate = application.Provide(func(compose *application.Composer) *migrate.Migrator {
+	migrator := compose.Use(Migrator)
+
+	compose.Startup(migrator.Up)
+
+	return migrator
+})

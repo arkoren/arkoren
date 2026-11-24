@@ -13,12 +13,12 @@ import (
 // allIAMFeatures selects every optional feature of add ark iam.
 var allIAMFeatures = layout.IAMFeatures
 
-// stepTexts joins the text of every step, one per line.
+// stepTexts joins the text and command of every step, one per line.
 func stepTexts(steps []console.Step) string {
 	texts := make([]string, len(steps))
 
 	for index, step := range steps {
-		texts[index] = step.Text
+		texts[index] = step.Text + " " + step.Command
 	}
 
 	return strings.Join(texts, "\n")
@@ -29,9 +29,21 @@ func created(plan *layout.Plan) []string {
 	return files.Paths(plan.Create)
 }
 
+// edited returns the lines a plan inserts into path, or nil when it does not
+// edit path.
+func edited(plan *layout.Plan, path string) []string {
+	for _, edit := range plan.Edit {
+		if edit.Path == path {
+			return edit.Inserted
+		}
+	}
+
+	return nil
+}
+
 // TestAddIAMWritesProvidersAndWiresCompose creates the module's providers, the
 // shared ones it needs and the Compose insertions, with the jobs in the server
-// by default.
+// by default and the migrations applied before the routes are served.
 func TestAddIAMWritesProvidersAndWiresCompose(t *testing.T) {
 	t.Parallel()
 
@@ -43,26 +55,191 @@ func TestAddIAMWritesProvidersAndWiresCompose(t *testing.T) {
 	for _, want := range []string{
 		"internal/bootstrap/iam.go", "internal/bootstrap/password_reset.go", "internal/bootstrap/email_verification.go",
 		"internal/bootstrap/token_scopes.go", "internal/bootstrap/roles.go", "internal/bootstrap/account_view.go",
-		"internal/bootstrap/google.go", "internal/bootstrap/github.go", "internal/bootstrap/github_sign_up.go",
 		"internal/bootstrap/database.go", "internal/bootstrap/cache.go", "internal/bootstrap/hasher.go",
 		"internal/bootstrap/link_signer.go", "internal/bootstrap/mailer.go", "internal/bootstrap/queue.go",
 		"internal/bootstrap/dispatcher.go", "internal/bootstrap/consumer.go", "internal/bootstrap/work.go",
-		"internal/bootstrap/two_factor_key.go", "internal/bootstrap/oauth_key.go",
+		"internal/bootstrap/two_factor_key.go", "internal/bootstrap/migrator.go", "internal/migrations/migrations.go",
 	} {
 		if !slices.Contains(created(plan), want) {
 			t.Fatalf("plan does not create %s: %v", want, created(plan))
 		}
 	}
 
-	compose := read(t, root, "internal/bootstrap/server/compose.go")
+	for _, unwanted := range []string{"internal/bootstrap/google.go", "internal/bootstrap/github.go", "internal/bootstrap/oauth_key.go"} {
+		if slices.Contains(created(plan), unwanted) {
+			t.Fatalf("plan creates %s without a sign-in client: %v", unwanted, created(plan))
+		}
+	}
 
-	if !strings.Contains(compose, "compose.Use(bootstrap.IAMRouter)\n\tcompose.Use(bootstrap.IAMJobs)\n\tcompose.Use(bootstrap.Work)\n\n\tif compose.App().Debug() {") {
+	compose := read(t, root, "internal/bootstrap/server/compose.go")
+	want := "compose.Use(bootstrap.Migrate)\n\tcompose.Use(bootstrap.IAMRouter)\n\tcompose.Use(bootstrap.IAMJobs)\n\tcompose.Use(bootstrap.Work)\n\n\tif compose.App().Debug() {"
+
+	if !strings.Contains(compose, want) {
 		t.Fatalf("compose.go:\n%s", compose)
+	}
+
+	if identity := read(t, root, "internal/bootstrap/iam.go"); !strings.Contains(identity, `web.Group("/auth", identity.Register)`) {
+		t.Fatalf("iam.go does not mount the routes under /auth:\n%s", identity)
 	}
 
 	if found := load(t, root).Check(); len(found) != 0 {
 		t.Fatalf("generated project violates the layout rules: %+v", found)
 	}
+}
+
+// TestAddIAMWritesMigratorAndMigrate applies the migrations in a Startup
+// callback, with the application's own migrations and the module's, and creates
+// the empty All the Migrator calls.
+func TestAddIAMWritesMigratorAndMigrate(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	project := load(t, root)
+	plan, err := project.AddIAM(layout.IAMOptions{}, templates)
+	apply(t, project, plan, err)
+
+	migrator := read(t, root, "internal/bootstrap/migrator.go")
+
+	for _, want := range []string{
+		"migrator.Add(migrations.All()...)", "migrator.Add(compose.Use(IAM).Migrations()...)", "compose.Startup(migrator.Up)",
+		`"example.com/shop/internal/migrations"`, "var Migrate = application.Provide(",
+	} {
+		if !strings.Contains(migrator, want) {
+			t.Fatalf("migrator.go misses %q:\n%s", want, migrator)
+		}
+	}
+
+	if all := read(t, root, "internal/migrations/migrations.go"); !strings.Contains(all, "func All() []migrate.Definition") {
+		t.Fatalf("migrations.go:\n%s", all)
+	}
+}
+
+// TestAddIAMKeepsExistingMigrations leaves the application's All alone and
+// calls it from the new Migrator.
+func TestAddIAMKeepsExistingMigrations(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	project := load(t, root)
+	plan, err := project.AddMigration("create_orders", templates)
+	apply(t, project, plan, err)
+
+	plan, err = load(t, root).AddIAM(layout.IAMOptions{}, templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if slices.Contains(created(plan), "internal/migrations/migrations.go") || !slices.Contains(created(plan), "internal/bootstrap/migrator.go") {
+		t.Fatalf("plan creates %v", created(plan))
+	}
+}
+
+// existingMigrator is the Migrator provider of a project that ran
+// `arkoren add migration` and wrote its own migrate process.
+const existingMigrator = `package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/database/migrate"
+
+	"example.com/shop/internal/migrations"
+)
+
+// Migrator holds the application's migrations.
+var Migrator = application.Provide(func(compose *application.Composer) *migrate.Migrator {
+	migrator := migrate.New(compose.Use(Database))
+	compose.Require(migrator.Add(migrations.All()...))
+
+	return migrator
+})
+`
+
+// TestAddIAMInsertsIntoExistingMigrator adds the module's migrations to the
+// Migrator the project already has, and writes neither a second Migrator nor
+// a Migrate for the server.
+func TestAddIAMInsertsIntoExistingMigrator(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	writeFile(t, root, "internal/bootstrap/migrator.go", existingMigrator)
+	project := load(t, root)
+	plan, err := project.AddIAM(layout.IAMOptions{}, templates)
+	apply(t, project, plan, err)
+
+	line := "compose.Require(migrator.Add(compose.Use(IAM).Migrations()...))"
+
+	if inserted := edited(plan, "internal/bootstrap/migrator.go"); !slices.Equal(inserted, []string{line}) {
+		t.Fatalf("inserted = %v, want %q", inserted, line)
+	}
+
+	migrator := read(t, root, "internal/bootstrap/migrator.go")
+
+	if !strings.Contains(migrator, "migrator.Add(migrations.All()...))\n\t"+line+"\n\n\treturn migrator") {
+		t.Fatalf("migrator.go:\n%s", migrator)
+	}
+
+	if compose := read(t, root, "internal/bootstrap/server/compose.go"); strings.Contains(compose, "Migrate") || !strings.Contains(compose, "bootstrap.IAMRouter") {
+		t.Fatalf("compose.go:\n%s", compose)
+	}
+
+	if strings.Contains(stepTexts(plan.Steps), "Migrations()") {
+		t.Fatalf("steps ask for what the command did: %v", plan.Steps)
+	}
+}
+
+// TestAddIAMDoesNotInsertMigrationsTwice recognizes the line it would insert.
+func TestAddIAMDoesNotInsertMigrationsTwice(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	writeFile(t, root, "internal/bootstrap/migrator.go", strings.Replace(existingMigrator, "\n\treturn migrator",
+		"\tcompose.Require(migrator.Add(compose.Use(IAM).Migrations()...))\n\n\treturn migrator", 1))
+
+	plan, err := load(t, root).AddIAM(layout.IAMOptions{}, templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if inserted := edited(plan, "internal/bootstrap/migrator.go"); inserted != nil {
+		t.Fatalf("inserted %v into a Migrator that has the line", inserted)
+	}
+}
+
+// TestAddIAMLeavesAStepWhenMigratorCannotTakeTheLine falls back to the manual
+// step for a Migrator without a list of migrations to extend.
+func TestAddIAMLeavesAStepWhenMigratorCannotTakeTheLine(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	writeFile(t, root, "internal/bootstrap/migrator.go", `package bootstrap
+
+import "arkoren.dev/core/application"
+
+var Migrator = application.Provide(func(compose *application.Composer) int {
+	return 1
+})
+`)
+
+	plan, err := load(t, root).AddIAM(layout.IAMOptions{}, templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if edited(plan, "internal/bootstrap/migrator.go") != nil || !strings.Contains(stepTexts(plan.Steps), "compose.Use(IAM).Migrations()") {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
+
+// TestAddIAMRefusesMigrateWithoutMigrator would otherwise write a second Migrate.
+func TestAddIAMRefusesMigrateWithoutMigrator(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	writeFile(t, root, "internal/bootstrap/existing_migrate.go", "package bootstrap\n\nvar Migrate = 1\n")
+
+	_, err := load(t, root).AddIAM(layout.IAMOptions{}, templates)
+
+	requireUsage(t, err, "internal/bootstrap already declares Migrate")
 }
 
 // TestAddIAMPinsTheModulesItImports lists the modules the new files need with
@@ -76,7 +253,7 @@ func TestAddIAMPinsTheModulesItImports(t *testing.T) {
 	}
 
 	want := []string{
-		"arkoren.dev/ark/iam@v0.5.0", "arkoren.dev/ark/oauth@v0.7.0", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/driver/bcrypt@v0.1.0",
+		"arkoren.dev/ark/iam@v0.5.0", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/driver/bcrypt@v0.1.0",
 		"arkoren.dev/driver/sqlite@v0.1.0", "arkoren.dev/foundation/key@v0.1.1", "arkoren.dev/foundation/totp@v0.2.0",
 	}
 
@@ -151,6 +328,10 @@ func TestAddIAMKeepsExistingProviders(t *testing.T) {
 			t.Fatalf("plan does not create %s: %v", wanted, created(plan))
 		}
 	}
+
+	if slices.Contains(edited(plan, ".env"), "DATABASE_URL=file:app.db") {
+		t.Fatalf(".env edit sets DATABASE_URL for a Database provider the project wrote: %v", plan.Edit)
+	}
 }
 
 // TestAddIAMSkipsComposeUsesAlreadyThere keeps a Compose that already runs Work
@@ -221,7 +402,21 @@ func TestAddIAMRefusesUnknownFeature(t *testing.T) {
 
 	_, err := load(t, scaffoldProject(t)).AddIAM(layout.IAMOptions{With: []string{"passkeys"}}, templates)
 
-	requireUsage(t, err, "--with accepts reset, verification, two-factor, tokens, permissions, account, google, github")
+	requireUsage(t, err, "--with accepts reset, verification, two-factor, tokens, permissions, account")
+}
+
+// TestAddIAMRefusesSignInProviders points the removed google and github values
+// at the command that adds them now.
+func TestAddIAMRefusesSignInProviders(t *testing.T) {
+	t.Parallel()
+
+	project := load(t, scaffoldProject(t))
+
+	for _, provider := range []string{"google", "github"} {
+		_, err := project.AddIAM(layout.IAMOptions{With: []string{provider}}, templates)
+
+		requireUsage(t, err, "arkoren add ark oauth "+provider)
+	}
 }
 
 // TestAddIAMRefusesMissingProcess needs a Compose for the jobs.
@@ -242,8 +437,9 @@ func TestAddIAMIgnoresProcessWithoutJobs(t *testing.T) {
 	}
 }
 
-// TestAddIAMReportsWhatItCannotDo lists the migrator, environment and key steps.
-func TestAddIAMReportsWhatItCannotDo(t *testing.T) {
+// TestAddIAMReportsOnlyWhatTheReaderMustDo lists the key files and ends with the
+// command that starts the server; the environment and migrations need no step.
+func TestAddIAMReportsOnlyWhatTheReaderMustDo(t *testing.T) {
 	t.Parallel()
 
 	plan, err := load(t, scaffoldProject(t)).AddIAM(layout.IAMOptions{With: allIAMFeatures}, templates)
@@ -254,56 +450,58 @@ func TestAddIAMReportsWhatItCannotDo(t *testing.T) {
 	notes := stepTexts(plan.Steps)
 
 	for _, want := range []string{
-		"Migrations()", "DATABASE_URL", "PASSWORD_RESET_URL", "EMAIL_VERIFY_URL", "LINK_KEY_FILE", "TWO_FACTOR_KEY_FILE", "OAUTH_KEY_FILE",
-		"GOOGLE_CLIENT_ID", "GITHUB_CLIENT_SECRET", "worker",
+		"LINK_KEY_FILE=link.key", "arkoren key generate shared --out link.key", "TWO_FACTOR_KEY_FILE=two-factor.key",
+		"arkoren key generate shared --out two-factor.key", "worker", "make run",
 	} {
 		if !strings.Contains(notes, want) {
 			t.Fatalf("notes miss %q:\n%s", want, notes)
 		}
 	}
+
+	for _, unwanted := range []string{"DATABASE_URL", "PASSWORD_RESET_URL", "EMAIL_VERIFY_URL", "Migrations()"} {
+		if strings.Contains(notes, unwanted) {
+			t.Fatalf("notes ask for %q, which the command did:\n%s", unwanted, notes)
+		}
+	}
+
+	if last := plan.Steps[len(plan.Steps)-1]; last.Command != "make run" {
+		t.Fatalf("last step = %+v, want make run", last)
+	}
 }
 
-// TestAddOAuthWritesTheClientProvider creates the provider and the key it needs,
-// and tells how to hand the client to the identity module.
-func TestAddOAuthWritesTheClientProvider(t *testing.T) {
+// TestAddIAMWiresDeclaredSignInClients passes a client that internal/bootstrap
+// already declares, with its sign-up fragment, to identity.Provider.
+func TestAddIAMWiresDeclaredSignInClients(t *testing.T) {
 	t.Parallel()
 
 	root := scaffoldProject(t)
 	project := load(t, root)
-	plan, err := project.AddOAuth("google", templates)
+	plan, err := project.AddOAuth([]string{"google", "github"}, templates)
 	apply(t, project, plan, err)
 
-	if !slices.Equal(created(plan), []string{"internal/bootstrap/google.go", "internal/bootstrap/oauth_key.go"}) || len(plan.Edit) != 0 {
-		t.Fatalf("plan = %+v", plan)
-	}
-
-	if google := read(t, root, "internal/bootstrap/google.go"); !strings.Contains(google, "compose.Startup(client.Start)") ||
-		!strings.Contains(google, "var Google = application.Provide(") {
-		t.Fatalf("google.go:\n%s", google)
-	}
-
-	if !slices.Equal(plan.Requires, []string{"arkoren.dev/ark/oauth@v0.7.0", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/foundation/key@v0.1.1"}) {
-		t.Fatalf("requires = %v", plan.Requires)
-	}
-
-	if !strings.Contains(stepTexts(plan.Steps), "identity.Provider(compose.Use(Google))") {
-		t.Fatalf("steps = %v", plan.Steps)
-	}
-}
-
-// TestAddOAuthRefusesUnknownAndExistingProviders names the supported providers.
-func TestAddOAuthRefusesUnknownAndExistingProviders(t *testing.T) {
-	t.Parallel()
-
-	root := scaffoldProject(t)
-	project := load(t, root)
-
-	_, err := project.AddOAuth("myspace", templates)
-	requireUsage(t, err, "supports google and github")
-
-	plan, err := project.AddOAuth("github", templates)
+	project = load(t, root)
+	plan, err = project.AddIAM(layout.IAMOptions{}, templates)
 	apply(t, project, plan, err)
 
-	_, err = load(t, root).AddOAuth("github", templates)
-	requireUsage(t, err, "internal/bootstrap already declares GitHub")
+	identity := read(t, root, "internal/bootstrap/iam.go")
+
+	for _, want := range []string{"identity.Provider(compose.Use(Google))", "identity.Provider(compose.Use(GitHub), compose.Use(GitHubSignUp))"} {
+		if !strings.Contains(identity, want) {
+			t.Fatalf("iam.go misses %q:\n%s", want, identity)
+		}
+	}
+
+	if slices.Contains(created(plan), "internal/bootstrap/oauth_key.go") {
+		t.Fatalf("plan rewrites the OAuthKey the clients declared: %v", created(plan))
+	}
+
+	env := read(t, root, ".env")
+
+	if !strings.Contains(env, "GOOGLE_REDIRECT_URL=http://127.0.0.1:8080/auth/google/callback\n") {
+		t.Fatalf(".env:\n%s", env)
+	}
+
+	if found := load(t, root).Check(); len(found) != 0 {
+		t.Fatalf("generated project violates the layout rules: %+v", found)
+	}
 }

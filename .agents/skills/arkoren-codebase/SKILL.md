@@ -628,9 +628,9 @@ variable that returns the component it makes live or a construction callback for
 `arkoren check` treats as composition: a function literal taking `*pkg.XBuilder` of an `arkoren.dev` package); `arkoren add feature` writes `internal/bootstrap/<feature>.go`
 with the store, service and surface providers, features never import `application` or bootstrap, and
 `arkoren check` enforces both (`feature-imports-application`, `bootstrap-action-func`) and `composer-supply-outside-tests`
-(`Composer.Supply` only in `_test.go`). `arkoren add ark iam --with ...` and `arkoren add ark oauth <provider>` write the
+(`Composer.Supply` only in `_test.go`). `arkoren add ark iam --with ...` (features only; sign-in providers moved to `add ark oauth`) and `arkoren add ark oauth <provider>...` (google, github, microsoft, apple, oidc; inserts `identity.Provider` into an existing `iam.go`, and `add ark iam` wires declared clients) write the
 ark's providers from `templates/add/ark/` (IAM, IAMRouter, IAMJobs, one fragment file per feature, and every missing shared
-provider by name with local defaults), insert `compose.Use` lines, and fetch the ark with `go get` at the version pinned in
+provider by name with local defaults), insert `compose.Use` lines (`Migrate`, which applies migrations at server startup through a generated `Migrator`, or `IAM.Migrations` inserted into an existing one; `IAMRouter`, mounted under `/auth`), append safe defaults to `.env` (never secrets or key paths), and fetch the ark with `go get` at the version pinned in
 `internal/layout/ark.go` (`modulePins`; bump a pin with the release plan's proposal in the same change as the template or
 API it needs). The IAM code in `skills/arkoren-structure/references/examples.md` is compared with the generator's output
 by `TestExamplesMatchAddArkOutput`; regenerate the example when a template changes.

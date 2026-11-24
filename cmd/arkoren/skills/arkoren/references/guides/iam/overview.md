@@ -203,10 +203,11 @@ The [route reference](routes.md) covers the full list and custom paths.
 `Register` never installs the middleware itself. Install it once on the router
 that carries every route needing to know who is calling, and register IAM on
 that router: your own routes and IAM's then share one identification step.
-Register at the root. Provider redirects use absolute paths such as
-`/auth/{name}`, so a router with a path prefix would send users to routes that
-do not exist, without any error. To serve other paths, register the
-[individual handlers](routes.md#custom-paths).
+Every route, the providers' included, is relative to the router you register
+on, so `web.Group("/auth", identity.Register)` serves `POST /auth/login` and a
+provider named `google` at `/auth/google`. The connect handler reads the prefix
+from the request, so any prefix works; register each provider's callback URL with
+it. To serve other paths, register the [individual handlers](routes.md#custom-paths).
 
 Your own routes are not automatically private. After the middleware, require an
 authenticated caller with `auth` from `arkoren.dev/core/auth`:

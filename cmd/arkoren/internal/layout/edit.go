@@ -320,3 +320,277 @@ func returnedLiteral(file *ast.File, name string) *ast.CompositeLit {
 
 	return nil
 }
+
+// iamPackage is the import path of the identity module whose builder callback
+// [addProviders] extends.
+const iamPackage = "arkoren.dev/ark/iam"
+
+// statementText returns the source text of the expression of an expression
+// statement, or "" for any other statement.
+func statementText(statement ast.Stmt) string {
+	if expression, ok := statement.(*ast.ExprStmt); ok {
+		return types.ExprString(expression.X)
+	}
+
+	return ""
+}
+
+// providerLiteral returns the function literal passed to application.Provide
+// by the top-level variable name, or nil when the variable has another shape.
+func providerLiteral(file *ast.File, name string) *ast.FuncLit {
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+
+		if !ok || gen.Tok != token.VAR {
+			continue
+		}
+
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+
+			if !ok || len(value.Names) != 1 || value.Names[0].Name != name || len(value.Values) != 1 {
+				continue
+			}
+
+			if call, ok := value.Values[0].(*ast.CallExpr); ok && len(call.Args) > 0 {
+				literal, _ := call.Args[len(call.Args)-1].(*ast.FuncLit)
+
+				return literal
+			}
+		}
+	}
+
+	return nil
+}
+
+// addIAMMigrations returns the content of the file declaring the Migrator
+// provider with `compose.Require(migrator.Add(compose.Use(IAM).Migrations()...))`
+// inserted after its last `compose.Require(migrator.Add(...))` statement,
+// formatted, and the inserted statement. The statement is not inserted twice:
+// when it is present the content is returned unchanged with no statements. The
+// names of the composer and the migrator are those the provider uses.
+//
+// It returns [errNoInsertionPoint] when the Migrator is not an
+// application.Provide of a function taking a *application.Composer, or has no
+// `Require(<migrator>.Add(...))` statement to follow.
+func addIAMMigrations(rel string, content []byte) ([]byte, []string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, rel, content, parser.SkipObjectResolution)
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse %s: %w", rel, err)
+	}
+
+	literal := providerLiteral(file, "Migrator")
+
+	if literal == nil {
+		return nil, nil, errNoInsertionPoint
+	}
+
+	composer := composerParamName(literal.Type, importName(file, applicationPackage))
+	last := -1
+	migrator := ""
+
+	for index, statement := range literal.Body.List {
+		if name := addedMigrator(statement, composer); name != "" {
+			last = index
+			migrator = name
+		}
+	}
+
+	if last < 0 {
+		return nil, nil, errNoInsertionPoint
+	}
+
+	call := composer + ".Require(" + migrator + ".Add(" + composer + ".Use(IAM).Migrations()...))"
+
+	if slices.ContainsFunc(literal.Body.List, func(statement ast.Stmt) bool { return statementText(statement) == call }) {
+		return content, nil, nil
+	}
+
+	offset := fset.Position(literal.Body.List[last].End()).Offset
+	updated, err := applyEdits(content, []textEdit{{endOfLine(content, offset), "\n\t" + call}})
+
+	return updated, []string{call}, err
+}
+
+// addedMigrator returns the name of the migrator in a statement of the form
+// composer.Require(migrator.Add(...)), or "" for any other statement.
+func addedMigrator(statement ast.Stmt, composer string) string {
+	expression, ok := statement.(*ast.ExprStmt)
+
+	if !ok {
+		return ""
+	}
+
+	require, ok := expression.X.(*ast.CallExpr)
+
+	if !ok || len(require.Args) != 1 || !isSelector(require.Fun, composer, "Require") {
+		return ""
+	}
+
+	add, ok := require.Args[0].(*ast.CallExpr)
+
+	if !ok {
+		return ""
+	}
+
+	selector, ok := add.Fun.(*ast.SelectorExpr)
+
+	if !ok || selector.Sel.Name != "Add" {
+		return ""
+	}
+
+	receiver, ok := selector.X.(*ast.Ident)
+
+	if !ok {
+		return ""
+	}
+
+	return receiver.Name
+}
+
+// isSelector reports whether expression is the selector receiver.name on a
+// plain identifier.
+func isSelector(expression ast.Expr, receiver, name string) bool {
+	selector, ok := expression.(*ast.SelectorExpr)
+
+	if !ok || selector.Sel.Name != name {
+		return false
+	}
+
+	identifier, ok := selector.X.(*ast.Ident)
+
+	return ok && identifier.Name == receiver
+}
+
+// addProviders returns the content of the file declaring the IAM provider with
+// one `identity.Provider(compose.Use(Client), ...)` statement per group
+// inserted into the callback it passes to iam.New, formatted, and the inserted
+// statements. Each group lists the bootstrap providers of one call: a sign-in
+// client first, then its settings fragments. A group whose client the callback
+// already passes to Provider is skipped; when every group is present the
+// content is returned unchanged with no statements. New statements follow the
+// last Provider statement, or the last statement of the callback.
+//
+// It returns [errNoInsertionPoint] when the file has no iam.New call inside a
+// function taking a *application.Composer whose last argument is a function
+// literal with one named builder parameter.
+func addProviders(rel string, content []byte, groups [][]string) ([]byte, []string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, rel, content, parser.SkipObjectResolution)
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse %s: %w", rel, err)
+	}
+
+	callback, composer := iamCallback(file)
+
+	if callback == nil || callback.Type.Params.NumFields() != 1 || len(callback.Type.Params.List[0].Names) != 1 {
+		return nil, nil, errNoInsertionPoint
+	}
+
+	builder := callback.Type.Params.List[0].Names[0].Name
+	statements := callback.Body.List
+	anchor := len(statements) - 1
+
+	for index, statement := range statements {
+		if strings.HasPrefix(statementText(statement), builder+".Provider(") {
+			anchor = index
+		}
+	}
+
+	calls := missingProviderCalls(statements, builder, composer, groups)
+
+	if len(calls) == 0 {
+		return content, nil, nil
+	}
+
+	point := fset.Position(callback.Body.Lbrace).Offset + 1
+
+	if anchor >= 0 {
+		point = endOfLine(content, fset.Position(statements[anchor].End()).Offset)
+	}
+
+	updated, err := applyEdits(content, []textEdit{{point, "\n" + strings.Join(calls, "\n")}})
+
+	return updated, calls, err
+}
+
+// missingProviderCalls returns the source of one builder.Provider call per
+// group whose client statements do not pass to Provider yet, in order. Each use
+// is written with the composer name, as in compose.Use(Google).
+func missingProviderCalls(statements []ast.Stmt, builder, composer string, groups [][]string) []string {
+	var calls []string
+
+	for _, group := range groups {
+		uses := make([]string, len(group))
+
+		for index, provider := range group {
+			uses[index] = composer + ".Use(" + provider + ")"
+		}
+
+		if !slices.ContainsFunc(statements, func(statement ast.Stmt) bool { return passesClient(statement, builder, uses[0]) }) {
+			calls = append(calls, builder+".Provider("+strings.Join(uses, ", ")+")")
+		}
+	}
+
+	return calls
+}
+
+// iamCallback returns the function literal that the iam.New call of file
+// receives as its last argument, with the name of the composer parameter of the
+// function that contains the call, or nil.
+func iamCallback(file *ast.File) (*ast.FuncLit, string) {
+	application := importName(file, applicationPackage)
+	module := importName(file, iamPackage)
+
+	var callback *ast.FuncLit
+
+	composer := ""
+
+	ast.Inspect(file, func(node ast.Node) bool {
+		outer, ok := node.(*ast.FuncLit)
+
+		if !ok || callback != nil {
+			return callback == nil
+		}
+
+		name := composerParamName(outer.Type, application)
+
+		if name == "" {
+			return true
+		}
+
+		ast.Inspect(outer.Body, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+
+			if !ok || callback != nil || len(call.Args) == 0 || !isSelector(call.Fun, module, "New") {
+				return callback == nil
+			}
+
+			callback, _ = call.Args[len(call.Args)-1].(*ast.FuncLit)
+			composer = name
+
+			return false
+		})
+
+		return callback == nil
+	})
+
+	return callback, composer
+}
+
+// passesClient reports whether statement is a builder.Provider call whose first
+// argument is the source text client, such as compose.Use(Google).
+func passesClient(statement ast.Stmt, builder, client string) bool {
+	expression, ok := statement.(*ast.ExprStmt)
+
+	if !ok {
+		return false
+	}
+
+	call, ok := expression.X.(*ast.CallExpr)
+
+	return ok && isSelector(call.Fun, builder, "Provider") && len(call.Args) > 0 && types.ExprString(call.Args[0]) == client
+}

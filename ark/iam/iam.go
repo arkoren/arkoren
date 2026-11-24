@@ -87,7 +87,7 @@ var ErrNotMigrated = storage.ErrNotMigrated
 //		return err
 //	}
 //	web := routes.With(identity.Middleware())
-//	web.Group("/", identity.Register)
+//	web.Group("/auth", identity.Register)
 type IAM struct {
 	db          *database.Database
 	store       *cache.Cache

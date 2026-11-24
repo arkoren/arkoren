@@ -290,13 +290,16 @@ func TestLayoutCommandsOnBuiltProject(t *testing.T) {
 	}
 }
 
-// iamExampleFeatures is the --with list whose output examples.md shows. It leaves
-// out google, whose startup performs network discovery, so the identity process
-// test in the example runs offline.
-const iamExampleFeatures = "reset,verification,two-factor,tokens,permissions,account,github"
+// iamExampleFeatures is the --with list whose output examples.md shows. The
+// example also has the GitHub sign-in client, added with `add ark oauth github`
+// before the identity module so that the module wires it; it leaves out google,
+// whose startup performs network discovery, so the identity process test in the
+// example runs offline.
+const iamExampleFeatures = "reset,verification,two-factor,tokens,permissions,account"
 
-// TestAddArkIAMDryRunReportsPlan lists the files, the Compose insertions, the
-// pinned modules and the steps left to the user, and writes nothing.
+// TestAddArkIAMDryRunReportsPlan lists the files, the Compose and .env
+// insertions, the pinned modules and the steps left to the user, and writes
+// nothing.
 func TestAddArkIAMDryRunReportsPlan(t *testing.T) {
 	t.Parallel()
 
@@ -310,15 +313,23 @@ func TestAddArkIAMDryRunReportsPlan(t *testing.T) {
 
 	edits := changesWith(report, "edit")
 
-	if report["summary"] != "Would add ark iam" || edits[0]["path"] != "internal/bootstrap/server/compose.go" || len(edits) != 3 || edits[0]["detail"] != "compose.Use(bootstrap.IAMRouter)" {
+	if report["summary"] != "Would add ark iam" || len(edits) != 7 || edits[0]["path"] != "internal/bootstrap/server/compose.go" ||
+		edits[0]["detail"] != "compose.Use(bootstrap.Migrate)" || edits[1]["detail"] != "compose.Use(bootstrap.IAMRouter)" {
 		t.Fatalf("report = %v", report)
+	}
+
+	if last := edits[len(edits)-1]; last["path"] != ".env" || last["detail"] != "EMAIL_VERIFY_URL=http://127.0.0.1:8080/verify-email" {
+		t.Fatalf("last edit = %v", last)
 	}
 
 	if requires := changesWith(report, "require"); requires[0]["path"] != "arkoren.dev/ark/iam@v0.5.0" {
 		t.Fatalf("requires = %v", requires)
 	}
 
-	if steps := report["next_steps"].([]any); !strings.Contains(steps[0].(map[string]any)["text"].(string), "Migrations()") {
+	steps := report["next_steps"].([]any)
+
+	if first := steps[0].(map[string]any); !strings.Contains(first["text"].(string), "LINK_KEY_FILE=link.key") ||
+		first["command"] != "arkoren key generate shared --out link.key" || steps[len(steps)-1].(map[string]any)["command"] != "make run" {
 		t.Fatalf("next_steps = %v", steps)
 	}
 
@@ -327,16 +338,17 @@ func TestAddArkIAMDryRunReportsPlan(t *testing.T) {
 	}
 }
 
-// TestAddArkArgumentsAreChecked rejects arguments iam does not take, a missing
-// OAuth provider and unknown features.
+// TestAddArkArgumentsAreChecked rejects arguments iam does not take, a missing,
+// repeated or unknown OAuth provider and unknown features, among them the
+// sign-in providers that moved to add ark oauth.
 func TestAddArkArgumentsAreChecked(t *testing.T) {
 	t.Parallel()
 
 	env := scaffoldedProject(t)
 
 	for _, args := range [][]string{
-		{"add", "ark", "iam", "extra"}, {"add", "ark", "oauth"}, {"add", "ark", "oauth", "google", "github"},
-		{"add", "ark", "iam", "--with", "passkeys"}, {"add", "ark", "oauth", "myspace"},
+		{"add", "ark", "iam", "extra"}, {"add", "ark", "oauth"}, {"add", "ark", "oauth", "google", "google"},
+		{"add", "ark", "iam", "--with", "passkeys"}, {"add", "ark", "iam", "--with", "google"}, {"add", "ark", "oauth", "myspace"},
 	} {
 		_, err := runLayout(t, env, args...)
 		requireNewUsage(t, err)
@@ -351,8 +363,10 @@ func TestExamplesMatchAddArkOutput(t *testing.T) {
 
 	env := scaffoldedProject(t)
 
-	if _, err := runLayout(t, env, "add", "ark", "iam", "--with", iamExampleFeatures, "--skip-tidy"); err != nil {
-		t.Fatal(err)
+	for _, args := range [][]string{{"add", "ark", "oauth", "github"}, {"add", "ark", "iam", "--with", iamExampleFeatures}} {
+		if _, err := runLayout(t, env, append(args, "--skip-tidy")...); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	examples, err := skillSource.ReadFile("skills/arkoren-structure/references/examples.md")
@@ -362,7 +376,7 @@ func TestExamplesMatchAddArkOutput(t *testing.T) {
 
 	for _, name := range []string{
 		"iam", "password_reset", "email_verification", "token_scopes", "roles", "account_view", "github", "github_sign_up",
-		"hasher", "cache", "link_signer", "two_factor_key", "oauth_key", "mailer",
+		"hasher", "cache", "link_signer", "two_factor_key", "oauth_key", "mailer", "migrator",
 	} {
 		rel := "internal/bootstrap/" + name + ".go"
 		generated, err := os.ReadFile(filepath.Join(env.Dir, rel))
@@ -396,9 +410,10 @@ func exampleFile(t *testing.T, examples, rel string) string {
 
 // TestAddArkIAMGeneratedProject builds the identity module's generated providers
 // against this checkout's modules, vets them, requires `check` to stay clean, and
-// then runs the process test of examples.md: the identity routes serve a
-// registration, the identity job sends the verification email through a mailer
-// the test supplies, and the emailed link verifies the address. It needs the Go
+// then runs the process test of examples.md: the server applies the migrations
+// at startup, the identity routes under /auth serve a registration, the identity
+// job sends the verification email through a mailer the test supplies, and the
+// emailed link verifies the address. It needs the Go
 // toolchain and resolves third-party modules, so short mode skips it.
 func TestAddArkIAMGeneratedProject(t *testing.T) {
 	if testing.Short() {
@@ -408,19 +423,12 @@ func TestAddArkIAMGeneratedProject(t *testing.T) {
 	env := scaffoldedProject(t)
 
 	for _, args := range [][]string{
+		{"add", "ark", "oauth", "github"},
 		{"add", "ark", "iam", "--with", iamExampleFeatures},
-		{"add", "ark", "oauth", "google"},
 	} {
 		if _, err := runLayout(t, env, append(args, "--skip-tidy")...); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
-	}
-
-	// The identity process test needs a Migrator that runs the module's migrations.
-	identity := filepath.Join(env.Dir, "internal/bootstrap")
-
-	if err := os.WriteFile(filepath.Join(identity, "migrator.go"), []byte(migratorSource), 0o600); err != nil {
-		t.Fatal(err)
 	}
 
 	examples, err := skillSource.ReadFile("skills/arkoren-structure/references/examples.md")
@@ -452,25 +460,6 @@ func TestAddArkIAMGeneratedProject(t *testing.T) {
 		t.Fatalf("check after add ark: %v, %v", report, err)
 	}
 }
-
-// migratorSource is the Migrator provider of the generated project in
-// TestAddArkIAMGeneratedProject: the application has no migrations of its own, so
-// it holds the identity module's.
-const migratorSource = `package bootstrap
-
-import (
-	"arkoren.dev/core/application"
-	"arkoren.dev/core/service/database/migrate"
-)
-
-// Migrator holds the identity module's migrations.
-var Migrator = application.Provide(func(compose *application.Composer) *migrate.Migrator {
-	migrator := migrate.New(compose.Use(Database))
-	compose.Require(migrator.Add(compose.Use(IAM).Migrations()...))
-
-	return migrator
-})
-`
 
 // changesWith returns the changes of one action from a decoded result.
 func changesWith(report map[string]any, action string) []map[string]any {

@@ -5,7 +5,7 @@ import (
 	"arkoren.dev/core/application"
 )
 
-// AccountView is the identity module's account settings: what GET /account tells
+// AccountView is the identity module's account settings: what GET /auth/account tells
 // the signed-in user beyond the subject and email facts, which is how the request
 // logged in{{if .Permissions}}, their permissions{{end}}{{if .TwoFactor}} and their two-factor state{{end}}.
 // The route never encodes application data; compose a GET /me from IAM.Account

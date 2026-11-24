@@ -131,8 +131,8 @@ bootstrap providers that wire it, so the module's own settings stay in small
 files you can read and change:
 
 ```sh
-arkoren add ark iam --with reset,verification,two-factor,tokens,permissions,account,github
-arkoren add ark oauth google
+arkoren add ark oauth google github
+arkoren add ark iam --with reset,verification,two-factor,tokens,permissions,account
 ```
 
 `add ark iam` always writes `internal/bootstrap/iam.go` with the `IAM`,
@@ -140,12 +140,24 @@ arkoren add ark oauth google
 providers, and one file per selected feature that returns the construction
 callback of that feature's package (`PasswordReset`, `EmailVerification`,
 `TokenScopes`, `Roles`, `AccountView`). `--with` takes `reset` (registration and
-password recovery), `verification`, `two-factor`, `tokens`, `permissions`,
-`account`, `google` and `github`; password login is always on. `github` also
-writes `GitHubSignUp`, which lets a first GitHub login create a user: remove it
-from `IAM` to only log in existing users. `add ark oauth google` (or `github`)
-writes only that sign-in client and the key it needs; pass the client to
-`identity.Provider` in `IAM` yourself.
+password recovery), `verification`, `two-factor`, `tokens`, `permissions` and
+`account`; password login is always on. Sign-in providers are not features: a
+value such as `google` fails with a usage error whose next step is
+`arkoren add ark oauth google`.
+
+`add ark oauth PROVIDER...` adds one or more sign-in clients: `google`, `github`,
+`microsoft`, `apple` or `oidc`. Each writes `internal/bootstrap/<provider>.go`
+with a provider (`Google`, `GitHub`, `Microsoft`, `Apple`, `OIDC`) that reads its
+settings from the environment (`<PROVIDER>_CLIENT_ID`, `_CLIENT_SECRET` and
+`_REDIRECT_URL`; Microsoft also `MICROSOFT_TENANT`, defaulting to `common`; Apple
+reads `APPLE_TEAM_ID`, `APPLE_KEY_ID` and the Apple-issued `.p8` key from
+`APPLE_KEY_FILE` instead of a secret; OIDC reads `OIDC_ISSUER_URL`), and `OAuthKey`
+once. `github` also writes `GitHubSignUp`, which lets a first GitHub login create a
+user; the other providers only log in existing users, because creating accounts is
+your decision: write a fragment like `GitHubSignUp` to enable it. When
+`internal/bootstrap/iam.go` exists, the command inserts the matching
+`identity.Provider` call into the `iam.New` callback; otherwise it writes only the
+client, and a later `add ark iam` wires every client it finds.
 
 Every shared provider the new code uses is written with a local default when
 `internal/bootstrap` does not declare one by name, and kept when it does:
@@ -158,17 +170,35 @@ named by environment variables, such as `LINK_KEY_FILE`; create them with
 The command inserts `compose.Use(bootstrap.IAMRouter)` into the server's
 `Compose`, and `compose.Use(bootstrap.IAMJobs)` and `compose.Use(bootstrap.Work)`
 into the `Compose` of `--process NAME` (default `server`), skipping lines already
-there. With the memory queue the process that serves HTTP must also send the
-emails, which is why `server` is the default; move the two lines to a worker when
-you swap the queue driver. The module's pinned version is fetched with `go get`
-before `go mod tidy`, so tidy does not pick a newer release; `--skip-tidy` leaves
-both for you, and the report lists each module as a `require` change.
+there. The identity routes are mounted under `/auth`, so login is
+`POST /auth/login`, sessions are `GET /auth/sessions` and a provider's callback is
+`/auth/<provider>/callback`. With the memory queue the process that serves HTTP
+must also send the emails, which is why `server` is the default; move the two
+lines to a worker when you swap the queue driver.
 
-The report also lists `next_steps` (a numbered list on a terminal, each a
-`text` sentence), the work the command cannot do: add
-`compose.Use(IAM).Migrations()...` to your `Migrator` (the migrate process then
-builds `IAM` and needs the same environment as the server), set the environment
-variables and key files, and replace the logging mailer before production.
+Migrations run when the server starts. Without a `Migrator` provider, the command
+writes `internal/bootstrap/migrator.go` with `Migrator` (your `migrations.All()`
+and the module's `Migrations()`) and `Migrate`, which runs `Migrator.Up` in a
+startup callback, creates an empty `internal/migrations/migrations.go` when the
+project has no `All`, and inserts `compose.Use(bootstrap.Migrate)` before
+`IAMRouter`. `Up` holds the migration lock, so replicas are safe. For production,
+remove `Migrate` from the server and run the migrations in a one-shot `migrate`
+process (`compose.Run(compose.Use(bootstrap.Migrator).Up)`); the process ends when
+`Up` returns. With an existing `Migrator`, the command inserts
+`compose.Require(migrator.Add(compose.Use(IAM).Migrations()...))` into it instead.
+
+It also appends the variables with safe local defaults that `.env` lacks, and
+never changes one it sets: `DATABASE_URL=file:app.db` (when it writes `Database`),
+`PASSWORD_RESET_URL` and `EMAIL_VERIFY_URL`, and each client's `_REDIRECT_URL`,
+all derived from `HTTP_ADDR`. Secrets, client IDs and key paths are never written.
+Each line is an `edit` change on `.env`.
+
+The module's pinned version is fetched with `go get` before `go mod tidy`, so tidy
+does not pick a newer release; `--skip-tidy` leaves both for you, and the report
+lists each module as a `require` change. The report also lists `next_steps`, the
+work only you can do: create the key files with the `arkoren key generate shared
+--out FILE` command it prints, register each client's callback URL and set its
+credentials, replace the logging mailer before production, and run `make run`.
 
 ## Preview and Safety
 

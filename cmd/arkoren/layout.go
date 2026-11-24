@@ -23,9 +23,12 @@ func addCLICommand(env console.Environment) *cli.Command {
 	dryRun := &cli.BoolFlag{Name: "dry-run", Usage: "Show the files and edits without writing"}
 	skipTidy := &cli.BoolFlag{Name: "skip-tidy", Usage: "Write files offline without running go mod tidy for new imports"}
 
-	// subcommand declares one add operation. argsUsage names its single positional
-	// argument, such as NAME; empty means the operation takes none.
+	// subcommand declares one add operation. argsUsage names its positional
+	// argument, such as NAME, or ends in "..." when it takes one or more; empty
+	// means the operation takes none.
 	subcommand := func(name, usage, argsUsage string, flags []cli.Flag, plan func(*layout.Project, *cli.Command) (*layout.Plan, error)) *cli.Command {
+		variadic := strings.HasSuffix(argsUsage, "...")
+
 		return &cli.Command{
 			Name:      name,
 			Usage:     usage,
@@ -40,7 +43,7 @@ func addCLICommand(env console.Environment) *cli.Command {
 					return console.UsageError("missing argument %s", argsUsage)
 				}
 
-				if argsUsage != "" && command.Args().Len() > 1 {
+				if argsUsage != "" && !variadic && command.Args().Len() > 1 {
 					return console.UsageError("too many arguments: %s takes one %s", command.FullName(), argsUsage)
 				}
 
@@ -149,9 +152,9 @@ func addCLICommand(env console.Environment) *cli.Command {
 
 							return project.AddIAM(options, newTemplates)
 						}),
-					subcommand("oauth", "Add an OAuth sign-in client (ark/oauth) for PROVIDER: google or github", "PROVIDER", nil,
+					subcommand("oauth", "Add OAuth sign-in clients (ark/oauth) for each PROVIDER: "+strings.Join(layout.OAuthProviders(), ", "), "PROVIDER...", nil,
 						func(project *layout.Project, command *cli.Command) (*layout.Plan, error) {
-							return project.AddOAuth(command.Args().First(), newTemplates)
+							return project.AddOAuth(command.Args().Slice(), newTemplates)
 						}),
 				},
 			},
@@ -189,7 +192,7 @@ func addSummary(command *cli.Command) string {
 	}
 
 	if command.Args().Present() {
-		subject += " " + command.Args().First()
+		subject += " " + strings.Join(command.Args().Slice(), " ")
 	}
 
 	if command.Bool("dry-run") {

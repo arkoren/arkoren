@@ -1,0 +1,35 @@
+package bootstrap
+
+import (
+	"cmp"
+	"os"
+
+	"arkoren.dev/ark/oauth/oauthauth"
+	"arkoren.dev/core/application"
+)
+
+// Microsoft is the process's one Microsoft (Entra ID) sign-in client. It reads
+// MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET and MICROSOFT_REDIRECT_URL (the
+// absolute address of the callback route, such as
+// https://app.example.com/auth/microsoft/callback) from the environment, and
+// seals its login cookies with the OAuthKey provider. MICROSOFT_TENANT selects
+// who may sign in: a tenant ID, "organizations", "consumers", or "common" (the
+// default) for both work and personal accounts. Microsoft's email claim is
+// mutable, so users are matched by tenant and account, and an email is reported
+// only when the app registration adds the optional xms_edov claim. Startup
+// performs the provider's OIDC discovery over the network, so the process fails
+// to start when Microsoft cannot be reached. Pass the client to the identity
+// module with identity.Provider(compose.Use(Microsoft)), which mounts its login
+// and callback routes.
+var Microsoft = application.Provide(func(compose *application.Composer) *oauthauth.Client {
+	cipher := compose.Use(OAuthKey)
+	tenant := cmp.Or(os.Getenv("MICROSOFT_TENANT"), "common")
+
+	client := compose.Must(oauthauth.New(oauthauth.Microsoft(tenant), cipher, os.Getenv("MICROSOFT_CLIENT_ID"), func(client *oauthauth.ClientBuilder) {
+		client.ClientSecret(os.Getenv("MICROSOFT_CLIENT_SECRET"))
+		client.RedirectURL(os.Getenv("MICROSOFT_REDIRECT_URL"))
+	}))
+	compose.Startup(client.Start)
+
+	return client
+})

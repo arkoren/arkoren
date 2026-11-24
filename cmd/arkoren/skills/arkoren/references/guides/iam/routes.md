@@ -10,10 +10,11 @@ summary:
 
 # Routes
 
-`web.Group("/", identity.Register)` registers the default routes below. `web`
-must already run the [IAM middleware and appropriate CSRF
-protection](overview.md#register-routes). Register once at the root, never under
-a path prefix; register individual handlers instead if your paths must differ.
+`web.Group("/auth", identity.Register)` registers the default routes below, each
+relative to the prefix you register at (`POST /login` is `POST /auth/login`
+there; use `"/"` for no prefix). `web` must already run the [IAM middleware and
+appropriate CSRF protection](overview.md#register-routes). Register once; register
+individual handlers instead if your paths must differ.
 
 This page is a lookup reference. The feature guides explain request bodies
 and workflows; [Fresh Logins](freshness.md#credential-routes) compares their
@@ -49,11 +50,11 @@ particular request is authorized.
 | `GET /sessions` | Always |
 | `DELETE /sessions/{id}` | Always |
 | `DELETE /sessions` | Always |
-| `GET /auth/{name}` | That provider registered |
-| `GET /auth/{name}/callback` | That provider registered |
-| `POST /auth/{name}/callback` | That provider registered |
-| `GET /auth/{name}/nonce` | Provider implements `iam.NativeProvider` |
-| `POST /auth/{name}/native` | Provider implements `iam.NativeProvider` |
+| `GET /{name}` | That provider registered |
+| `GET /{name}/callback` | That provider registered |
+| `POST /{name}/callback` | That provider registered |
+| `GET /{name}/nonce` | Provider implements `iam.NativeProvider` |
+| `POST /{name}/native` | Provider implements `iam.NativeProvider` |
 | `GET /connections` | A provider registered |
 | `POST /connections/{id}` | A provider registered |
 | `DELETE /connections/{id}` | A provider registered |
@@ -140,7 +141,7 @@ missing media types, and different JSON media types return `415`.
 Body-reading IAM handlers limit JSON input to 64 KiB.
 `DELETE` handlers are not wrapped in the JSON media-type check.
 
-The provider protocol routes under `/auth/{name}` follow the OAuth client's
+The provider protocol routes under `/{name}` follow the OAuth client's
 own parsing rules: callbacks can arrive as a query or a form.
 The [Apple callback](federated-sign-in.md#apple-callback) additionally needs its
 precise CSRF exception. Do not disable CSRF for IAM's JSON routes.
@@ -288,7 +289,7 @@ web.Post("/connections/{provider}", identity.Links().ConnectHandler(identity.Gua
 
 That preserves the [explicit connection flow](federated-sign-in.md#connect-a-provider).
 Update the front end's navigation target too; the default
-`/auth/{provider}` target is no longer correct. If you customize Apple's path,
+`/{provider}` target beside the connect route is no longer correct. If you customize Apple's path,
 update only that callback's CSRF exception to match it.
 
 For the full handler set, see the

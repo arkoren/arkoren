@@ -1,0 +1,33 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/ark/oauth/oauthauth"
+	"arkoren.dev/core/application"
+)
+
+// OIDC is the process's one generic OpenID Connect sign-in client, for an issuer
+// such as Keycloak or Auth0. It reads OIDC_ISSUER_URL, OIDC_CLIENT_ID,
+// OIDC_CLIENT_SECRET and OIDC_REDIRECT_URL (the absolute address of the callback
+// route, such as https://app.example.com/auth/oidc/callback) from the
+// environment, and seals its login cookies with the OAuthKey provider. The
+// client is named "oidc", which is its route prefix. The issuer's email_verified
+// claim is not trusted, so a login never takes over a local account by email;
+// trust it only for an issuer you operate, with the provider's TrustEmail
+// setting. Startup performs the provider's OIDC discovery over the network, so
+// the process fails to start when the issuer cannot be reached. Pass the client
+// to the identity module with identity.Provider(compose.Use(OIDC)), which mounts
+// its login and callback routes.
+var OIDC = application.Provide(func(compose *application.Composer) *oauthauth.Client {
+	cipher := compose.Use(OAuthKey)
+
+	client := compose.Must(oauthauth.New(oauthauth.OIDC(os.Getenv("OIDC_ISSUER_URL")), cipher, os.Getenv("OIDC_CLIENT_ID"), func(client *oauthauth.ClientBuilder) {
+		client.Name("oidc")
+		client.ClientSecret(os.Getenv("OIDC_CLIENT_SECRET"))
+		client.RedirectURL(os.Getenv("OIDC_REDIRECT_URL"))
+	}))
+	compose.Startup(client.Start)
+
+	return client
+})
