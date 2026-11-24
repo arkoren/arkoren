@@ -1,47 +1,25 @@
 ---
-title: Federated Sign-In
-description: Add external sign-in, control first-login sign-up per provider, and let signed-in users connect or disconnect their own identities.
-order: 50
+title: External Sign-In
+nav: External Sign-In
+description: Let users sign in with Google, GitHub, Apple, or OIDC providers, control first-login sign-up, connect accounts from settings, and support mobile native login.
+order: 60
 summary:
-  - Construct and start Google and GitHub clients, then register their IAM routes with session and CSRF protection.
-  - Control first-login sign-up and understand the destructive claim of an unverified built-in account.
-  - Connect and disconnect identities explicitly, or use native login and Apple's protected callback.
+  - Configure and start OAuth clients, then register them with IAM to mount their login and callback routes.
+  - Control first-time sign-up per provider, add custom creation rules, and understand unverified-account takeover.
+  - Let signed-in users connect or disconnect providers, store optional profile claims, and handle native mobile login and Apple callbacks.
 ---
 
-# Federated Sign-In
+# External Sign-In
 
-Users can sign in with an external account instead of another password.
-IAM stores a **connection** from the provider's verified issuer and subject
-to a local user subject. Later sign-ins use that connection, not the user's
-email or mutable profile.
+Users often prefer signing in with an existing Google, GitHub, or Apple account instead of creating another password. IAM handles external sign-in by storing a **connection** that maps the provider's verified issuer and subject to your local user subject. Subsequent logins match that immutable connection, never a mutable email address or profile name.
 
-The [OAuth](../oauth/overview.md) module owns provider credentials, discovery,
-callback verification, and redirects; IAM owns local users, connections, and
-login policy.
-The [provider comparison](../oauth/providers.md#compatibility-matrix)
-explains differences between Google, Microsoft, GitHub, Apple, and generic
-adapters.
+Responsibilities are cleanly split between two arks: [OAuth](../oauth/overview.md) handles provider credentials, OIDC discovery, token verification, and redirects; IAM handles local users, connections, sign-up policy, and sessions. See the [provider comparison](../oauth/providers.md#compatibility-matrix) for differences across Google, Microsoft, GitHub, Apple, and generic OIDC.
 
-## Configure Clients
+## Configuring OAuth Clients
 
-Register Google and GitHub applications with their respective callback URLs
-before constructing the clients. Assume `googleID`, `googleSecret`, `githubID`,
-and `githubSecret` come from your configuration or secret provider. Both
-clients use an existing `cipher *crypto.Encrypter` with a stable key shared by
-every instance that can receive a callback. See
-[Encryption Keys](../encryption/keys.md) for key provisioning; do not generate
-a new key per request or process start.
+Register your application with each provider and whitelist the exact callback URLs you plan to serve (for example, `https://app.example.com/auth/google/callback`). Both clients below use your existing `*crypto.Encrypter` (`cipher`) with a stable key shared across all instances that may receive callbacks; see [Encryption Keys](../encryption/keys.md).
 
-These fragments use the following imports:
-
-```go
-import (
-	"arkoren.dev/ark/iam"
-	"arkoren.dev/ark/oauth/oauthauth"
-)
-```
-
-Construct the Google client first. Handle the error before continuing:
+Import `oauthauth` from `arkoren.dev/ark/oauth/oauthauth` and construct each client:
 
 ```go
 google, err := oauthauth.New(oauthauth.Google(), cipher, googleID,
@@ -53,8 +31,6 @@ google, err := oauthauth.New(oauthauth.Google(), cipher, googleID,
 )
 ```
 
-Then construct the GitHub client and handle its error:
-
 ```go
 github, err := oauthauth.New(oauthauth.GitHub(), cipher, githubID,
 	func(client *oauthauth.ClientBuilder) {
@@ -65,177 +41,92 @@ github, err := oauthauth.New(oauthauth.GitHub(), cipher, githubID,
 )
 ```
 
-The registered callback URLs must match these URLs exactly. IAM registers paths
-using each client's name: these presets use `google` and `github`. If you
-change a name, update the callback URL and provider registration to match.
-`ChallengeURL` points to your front-end second-factor challenge page; configure
-it when users may have a second factor.
+Each preset gives the client a default name (`google`, `github`) that IAM uses in its route paths. Generic OIDC clients default to `oauth`, so rename them with `client.Name(...)` if you mount more than one. Configure `ChallengeURL` whenever users may have local two-factor enabled; without it, a callback for a two-factor user fails rather than bypassing the challenge.
 
-Before serving requests, start both clients. In a startup function returning
-an error:
+Start each client before serving requests (or wire `Start` into your [application startup lifecycle](../oauth/overview.md#start-discovery)):
 
 ```go
-if err := google.Start(ctx); err != nil {
-	return err
-}
-if err := github.Start(ctx); err != nil {
-	return err
-}
+err = google.Start(ctx)
+err = github.Start(ctx)
 ```
 
-Google uses OIDC discovery and cannot serve login requests until startup
-succeeds; GitHub uses plain OAuth2 and its `Start` is a no-op.
-Alternatively register the clients' `Start` methods with your application's
-startup lifecycle, as shown in [OAuth startup](../oauth/overview.md#start-discovery).
+Google uses OIDC discovery and returns `503` until `Start` succeeds; GitHub uses plain OAuth2 and its `Start` is a no-op.
 
-## Register Providers
+## Registering Providers with IAM
 
-Use the existing `db *database.Database` and `store *cache.Cache` described
-in [IAM Overview](overview.md#start-small). Give each client its own call:
+Pass each client to `identity.Provider(...)` inside `iam.New`:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(google)
-	identity.Provider(github)
-})
+identity.Provider(google)
+identity.Provider(github)
 ```
 
-Handle the constructor error before using `identity`. The clients satisfy
-`iam.Provider`: IAM asks them for their name,
-login handler, and callback handler. You do not write a resolver for registered
-providers. Add and run `identity.Migrations()` before serving, as described in
-[Prepare Storage](overview.md#prepare-storage).
+Each `*oauthauth.Client` satisfies `iam.Provider`, so you do not write a custom resolver. Provider names must be unique URL-safe segments (letters, digits, hyphens, underscores).
 
-Register once at the root of your existing `*router.Router` named `routes`.
-IAM loads the session, but does not provide CSRF protection; use
-`csrf` from `arkoren.dev/core/http/middleware/csrf`:
-
-```go
-web := routes.With(csrf.Middleware(), identity.Middleware())
-web.Group("/auth", identity.Register)
-```
-
-Mounted at `/auth`, `GET /auth/google` starts Google login; both `GET` and `POST`
-`/auth/google/callback` are registered for its callback. Providers are mounted
-at `/{name}` below the prefix you register at. Other clients follow the
-same name-based pattern. Names must be unique safe path segments containing
-only letters, digits, hyphens, and underscores, or `New` fails. A provider you
-never pass to `Provider` is not mounted at all.
-Generic OAuth clients default to `oauth`; rename them in their client settings
-if you use more than one.
-
-For example, add a browser link to start Google sign-in and return to a local
-page:
+When you mount IAM at `/auth` with `web.Group("/auth", identity.Register)`, IAM automatically mounts `GET /auth/{name}` and both `GET` and `POST /auth/{name}/callback` for every registered provider. Add a link on your login page to start the browser flow:
 
 ```html
 <a href="/auth/google?return_to=/projects">Continue with Google</a>
 ```
 
-The target must be a validated local path. A first login normally fails with
-`federation:no-account` until the identity is connected or provider sign-up is
-enabled, subject to the unverified-account exception described below.
-
-A connected identity logs its local user in unless that user is disabled or
-deleted. After successful login, the callback redirects the browser to the
-validated local `return_to` target supplied to the login route, or `/` if none
-was supplied. If the user also has a second factor, the browser callback
-redirects to the client's configured `ChallengeURL` instead; it does not carry
-`return_to` to that page. Configure a front-end challenge
-page on every client whose users may need one; without it, such a callback
-fails rather than bypassing two-factor. The page completes
-[`POST /login/challenge`](two-factor.md#complete-a-login).
+`return_to` must be a safe local path (defaulting to `/`). After a connected user authenticates at the provider, the callback establishes a local session and redirects to `return_to`, or to `ChallengeURL` if the user has a local second factor enrolled (without forwarding `return_to`). Disabled or deleted users cannot sign in.
 
 ## First-Time Sign-In
 
-An unknown external identity normally receives `403`
-`federation:no-account`. The exception is a provider-verified email that
-[claims an unverified built-in account](#unverified-accounts).
-Successful authentication at the provider does not otherwise grant membership
-in your application.
+By default, external providers only sign in users who are **already connected** to a local account. An unknown identity returns `403` `federation:no-account`: authenticating at Google or GitHub does not automatically grant membership in your app.
 
-To let one provider create new users, enable sign-up for that provider:
+To allow new users to join automatically through a specific provider, enable `SignUp(true)` on that provider alone:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(google)
-	identity.Provider(github, func(login *iam.ProviderBuilder) {
-		login.SignUp(true)
-	})
+identity.Provider(google)
+identity.Provider(github, func(login *iam.ProviderBuilder) {
+	login.SignUp(true)
 })
 ```
 
-Here GitHub can create a user; Google cannot. Both can still sign in connected
-identities or connect a provider from an existing user's settings.
-This setting is independent of password registration.
+Here GitHub creates accounts on first sign-in while Google remains invite- or connect-only. This setting is independent of password registration.
 
-Sign-up requires a nonempty email that the provider reports as verified;
-otherwise it returns `403` `federation:email-unverified` and creates nothing.
-New users start verified. With [your own users](own-users.md), IAM calls
-`Users.Create` with that email and verified flag; enabling sign-up without
-`Users.Create` is a construction error.
+Sign-up rules:
 
-A matching email is not permission to attach a new identity to an existing
-**verified** account. With sign-up enabled, such a collision is `409`
-`account:email-taken`; with sign-up disabled, it remains `403`
-`federation:no-account`. The owner logs in another way and connects the provider.
-Concurrent first sign-ins of the same identity create one connected user.
+- **Verified email required**: The provider must supply a nonempty, verified email; otherwise IAM returns `403` `federation:email-unverified` and creates nothing. New users start with a verified email.
+- **No silent merging**: If the email already belongs to a **verified** local account, IAM never links them automatically. With sign-up on, it returns `409` `account:email-taken`; with sign-up off, `403` `federation:no-account`. The owner must sign in another way and connect the provider from settings.
+- **Race-safe**: Concurrent first logins for the same external identity create only one local user.
 
-If you need an additional sign-up rule, such as checking invitations, add
-`login.Create(checkInvitation)` in that provider's callback.
-`checkInvitation` is your
-`func(context.Context, auth.External) (string, error)`, using standard-library
-`context` and `auth` from `arkoren.dev/core/auth`: return an error to
-refuse, `""` and nil to continue with normal user creation, or a newly created
-subject to handle creation yourself. Never return an existing user found by
-email. Multiple `Create` hooks run in order until one returns a subject;
-errors reach the client, so use a problem value for a safe public refusal.
-This hook applies to sign-up, not every later login; it is not a universal
-access gate.
+### Custom Sign-Up Rules
 
-## Unverified Accounts
+To enforce an extra condition on first-time sign-up, such as checking an invitation list, attach a `Create` hook to the provider:
 
-There is one deliberate email-based exception. If someone registered Ada's
-address without proving it, a provider identity with a verified matching email
-can claim that **unverified built-in account**. Without this rule, the earlier
-registrant could block the owner.
+```go
+identity.Provider(github, func(login *iam.ProviderBuilder) {
+	login.SignUp(true)
+	login.Create(checkInvitation)
+})
+```
 
-In one database transaction, IAM marks the address verified, deletes the old
-password and attached connections, authenticator, recovery codes, and tokens,
-rotates the credential version, and connects the owner's identity.
-Database failure rolls back that takeover. Rotation invalidates the earlier
-holder's sessions and pending logins; after commit, IAM also attempts
-best-effort removal of their cached login records.
+`checkInvitation` has the signature `func(context.Context, auth.External) (string, error)`:
 
-The takeover emits `federation.AccountClaimed` alongside `LinkCreated`.
-It applies even with provider sign-up disabled, because it creates no user.
-A disabled user cannot be claimed or re-enabled this way.
-An already verified account is never taken over.
+- Return a **problem error** to refuse sign-up with a safe client-facing message.
+- Return `"", nil` to let IAM create the user normally.
+- Return a **newly created subject** to handle user creation yourself (never return an existing user matched by email).
 
-This rule trusts the provider's email evidence with account ownership.
-Google, GitHub, Apple, and Microsoft presets derive it from their own
-verified-email checks; Microsoft requires `xms_edov`.
-Generic OIDC reports no email by default. Enable its `TrustEmail(true)` only
-after reviewing the provider's address-verification policy.
-See [provider email handling](../oauth/providers.md) before enabling sign-up
-or using pre-created unverified accounts.
+Multiple `Create` hooks run in order until one returns a subject. This hook runs only during new-user sign-up, not on subsequent logins.
 
-For application-owned credentials, register
-[`OnEmailProven`](own-users.md#additional-credentials) so a takeover or recovery
-also removes credentials IAM does not know about. Automatic provider
-takeover is unavailable with a custom user store; it cannot assume that your
-login identifier is an email.
+## Unverified Account Takeover
 
-## Connect a Provider
+There is one deliberate email-based exception. If someone previously registered `ada@example.com` via password sign-up without verifying the mailbox, a provider login with a **verified** matching email claims that **unverified built-in account** so an unverified registrant cannot squat on the real owner's address.
 
-A user who already has an account connects a provider from account settings.
-`POST /connections/{provider}` requires a session, a
-[fresh proof](freshness.md), and a verified email.
-It stores a single-use intent in that session for ten minutes and returns
-`303` to the provider's login URL. The callback must complete in the same session.
+In a single database transaction, IAM marks the address verified, deletes the old password, connections, two-factor enrollment, recovery codes, and tokens, rotates the credential version (invalidating prior sessions), and links the owner's external identity. It emits `federation.AccountClaimed` alongside `federation.LinkCreated`.
 
-Do not use a plain link or HTML form: a GET to provider login must not link an
-identity, and the connect POST requires the JSON media type.
-In a same-origin front end, first store the intent:
+> [!WARNING]
+> Because this rule trusts the provider's verified-email claim with account ownership, enable `TrustEmail(true)` on generic OIDC providers only after verifying their email-verification policy. Google, GitHub, Apple, and Microsoft presets derive verification from their own provider checks (Microsoft requires `xms_edov`).
+
+This takeover applies even when `SignUp` is disabled (since no new user is created), never affects already verified or disabled accounts, and is available only with the built-in directory. If your application stores its own credentials outside IAM, register [`OnEmailProven`](own-users.md#custom-credentials) so they are purged in the same transaction.
+
+## Connecting and Disconnecting Accounts
+
+An existing signed-in user can link a provider from their account settings. `POST /connections/{provider}` requires a browser session, a [fresh proof](freshness.md), and a verified email. It stores a single-use 10-minute intent in the session and responds with `303` to the provider's login route.
+
+Do not link accounts with a plain `<a>` tag or HTML form: the connect endpoint requires `POST` with `Content-Type: application/json`. From your same-origin front end, store the intent with manual redirect handling, then navigate to the provider:
 
 ```js
 const response = await fetch(`/connections/${provider}`, {
@@ -243,50 +134,22 @@ const response = await fetch(`/connections/${provider}`, {
   headers: { "Content-Type": "application/json" },
   redirect: "manual",
 });
-```
-
-Here `provider` is an enabled provider name selected by your UI.
-With manual redirects, a successful `303` appears as an opaque redirect.
-Check that result before navigating:
-
-```js
 if (response.type !== "opaqueredirect") {
   throw new Error(`Connect failed with status ${response.status}`);
 }
 location.assign(`/auth/${provider}`);
 ```
 
-Failures such as `401`, `403`, `404`, or `415` remain ordinary responses;
-display the problem and, if needed, confirm identity before trying again.
-An unknown provider is `404`. Provider sign-up may stay disabled throughout
-this connection flow.
+If the callback completes in the same session, the provider is linked even if `SignUp` is off. Each user can hold one connection per issuer; linking an identity owned by someone else or duplicating an issuer returns `409`.
 
-The callback returns `409` if the identity belongs to someone else, or the user
-already has another connection for that issuer. Each user can have one
-connection per issuer.
+To display and remove connections in settings:
 
-## List and Disconnect
+- `GET /connections` (session required) returns each connection's `id`, `issuer`, `created_at`, `last_used_at`, and any kept `claims`.
+- `DELETE /connections/{id}` (session + fresh proof) removes a connection and returns `204`. Removing the user's last login method returns `409` `federation:last-link` unless they have a password or another connection.
 
-`GET /connections` needs a session and returns connection metadata:
-`id`, `issuer`, `created_at`, and `last_used_at`. IAM stores no provider
-email or profile data in the connection unless you ask for claims with
-[`KeepClaims`](#keep-claims); then `claims` appears on the connections that hold
-some.
+## Keeping Provider Profile Claims
 
-`DELETE /connections/{id}` also needs a fresh proof and returns `204`.
-Removing the last login method returns `409` `federation:last-link`;
-the user must first have a password or another connection. An unknown or
-unowned connection is `404`.
-
-Connections publish `federation.LinkCreated` and `LinkDeleted` for
-[notifications](accounts.md#security-notifications).
-Provider login does not replace a local step-up proof; see
-[Fresh Logins](freshness.md#provider-logins).
-
-## Keep Claims
-
-A provider's verified identity can carry profile claims, such as a name or a
-picture. Name the ones you want to prefill a profile form with, per provider:
+By default, IAM stores no profile data on connections. If you want to prefill a profile form with fields like `name` or `picture`, allowlist them per provider:
 
 ```go
 identity.Provider(google, func(login *iam.ProviderBuilder) {
@@ -294,95 +157,42 @@ identity.Provider(google, func(login *iam.ProviderBuilder) {
 })
 ```
 
-Nothing is kept by default and calls add up. IAM stores the named claims on the
-connection at sign-up, when a user connects the provider, and at every login. A
-login overwrites the claims it carries and keeps the rest, so Apple's name, which
-Apple sends only on the first login, stays. A claim the provider stops sending
-also stays until the connection is removed. Read them with
-`identity.Links().List(ctx, subject)` or from `GET /connections`:
+IAM captures those claims at sign-up, connection, and every subsequent login, updating claims present in the latest login while preserving older ones (so Apple's first-login-only `name` is retained). Read them via `identity.Links().List(ctx, subject)` or `GET /connections`.
 
-```json
-[{ "id": "9c1f", "issuer": "https://accounts.google.com", "created_at": "2026-11-02T09:14:00Z", "claims": { "name": "Ada Lovelace" } }]
-```
-
-Only strings, booleans, numbers and lists of strings are kept, up to 8 KiB per
-connection. Other values are dropped with one `slog` warning per claim name, and
-an update that would exceed the cap is skipped. A login never fails because of
-claims. An empty name or a protocol claim (`iss`, `sub`, `aud`, `exp`, `iat`,
-`nbf`, `nonce`, `at_hash`, `auth_time`, `scope`, `azp`, `acr`, `amr`) makes
-`iam.New` fail with `iam.ErrInvalidConfig`. Unlinking a connection, removing all
-of a user's connections, and forgetting the user delete the claims with the row.
+Only strings, booleans, numbers, and string slices are stored, up to 8 KiB per connection. Unsupported types are dropped with a warning, oversized updates are skipped without failing login, and protocol claims (`iss`, `sub`, `aud`, `exp`, `iat`, `nbf`, `nonce`, `at_hash`, `auth_time`, `scope`, `azp`, `acr`, `amr`) or empty names fail `iam.New` with `iam.ErrInvalidConfig`.
 
 > [!WARNING]
-> Kept claims are unverified suggestions of the provider and can change at each
-> login. Use them to prefill a form the user confirms. Never use them for
-> authorization, for identity, or to match users to accounts.
+> Kept claims are unverified profile hints from the provider and can change on any login. Use them only to prefill user-confirmed forms, never for authorization, identity, or account matching.
 
-The connection table gains a nullable `claims` column in the
-`links-add-claims` migration; run `identity.Migrations()` before deploying.
-Which claims arrive depends on the provider: see
-[Provider claims](../oauth/browser-login.md#provider-claims).
+## Mobile Native Login
 
-## Native Login
+Google and Apple also support native ID-token login from mobile SDKs. When a provider implements `iam.NativeProvider`, IAM mounts two additional endpoints under `/auth/{name}`:
 
-Google and Apple also support native ID-token login through their mobile SDKs.
-IAM registers nonce and native-login routes for clients implementing
-`iam.NativeProvider`. The shared OAuth client has those methods for every
-preset, but presets without native support return `oauthauth.ErrUnsupported`;
-route presence is not proof of support.
+1. `GET /auth/{name}/nonce` returns a nonce and binds it to a temporary session. Pass it to the mobile SDK (raw for Google, hashed for Apple; see [Native Login](../oauth/native-login.md)).
+2. `POST /auth/{name}/native` accepts `{"id_token": "..."}` and responds with `204` (or `202` when a second-factor challenge remains).
 
-For a supported, audience-configured client:
+Keep the same cookie jar across the nonce, native login, and any challenge, then [exchange the login for a device token](tokens.md#mobile-device-tokens). Configure accepted mobile client IDs with `NativeAudiences` on the OAuth client. Because `*oauthauth.Client` implements `NativeProvider` structurally, presets without native support still mount these paths and return `oauthauth.ErrUnsupported`.
 
-1. `GET /auth/{name}/nonce` returns a nonce and stores it in the temporary
-   session. Pass it to the provider SDK as required by that provider.
-2. Submit the SDK's ID token to `POST /auth/{name}/native`:
+## Apple's Cross-Site Callback
 
-```json
-{
-  "id_token": "..."
-}
-```
-
-The result is `204`, or `202` when a second-factor challenge remains.
-Keep the same cookie jar for the nonce, native login, and any challenge;
-then [exchange the login for a device token](tokens.md#exchange-a-mobile-login).
-Configure the accepted app client IDs with `NativeAudiences`.
-[Native Login](../oauth/native-login.md) covers Google's raw nonce and Apple's
-hashed nonce requirements.
-
-## Apple Callback
-
-Apple sends a cross-site form POST. Keep CSRF protection on account routes,
-but exempt exactly Apple's callback pattern. Its sealed OAuth state and
-single-use callback handoff protect the protocol route instead.
-
-With standard-library `net/http`, create the narrowly scoped exception:
+Sign in with Apple delivers its callback as a cross-site form `POST`. Keep CSRF protection enabled across your app, and add a narrow bypass for Apple's callback path alone; its sealed OAuth state and single-use callback handoff protect that route instead:
 
 ```go
 engine := http.NewCrossOriginProtection()
 engine.AddInsecureBypassPattern("POST /auth/apple/callback")
 ```
 
-Pass that protection to `csrf` from
-`arkoren.dev/core/http/middleware/csrf` when registering IAM:
+Pass `engine` into `csrf.Middleware`:
 
 ```go
 web := routes.With(csrf.Middleware(func(protection *csrf.Builder) {
 	protection.Protection(engine)
 }), identity.Middleware())
-web.Group("/", identity.Register)
+web.Group("/auth", identity.Register)
 ```
 
-Use your client's actual name if it is not `apple`.
-HTTPS is required. Keep the default `SameSite=Lax` session policy:
-Apple's POST verifies the identity and redirects to a GET on the same callback;
-that GET must receive the existing session to connect the right account.
-`Register` adds both methods. Do not add a second callback or disable CSRF
-for the whole authentication area.
+Substitute your client's actual name if it is not `apple`. Keep HTTPS and the default `SameSite=Lax` session cookie so Apple's `POST`-to-`GET` handoff carries the existing session when connecting an account.
 
-Next, use [Sessions and Accounts](accounts.md) to manage the local access
-these login methods create, or apply this flow to
-[SSO](sso.md).
+Next, see [Organization SSO](sso.md) to apply external sign-in to enterprise workspaces and corporate identity providers.
 
-For connections and resolver hooks, see the
-[`federation` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/federation).
+For connection stores and resolvers, see the [`federation` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/federation).

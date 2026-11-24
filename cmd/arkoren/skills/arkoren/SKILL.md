@@ -467,19 +467,18 @@ opaque to inference.
 
 #### IAM
 
-- [IAM Overview](references/guides/iam/overview.md): Build a minimal login system with IAM, prepare its storage, and register its routes with session and CSRF protection.
-- [Passwords](references/guides/iam/passwords.md): Sign in with a password, handle a pending second factor, and confirm or change credentials through the IAM routes.
-- [Email Links](references/guides/iam/email-links.md): Give IAM a queue, a mailer and page addresses, then let users reset passwords and verify addresses through signed, single-use links.
-- [Registration](references/guides/iam/registration.md): Open password sign-up deliberately, handle its accepted response, and give both new users and existing address owners a safe path forward.
-- [Federated Sign-In](references/guides/iam/federated-sign-in.md): Add external sign-in, control first-login sign-up per provider, and let signed-in users connect or disconnect their own identities.
-- [SSO](references/guides/iam/sso.md): Use a configured identity provider for organizational sign-in while retaining control of local membership and access.
-- [Fresh Logins](references/guides/iam/freshness.md): Distinguish a session, a verified email, a fresh credential proof, and a new login before allowing sensitive actions.
-- [Two-Factor](references/guides/iam/two-factor.md): Enroll an authenticator, finish a pending login, and recover from a lost device without weakening the account through an old session.
-- [Permissions](references/guides/iam/permissions.md): Assign core gate roles and permissions to users, check them on sessions and tokens, and manage them through optional routes.
-- [API Tokens](references/guides/iam/tokens.md): Issue restricted personal tokens, authenticate API requests, and exchange a recent mobile login for a revocable device token.
-- [Sessions and Accounts](references/guides/iam/accounts.md): Manage active logins, suspend or remove users, and choose how credential changes and recovery affect existing access.
-- [Your Own Users](references/guides/iam/own-users.md): Connect an existing user store to IAM while preserving credential versioning, email ownership checks, and transactional cleanup.
-- [Routes](references/guides/iam/routes.md): Look up IAM's default routes, availability rules, response problems, and the steps for registering individual handlers on custom paths.
+- [IAM Overview](references/guides/iam/overview.md): Understand how Arkoren IAM works, wire it into your application, run its migrations, and protect your first route.
+- [Passwords & Registration](references/guides/iam/passwords.md): Sign users in with passwords, handle pending second-factor challenges, change passwords safely, configure password rules, and open self-service registration.
+- [Verification & Recovery](references/guides/iam/email-links.md): Send signed, single-use links through your queue and mailer so users can reset forgotten passwords and verify email addresses safely.
+- [Step-Up & Freshness](references/guides/iam/freshness.md): Understand how IAM protects sensitive actions with session checks, verified emails, fresh credential proofs, and recent logins.
+- [Two-Factor Authentication](references/guides/iam/two-factor.md): Add TOTP authenticator apps and single-use recovery codes to your login flow, handle challenges, and rotate encryption keys safely.
+- [External Sign-In](references/guides/iam/federated-sign-in.md): Let users sign in with Google, GitHub, Apple, or OIDC providers, control first-login sign-up, connect accounts from settings, and support mobile native login.
+- [Organization SSO](references/guides/iam/sso.md): Configure a corporate identity provider for organizational single sign-on, admit invited staff, enforce ongoing membership, and offboard departing users.
+- [Roles & Permissions](references/guides/iam/permissions.md): Define core gate roles and permissions, assign them to users in IAM, protect critical roles, check access on sessions and tokens, and mount management routes.
+- [API & Device Tokens](references/guides/iam/tokens.md): Issue scoped personal access tokens for scripts and revocable device tokens for mobile apps, enforce live permission ceilings, and prune expired rows.
+- [Sessions & Accounts](references/guides/iam/accounts.md): Inspect the signed-in account, manage active sessions, configure session policy, suspend or delete users, and listen to security events.
+- [Custom User Stores](references/guides/iam/own-users.md): Connect IAM to your existing users table, preserve email-verification and sign-up safeguards, compose your own /me endpoint, and register custom credentials.
+- [Routes & Errors](references/guides/iam/routes.md): Look up every default IAM HTTP route, JSON media-type rule, login response shape, stable problem type, and how to mount handlers on custom paths.
 
 #### OAuth
 

@@ -142,7 +142,7 @@ holds what the provider sent beyond the email:
 Apple sends the user's name only on the first authorization, so store it then;
 a later login carries no `name`. With IAM, `ProviderBuilder.KeepClaims` does this
 for you and keeps the name through later logins: see
-[Keep Claims](../iam/federated-sign-in.md#keep-claims). Claims are the
+[Keep Claims](../iam/federated-sign-in.md#keeping-provider-profile-claims). Claims are the
 provider's suggestions, not proof of anything beyond the verified identity.
 
 ## Second Factors

@@ -1,172 +1,82 @@
 ---
-title: Your Own Users
-description: Connect an existing user store to IAM while preserving credential versioning, email ownership checks, and transactional cleanup.
+title: Custom User Stores
+nav: Custom User Stores
+description: Connect IAM to your existing users table, preserve email-verification and sign-up safeguards, compose your own /me endpoint, and register custom credentials.
 order: 110
 summary:
-  - Replace the built-in directory with a provider and only the adapters your enabled features need.
-  - Preserve secure creation, stored-recipient lookup, and atomic email-proof behavior.
-  - Own user deletion and extend credential cleanup without relying on best-effort events.
+  - Replace IAM's built-in users table with identity.Users using your existing UserProvider, lookup, and version rotation.
+  - Wire Verification and Create on UsersBuilder to keep credential-enrollment gates and sign-up safe.
+  - Compose your own /me endpoint, own user deletion via Forget, and register custom credentials.
 ---
 
-# Your Own Users
+# Custom User Stores
 
-If your application already has users, IAM does not need a second users
-table. Give it your provider and the operations it needs to use those users.
-Passwords, authenticators, tokens, and connections still store their data
-under the same stable subject strings.
+If your application already has a `users` table, IAM does not need a second one. Pass your existing `*auth.UserProvider` to `identity.Users(...)` inside `iam.New`, and IAM skips its built-in users table while keeping passwords, two-factor secrets, tokens, external connections, and permissions stored under your existing subject strings.
 
-Start from a working `*auth.UserProvider` over your store, following
-[user-provider setup](../authentication/session-login.md#load-accounts). Its `Find` operation
-must distinguish missing users (`auth.ErrUserNotFound`) from disabled users
-(`auth.ErrUserDisabled`) and return a credential `Version` that changes
-when access derived from that version must end.
+Start with a working `*auth.UserProvider` over your users table (see [loading accounts](../authentication/session-login.md#load-accounts)). Its `Find` method must distinguish missing users (`auth.ErrUserNotFound`) from disabled users (`auth.ErrUserDisabled`) and return a `Version` that changes whenever old sessions and tokens must be invalidated.
 
-## Replace the Directory
+## Replacing the Built-In Directory
 
-For password login with users created elsewhere, provide the provider,
-identifier lookup, and version-rotation function:
+If you only use external providers or API tokens with users managed elsewhere, passing `provider` alone is enough (`identity.Users(provider)`). For password login, also configure `Lookup` and `Rotate` in the `UsersBuilder` callback:
 
 ```go
-users := iam.Users{
-	Provider: provider,
-	Lookup:   lookup,
-	Rotate:   rotate,
-}
-```
-
-`lookup` is your
-`func(context.Context, string) (subject string, address string, err error)`.
-It maps a login identifier to a subject and the **stored** email address.
-Return an error wrapping `auth.ErrUserNotFound` for an unknown identifier.
-Do not return the typed identifier as the recipient: case folding or
-look-alike characters can otherwise redirect a victim's reset link.
-
-`rotate` is your `func(context.Context, string) error`.
-It must change the same `UserRecord.Version` returned by the provider.
-A reset calls it to invalidate every previous session, pending login, and
-API token. Use the supplied context so it joins the reset's database
-transaction.
-
-Pass this value while enabling passwords:
-
-```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Users(users)
-	identity.Password(hasher)
+identity.Users(provider, func(users *iam.UsersBuilder) {
+	users.Lookup(store.SubjectAndEmail)
+	users.Rotate(store.BumpVersion)
 })
 ```
 
-With the usual `Register`, this enables password login and change without
-registration or email recovery.
-You can configure `passwords.Reset` using the same
-[email-link handoff](email-links.md); IAM then mails the address returned by
-your lookup. Requests can use `identifier` instead of `email`.
+What each function must do:
 
-The minimal adapter above supplies no email-verification checks.
-Use it only when your application enforces the corresponding ownership rules;
-otherwise add the pair below before enabling credential enrollment.
+- **`Lookup(ctx, identifier) (subject, address, err)`**: Maps a login identifier (email, username, etc.) to the user's subject and their **stored** email address. Wrap `auth.ErrUserNotFound` when missing. Never echo the raw typed identifier back as `address`, because case folding or look-alike characters could misdirect reset emails.
+- **`Rotate(ctx, subject) error`**: Bumps the same `UserRecord.Version` that `Provider` returns, using `ctx` so it joins password-reset transactions.
 
-## Verified Emails
+You cannot combine `identity.Users(...)` with `identity.Directory(...)` (`iam.ErrInvalidConfig`). With custom users, `identity.Directory()` returns `nil`, requests may send `identifier` instead of `email`, and IAM's migrations omit the built-in `users` table.
 
-To preserve IAM's built-in email protections, supply `Verified` and
-`ProveEmail` together. `Verified` reads the current state:
+> [!NOTE]
+> The minimal adapter above includes no email-verification checks. Add `Verification` below before enabling credential enrollment unless your application enforces equivalent ownership rules itself.
 
-```go
-verified := func(ctx context.Context, subject string) (bool, error) {
-	return directory.EmailVerified(ctx, subject)
-}
-```
+## Preserving Email-Verification Protections
 
-Here `directory` is your application repository, not IAM's built-in
-directory. A false result prevents provider connection, two-factor enrollment,
-and token creation with `403` `account:email-unverified`.
-
-`ProveEmail` marks the email verified and reports whether it was unverified
-before the call:
+To keep IAM's built-in guards against unverified accounts (blocking provider connections, two-factor enrollment, and token creation with `403` `account:email-unverified`, and purging unverified credentials on password reset), wire `Verification` with both functions:
 
 ```go
-prove := func(ctx context.Context, subject string) (bool, error) {
-	return directory.MarkEmailVerified(ctx, subject)
-}
+identity.Users(provider, func(users *iam.UsersBuilder) {
+	users.Lookup(store.SubjectAndEmail)
+	users.Rotate(store.BumpVersion)
+	users.Verification(store.EmailVerified, store.MarkEmailVerified)
+})
 ```
 
-Implement that test-and-update atomically using the supplied transaction
-context. A completed password reset calls it because the mailbox has just
-been proved. If it returns true, IAM purges connected identities,
-authenticator enrollment, recovery codes, and tokens that an earlier
-registrant might have attached. A failure rolls the reset's SQL writes back.
+- **`verified(ctx, subject) (bool, error)`**: Reports whether the user's email is currently verified. `identity.RequireVerified()` calls this on every request (and panics at startup if verification is not configured).
+- **`proveEmail(ctx, subject) (wasUnverified bool, err error)`**: Atomically marks the email verified inside the supplied transaction context and returns `true` if it was previously unverified. When it returns `true` during a password reset, IAM purges any connections, two-factor enrollment, recovery codes, and tokens attached before the mailbox was proved.
 
-Include the pair in the adapter:
+Both functions must be non-nil. Because IAM does not own your users table, it does not mount `/email/verify` or `/email/verify/resend`; your application owns ordinary verification emails and UI.
+
+## Enabling User Creation
+
+To support password `Registration(true)` or external provider `SignUp(true)`, add `Create` alongside `Verification` (verification is required whenever `Create` is set):
 
 ```go
-users := iam.Users{
-	Provider:   provider,
-	Lookup:     lookup,
-	Rotate:     rotate,
-	Verified:   verified,
-	ProveEmail: prove,
-}
+identity.Users(provider, func(users *iam.UsersBuilder) {
+	users.Lookup(store.SubjectAndEmail)
+	users.Rotate(store.BumpVersion)
+	users.Verification(store.EmailVerified, store.MarkEmailVerified)
+	users.Create(store.Create)
+})
 ```
 
-Setting just one function is invalid.
-`identity.RequireVerified()` calls `Verified` on every request; without it, that
-middleware constructor panics. Without the pair, IAM cannot gate enrollment
-or purge unverified credentials on reset; your application owns both rules.
+`Create(ctx, identifier, verified) (subject, err)` receives `verified = false` for password registration and `verified = true` with a provider-verified email for provider sign-up:
 
-Your application also owns ordinary email-verification messages and UI.
-IAM's `/email/verify` and `/email/verify/resend` routes are not registered
-with custom users, and requesting their handlers directly panics.
+- **Never return an existing user**: Always fail on a duplicate identifier, wrapping `iam.ErrIdentifierTaken` so password registration returns `202` and triggers your taken-address hook rather than leaking existence.
+- **Join the transaction**: Use `ctx` so user creation and initial credential writes commit or roll back together.
+- **Own registration emails**: IAM does not automatically queue verification or taken-address emails for custom users; attach `Registered` and `Taken` hooks on `password.Builder` with comparable work on both branches.
 
-## Let Users Join
+Automatic provider takeover of unverified accounts is available only with the built-in directory, since IAM cannot assume your custom login identifier is an email address.
 
-If IAM may request user creation, add `Create` to the adapter:
+## Building Your Own `/me` Endpoint
 
-```go
-users := iam.Users{
-	Provider:   provider,
-	Lookup:     lookup,
-	Rotate:     rotate,
-	Verified:   verified,
-	ProveEmail: prove,
-	Create:     create,
-}
-```
-
-`create` is your
-`func(context.Context, string, bool) (string, error)`. The arguments are the
-identifier and its verified status. Password registration supplies `false`.
-Provider sign-up supplies a nonempty provider-verified email and `true`;
-the resolver rejects unproved emails before creation.
-
-Creation must fail for an existing identifier, never return its subject.
-Otherwise an external identity could attach itself to another person's user.
-For a taken identifier, wrap `iam.ErrIdentifierTaken` so registration can
-return the same `202` as for a new account.
-Other errors reach the client; use safe problem values for public refusals.
-Creation and credential writes must use the same database transaction context.
-
-`Create` requires both verification functions, even if users can also be
-created elsewhere. It does not open sign-up by itself:
-enable password `Registration(true)` or a provider's `login.SignUp(true)`
-explicitly. Either setting without `Create` is ignored with a warning: no
-route accepts registrations and the provider only signs in known identities.
-
-With custom users, IAM does not automatically send registration verification
-or taken-address notices. Supply your own `Registered` and `Taken` password
-hooks with comparable work on both branches. Hook failures are logged without
-changing the accepted registration response.
-
-Automatic provider takeover by matching an unverified email is built-in-directory
-behavior only. Your lookup may accept usernames or other identifiers, so IAM
-does not assume it can use the provider's email to find an existing account.
-
-## Show Your Users
-
-IAM encodes no application data. `GET /account` answers with the subject and the
-`email` and `email_verified` claims of your user record, never the raw record
-value: your driver's struct often holds a credentials stamp or a disabled flag.
-To publish a profile, write your own `GET /me` that combines
-`identity.Account(ctx)` with your user:
+IAM never serializes your application's user struct. `GET /account` only exposes `subject` and the `email`/`email_verified` claims from `auth.UserRecord.Claims` (with no built-in timestamps). To serve a richer profile, embed `iam.AccountView` in your own response type and call `identity.Account(r.Context())`:
 
 ```go
 type Me struct {
@@ -189,20 +99,11 @@ web.Get("/me", func(w http.ResponseWriter, r *http.Request) error {
 })
 ```
 
-`Account` returns `auth.ErrUnauthenticated` without an identity, so the route
-answers `401` for anonymous requests. Turn on optional parts with
-`identity.Account(func(view *iam.AccountBuilder) { ... })`; the method works
-whether or not that call is made. See [Routes](routes.md#account) for the parts.
+`identity.Account` returns `auth.ErrUnauthenticated` (`401`) when no authenticated identity is present, and includes any optional fields enabled via `identity.Account(...)`.
 
-## Delete Your Users
+## Owning User Deletion
 
-No built-in users table or `DELETE /account` route is supplied.
-`identity.Directory()` returns nil, `DeleteAccountHandler()` panics, and combining
-`identity.Users` with `identity.Directory` configuration makes construction fail.
-The enabled credential stores and their migrations remain available.
-
-Inside your application's authorized deletion flow, forget credentials and
-delete the user in one transaction:
+With custom users, IAM does not mount `DELETE /account` (and calling `DeleteAccountHandler()` panics). Inside your own authorized deletion handler, call `identity.UserProvider().Forget(ctx, subject)` and delete your user row in the same database transaction:
 
 ```go
 err := db.WithTransaction(ctx, func(ctx context.Context) error {
@@ -214,50 +115,22 @@ err := db.WithTransaction(ctx, func(ctx context.Context) error {
 })
 ```
 
-`directory.Delete` is your application's deletion method.
-Forget hooks run in registration order; the first error stops the operation.
-Their SQL work must use that context and database to roll back together.
-The [account-deletion guidance](accounts.md#delete-an-account) explains the
-separate boundary for cached login records and external side effects.
+`Forget` runs every IAM and application forget hook in registration order, rolling back the SQL transaction on the first error. Store subjects in your own tables using bytewise, case-sensitive text columns (avoid case-insensitive default collations).
 
-Subjects are bytewise, case-sensitive identifiers. Store them in your related
-tables as bytewise text columns, not under a case-insensitive default collation.
+## Custom Credentials
 
-## Additional Credentials
-
-If your application or another module supplies a credential, register it through
-IAM's `SecondFactor` or `StepUp` builder methods. They append after the
-built-in methods. `Authenticator` similarly appends request authenticators
-after sessions and IAM tokens.
-
-For example, with an application-provided `auth.Credential` named `credential`
-and a transactional removal function named `removeCredentials`:
+If your application or another module provides an extra `auth.Credential` (such as passkeys) or an extra `auth.Authenticator`, register them on the IAM builder rather than directly on `identity.Guard` so duplicate method names are caught at startup:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.SecondFactor(credential)
-	identity.StepUp(credential)
-	identity.OnEmailProven(removeCredentials)
-})
+identity.SecondFactor(credential)
+identity.StepUp(credential)
+identity.OnEmailProven(removeCredentials)
 ```
 
-This illustrates the extension points, not a shipped passkey implementation.
-Retain your user adapter and login features in the real constructor.
-Use the facade registration methods rather than putting credentials directly
-in `identity.Guard`: duplicate method names make construction fail.
-After construction, `identity.MustAccept(method)` can assert a required method
-at startup; it panics if that method was not registered.
+- `SecondFactor` and `StepUp` append after IAM's built-in methods; `Authenticator` appends after sessions and IAM tokens.
+- `identity.MustAccept(method)` asserts at startup that a required method was registered (panicking otherwise).
+- `OnEmailProven` runs inside the transaction of a password reset or provider takeover that proves an **unverified** mailbox, after IAM's own purge. All registered hooks run in order and any error rolls back the SQL transaction. Also register an `OnForget` hook so your credential store cleans up on account deletion.
 
-`OnEmailProven` runs after IAM's own purge inside a reset or provider takeover
-that proves an **unverified** mailbox. It does not run for an already verified
-account. Multiple hooks run in order, all are attempted, and their errors are
-joined; a failure rolls back the SQL transaction.
-Use this hook for required credential removal, not an event listener.
-Register a provider `OnForget` hook too if your credential store must be cleaned
-up on account deletion.
+Finally, see [Routes & Errors](routes.md) for the complete HTTP route table, problem types, and custom path mounting.
 
-For exact route availability and custom registration, use the [Routes](routes.md)
-reference.
-
-For adapter fields and extension hooks, see the
-[`iam` API reference](https://pkg.go.dev/arkoren.dev/ark/iam).
+For adapter fields and extension hooks, see the [`iam` API reference](https://pkg.go.dev/arkoren.dev/ark/iam).

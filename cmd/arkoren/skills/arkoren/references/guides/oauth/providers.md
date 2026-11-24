@@ -219,7 +219,7 @@ The service's `email_verified` claim is not trusted by default. With the default
 `External.Email` is empty and `EmailVerified` false whatever the token says,
 because many OIDC services let users set an address they never proved, and
 trusting it would let such a user take over a local account with the same email
-(the [IAM facade](../iam/federated-sign-in.md#unverified-accounts) does exactly
+(the [IAM facade](../iam/federated-sign-in.md#unverified-account-takeover) does exactly
 that for a verified email). Turn trust on only for a service you operate or whose
 address verification you have reviewed:
 

@@ -1,130 +1,114 @@
 ---
-title: Sessions and Accounts
+title: Sessions & Accounts
 nav: Sessions & Accounts
-description: Manage active logins, suspend or remove users, and choose how credential changes and recovery affect existing access.
+description: Inspect the signed-in account, manage active sessions, configure session policy, suspend or delete users, and listen to security events.
 order: 100
 summary:
-  - List and revoke session logins without mistaking them for device tokens.
-  - Set shared session policy and distinguish reversible suspension from credential-version rotation.
-  - Delete user-owned data through forget hooks and observe security changes without relying on notifications for enforcement.
+  - Enable GET /account to expose IAM's view of the current user to your front end.
+  - List and revoke active browser sessions, and configure shared session lifetime and cookie settings.
+  - Control credential-change revocation, suspend or delete users cleanly, and subscribe to security events.
 ---
 
-# Sessions and Accounts
+# Sessions & Accounts
 
-After login works, users need to recognize their active sessions and end
-access they no longer trust. Your application also needs administrative ways
-to suspend or delete a user. IAM separates **login records** in the cache
-from the user and credentials in the database; deleting one session is not
-the same as revoking every credential.
+Once users can sign in, they need to see who they are signed in as, inspect their active sessions, and sign out devices they no longer recognize. Your application also needs clean administrative controls to suspend or delete accounts and react to security-sensitive changes.
 
-This page assumes the [facade is registered](overview.md#register-routes).
-Session-management routes require a guard-authenticated session, not a bearer
-token. Administrative Go methods belong behind your application's own
-authorization, never on unprotected routes.
+IAM separates **login records** (stored in your cache) from **users and credentials** (stored in your database). Ending one session does not revoke API tokens or credentials; deleting an account removes everything together.
 
-## Manage Sessions
+## Inspecting the Current Account
 
-`GET /sessions` returns `200` with the user's active login records.
-An abbreviated entry looks like:
+Front ends often need a lightweight endpoint that returns who is signed in, whether their email is verified, what roles they hold, and whether two-factor is active. Enable `GET /account` with `identity.Account(...)`:
+
+```go
+identity.Account(func(view *iam.AccountBuilder) {
+	view.Permissions(true)
+	view.TwoFactor(true)
+	view.Login(true)
+})
+```
+
+`GET /account` responds with `200` for both browser sessions and API tokens (`401` for anonymous requests or pending two-factor logins). Without calling `identity.Account(...)`, the route is not mounted.
+
+By default, the response contains `subject` and the user's email facts (`email`, `email_verified`, plus `verified_at` and `created_at` with the built-in directory). Each optional builder method adds one section:
+
+| Option | Fields added |
+| --- | --- |
+| `Permissions(true)` | `roles` and `permissions` (same as `GET /me/permissions`) |
+| `TwoFactor(true)` | `two_factor` boolean (whether an authenticator is confirmed) |
+| `Login(true)` | `login` object: `session`, `level` (`none`, `single`, `multi`), and core `methods` (`pwd`, `otp`, `hwk`, `swk`) |
+
+With everything enabled for a built-in user signed in with a password and TOTP:
 
 ```json
 {
-  "id": "Hq3...",
-  "created_at": "2026-11-15T09:30:00Z",
-  "seen_at": "2026-11-15T10:02:00Z",
-  "current": true
+  "subject": "3f9c2a7e1b8d4c6fa0e5d7b9c1a3f2e4",
+  "email": "ada@example.com",
+  "email_verified": true,
+  "verified_at": "2026-11-02T09:14:00Z",
+  "created_at": "2026-10-28T17:40:12Z",
+  "roles": ["editor"],
+  "permissions": ["posts:read", "posts:write"],
+  "two_factor": true,
+  "login": { "session": true, "level": "multi", "methods": ["pwd", "otp"] }
 }
 ```
 
-The actual response is an array. By default entries also include `user_agent`
-and `ip`; those are personal data. `seen_at` can lag by five minutes or more,
-so do not present it as an exact activity timestamp.
+For an API token request, `login` reports `{"session": false, "level": "none", "methods": []}`. Calling `Permissions(true)` without `identity.Permissions` or `TwoFactor(true)` without `identity.TwoFactor` is ignored with one warning.
 
-To end one listed login, send `DELETE /sessions/{id}`.
-Success is `204`, including for an unknown ID. The current login may also be
-revoked this way. To end every login except the caller's, send
-`DELETE /sessions`. Neither operation needs freshness, so a user can react
-to suspicious activity without first finding another credential.
+IAM never encodes your application's profile fields (like display name or billing plan). To combine `iam.AccountView` with your own profile data in a custom `GET /me` handler, call `identity.Account(r.Context())`; it works even when `GET /account` is not mounted. See [Building Your Own `/me` Endpoint](own-users.md#building-your-own-me-endpoint).
 
-These requests do not revoke API tokens. A mobile login exchanged for a device
-token is no longer a session; manage it through the
-[token routes](tokens.md#manage-and-prune).
+## Managing Active Sessions
 
-## Session Policy
+Every IAM facade mounts three session-management routes automatically (browser session required, no freshness check needed so users can react to suspicious activity immediately):
 
-The facade gives its guard and session middleware the same absolute lifetime:
-24 hours by default. Configure that once, not on each component independently:
+- `GET /sessions` returns a `200` JSON array of the user's active logins (`id`, `created_at`, `seen_at`, `current`, plus `user_agent` and `ip` by default). Treat `user_agent` and `ip` as personal data, and note that `seen_at` can lag by five minutes or more.
+- `DELETE /sessions/{id}` ends one session (`204`, even for an unknown ID). Users can revoke another device or their current session.
+- `DELETE /sessions` ends every active session *except* the caller's (`204`).
+
+These endpoints manage browser sessions only. Mobile logins that were exchanged for a device token are managed through the [token routes](tokens.md#listing-revoking-and-pruning).
+
+## Session Lifetime and Cookies
+
+IAM keeps the guard and session middleware synchronized on one absolute session lifetime, **24 hours** by default. Change it in one place:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher)
-	identity.SessionLifetime(7 * 24 * time.Hour)
+identity.SessionLifetime(7 * 24 * time.Hour)
+```
+
+This sets the maximum lifetime; idle expiry, cache eviction, manual revocation, or credential changes can still end a session sooner. To customize cookie settings such as the cookie name, idle lifetime, or renewal, use `identity.Session(...)` with `session` from `arkoren.dev/core/http/session`:
+
+```go
+identity.Session(func(cookies *session.Builder) {
+	cookies.Name("__Host-acme.session")
 })
 ```
 
-This changes the maximum login age; it does not promise seven days without an
-idle expiry, cache eviction, revocation, or credential change.
-For idle lifetime and renewal, configure the session policy through
-`identity.Session` and follow the [session guide](../http-capabilities/sessions.md).
+Keep required `__Host-` cookie invariants (secure, root path, no domain). IAM applies its shared lifetime and session handle after your `Session` and `Guard` callbacks so they stay consistent. See [Sessions](../http-capabilities/sessions.md) for cookie and storage behavior.
 
-For example, to use an application-specific cookie name, import `session`
-from `arkoren.dev/core/http/session`:
+## Credential-Change Revocation
 
-```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Session(func(cookies *session.Builder) {
-		cookies.Name("__Host-acme.session")
-	})
-})
-```
+When a user secures their account, IAM revokes older sessions and credentials by default so an attacker cannot keep using stolen access:
 
-Keep the host-prefixed cookie's required secure, root-path, no-domain settings.
-This is a session-setting fragment; retain the login features you need.
-The facade applies its own absolute lifetime and default session handle after
-your callback. A `Guard` callback likewise cannot override the shared lifetime,
-handle, or client-address function.
-
-## Credential Changes
-
-A change intended to protect an account must not leave an attacker's earlier
-login working. IAM applies these defaults:
-
-| Change | Session effect | Token effect |
+| Event | Sessions | Tokens |
 | --- | --- | --- |
-| Password change | End other logins; keep the caller | Revoke all |
-| Enable two-factor | End other logins; keep the caller | Revoke all |
-| Password reset | Rotate version; end all sessions and pending logins | Invalidate all |
-| Provider takeover of an unverified account | Rotate version; invalidate previous sessions and pending logins | Delete all |
+| Password change | Ends other sessions; keeps caller | Revokes all |
+| Enable two-factor | Ends other sessions; keeps caller | Revokes all |
+| Password reset | Rotates version; ends all sessions and pending logins | Invalidates all |
+| Provider takeover of unverified account | Rotates version; invalidates prior sessions and pending logins | Deletes all |
 
-If users depend on long-lived personal tokens for scripts, you can preserve
-them for the first two changes. This also preserves personal tokens an
-attacker may have created using the old password. Accept that risk explicitly
-before configuring:
+If your users rely on long-lived personal access tokens for scripts and you explicitly accept the risk that an attacker with the old password could have minted one, preserve personal tokens across password changes and two-factor enrollment:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher)
-	identity.Tokens()
-	identity.KeepPersonalTokens()
-})
+identity.KeepPersonalTokens()
 ```
 
-Device tokens are still revoked. `KeepPersonalTokens` never exempts a token
-from a password reset, version rotation, or account deletion.
-The individual feature pages describe failure and recovery behavior;
-[Fresh Logins](freshness.md#credential-routes) owns the route requirements.
+Device tokens are still revoked, and `KeepPersonalTokens()` never exempts any token from a password reset, version rotation, or account deletion.
 
-## Suspend a User
+## Suspending Users
 
-The built-in directory exposes `Disable(ctx, subject)` for reversible
-suspension. The next session, pending-login, token, or provider-login check
-rejects the disabled user. It does not delete their data.
-`Enable(ctx, subject)` clears the disabled flag.
+For temporary suspension with the built-in directory, call `identity.Directory().Disable(ctx, subject)` (and `Enable(ctx, subject)` to restore access). A disabled user is immediately rejected on their next session, pending-login, token, or provider check without deleting their data.
 
-Disabling **does not** change the credential version. An unexpired token or
-otherwise valid session can become usable again after re-enabling.
-For offboarding, rotate the version as well, using the same database
-transaction:
+Disabling alone does **not** bump the user's credential version: existing unexpired tokens or sessions would work again if the account is re-enabled. For permanent offboarding, disable and rotate the version in one database transaction:
 
 ```go
 err := db.WithTransaction(ctx, func(ctx context.Context) error {
@@ -136,26 +120,11 @@ err := db.WithTransaction(ctx, func(ctx context.Context) error {
 })
 ```
 
-The old version's sessions, pending logins, and tokens remain invalid even
-after re-enabling. Rotation does not delete passwords, connections, or
-authenticators. Keep the user disabled while they must not sign in.
+## Deleting Accounts
 
-The [provisioning example](overview.md#add-a-user) covers adding directory users.
-For provider-only invitations, use the different
-[unverified invitation path](sso.md#admit-users), rather
-than assuming `CreateVerified` connects an unknown provider identity.
+With the built-in directory, `DELETE /account` lets a signed-in user with a [fresh login](freshness.md) delete their account (`204`). For administrative deletion, call `identity.Directory().Delete(ctx, subject)` (`auth.ErrUserNotFound` if missing).
 
-## Delete an Account
-
-`DELETE /account` requires the current user's session and a fresh login.
-On success it returns `204`, deletes the built-in user and the enabled
-features' SQL rows, and ends the caller's session.
-This is destructive; your application decides how to confirm the deletion
-and whether additional business records must be removed or retained.
-
-The directory calls the shared user provider's **forget hooks** before
-deleting the user. Each hook receives the subject and the transaction context.
-To include application-owned posts, register a hook on that provider:
+Before deleting the user row, IAM runs every registered **forget hook** inside the same database transaction, removing passwords, two-factor secrets, tokens, connections, permission grants, and cached login records. Register your own forget hook to delete application-owned data in that same transaction:
 
 ```go
 identity.UserProvider().OnForget(func(ctx context.Context, subject string) error {
@@ -163,32 +132,17 @@ identity.UserProvider().OnForget(func(ctx context.Context, subject string) error
 })
 ```
 
-Here `posts.DeleteBySubject` is your application's subject-filtered deletion
-using the same database and context. A hook error prevents the SQL transaction
-from committing. Cache changes or external side effects do not gain SQL
-rollback merely because their hook runs in that context.
-The guard's hook also removes cached login records.
+If any hook returns an error, the SQL transaction rolls back and the user stays intact. Keep in mind that cache updates or external API calls inside a hook do not participate in SQL rollback. Deletion emits `account.UserDeleted` and core's `auth.UserForgotten`.
 
-For administrative deletion, `identity.Directory().Delete(ctx, subject)` follows
-the same forget path. Deletion emits `account.UserDeleted` and core's
-`auth.UserForgotten`; an unknown subject returns `auth.ErrUserNotFound`.
-With [custom users](own-users.md#delete-your-users), the built-in account
-route is absent and you own the deletion transaction.
+## Security Events
 
-## Security Notifications
-
-Events let you notify a user or record an audit observation. Pass your existing
-event bus when constructing the facade:
+To send security alert emails or record audit observations, attach your application's [event bus](../events/overview.md) to IAM:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher)
-	identity.Events(bus)
-})
+identity.Events(bus)
 ```
 
-The feature events carry local subjects, not emails, passwords, tokens, codes,
-or external identifiers:
+IAM events carry only local `subject` identifiers, never emails, passwords, tokens, codes, or external IDs:
 
 | Package | Events |
 | --- | --- |
@@ -197,35 +151,12 @@ or external identifiers:
 | `twofactor` | `Enabled`, `Disabled`, `Regenerated`, `RecoveryUsed` |
 | `apitoken` | `Issued`, `Revoked` |
 | `federation` | `LinkCreated`, `LinkDeleted`, `AccountClaimed` |
+| `permission` | `GrantCreated`, `GrantRevoked`, `HolderOrphaned` |
 
-Core additionally emits credential-enrollment, user-forgotten, and
-second-factor-lockout events. Use the normal
-[listener lifecycle](../events/listeners.md) and keep callbacks short:
-they run in-process, not on an email worker. Notifications are not a durable
-audit log or a place to enforce a security decision.
+Core also emits `auth.CredentialEnrolled`, `auth.UserForgotten`, and `auth.SecondFactorLocked`. Keep [event listeners](../events/listeners.md) short: they run in-process, cannot roll back the triggering transaction, and are not a substitute for transactional hooks or a durable audit log.
 
-In particular, resetting an **already verified** account keeps its provider
-connections: they may be legitimate ways the owner signs in.
-After `password.WasReset`, review them under your recovery policy:
+For example, because resetting an **already verified** account preserves its external provider connections, you can listen for `password.WasReset` to notify the user to review `identity.Links().List(ctx, subject)` (check that `identity.Links() != nil` when providers are optional) or call `UnlinkAll` if your policy requires revoking connections on recovery.
 
-```go
-connections, err := identity.Links().List(ctx, subject)
-```
+Next, see [Custom User Stores](own-users.md) if your application already maintains its own users table or needs custom credentials.
 
-Only call this when providers are enabled; `identity.Links()` is nil otherwise.
-Ask the owner to review the list, or use `UnlinkAll(ctx, subject)` if your
-application's explicit policy revokes every connection on recovery.
-A provider takeover of an unverified account already purges connections and
-emits `federation.AccountClaimed`; review application-owned credentials too.
-A listener cannot extend or roll back the reset transaction.
-If your policy requires atomic removal from an already verified account,
-provide an application-owned transactional recovery flow.
-`OnEmailProven` handles unverified-mailbox cleanup only; it is not a hook for
-every reset.
-
-For an organization-specific application, continue with
-[Organization Sign-In](sso.md).
-
-For directory administration and facade hooks, see the
-[`account` API](https://pkg.go.dev/arkoren.dev/ark/iam/account) and
-[`iam` API](https://pkg.go.dev/arkoren.dev/ark/iam).
+For directory and facade APIs, see [`account`](https://pkg.go.dev/arkoren.dev/ark/iam/account) and [`iam`](https://pkg.go.dev/arkoren.dev/ark/iam).
