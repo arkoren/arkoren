@@ -253,7 +253,7 @@ func TestAddIAMPinsTheModulesItImports(t *testing.T) {
 	}
 
 	want := []string{
-		"arkoren.dev/ark/iam@v0.5.0", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/driver/bcrypt@v0.1.0",
+		"arkoren.dev/ark/iam@v0.6.1", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/driver/bcrypt@v0.1.0",
 		"arkoren.dev/driver/sqlite@v0.1.0", "arkoren.dev/foundation/key@v0.1.1", "arkoren.dev/foundation/totp@v0.2.0",
 	}
 
@@ -269,7 +269,7 @@ func TestAddIAMPinsTheModulesItImports(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if slices.Contains(plan.Requires, "arkoren.dev/ark/iam@v0.5.0") || !slices.Contains(plan.Requires, "arkoren.dev/driver/sqlite@v0.1.0") {
+	if slices.Contains(plan.Requires, "arkoren.dev/ark/iam@v0.6.1") || !slices.Contains(plan.Requires, "arkoren.dev/driver/sqlite@v0.1.0") {
 		t.Fatalf("requires = %v, want the missing modules only", plan.Requires)
 	}
 }

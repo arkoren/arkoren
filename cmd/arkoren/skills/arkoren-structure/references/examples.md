@@ -1,6 +1,6 @@
 # Examples
 
-A small shop service shaped by the arkoren-structure rules: a `server` with HTTP routes and an event listener, a `worker` consuming jobs, and a `migrate` one-shot. Every file compiles and passes `go vet` and `arkoren check` against `arkoren.dev/core` v0.19.0 (the identity files against `arkoren.dev/ark/iam` v0.5.0), and the tests at the end pass. Drivers are SQLite and the memory queue; swap them inside the bootstrap providers without touching features. Generated files keep their long doc comments in a real project; they are shortened here.
+A small shop service shaped by the arkoren-structure rules: a `server` with HTTP routes and an event listener, a `worker` consuming jobs, and a `migrate` one-shot. Every file compiles and passes `go vet` and `arkoren check` against `arkoren.dev/core` v0.19.0 (the identity files against `arkoren.dev/ark/iam` v0.6.1), and the tests at the end pass. Drivers are SQLite and the memory queue; swap them inside the bootstrap providers without touching features. Generated files keep their long doc comments in a real project; they are shortened here.
 
 ## Contents
 
