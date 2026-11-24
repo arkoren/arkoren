@@ -62,11 +62,13 @@ middleware, register the endpoint inside a protected group. Import `router` from
 ```go
 routes.Group("/docs", func(protected *router.Router) {
 	protected.Use(requireDocsAccess)
-	protected.Get("/asyncapi.json", Document.Handler())
+	protected.Get("/asyncapi.json", Document.Handler(), asyncapi.DocumentOperation)
 })
 ```
 
-This serves `/docs/asyncapi.json` through that middleware. The middleware is
+This serves `/docs/asyncapi.json` through that middleware. `asyncapi.DocumentOperation`
+describes the route in the router's [OpenAPI document](../openapi/operations.md): the cached JSON
+answer and the 500 problem for an invalid document. The middleware is
 application code, not supplied by AsyncAPI; [group routes](../http-fundamentals/routing.md#group-routes)
 describe how to share access controls. If an existing listener or router already
 enforces the required access boundary, you can instead register the handler

@@ -259,7 +259,7 @@ func (issuer *Issuer) Migrations() []migrate.Definition {
 // Example:
 //
 //	if issuer.PersonalTokens() {
-//		web.Post("/tokens", issuer.CreateHandler(guard))
+//		web.Post("/tokens", issuer.CreateHandler(guard), apitoken.CreateOperation)
 //	}
 func (issuer *Issuer) PersonalTokens() bool {
 	return issuer.personal
@@ -271,7 +271,7 @@ func (issuer *Issuer) PersonalTokens() bool {
 // Example:
 //
 //	if issuer.DeviceTokens() {
-//		web.Post("/device-tokens", issuer.ExchangeHandler(guard))
+//		web.Post("/device-tokens", issuer.ExchangeHandler(guard), apitoken.ExchangeOperation)
 //	}
 func (issuer *Issuer) DeviceTokens() bool {
 	return issuer.device

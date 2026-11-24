@@ -58,9 +58,9 @@ With `app := composer.App()` and an existing `routes *router.Router` from
 `arkoren.dev/core/http/router`, mount the three application-owned handlers:
 
 ```go
-routes.Get(application.ReadyPath, app.ReadyHandler())
-routes.Get(application.LivePath, app.LiveHandler())
-routes.Get(application.StartupPath, app.StartupHandler())
+routes.Get(application.ReadyPath, app.ReadyHandler(), application.ReadyOperation)
+routes.Get(application.LivePath, app.LiveHandler(), application.LiveOperation)
+routes.Get(application.StartupPath, app.StartupHandler(), application.StartupOperation)
 ```
 
 To register all three at once with their OpenAPI operations, call

@@ -37,9 +37,11 @@ subject and the factors it verified and returns `outcome.Response(w)`: 204, or
 202 with the user's second-factor methods when a registered credential says one
 is needed. `guard.PendingHandler()` (GET), `guard.ChallengeHandler()` (POST
 `{"method": ...}`) and `guard.ConfirmHandler()` finish a parked login or confirm
-a logged-in one; they share one per-user attempt count. A session already
+a logged-in one; they share one per-user attempt count, and `auth.PendingOperation`,
+`auth.ChallengeOperation` and `auth.ConfirmOperation` describe them in the router's
+OpenAPI document. A session already
 logged in as that subject keeps its login instead: `Begin` adds the factors and
-skips the second-factor rules. `web.Post("/logout", guard.LogoutHandler())`
+skips the second-factor rules. `web.Post("/logout", guard.LogoutHandler(), auth.LogoutOperation)`
 owns the logout route: it ends the login, publishes `auth.LoggedOut` and
 answers 204, or 303 with `LogoutBuilder.Redirect`. `RequireLevel` and
 `guard.RequireFresh` protect routes by the factors of the identity, so they also

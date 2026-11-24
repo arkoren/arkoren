@@ -599,3 +599,25 @@ func TestChangePasswordCounterIsIndependentOfLoginCounter(t *testing.T) {
 		}
 	})
 }
+
+// TestLoginRejectsMistypedMembersWithValidationProblem verifies a body whose
+// members have the wrong JSON type is parsed through the handler's schema and
+// answered with the request package's 422 validation problem, never with a
+// plain error body.
+func TestLoginRejectsMistypedMembersWithValidationProblem(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+
+		reply := sys.client.Post("/login", `{"email":5,"password":"correct horse"}`)
+
+		if reply.Status != http.StatusUnprocessableEntity {
+			t.Fatalf("mistyped email = %d %s, want 422", reply.Status, reply.Body)
+		}
+
+		if !strings.Contains(reply.Body, "validation-failed") {
+			t.Fatalf("body = %s, want the validation-failed problem", reply.Body)
+		}
+	})
+}

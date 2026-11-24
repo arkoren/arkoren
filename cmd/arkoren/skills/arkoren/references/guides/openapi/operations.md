@@ -239,7 +239,7 @@ separately with a unique ID. Equivalent templates such as `/users/{id}` and
 `/users/{name}` also conflict, even under different methods. `QUERY` has its OpenAPI
 3.2 method field; `CONNECT` and extension methods appear in `additionalOperations`.
 
-Leave mounts and catch-all registrations unannotated, or set `Hidden(true)`.
+Leave catch-all registrations unannotated, or set `Hidden(true)`.
 Visible annotated opaque paths fail export. Hiding an operation suppresses its
 metadata errors too, but does not prevent requests or remove it from `Routes()`.
 

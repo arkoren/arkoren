@@ -99,6 +99,10 @@ func TestHandlerRejectsTypedNilRegistry(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", response.Code)
 	}
+
+	if response.Header().Get("Content-Type") != "application/problem+json" || !strings.Contains(response.Body.String(), "invalid-registry") {
+		t.Fatalf("response = %q %s, want the invalid-registry problem document", response.Header().Get("Content-Type"), response.Body.String())
+	}
 }
 
 // startMetricsDriver supplies an isolated, started public driver without

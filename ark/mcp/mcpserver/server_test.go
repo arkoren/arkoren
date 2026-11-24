@@ -20,6 +20,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"arkoren.dev/ark/mcp/mcpserver"
+	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/mcp"
 	"arkoren.dev/foundation/validate"
 )
@@ -85,7 +86,7 @@ func ExampleNew() {
 
 	recorded := httptest.NewRecorder()
 
-	server.ServeHTTP(recorded, request)
+	handlerOf(server).ServeHTTP(recorded, request)
 
 	if recorded.Code != http.StatusOK {
 		fmt.Println("unexpected HTTP status:", recorded.Code)
@@ -151,7 +152,7 @@ func ExampleServer_Server() {
 
 	recorded := httptest.NewRecorder()
 
-	server.ServeHTTP(recorded, request)
+	handlerOf(server).ServeHTTP(recorded, request)
 
 	if recorded.Code != http.StatusOK {
 		fmt.Println("unexpected HTTP status:", recorded.Code)
@@ -186,6 +187,75 @@ type message struct {
 	Text string `json:"text"`
 }
 
+// handlerOf attaches server to a fresh router group at /mcp, the way an
+// application does, and returns that router as the HTTP handler under test.
+func handlerOf(server *mcpserver.Server) http.Handler {
+	routes := router.New()
+	routes.Group("/mcp", server.Register)
+
+	return routes
+}
+
+// TestRegisterServesPostRoundTrip checks a real SDK client round trip through
+// a group, and that POST is the only registered route.
+func TestRegisterServesPostRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tool := mcp.NewTool("echo", func(context.Context, mcp.NoInput) (message, error) {
+		return message{Text: "hi"}, nil
+	})
+	routes := router.New()
+	routes.Group("/mcp", managed(t, tool).Register)
+
+	session := connect(t, routes, "2026-07-28")
+	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: "echo"})
+
+	if err != nil || result.IsError || result.StructuredContent.(map[string]any)["text"] != "hi" {
+		t.Fatalf("call = %+v, %v", result, err)
+	}
+
+	listed := routes.Routes()
+
+	if len(listed) != 1 || listed[0].Method != http.MethodPost || listed[0].Pattern != "/mcp" {
+		t.Fatalf("routes = %+v", listed)
+	}
+}
+
+// TestRegisterAnswers405ForOtherMethods checks that GET and DELETE are refused
+// by the router, since the stateless endpoint has no event stream or session.
+func TestRegisterAnswers405ForOtherMethods(t *testing.T) {
+	t.Parallel()
+
+	handler := handlerOf(managed(t))
+
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		recorded := httptest.NewRecorder()
+
+		handler.ServeHTTP(recorded, httptest.NewRequest(method, "/mcp", nil))
+
+		if recorded.Code != http.StatusMethodNotAllowed || !strings.Contains(recorded.Header().Get("Allow"), http.MethodPost) {
+			t.Fatalf("%s: status %d, Allow %q", method, recorded.Code, recorded.Header().Get("Allow"))
+		}
+	}
+}
+
+// TestEndpointHandlerServesCustomPath checks that EndpointHandler accepts POST
+// at a path chosen by the application, and the SDK refuses other methods.
+func TestEndpointHandlerServesCustomPath(t *testing.T) {
+	t.Parallel()
+
+	routes := router.New()
+	routes.Any("/rpc", managed(t).EndpointHandler())
+
+	recorded := httptest.NewRecorder()
+
+	routes.ServeHTTP(recorded, httptest.NewRequest(http.MethodGet, "/rpc", nil))
+
+	if recorded.Code != http.StatusMethodNotAllowed || recorded.Header().Get("Allow") != http.MethodPost {
+		t.Fatalf("status %d, Allow %q", recorded.Code, recorded.Header().Get("Allow"))
+	}
+}
+
 // connect starts a real HTTP endpoint and official SDK client. Negative retries
 // prevent the test client from masking a transport failure by replaying work.
 func connect(t *testing.T, handler http.Handler, version string) *sdkmcp.ClientSession {
@@ -196,7 +266,7 @@ func connect(t *testing.T, handler http.Handler, version string) *sdkmcp.ClientS
 
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test", Version: "1"}, nil)
 	session, err := client.Connect(t.Context(), &sdkmcp.StreamableClientTransport{
-		Endpoint: endpoint.URL, MaxRetries: -1, DisableStandaloneSSE: true,
+		Endpoint: endpoint.URL + "/mcp", MaxRetries: -1, DisableStandaloneSSE: true,
 	}, &sdkmcp.ClientSessionOptions{ProtocolVersion: version})
 
 	if err != nil {
@@ -234,7 +304,7 @@ func managed(t *testing.T, tools ...mcp.Tool) *mcpserver.Server {
 func expectFailure(t *testing.T, tool mcp.Tool, expected string) {
 	t.Helper()
 
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: tool.Name()})
 
@@ -263,7 +333,7 @@ func TestModernClientListsRawSchema(t *testing.T) {
 	tool := mcp.NewTool("Echo.v1", func(_ context.Context, input message) (message, error) {
 		return input, nil
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	listed, err := session.ListTools(t.Context(), nil)
 
@@ -288,7 +358,7 @@ func TestModernClientCallsWithStructuredOutput(t *testing.T) {
 	tool := mcp.NewTool("Echo.v1", func(_ context.Context, input message) (message, error) {
 		return input, nil
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{
 		Name: tool.Name(), Arguments: map[string]any{"text": "hello"},
@@ -317,7 +387,7 @@ func TestLegacyStreamableClientCalls(t *testing.T) {
 	tool := mcp.NewTool("status", func(context.Context, mcp.NoInput) (message, error) {
 		return message{Text: "ready"}, nil
 	})
-	session := connect(t, managed(t, tool), "2025-06-18")
+	session := connect(t, handlerOf(managed(t, tool)), "2025-06-18")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: tool.Name()})
 
@@ -367,7 +437,7 @@ func TestToolErrorProtocolMessageIsBounded(t *testing.T) {
 		t.Fatal("core changed the approved cause")
 	}
 
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: tool.Name()})
 
@@ -436,7 +506,7 @@ func TestInvalidInputDoesNotInvokeHandler(t *testing.T) {
 		return input, nil
 	})
 
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{
 		Name: tool.Name(), Arguments: map[string]any{"unknown": "private input"},
@@ -458,7 +528,7 @@ func TestInvalidInputDoesNotInvokeHandler(t *testing.T) {
 func TestUnknownToolIsProtocolError(t *testing.T) {
 	t.Parallel()
 
-	session := connect(t, managed(t), "2026-07-28")
+	session := connect(t, handlerOf(managed(t)), "2026-07-28")
 
 	_, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: "unknown"})
 
@@ -526,7 +596,7 @@ func TestPublicationDetachesBuilder(t *testing.T) {
 	tools[0] = mcp.Tool{}
 	retained.Tools(mcp.Tool{})
 
-	session := connect(t, server, "2026-07-28")
+	session := connect(t, handlerOf(server), "2026-07-28")
 
 	listed, err := session.ListTools(t.Context(), nil)
 
@@ -568,7 +638,7 @@ func TestOuterAuthenticationContextPreserved(t *testing.T) {
 	server := managed(t, tool)
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		ctx := context.WithValue(request.Context(), principalKey{}, "alice")
-		server.ServeHTTP(writer, request.WithContext(ctx))
+		handlerOf(server).ServeHTTP(writer, request.WithContext(ctx))
 	})
 
 	session := connect(t, handler, "2026-07-28")
@@ -596,7 +666,7 @@ func TestLegacyOuterAuthenticationContextPreserved(t *testing.T) {
 	server := managed(t, tool)
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		ctx := context.WithValue(request.Context(), principalKey{}, "alice")
-		server.ServeHTTP(writer, request.WithContext(ctx))
+		handlerOf(server).ServeHTTP(writer, request.WithContext(ctx))
 	})
 
 	session := connect(t, handler, "2025-06-18")
@@ -622,7 +692,7 @@ func TestConcurrentCallsDoNotReplay(t *testing.T) {
 		return message{Text: "done"}, nil
 	})
 
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	const count = 8
 	failures := make(chan error, count)
@@ -667,7 +737,7 @@ func TestRequestCancellationReachesHandler(t *testing.T) {
 		return message{}, ctx.Err()
 	})
 
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
@@ -737,7 +807,7 @@ func TestInputNormalizationRunsOnce(t *testing.T) {
 			})
 		}))
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{
 		Name: tool.Name(), Arguments: map[string]any{"text": "xxvalue"},
@@ -764,7 +834,7 @@ func TestOutputNormalizationDoesNotRun(t *testing.T) {
 			})
 		}))
 	})
-	session := connect(t, managed(t, tool), "2026-07-28")
+	session := connect(t, handlerOf(managed(t, tool)), "2026-07-28")
 
 	result, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: tool.Name()})
 
@@ -813,7 +883,7 @@ func TestBodyLimitRejectsOversizedRequest(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 
-	server.ServeHTTP(recorder, request)
+	handlerOf(server).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("body limit status = %d: %s", recorder.Code, recorder.Body)
@@ -839,7 +909,7 @@ func TestListDoesNotInvokeTools(t *testing.T) {
 		return &sdkmcp.CallToolResult{}, nil
 	})
 
-	session := connect(t, server, "2026-07-28")
+	session := connect(t, handlerOf(server), "2026-07-28")
 
 	listed, err := session.ListTools(t.Context(), nil)
 
@@ -849,5 +919,49 @@ func TestListDoesNotInvokeTools(t *testing.T) {
 
 	if calls.Load() != 0 || len(listed.Tools) != 2 {
 		t.Fatalf("list invoked tools or omitted native additions: %+v", listed.Tools)
+	}
+}
+
+// TestRegisterExportsOperation verifies Register carries the endpoint's
+// operation, so the router exports POST on the group path without errors, with
+// a summary, a body and the documented statuses.
+func TestRegisterExportsOperation(t *testing.T) {
+	t.Parallel()
+
+	server, err := mcpserver.New("catalog", "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routes := router.New()
+	routes.Group("/mcp", server.Register)
+
+	data, err := routes.OpenAPI("MCP", "1")
+	if err != nil {
+		t.Fatalf("OpenAPI() error = %v", err)
+	}
+
+	var document struct {
+		Paths map[string]map[string]struct {
+			Summary     string                    `json:"summary"`
+			RequestBody map[string]any            `json:"requestBody"`
+			Responses   map[string]map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	operation := document.Paths["/mcp"]["post"]
+
+	if operation.Summary == "" || operation.RequestBody == nil {
+		t.Fatalf("operation = %+v, want summary and body", operation)
+	}
+
+	for _, status := range []string{"200", "202", "400", "405"} {
+		if operation.Responses[status] == nil {
+			t.Errorf("operation does not declare status %s", status)
+		}
 	}
 }

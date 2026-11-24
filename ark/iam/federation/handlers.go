@@ -1,6 +1,7 @@
 package federation
 
 import (
+	"cmp"
 	"net/http"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 //
 // Example:
 //
-//	web.Get("/connections", links.ListHandler())
+//	web.Get("/connections", links.ListHandler(), federation.ListOperation)
 func (links *Links) ListHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
@@ -41,7 +42,7 @@ func (links *Links) ListHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/connections/{id}", links.DeleteHandler(guard))
+//	web.Delete("/connections/{id}", links.DeleteHandler(guard), federation.DeleteOperation)
 func (links *Links) DeleteHandler(guard *auth.Guard) router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
@@ -56,7 +57,9 @@ func (links *Links) DeleteHandler(guard *auth.Guard) router.Handler {
 	}
 }
 
-// ConnectHandler returns the handler of POST /connections/{provider}: it records
+// ConnectHandler returns the handler of POST /connections/{provider}: the
+// provider name is the path value "provider", or "id" when the route shares its
+// template with [Links.DeleteHandler], as the facade's routes do. It records
 // a connect intent in the logged-in user's session and answers 303 to the
 // provider's login route, where the user signs in; the callback then links that
 // identity to their account ([Links.Resolve]). targets maps each provider name to
@@ -74,7 +77,7 @@ func (links *Links) DeleteHandler(guard *auth.Guard) router.Handler {
 //
 //	web.Post("/connections/{provider}", links.ConnectHandler(guard, map[string]string{
 //		"google": "/auth/google",
-//	}))
+//	}), federation.ConnectOperation)
 func (links *Links) ConnectHandler(guard *auth.Guard, targets map[string]string) router.Handler {
 	fixed := make(map[string]string, len(targets))
 	for name, target := range targets {
@@ -92,7 +95,7 @@ func (links *Links) ConnectHandler(guard *auth.Guard, targets map[string]string)
 		if err := web.Verified(r.Context(), links.verified, identity.Subject()); err != nil {
 			return err
 		}
-		target, ok := fixed[r.PathValue("provider")]
+		target, ok := fixed[cmp.Or(r.PathValue("provider"), r.PathValue("id"))]
 		if !ok {
 			return ErrUnknownProvider
 		}

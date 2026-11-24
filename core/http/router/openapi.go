@@ -8,6 +8,7 @@ import (
 
 	"arkoren.dev/core/http/router/internal/openapi"
 	"arkoren.dev/core/http/router/internal/snapshot"
+	"arkoren.dev/foundation/problem"
 )
 
 // OpenAPIBuilderFunc configures one document synchronously in order. Nil
@@ -96,7 +97,7 @@ func newOpenAPI(configure []OpenAPIBuilderFunc) OpenAPIBuilder {
 // OpenAPI exports only annotated, nonhidden routes as deterministic OpenAPI
 // 3.2.1 JSON. It reads the entire router tree, using final group paths and
 // synthesizing required string parameters for otherwise undescribed wildcards.
-// Catch-alls and mounts are opaque and must be omitted or hidden. Declaration
+// Catch-alls are opaque and must be omitted or hidden. Declaration
 // errors, duplicate IDs and equivalent path templates return contextual errors.
 // Schemas remain inline and references are neither rewritten nor fetched.
 // Registration must finish before exporting concurrently.
@@ -120,7 +121,7 @@ func (router *Router) OpenAPI(title, version string, configure ...OpenAPIBuilder
 //
 // Example:
 //
-//	routes.Get("/openapi.json", routes.OpenAPIHandler("Users", "1.0"))
+//	routes.Get("/openapi.json", routes.OpenAPIHandler("Users", "1.0"), router.OpenAPIOperation)
 func (router *Router) OpenAPIHandler(title, version string, configure ...OpenAPIBuilderFunc) Handler {
 	document := newOpenAPI(configure)
 	load := sync.OnceValues(func() ([]byte, error) {
@@ -140,6 +141,24 @@ func (router *Router) OpenAPIHandler(title, version string, configure ...OpenAPI
 
 		return err
 	}
+}
+
+// OpenAPIOperation describes the route of [Router.OpenAPIHandler]. It documents
+// the cached 200 JSON document, whose content is the OpenAPI description itself
+// (kept opaque here), and the 500 problem the handler returns when a metadata
+// declaration is invalid. The annotation changes no handler behavior and
+// registers no route; the application chooses the path and its access policy.
+//
+// Example:
+//
+//	routes.Get("/openapi.json", routes.OpenAPIHandler("Users", "1.0"), router.OpenAPIOperation)
+func OpenAPIOperation(operation *OperationBuilder) {
+	operation.Summary("OpenAPI document")
+	operation.Description("Returns the OpenAPI 3.2 description of this application's annotated routes. " +
+		"The document is built once on the first request and cached, so routes added later are not included. " +
+		"An invalid operation declaration fails the request with a 500 problem.")
+	operation.JSONResponse(http.StatusOK, RawSchema(`{"type":"object","readOnly":true,"required":["openapi","info","paths"]}`))
+	operation.Problem(problem.InternalServerError())
 }
 
 // openAPI renders a completed configuration against the current route tree.

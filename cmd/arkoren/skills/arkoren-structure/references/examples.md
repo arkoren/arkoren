@@ -287,9 +287,7 @@ var Router = application.Provide(func(compose *application.Composer) *router.Rou
 	routes.Use(router.Recover())
 	routes.Use(csrf.Middleware())
 
-	routes.Get(application.LivePath, app.LiveHandler(), application.LiveOperation)
-	routes.Get(application.ReadyPath, app.ReadyHandler(), application.ReadyOperation)
-	routes.Get(application.StartupPath, app.StartupHandler(), application.StartupOperation)
+	routes.Group("/", app.RegisterProbes)
 
 	return routes
 })

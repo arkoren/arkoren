@@ -314,10 +314,10 @@ expose label values, resource metadata, and native collector errors. With that
 listener's router `r` and `router` from `arkoren.dev/core/http/router`:
 
 ```go
-r.Get("/metrics", router.HTTP(driver.Handler()))
+r.Get("/metrics", router.HTTP(driver.Handler()), prometheustelemetry.Operation)
 ```
 
-The handler serves Prometheus text or negotiated OpenMetrics. It can serve
+`prometheustelemetry.Operation` documents the scrape route in the router's OpenAPI document. The handler serves Prometheus text or negotiated OpenMetrics. It can serve
 caller-owned collectors before startup and after stop; a successful scrape is
 not proof that Arkoren recording has started.
 

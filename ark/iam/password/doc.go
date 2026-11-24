@@ -86,6 +86,6 @@
 //	guard, err := auth.NewGuard(provider, store, func(policy *auth.GuardBuilder) {
 //		policy.StepUp(verifier.Credential())
 //	})
-//	web.Post("/register", verifier.RegisterHandler())
-//	web.Post("/login", verifier.LoginHandler(guard))
+//	web.Post("/register", verifier.RegisterHandler(), password.RegisterOperation)
+//	web.Post("/login", verifier.LoginHandler(guard), password.LoginOperation)
 package password

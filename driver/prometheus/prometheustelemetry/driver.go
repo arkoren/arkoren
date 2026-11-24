@@ -2,6 +2,7 @@ package prometheustelemetry
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"arkoren.dev/core/service/telemetry"
+	"arkoren.dev/foundation/problem"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -189,27 +191,25 @@ func (driver *Driver) Stop(context.Context) error {
 // format, or OpenMetrics when the scraper asks for it. Mount it where the
 // scraper expects it:
 //
-//	r.Get("/metrics", router.HTTP(prom.Handler()))
+//	r.Get("/metrics", router.HTTP(prom.Handler()), prometheustelemetry.Operation)
 //
-// It works before Start and after Stop, serving whatever the registry
+// [Operation] describes the route in the router's OpenAPI document. It works before Start and after Stop, serving whatever the registry
 // holds. Gathering errors are logged to the application logger and the
 // metrics that could be gathered are still served. When the configuration has
-// no gatherer, the handler answers 501 Not Implemented.
-// A typed-nil native registry pointer instead answers a fixed 503 response,
-// including before Start, without invoking the invalid native handle. Native
+// no gatherer, the handler answers the 501 problem [ErrNoGatherer].
+// A typed-nil native registry pointer instead answers the fixed 503 problem
+// [ErrInvalidRegistry], including before Start, without invoking the invalid
+// native handle. Both are RFC 9457 documents (application/problem+json), never
+// plain text. Native
 // collectors are caller-managed; their error text can reach protected local logs
 // or the metrics error response when no metrics can be served.
 func (driver *Driver) Handler() http.Handler {
 	if err := driver.config.validate(); err != nil {
-		return http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			http.Error(writer, "prometheus telemetry: invalid registry configuration", http.StatusServiceUnavailable)
-		})
+		return problemHandler(ErrInvalidRegistry)
 	}
 
 	if driver.config.Gatherer == nil {
-		return http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			http.Error(writer, "prometheus telemetry: no gatherer configured", http.StatusNotImplemented)
-		})
+		return problemHandler(ErrNoGatherer)
 	}
 
 	return promhttp.HandlerFor(driver.config.Gatherer, promhttp.HandlerOpts{
@@ -218,6 +218,53 @@ func (driver *Driver) Handler() http.Handler {
 		},
 		ErrorHandling:     promhttp.ContinueOnError,
 		EnableOpenMetrics: true,
+	})
+}
+
+// ErrNoGatherer is the 501 problem [Driver.Handler] answers when the
+// configuration registers instruments but has no gatherer to scrape, for example
+// a registerer-only configuration.
+//
+// Example:
+//
+//	fmt.Println(prometheustelemetry.ErrNoGatherer.Status()) // 501
+var ErrNoGatherer = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:driver/prometheus:prometheustelemetry:no-gatherer")
+	details.Title("No metrics gatherer")
+	details.Detail("The telemetry configuration has no gatherer to scrape.")
+	details.Status(http.StatusNotImplemented)
+})
+
+// ErrInvalidRegistry is the fixed 503 problem [Driver.Handler] answers when the
+// native registry configuration is invalid (a typed-nil pointer), including
+// before Start. Start fails for the same configuration.
+//
+// Example:
+//
+//	fmt.Println(prometheustelemetry.ErrInvalidRegistry.Status()) // 503
+var ErrInvalidRegistry = problem.New(func(details *problem.Builder) {
+	details.Type("tag:arkoren.dev,2026-11:driver/prometheus:prometheustelemetry:invalid-registry")
+	details.Title("Invalid metrics registry")
+	details.Detail("The telemetry registry configuration is invalid.")
+	details.Status(http.StatusServiceUnavailable)
+})
+
+// problemHandler answers every request with details as an application/problem+json
+// document at its status. The Prometheus handler is a plain [http.Handler], so
+// the router cannot render a returned error for it.
+func problemHandler(details problem.Details) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		data, err := json.Marshal(details)
+
+		writer.Header().Set("Content-Type", "application/problem+json")
+		writer.WriteHeader(details.Status())
+
+		if err != nil {
+			return
+		}
+
+		// The scraper already has the status; a failed write has no other channel.
+		_, _ = writer.Write(data)
 	})
 }
 

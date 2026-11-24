@@ -194,11 +194,11 @@ func (identity *IAM) registerProviders(r *router.Router) {
 	for _, mounted := range identity.providers {
 		provider := mounted.provider
 		base := "/auth/" + provider.Name()
-		r.Get(base, provider.LoginHandler())
-		r.Methods([]string{http.MethodGet, http.MethodPost}, base+"/callback", provider.CallbackHandler(identity.guard, mounted.resolve))
+		r.Get(base, provider.LoginHandler(), ProviderLoginOperation)
+		r.Methods([]string{http.MethodGet, http.MethodPost}, base+"/callback", provider.CallbackHandler(identity.guard, mounted.resolve), ProviderCallbackOperation)
 		if native, ok := provider.(NativeProvider); ok {
-			r.Get(base+"/nonce", native.NonceHandler())
-			r.Post(base+"/native", native.NativeHandler(identity.guard, mounted.resolve))
+			r.Get(base+"/nonce", native.NonceHandler(), ProviderNonceOperation)
+			r.Post(base+"/native", native.NativeHandler(identity.guard, mounted.resolve), ProviderNativeOperation)
 		}
 	}
 }

@@ -88,7 +88,7 @@ func (client *Client) nativeReady() error {
 //
 // Example:
 //
-//	r.Get("/auth/google/nonce", client.NonceHandler())
+//	r.Get("/auth/google/nonce", client.NonceHandler(), oauthauth.NonceOperation)
 func (client *Client) NonceHandler() router.Handler {
 	return func(writer http.ResponseWriter, httpRequest *http.Request) error {
 		if err := client.nativeReady(); err != nil {
@@ -161,7 +161,7 @@ func (client *Client) NonceHandler() router.Handler {
 //
 // Example:
 //
-//	r.Post("/auth/google/native", client.NativeHandler(guard, resolve))
+//	r.Post("/auth/google/native", client.NativeHandler(guard, resolve), oauthauth.NativeOperation)
 func (client *Client) NativeHandler(guard *auth.Guard, resolve auth.Resolver) router.Handler {
 	var configurationErr error
 
@@ -191,7 +191,7 @@ func (client *Client) NativeHandler(guard *auth.Guard, resolve auth.Resolver) ro
 			return auth.ErrUnauthenticated
 		}
 
-		body, err := request.JSON[nativeLoginBody](httpRequest, request.MaxSize(maxNativeBody))
+		body, err := request.ParseJSON(httpRequest, nativeLoginSchema, request.MaxSize(maxNativeBody))
 
 		if err != nil {
 			return err

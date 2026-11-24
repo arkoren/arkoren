@@ -3,6 +3,7 @@ package prometheustelemetry
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"io"
 	"log/slog"
 	"net/http"
@@ -304,6 +305,10 @@ func TestHandlerWithoutGatherer(t *testing.T) {
 
 	if recorder.Code != http.StatusNotImplemented {
 		t.Errorf("status = %d, want %d", recorder.Code, http.StatusNotImplemented)
+	}
+
+	if recorder.Header().Get("Content-Type") != "application/problem+json" || !strings.Contains(recorder.Body.String(), "no-gatherer") {
+		t.Errorf("response = %q %s, want the no-gatherer problem document", recorder.Header().Get("Content-Type"), recorder.Body.String())
 	}
 }
 
@@ -938,6 +943,44 @@ func TestEndToEnd(t *testing.T) {
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("/metrics misses %q:\n%s", want, body)
+		}
+	}
+}
+
+// TestOperationExportsOpenAPI verifies the scrape route registers with
+// Operation, exports without metadata errors, and documents its failure statuses.
+func TestOperationExportsOpenAPI(t *testing.T) {
+	t.Parallel()
+
+	driver := New()
+	routes := router.New()
+	routes.Get("/metrics", router.HTTP(driver.Handler()), Operation)
+
+	data, err := routes.OpenAPI("Metrics", "1")
+	if err != nil {
+		t.Fatalf("OpenAPI() error = %v", err)
+	}
+
+	var document struct {
+		Paths map[string]map[string]struct {
+			Summary   string                    `json:"summary"`
+			Responses map[string]map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	operation := document.Paths["/metrics"]["get"]
+
+	if operation.Summary == "" {
+		t.Fatal("operation has no summary")
+	}
+
+	for _, status := range []string{"200", "500", "501", "503"} {
+		if operation.Responses[status] == nil {
+			t.Errorf("operation does not declare status %s", status)
 		}
 	}
 }

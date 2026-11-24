@@ -2,6 +2,13 @@ package iam
 
 import (
 	"arkoren.dev/core/http/router"
+
+	"arkoren.dev/ark/iam/account"
+	"arkoren.dev/ark/iam/apitoken"
+	"arkoren.dev/ark/iam/federation"
+	"arkoren.dev/ark/iam/password"
+	"arkoren.dev/ark/iam/permission"
+	"arkoren.dev/ark/iam/twofactor"
 )
 
 // Register adds the default routes of the enabled features to r. Only the
@@ -79,16 +86,16 @@ func (identity *IAM) Register(r *router.Router) {
 	identity.registerTwoFactor(r)
 	identity.registerTokens(r)
 	identity.registerPermissions(r)
-	r.Get("/sessions", identity.ListSessionsHandler())
-	r.Delete("/sessions/{id}", identity.DeleteSessionHandler())
-	r.Delete("/sessions", identity.DeleteOtherSessionsHandler())
+	r.Get("/sessions", identity.ListSessionsHandler(), ListSessionsOperation)
+	r.Delete("/sessions/{id}", identity.DeleteSessionHandler(), DeleteSessionOperation)
+	r.Delete("/sessions", identity.DeleteOtherSessionsHandler(), DeleteOtherSessionsOperation)
 	identity.registerProviders(r)
 	identity.registerConnections(r)
 	if identity.account != nil {
-		r.Get("/account", identity.AccountHandler())
+		r.Get("/account", identity.AccountHandler(), AccountOperation)
 	}
 	if identity.directory != nil {
-		r.Delete("/account", identity.DeleteAccountHandler())
+		r.Delete("/account", identity.DeleteAccountHandler(), DeleteAccountOperation)
 	}
 }
 
@@ -99,14 +106,14 @@ func (identity *IAM) registerPassword(r *router.Router) {
 	if identity.verifier == nil {
 		return
 	}
-	r.Post("/login", identity.LoginHandler())
-	r.Put("/password", identity.ChangePasswordHandler())
+	r.Post("/login", identity.LoginHandler(), password.LoginOperation)
+	r.Put("/password", identity.ChangePasswordHandler(), password.ChangeOperation)
 	if identity.registration {
-		r.Post("/register", identity.RegisterHandler())
+		r.Post("/register", identity.RegisterHandler(), password.RegisterOperation)
 	}
 	if identity.reset() {
-		r.Post("/password/reset", identity.ResetPasswordHandler())
-		r.Post("/password/forgot", identity.ForgotPasswordHandler())
+		r.Post("/password/reset", identity.ResetPasswordHandler(), password.ResetOperation)
+		r.Post("/password/forgot", identity.ForgotPasswordHandler(), password.ForgotOperation)
 	}
 }
 
@@ -114,12 +121,12 @@ func (identity *IAM) registerPassword(r *router.Router) {
 // with a second factor, /logout always and /confirm with a step-up method.
 func (identity *IAM) registerLogin(r *router.Router) {
 	if identity.secondFactor {
-		r.Post("/login/challenge", identity.ChallengeHandler())
-		r.Get("/login/pending", identity.PendingHandler())
+		r.Post("/login/challenge", identity.ChallengeHandler(), ChallengeOperation)
+		r.Get("/login/pending", identity.PendingHandler(), PendingOperation)
 	}
-	r.Post("/logout", identity.LogoutHandler())
+	r.Post("/logout", identity.LogoutHandler(), LogoutOperation)
 	if identity.stepUp {
-		r.Post("/confirm", identity.ConfirmHandler())
+		r.Post("/confirm", identity.ConfirmHandler(), ConfirmOperation)
 	}
 }
 
@@ -129,8 +136,8 @@ func (identity *IAM) registerEmail(r *router.Router) {
 	if !identity.verification() {
 		return
 	}
-	r.Post("/email/verify", identity.VerifyEmailHandler())
-	r.Post("/email/verify/resend", identity.ResendVerificationHandler())
+	r.Post("/email/verify", identity.VerifyEmailHandler(), account.VerifyOperation)
+	r.Post("/email/verify/resend", identity.ResendVerificationHandler(), account.ResendOperation)
 }
 
 // registerTwoFactor registers the two-factor routes when [Builder.TwoFactor] is
@@ -139,10 +146,10 @@ func (identity *IAM) registerTwoFactor(r *router.Router) {
 	if identity.factors == nil {
 		return
 	}
-	r.Post("/two-factor/setup", identity.SetupTwoFactorHandler())
-	r.Post("/two-factor", identity.EnableTwoFactorHandler())
-	r.Delete("/two-factor", identity.DisableTwoFactorHandler())
-	r.Post("/two-factor/recovery-codes", identity.RecoveryCodesHandler())
+	r.Post("/two-factor/setup", identity.SetupTwoFactorHandler(), twofactor.SetupOperation)
+	r.Post("/two-factor", identity.EnableTwoFactorHandler(), twofactor.EnableOperation)
+	r.Delete("/two-factor", identity.DisableTwoFactorHandler(), twofactor.DisableOperation)
+	r.Post("/two-factor/recovery-codes", identity.RecoveryCodesHandler(), twofactor.RecoveryCodesOperation)
 }
 
 // registerTokens registers the token routes when [Builder.Tokens] is set.
@@ -150,14 +157,14 @@ func (identity *IAM) registerTokens(r *router.Router) {
 	if identity.issuer == nil {
 		return
 	}
-	r.Get("/tokens", identity.ListTokensHandler())
-	r.Delete("/tokens/{id}", identity.DeleteTokenHandler())
+	r.Get("/tokens", identity.ListTokensHandler(), apitoken.ListOperation)
+	r.Delete("/tokens/{id}", identity.DeleteTokenHandler(), apitoken.DeleteOperation)
 	if identity.issuer.PersonalTokens() {
-		r.Post("/tokens", identity.CreateTokenHandler())
+		r.Post("/tokens", identity.CreateTokenHandler(), apitoken.CreateOperation)
 	}
 	if identity.issuer.DeviceTokens() {
-		r.Post("/device-tokens", identity.ExchangeHandler())
-		r.Delete("/device-tokens/current", identity.DeleteDeviceTokenHandler())
+		r.Post("/device-tokens", identity.ExchangeHandler(), apitoken.ExchangeOperation)
+		r.Delete("/device-tokens/current", identity.DeleteDeviceTokenHandler(), apitoken.DeleteCurrentOperation)
 	}
 }
 
@@ -169,25 +176,28 @@ func (identity *IAM) registerPermissions(r *router.Router) {
 		return
 	}
 	if identity.permissions.SelfService() {
-		r.Get("/me/permissions", identity.SelfPermissionsHandler())
+		r.Get("/me/permissions", identity.SelfPermissionsHandler(), permission.SelfOperation)
 	}
 	if _, managed := identity.permissions.Management(); !managed {
 		return
 	}
-	r.Get("/users/{subject}/permissions", identity.UserPermissionsHandler())
-	r.Put("/users/{subject}/permissions/{name}", identity.GrantPermissionHandler())
-	r.Delete("/users/{subject}/permissions/{name}", identity.RevokePermissionHandler())
-	r.Put("/users/{subject}/roles/{name}", identity.GrantRoleHandler())
-	r.Delete("/users/{subject}/roles/{name}", identity.RevokeRoleHandler())
+	r.Get("/users/{subject}/permissions", identity.UserPermissionsHandler(), permission.UserOperation)
+	r.Put("/users/{subject}/permissions/{name}", identity.GrantPermissionHandler(), permission.GrantOperation)
+	r.Delete("/users/{subject}/permissions/{name}", identity.RevokePermissionHandler(), permission.RevokeOperation)
+	r.Put("/users/{subject}/roles/{name}", identity.GrantRoleHandler(), permission.GrantRoleOperation)
+	r.Delete("/users/{subject}/roles/{name}", identity.RevokeRoleHandler(), permission.RevokeRoleOperation)
 }
 
 // registerConnections registers the connection routes when [Builder.Provider]
-// added any provider.
+// added any provider. POST and DELETE share one path template, so the wildcard
+// has one name, "id" (the provider's name for POST, the connection's ID for
+// DELETE): OpenAPI cannot tell "/connections/{id}" from "/connections/{provider}"
+// and the export rejects both names on one path.
 func (identity *IAM) registerConnections(r *router.Router) {
 	if identity.links == nil {
 		return
 	}
-	r.Get("/connections", identity.ListConnectionsHandler())
-	r.Post("/connections/{provider}", identity.ConnectHandler())
-	r.Delete("/connections/{id}", identity.DeleteConnectionHandler())
+	r.Get("/connections", identity.ListConnectionsHandler(), federation.ListOperation)
+	r.Post("/connections/{id}", identity.ConnectHandler(), federation.ConnectOperation)
+	r.Delete("/connections/{id}", identity.DeleteConnectionHandler(), federation.DeleteOperation)
 }
