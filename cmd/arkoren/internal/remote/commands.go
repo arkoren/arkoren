@@ -40,42 +40,6 @@ type inspectorState struct {
 	Error console.ErrorReport `json:"error,omitzero"`
 }
 
-// urlInfo is the inspector URL and where it came from.
-type urlInfo struct {
-	// Value is the selected inspection root, not an operation endpoint.
-	Value string `json:"value"`
-
-	// From names the flag, environment, or file that supplied Value.
-	From string `json:"from"`
-}
-
-// tokenInfo says whether a token is set and where it came from; the token
-// itself is never printed.
-type tokenInfo struct {
-	// Set reports credential presence without exposing its contents.
-	Set bool `json:"set"`
-
-	// From identifies the credential source; empty sources are omitted.
-	From string `json:"from,omitzero"`
-}
-
-// sources reports where the URL and token came from.
-func (session *Session) sources() (*urlInfo, tokenInfo) {
-	var url *urlInfo
-
-	if session.settings.url.value != "" {
-		url = &urlInfo{
-			Value: session.settings.url.value,
-			From:  session.settings.url.from,
-		}
-	}
-
-	return url, tokenInfo{
-		Set:  session.settings.token.value != "",
-		From: session.settings.token.from,
-	}
-}
-
 // probe connects without failing the command: it returns the connection when
 // the handshake worked, and otherwise the state to report. failure is the
 // error to end the command with: nil when the inspector is merely not
@@ -152,7 +116,9 @@ type ToolsReport struct {
 }
 
 // ToolSummary is the information needed to choose a tool before reading help.
-// Kind and Follow are advertised hints, not authorization guarantees.
+// Kind and Follow are advertised hints, not authorization guarantees. Fields
+// are ordered for reading: the identity of the tool, then its description,
+// then the verbose-only detail.
 type ToolSummary struct {
 	// Command is the CLI spelling, including any advertised namespace.
 	Command string `json:"command"`
@@ -160,17 +126,15 @@ type ToolSummary struct {
 	// NativeName is the exact MCP name when it differs from Command.
 	NativeName string `json:"native_name,omitzero"`
 
-	// Description is the owner's explanation of the tool.
-	Description string `json:"description,omitzero"`
-
-	// DescriptionTruncated identifies an abbreviated ordinary summary.
-	DescriptionTruncated bool `json:"description_truncated,omitzero"`
-
 	// Kind is read when annotated read-only, otherwise action.
 	Kind string `json:"kind"`
 
 	// Follow reports support for bounded cursor polling.
 	Follow bool `json:"follow"`
+
+	// Description is the owner's explanation of the tool. An abbreviated
+	// summary ends with "…"; --verbose gives the full text.
+	Description string `json:"description,omitzero"`
 
 	// InputSchema is included only with --verbose.
 	InputSchema jsontext.Value `json:"input_schema,omitzero"`
@@ -217,7 +181,7 @@ func SummarizeTools(manifest *Catalog, verbose bool) []ToolSummary {
 
 				tool.Positional, tool.Examples, tool.Role = operation.Positional, operation.Examples, operation.Role
 			} else {
-				tool.Description, tool.DescriptionTruncated = console.DiagnosticText(operation.Summary)
+				tool.Description, _ = console.DiagnosticText(operation.Summary)
 			}
 
 			tools = append(tools, tool)
@@ -275,33 +239,70 @@ func (session *Session) remoteHelp(conn *connection, word string) error {
 	return nil
 }
 
-// StatusReport is the output of the status command.
+// StatusReport is the output of the status command, in the local report
+// envelope: a summary and, when the server has a health role, an ok verdict.
 type StatusReport struct {
-	// URL identifies the connected root and its configuration source.
-	URL *urlInfo `json:"url"`
+	// Summary names the connected application, as "Connected to shop 1.2.3
+	// (production)", or the URL when the server has no application identity.
+	Summary string `json:"summary"`
 
-	// Token reports credential presence and provenance without its value.
-	Token tokenInfo `json:"token"`
+	// OK is the health verdict: false when the health report failed or its
+	// status is "failing". It is absent when the server has no health role.
+	OK *bool `json:"ok,omitzero"`
 
 	// App is the application name, version, environment, and state when provided.
 	App map[string]any `json:"app,omitzero"`
 
-	// Arkoren is the server implementation version, or an identity override.
-	Arkoren string `json:"arkoren,omitzero"`
+	// Health is the output of "app:Health" when the server has it, or an
+	// object with the error that stopped it.
+	Health jsontext.Value `json:"health,omitzero"`
 
 	// Protocol is the SDK-negotiated native MCP Protocol version.
 	Protocol string `json:"protocol"`
+
+	// Arkoren is the server implementation version, or an identity override.
+	Arkoren string `json:"arkoren,omitzero"`
+
+	// Extensions counts the operation namespaces in the manifest.
+	Extensions int `json:"extensions"`
 
 	// Instance retains optional owner-defined process identity; absent when the
 	// identity tool does not provide it. No process identity is fabricated.
 	Instance any `json:"instance,omitzero"`
 
-	// Extensions counts the operation namespaces in the manifest.
-	Extensions int `json:"extensions"`
+	// URL is the selected inspection root.
+	URL string `json:"url"`
 
-	// Health is the output of "app:Health" when the server has it, or an
-	// object with the error that stopped it.
-	Health jsontext.Value `json:"health,omitzero"`
+	// URLSource names the flag, environment, or file that supplied URL.
+	URLSource string `json:"url_source"`
+
+	// TokenSet reports credential presence without exposing its contents.
+	TokenSet bool `json:"token_set"`
+
+	// TokenSource identifies the credential source; empty sources are omitted.
+	TokenSource string `json:"token_source,omitzero"`
+}
+
+// statusSummary names the connected application from its identity members, or
+// the URL when the identity has no name.
+func statusSummary(identity map[string]any, url string) string {
+	name, _ := identity["name"].(string)
+
+	if name == "" {
+		return "Connected to " + url
+	}
+
+	summary := "Connected to " + name
+
+	if version, _ := identity["version"].(string); version != "" {
+		summary += " " + version
+	}
+
+	if environment, _ := identity["environment"].(string); environment != "" {
+		summary += " (" + environment + ")"
+	}
+
+	return summary
 }
 
 // Status explicitly obtains optional identity and health roles for its report.
@@ -321,20 +322,26 @@ func (session *Session) Status(ctx context.Context) error {
 	}
 
 	report := StatusReport{
-		App:        summarizeIdentity(conn.App),
-		Arkoren:    conn.Arkoren,
-		Protocol:   conn.Protocol,
-		Instance:   conn.Instance,
-		Extensions: len(conn.Extensions),
+		App:         summarizeIdentity(conn.App),
+		Arkoren:     conn.Arkoren,
+		Protocol:    conn.Protocol,
+		Instance:    conn.Instance,
+		Extensions:  len(conn.Extensions),
+		URL:         session.settings.url.value,
+		URLSource:   session.settings.url.from,
+		TokenSet:    session.settings.token.value != "",
+		TokenSource: session.settings.token.from,
 	}
-	report.URL, report.Token = session.sources()
 
 	if session.flags.Verbose {
 		report.App = conn.App
 	}
 
+	report.Summary = statusSummary(conn.App, report.URL)
+
 	if operation := conn.role("health"); operation != nil {
 		health, err := conn.callTool(ctx, operation.NativeName, []byte("{}"))
+		healthy := err == nil && healthVerdict("health", health) == nil
 
 		if err != nil {
 			health, _ = json.Marshal(map[string]console.ErrorReport{"error": DescribeError(err, session.flags.Verbose)}, json.Deterministic(true))
@@ -342,6 +349,8 @@ func (session *Session) Status(ctx context.Context) error {
 		} else {
 			report.Health = SummarizeHealth(health, session.flags.Verbose)
 		}
+
+		report.OK = &healthy
 	}
 
 	return session.env.Result(report)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
@@ -51,10 +52,10 @@ func addCLICommand(env console.Environment) *cli.Command {
 					return err
 				}
 
-				report := addReport(changes, command.Bool("dry-run"))
+				summary := addSummary(command)
 
 				if command.Bool("dry-run") {
-					return env.Result(report)
+					return env.Result(addReport(summary, changes, true, false))
 				}
 
 				if err := project.Apply(ctx, changes); err != nil {
@@ -67,6 +68,8 @@ func addCLICommand(env console.Environment) *cli.Command {
 					return err
 				}
 
+				tidied := false
+
 				if needed && !command.Bool("skip-tidy") {
 					if len(changes.Requires) > 0 {
 						if err := scaffold.Get(ctx, project.Root, changes.Requires); err != nil {
@@ -78,10 +81,10 @@ func addCLICommand(env console.Environment) *cli.Command {
 						return err
 					}
 
-					report["tidied"] = true
+					tidied = true
 				}
 
-				return env.Result(report)
+				return env.Result(addReport(summary, changes, false, tidied))
 			},
 		}
 	}
@@ -152,38 +155,116 @@ func addCLICommand(env console.Environment) *cli.Command {
 	}
 }
 
-// addReport is the JSON result of an add: the files created, the insertions
-// made into existing files, and whether go mod tidy ran (set by the caller).
-// When the plan has them it also lists the pinned modules to fetch (requires)
-// and the steps left to the user (next_steps). Paths are slash-separated and
-// project-relative.
-func addReport(plan *layout.Plan, dryRun bool) map[string]any {
-	edits := make([]map[string]any, 0, len(plan.Edit))
+// addResult is the JSON result of an add, in the local action envelope: a
+// summary, whether it was a dry run, then the file changes and the steps left
+// to the user.
+type addResult struct {
+	// Summary reads "Added feature orders", or "Would add feature orders" for a
+	// dry run.
+	Summary string `json:"summary"`
+
+	// DryRun reports that nothing was written.
+	DryRun bool `json:"dry_run,omitzero"`
+
+	// Changes lists each created file, each inserted line, each pinned module
+	// and, when it ran, go mod tidy. Paths are slash-separated and
+	// project-relative.
+	Changes []console.Change `json:"changes,omitzero"`
+
+	// NextSteps lists the steps the command could not do itself.
+	NextSteps []string `json:"next_steps,omitzero"`
+}
+
+// addSummary names an add operation and its argument: "Added feature orders"
+// or "Added ark iam". With --dry-run it starts with "Would add".
+func addSummary(command *cli.Command) string {
+	subject := command.Name
+
+	if command.Name == "iam" || command.Name == "oauth" {
+		subject = "ark " + command.Name
+	}
+
+	if command.Args().Present() {
+		subject += " " + command.Args().First()
+	}
+
+	if command.Bool("dry-run") {
+		return "Would add " + subject
+	}
+
+	return "Added " + subject
+}
+
+// addReport builds the result of an add from its plan. Each created file is a
+// create change, each inserted line an edit change whose detail is that line,
+// each pinned module a require change, and go.mod a tidy change when tidied.
+func addReport(summary string, plan *layout.Plan, dryRun, tidied bool) addResult {
+	report := addResult{Summary: summary, DryRun: dryRun, NextSteps: plan.Notes}
+
+	for _, path := range files.Paths(plan.Create) {
+		report.Changes = append(report.Changes, console.Change{Action: console.ActionCreate, Path: path})
+	}
 
 	for _, edit := range plan.Edit {
-		edits = append(edits, map[string]any{"path": edit.Path, "inserted": edit.Inserted})
+		for _, line := range edit.Inserted {
+			report.Changes = append(report.Changes, console.Change{Action: console.ActionEdit, Path: edit.Path, Detail: line})
+		}
 	}
 
-	report := map[string]any{"dry_run": dryRun, "created": files.Paths(plan.Create), "edited": edits, "tidied": false}
-
-	if len(plan.Requires) > 0 {
-		report["requires"] = plan.Requires
+	for _, module := range plan.Requires {
+		report.Changes = append(report.Changes, console.Change{Action: console.ActionRequire, Path: module})
 	}
 
-	if len(plan.Notes) > 0 {
-		report["next_steps"] = plan.Notes
+	if tidied {
+		report.Changes = append(report.Changes, console.Change{Action: console.ActionTidy, Path: "go.mod"})
+	}
+
+	return report
+}
+
+// checkResult is the JSON result of `arkoren check`: a verdict in the local
+// check envelope, with each violation as file, line, rule and message.
+type checkResult struct {
+	// Summary reads "No layout violations", "1 layout violation" or "3 layout
+	// violations".
+	Summary string `json:"summary"`
+
+	// OK is false when there is at least one violation; it is always present.
+	OK bool `json:"ok"`
+
+	// Violations lists every broken rule; it is an empty array when OK.
+	Violations []layout.Violation `json:"violations"`
+}
+
+// checkReport summarizes violations. It substitutes an empty slice for nil so
+// the JSON always carries an array.
+func checkReport(violations []layout.Violation) checkResult {
+	report := checkResult{Summary: "No layout violations", OK: true, Violations: violations}
+
+	if violations == nil {
+		report.Violations = []layout.Violation{}
+	}
+
+	if len(violations) > 0 {
+		report.Summary = fmt.Sprintf("%d layout violations", len(violations))
+
+		if len(violations) == 1 {
+			report.Summary = "1 layout violation"
+		}
+
+		report.OK = false
 	}
 
 	return report
 }
 
 // checkCLICommand declares `arkoren check`: it reports layout rule violations
-// as one JSON document and exits 1 when there are any.
+// as one result document and exits 1 when there are any.
 func checkCLICommand(env console.Environment) *cli.Command {
 	return &cli.Command{
 		Name:  "check",
 		Usage: "Check the project against the layout rules",
-		Description: "Reports import-direction, bootstrap-shape, naming and Composer.Use violations with file:line as JSON, and exits 1 " +
+		Description: "Reports import-direction, bootstrap-shape, naming and Composer.Use violations with file:line, as JSON when piped, and exits 1 " +
 			"if there are any. Works from source without building. Run it in the project root. " +
 			"See the arkoren-structure skill for the rules.",
 		Action: func(ctx context.Context, command *cli.Command) error {
@@ -199,11 +280,7 @@ func checkCLICommand(env console.Environment) *cli.Command {
 
 			violations := project.Check()
 
-			if violations == nil {
-				violations = []layout.Violation{}
-			}
-
-			if err := env.Result(map[string]any{"ok": len(violations) == 0, "violations": violations}); err != nil {
+			if err := env.Result(checkReport(violations)); err != nil {
 				return err
 			}
 

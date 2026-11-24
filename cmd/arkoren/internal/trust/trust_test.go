@@ -89,7 +89,7 @@ func TestCertificateTrustAcceptsIndependentCA(t *testing.T) {
 		t.Fatalf("missing SHA-256 identity: %q", warning.String())
 	}
 
-	if !strings.Contains(output.String(), "completed") {
+	if !strings.Contains(output.String(), "Trusted root certificate in") {
 		t.Fatalf("missing completion: %q", output.String())
 	}
 }

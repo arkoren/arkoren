@@ -62,13 +62,13 @@ func TestAddFeatureDryRunWritesNothing(t *testing.T) {
 
 	report, err := runLayout(t, env, "add", "feature", "orders", "--web", "--dry-run")
 
-	if err != nil || report["dry_run"] != true || len(report["created"].([]any)) != 6 {
+	if err != nil || report["dry_run"] != true || report["summary"] != "Would add feature orders" || len(changesWith(report, "create")) != 6 {
 		t.Fatalf("report = %v, err = %v", report, err)
 	}
 
-	edited := report["edited"].([]any)[0].(map[string]any)
+	edited := changesWith(report, "edit")[0]
 
-	if edited["path"] != "internal/bootstrap/server/compose.go" || edited["inserted"].([]any)[0] != "compose.Use(bootstrap.OrdersRoutes)" {
+	if edited["path"] != "internal/bootstrap/server/compose.go" || edited["detail"] != "compose.Use(bootstrap.OrdersRoutes)" {
 		t.Fatalf("edited = %v", edited)
 	}
 
@@ -87,7 +87,7 @@ func TestAddFeatureWritesFilesAndRegistration(t *testing.T) {
 
 	report, err := runLayout(t, env, "add", "feature", "orders", "--web", "--jobs", "--skip-tidy")
 
-	if err != nil || report["tidied"] != false {
+	if err != nil || report["summary"] != "Added feature orders" || len(changesWith(report, "tidy")) != 0 {
 		t.Fatalf("report = %v, err = %v", report, err)
 	}
 
@@ -152,7 +152,7 @@ func TestCheckCleanProjectReportsOK(t *testing.T) {
 
 	report, err := runLayout(t, scaffoldedProject(t), "check")
 
-	if err != nil || report["ok"] != true || len(report["violations"].([]any)) != 0 {
+	if err != nil || report["ok"] != true || report["summary"] != "No layout violations" || len(report["violations"].([]any)) != 0 {
 		t.Fatalf("report = %v, err = %v", report, err)
 	}
 }
@@ -181,7 +181,7 @@ func TestCheckViolationsExitWithFailure(t *testing.T) {
 
 	violation := report["violations"].([]any)[0].(map[string]any)
 
-	if report["ok"] != false || violation["rule"] != "banned-package-name" || violation["file"] != "internal/util/util.go" || violation["line"] != 1.0 {
+	if report["ok"] != false || report["summary"] != "1 layout violation" || violation["rule"] != "banned-package-name" || violation["file"] != "internal/util/util.go" || violation["line"] != 1.0 {
 		t.Fatalf("report = %v", report)
 	}
 }
@@ -239,7 +239,7 @@ func TestLayoutCommandsOnBuiltProject(t *testing.T) {
 
 	report, err := runLayout(t, env, "add", "feature", "catalog", "--web")
 
-	if err != nil || report["tidied"] != true {
+	if err != nil || len(changesWith(report, "tidy")) != 1 {
 		t.Fatalf("add without --skip-tidy: report = %v, err = %v", report, err)
 	}
 
@@ -306,14 +306,13 @@ func TestAddArkIAMDryRunReportsPlan(t *testing.T) {
 		t.Fatalf("report = %v, err = %v", report, err)
 	}
 
-	edited := report["edited"].([]any)[0].(map[string]any)
-	inserted := edited["inserted"].([]any)
+	edits := changesWith(report, "edit")
 
-	if edited["path"] != "internal/bootstrap/server/compose.go" || len(inserted) != 3 || inserted[0] != "compose.Use(bootstrap.IAMRouter)" {
-		t.Fatalf("edited = %v", edited)
+	if report["summary"] != "Would add ark iam" || edits[0]["path"] != "internal/bootstrap/server/compose.go" || len(edits) != 3 || edits[0]["detail"] != "compose.Use(bootstrap.IAMRouter)" {
+		t.Fatalf("report = %v", report)
 	}
 
-	if requires := report["requires"].([]any); requires[0] != "arkoren.dev/ark/iam@v0.5.0" {
+	if requires := changesWith(report, "require"); requires[0]["path"] != "arkoren.dev/ark/iam@v0.5.0" {
 		t.Fatalf("requires = %v", requires)
 	}
 
@@ -470,3 +469,18 @@ var Migrator = application.Provide(func(compose *application.Composer) *migrate.
 	return migrator
 })
 `
+
+// changesWith returns the changes of one action from a decoded result.
+func changesWith(report map[string]any, action string) []map[string]any {
+	var matching []map[string]any
+
+	changes, _ := report["changes"].([]any)
+
+	for _, change := range changes {
+		if fields := change.(map[string]any); fields["action"] == action {
+			matching = append(matching, fields)
+		}
+	}
+
+	return matching
+}

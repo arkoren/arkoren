@@ -40,6 +40,43 @@ func TestOutputRetainsFirstFailure(t *testing.T) {
 	}
 }
 
+// TestOutputStyleTranslatesOnlyOnTerminals keeps JSON for pipes and files.
+func TestOutputStyleTranslatesOnlyOnTerminals(t *testing.T) {
+	t.Parallel()
+
+	if !(Environment{IsTerminal: true}).OutputStyle().Text {
+		t.Fatal("terminal output is not text")
+	}
+
+	if (Environment{}).OutputStyle().Text {
+		t.Fatal("non-terminal output is text")
+	}
+}
+
+// TestOutputStyleJSONFlagsKeepJSONOnTerminals honors -json and -compact.
+func TestOutputStyleJSONFlagsKeepJSONOnTerminals(t *testing.T) {
+	t.Parallel()
+
+	for _, flags := range []Globals{{JSON: true}, {Compact: true}} {
+		if (Environment{IsTerminal: true, Presentation: flags}).OutputStyle().Text {
+			t.Fatalf("flags %+v printed text", flags)
+		}
+	}
+}
+
+// TestResultPrintsTextOnTerminal translates local results on a terminal.
+func TestResultPrintsTextOnTerminal(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+
+	env := Environment{Stdout: &output, IsTerminal: true, Presentation: Globals{NoColor: true}}
+
+	if err := env.Result(map[string]any{"created": true}); err != nil || output.String() != "Created  true\n" {
+		t.Fatalf("output = %q; error = %v", output.String(), err)
+	}
+}
+
 // failingOutput accepts a fixed number of writes before failing. It can also
 // simulate an invalid short write without an error from an injected writer.
 type failingOutput struct {

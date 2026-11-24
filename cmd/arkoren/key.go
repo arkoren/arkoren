@@ -12,6 +12,31 @@ import (
 	"arkoren.dev/foundation/key"
 )
 
+// keyCheckResult is the JSON result of `arkoren key check`. Failure is an
+// error, so a result always means the key is valid.
+type keyCheckResult struct {
+	// Summary reads "Valid shared key".
+	Summary string `json:"summary"`
+
+	// Category is the checked key category: shared, signing or exchange.
+	Category string `json:"category"`
+
+	// Path is the checked file, never its contents.
+	Path string `json:"path"`
+}
+
+// keyGenerateResult is the JSON result of `arkoren key generate --out FILE`.
+type keyGenerateResult struct {
+	// Summary reads "Generated shared key".
+	Summary string `json:"summary"`
+
+	// Category is the generated key category.
+	Category string `json:"category"`
+
+	// Changes holds the one created private key file.
+	Changes []console.Change `json:"changes"`
+}
+
 // runKeyCheck reads one validated category/path selection and reports only the
 // category. The command boundary rejects extra arguments before this file I/O.
 func runKeyCheck(category, path string, env console.Environment) error {
@@ -19,7 +44,7 @@ func runKeyCheck(category, path string, env console.Environment) error {
 		return fmt.Errorf("check key: %w", err)
 	}
 
-	return env.Result(map[string]any{"category": category, "path": keyPath(env.Dir, path), "valid": true})
+	return env.Result(keyCheckResult{Summary: "Valid " + category + " key", Category: category, Path: keyPath(env.Dir, path)})
 }
 
 // runKeyPublic validates the typed category/format combination before file
@@ -97,7 +122,11 @@ func generateKey(ctx context.Context, category, out string, env console.Environm
 		return err
 	}
 
-	return env.Result(map[string]any{"category": category, "created": true, "path": keyPath(env.Dir, out)})
+	return env.Result(keyGenerateResult{
+		Summary:  "Generated " + category + " key",
+		Category: category,
+		Changes:  []console.Change{{Action: console.ActionCreate, Path: keyPath(env.Dir, out)}},
+	})
 }
 
 // generateKeyMaterial provisions the selected category without inventing

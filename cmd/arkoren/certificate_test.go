@@ -109,7 +109,7 @@ func TestCertificateGenerateOfflineRoundTrip(t *testing.T) {
 
 	output := env.Stdout.(*bytes.Buffer).String()
 
-	contains(t, output, `"trust_changed": false`)
+	contains(t, output, `"summary": "Generated root certificate"`, `System trust was not changed`, `arkoren certificate root trust `)
 
 	if strings.Contains(output, "PRIVATE KEY") {
 		t.Fatal("private PEM leaked to stdout")
@@ -190,7 +190,7 @@ func TestCertificateCheckForms(t *testing.T) {
 	}
 
 	contains(t, env.Stdout.(*bytes.Buffer).String(),
-		`"parsed": true`, `"key_matched": true`, `"key_matched": false`, `"expiry_checked": false`, `"trust_checked": false`)
+		`"summary": "Certificate parsed"`, `"summary": "Certificate parsed; key matches"`, `"key_matched": true`, `"not_checked"`, `"expiry"`, `"trust"`)
 }
 
 // TestCertificateIPOnlySAN accepts IP-only servers without fabricating a DNS
@@ -313,7 +313,7 @@ func TestCertificateCheckDoesNotAssertExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contains(t, env.Stdout.(*bytes.Buffer).String(), `"expiry_checked": false`, `"trust_checked": false`)
+	contains(t, env.Stdout.(*bytes.Buffer).String(), `"not_checked"`, `"expiry"`, `"trust"`)
 }
 
 // TestCertificateMismatchedPairFails rejects individually parseable certificates
@@ -659,7 +659,7 @@ func TestCertificatePartialPairReportsExactPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = persistCertificate(t.Context(), inventory, identity, env)
+	err = persistCertificate(t.Context(), inventory, identity, false, env)
 
 	if !errors.Is(err, os.ErrExist) {
 		t.Fatalf("partial pair = %v", err)

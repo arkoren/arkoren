@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	"strings"
+	"time"
 )
 
 // ANSI escape sequences of the color palette. The five colors are the basic
@@ -19,7 +20,7 @@ const (
 	ColorReset  = "\x1b[0m"
 )
 
-// Style says how [Render] lays out JSON.
+// Style says how [Format] presents a JSON document.
 type Style struct {
 	// Indent spreads the value over lines indented by two spaces; false
 	// writes it on one line without insignificant whitespace.
@@ -27,6 +28,14 @@ type Style struct {
 
 	// Color wraps every key and scalar in ANSI colors.
 	Color bool
+
+	// Text translates the document into human-readable text with [Text]
+	// instead of laying out JSON; [Format] applies it, [Render] ignores it.
+	Text bool
+
+	// Now is the time relative timestamps in text are measured against; the
+	// zero value means the current time. Tests set it for deterministic output.
+	Now time.Time
 }
 
 // frame is the position inside one open object or array during [Render].

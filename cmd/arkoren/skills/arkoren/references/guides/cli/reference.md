@@ -23,11 +23,11 @@ Uppercase operands below are values you supply, not literal words.
 | Form | Contract |
 | --- | --- |
 | `arkoren`, `arkoren -h`, `arkoren --help` | Offline root help as text; no endpoint configuration is read. |
-| `arkoren --version` | Installed CLI version as JSON, offline. |
+| `arkoren --version` | Installed CLI version, offline. |
 | `arkoren new DIR [flags]` | Create a starter and resolve Go dependencies; `--skip-tidy` creates files offline. Existing files are never overwritten. |
 | `arkoren add feature NAME [--web --jobs --flow --tools --events --schedules] [--process NAME]` | Create the plain-Go feature `internal/NAME` with the requested surfaces and its providers in `internal/bootstrap/NAME.go`, and add `compose.Use` lines to the `Compose` of `internal/bootstrap/PROCESS` (default `server`). |
 | `arkoren add process\|provider\|migration NAME` | Create `cmd/NAME` with its process root, a bootstrap provider, or a registered migration. All `add` forms accept `--dry-run` and `--skip-tidy`, never overwrite, and run `go mod tidy` when new files import an unrequired module. |
-| `arkoren check` | Report layout rule violations with file and line as JSON; exit 1 if there are any. |
+| `arkoren check` | Report layout rule violations with file and line; exit 1 if there are any. |
 | `arkoren map [--text]` | Print processes with their `Compose` statements, providers by file, features and migrations from source. |
 | `arkoren skills install\|update\|status [flags]` | Manage the CLI's bundled documentation offline. |
 | `arkoren key generate TYPE --out FILE` | Generate `shared`, `signing`, or `exchange` private material. |
@@ -39,7 +39,7 @@ Uppercase operands below are values you supply, not literal words.
 | `arkoren certificate check --cert FILE [--key FILE]` | Parse public PEM and optionally check the matching private key. |
 | `arkoren certificate root trust FILE [--yes]` | Explicitly install one public root in the supported system store. |
 | `arkoren certificate root untrust FILE [--yes]` | Remove trust for that exact root in the selected system scope. |
-| `arkoren tools [--json]` | Discover tools as JSON without invoking them; no positional target is accepted. |
+| `arkoren tools` | Discover tools without invoking them; no positional target is accepted. |
 | `arkoren status` | Explicitly call uniquely advertised identity and health roles for a report. |
 | `arkoren NAME --help` | Discover one remote tool's schema without invoking it. |
 | `arkoren GROUP: --help` | Describe an advertised CLI group, unless an exact native name takes precedence. |
@@ -80,7 +80,8 @@ schema-derived flags. One or two leading dashes work; flags do not bundle.
 | `--url URL` | No URL | Select the MCP mount; otherwise environment, then file. |
 | `--token TOKEN` | No token | Supply an existing bearer credential; otherwise environment, then file. |
 | `--env-file PATH` | Implicit `./.env` | Replace the file; an explicit nonempty path must exist and approves its URL for inherited tokens. Empty disables file loading. |
-| `--compact` | Off | Print ordinary JSON documents on one line. |
+| `--json` | Off | Print results and errors as JSON even on a terminal. Output that is not a terminal is always JSON. |
+| `--compact` | Off | Print each JSON document on one line; implies `--json`. |
 | `--verbose` | Off | Include complete captured safe diagnostics, schemas, local file lists, and status/build detail. |
 | `--no-color` | Off | Disable terminal coloring and bold help headings. Nonempty `NO_COLOR` also disables them. |
 | `--request-timeout DURATION` | `10s` | Per-request deadline for ordinary requests; `0` removes that deadline. Waiting reads normally use their total budget. Does not limit follow. |
@@ -121,7 +122,7 @@ exits 2. Non-preview conflicts go to stderr with `conflict_count` and
 `add`, `check` and `map` read the current directory, which must hold the project
 layout; otherwise they exit 2. See [Layout Commands](layout-commands.md) for
 the flags, insertion points and rules. `map --text` prints text lines, the only
-local report that is not JSON.
+local report that never goes through the JSON renderer.
 
 `skills install`, `skills update`, and `skills status` accept `--dir PATH`
 (default `.agents/skills`, with `arkoren` appended) and `--dry-run`, before or
@@ -190,17 +191,22 @@ that reader.
 
 | Output | Format |
 | --- | --- |
-| Ordinary local or remote result, including `--version` | One JSON document. |
+| Ordinary local or remote result, including `--version` | Text on a terminal; otherwise, or with `--json`, one JSON document. |
 | `--follow` | Compact NDJSON records and loss notices on the same stdout stream. |
 | Help and interactive confirmation | Text. |
 | `key public` and `key generate --out -` | Raw PEM or base64, not JSON strings. |
-| Errors | JSON with an `error` object on stderr. |
-| Trust warning before mutation | JSON with a `warning` object on stderr, even with `--yes`. |
+| Errors | On stderr: text on a terminal, otherwise, or with `--json`, JSON with an `error` object. |
+| Trust warning before mutation | On stderr even with `--yes`: text on a terminal, otherwise JSON with a `warning` object. |
 
-Ordinary JSON is indented by default. Terminal output adds color unless
-disabled; pipes do not. `--compact` changes indentation, not content. Help uses
-bold terminal headings and plain piped headings; remote output schemas follow
-the same color policy. Stderr independently checks whether its own stream is a
+On a terminal, results and errors are translated into colored text: aligned
+labels, nested objects as headed sections, and arrays of flat objects as tables.
+Output that is not a terminal stays JSON, indented by default, so pipes, scripts
+and agents are unaffected. Pass `--json` for JSON on a terminal, and `--compact`
+for one-line JSON; `--compact` implies `--json` and changes indentation, not
+content. Agents whose shells are not terminals already receive JSON; pass
+`--json` when a stable machine format must not depend on that. Color is off with
+`--no-color` or a nonempty `NO_COLOR`. Help uses bold terminal headings and
+plain piped headings. Stderr independently checks whether its own stream is a
 terminal. Use `--compact --no-color` for one-line JSON diagnostics in captures.
 
 Remote results prefer structured MCP content with sorted keys. A single text
@@ -212,8 +218,8 @@ enforce output schemas, or repair precision lost in application values; see
 [Number Precision](calling-tools.md#number-precision).
 
 Follow emits individual records rather than page envelopes or persisted cursor
-checkpoints. Notice fields include `dropped`, `instance_changed`, and
-`truncated`; consumers must handle them alongside records. See
+checkpoints. Notice fields are `dropped` and `instance_changed`; consumers must
+handle them alongside records. See
 [Waiting and Following](waiting-and-following.md) for gaps and restart behavior.
 
 ## Report Fields
@@ -226,15 +232,16 @@ supplied. It never calls identity to obtain `app` or a version override.
 
 Each tool summary contains `command`, optional description, `kind` (`read` or
 `action`), and `follow`. `native_name` appears when different. Descriptions can
-be abbreviated with `description_truncated`; verbose discovery includes full
+be abbreviated with a trailing `…`; verbose discovery includes full
 descriptions, input/output schemas, positionals, examples, and semantic roles.
-It is not a raw MCP catalog or local CLI manual. `tools --json` is a compatibility
-spelling of the same focused result.
+It is not a raw MCP catalog or local CLI manual.
 
 `status` calls a uniquely advertised identity role before a uniquely advertised
 health role, once each with `{}`; missing or ambiguous roles are skipped.
 Identity failure stops before health or output. Health failure appears as data
-and does not itself fail status. The report retains configuration sources,
+and does not itself fail status. The report has a `summary` and, with a health
+role, an `ok` verdict; it retains configuration sources (`url`, `url_source`,
+`token_set`, `token_source`),
 negotiated protocol, implementation version, optional process `instance`, and
 health. A string identity `arkoren` overrides the implementation version for
 this report only. `app` selects name, version, environment, and state when
@@ -243,21 +250,36 @@ status and check/failing/pending counts; verbose mode keeps full details.
 Neither mode makes extra role calls. Arkoren's health tool with `{}` observes
 cached checks; external servers define their own role semantics.
 
-Local reports use these fields rather than completion prose:
+Local reports start with a `summary` sentence and use these fields rather than
+completion prose. Actions then list `changes` (each with `action` `create`,
+`edit`, `remove`, `write`, `require` or `tidy`, a `path`, and an optional
+`detail`) and `next_steps`; a preview says "Would …" and sets `dry_run`. A
+failure is an error, never a result flag.
 
-| Command | Result fields |
+| Command | Result fields after `summary` |
 | --- | --- |
-| `new` | `created`, `destination`, `module`, `file_count`; previews include `dry_run`, `yes`, `conflict_count`. Verbose adds paths and preview conflicts. |
-| `add` | `dry_run`, `created` (paths), `edited` (`path` and `inserted` lines). |
-| `check` | `ok` and `violations`, each with `rule`, `file`, `line`, `message`. |
-| `map` | `module`, `processes`, `bootstrap`, `features`, `migrations`, `platform`; empty groups are omitted. |
-| `skills` | `directory`, `state`, `bundled_revision`, and installed revision/modification count when managed. Install/update add operation, preview state, write/remove/conflict counts; completed writes set `completed`. Verbose adds per-file details. |
-| `key generate` to file | `created`, `category`, absolute `path`; no private contents. |
-| `key check` | `valid`, `category`, absolute `path`. |
-| Certificate generation | `created`, `certificate`, `key`, `trust_changed: false`. |
-| `certificate check` | `certificate`, optional `key`, `parsed`, `key_matched`, `expiry_checked: false`, `trust_checked: false`. |
-| Root trust/untrust | `action`, `completed`, `sha256`, `target`. |
-| `--version` | `version`; verbose adds Go/module and available revision identifiers, not dependency or compiler-setting dumps. |
+| `new` | `dry_run` (previews), `module`, `destination`, `file_count`, `conflict_count` (previews), then `next_steps` for a real run. Verbose adds `conflicts` and one `create` change per file. |
+| `add` | `dry_run`, `changes`: `create` per file, `edit` per inserted line, `require` per pinned module, `tidy` when run; `next_steps`. |
+| `check` | `ok` and `violations`, each with `file`, `line`, `rule`, `message`. |
+| `map` | No summary: `module`, `processes`, `bootstrap`, `features`, `migrations`, `platform`; empty groups are omitted. |
+| `skills` | `dry_run` (previews) and `skills`, one entry per skill with `name`, `state`, `directory`, `installed_revision`, `bundled_revision`, `modified_file_count`; install/update add `written_files`, `removed_files`, `conflict_count`. Verbose adds `modified_files`, `conflicts` and `write`/`remove` changes. |
+| `key generate` to file | `category`, and a `create` change for the absolute `path`; no private contents. |
+| `key check` | `category`, absolute `path`. |
+| Certificate generation | `changes` creating the certificate and the private key; `next_steps` for a root. |
+| `certificate check` | `certificate`, optional `key` and `key_matched`, and `not_checked` (`expiry`, `trust`). |
+| Root trust/untrust | `action`, `target`, `sha256`. |
+| `--version` | No summary: `version`; verbose adds `module`, `go_version`, `revision`, `revision_at` and `modified`, not dependency or compiler-setting dumps. |
+
+On a terminal every RFC 3339 timestamp prints as `2026-11-23 10:00:01 (5s ago)`
+or `(in 59m)` (seconds, minutes, `1h5m`, days), and a number member such as
+`duration_ms` or `heap_alloc_bytes` prints in readable units (`12.5ms`,
+`1.2 MB`) under the label without its suffix. JSON keeps the exact values.
+
+On a terminal the summary is a bold headline: green `✓`, red `✗` when `ok` is
+false, yellow `→` for a preview. Empty values are omitted from the text, short
+lists print on one line, and lists of flat records print as tables. A remote
+tool's `{items, truncated}` list prints as a bare table, with a dim note when
+more results exist; JSON keeps every field.
 
 ## Failure Diagnostics
 

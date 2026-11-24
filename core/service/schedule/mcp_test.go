@@ -13,18 +13,21 @@ import (
 	"arkoren.dev/core/mcp"
 	"arkoren.dev/core/service/schedule"
 	"arkoren.dev/core/service/schedule/memoryschedule"
-	"arkoren.dev/foundation/validate"
 )
 
 // schedulerWith registers a calendar entry while leaving the scheduler stopped.
 // Manual tools can execute entries without starting the calendar driver.
-func schedulerWith(t *testing.T, name string, fn func(context.Context) error) *schedule.Scheduler {
+func schedulerWith(t *testing.T, name string, fn func(context.Context) error, configure ...schedule.EntryBuilderFunc) *schedule.Scheduler {
 	t.Helper()
 
 	scheduler := schedule.New(memoryschedule.New())
 
 	if err := scheduler.Add(schedule.NewEntry(name, fn, func(entry *schedule.EntryBuilder) {
 		entry.When(schedule.UTC().Cron("0 3 * * *"))
+
+		for _, apply := range configure {
+			apply(entry)
+		}
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +140,7 @@ func TestMCPEntriesLiveValues(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if len(items) != 1 || items[0]["next_in"] != "in 5m" {
+		if len(items) != 1 || items[0]["next_run"] != "2000-01-01T00:05:00Z" || items[0]["next_in"] != nil {
 			t.Fatalf("items = %+v", items)
 		}
 
@@ -151,7 +154,37 @@ func TestMCPEntriesLiveValues(t *testing.T) {
 	})
 }
 
-// TestMCPRunWaitsForCompletion checks one execution and paired duration values.
+// TestMCPEntriesOmitDefaultsAndPutDescriptionLast keeps overlap implicit when
+// it is allowed and writes the possibly long description after every other field.
+func TestMCPEntriesOmitDefaultsAndPutDescriptionLast(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		scheduler := schedulerWith(t, "report", func(context.Context) error {
+			return nil
+		})
+
+		raw := callTool[map[string]jsontext.Value](t, scheduler.MCPTools("jobs")[0], `{}`)
+
+		if strings.Contains(string(raw["items"]), "without_overlapping") {
+			t.Fatalf("items = %s", raw["items"])
+		}
+
+		scheduler = schedulerWith(t, "report", func(context.Context) error {
+			return nil
+		}, func(entry *schedule.EntryBuilder) {
+			entry.Description("builds the report")
+		})
+
+		raw = callTool[map[string]jsontext.Value](t, scheduler.MCPTools("jobs")[0], `{}`)
+
+		if text := string(raw["items"]); !strings.HasSuffix(text, `"description":"builds the report"}]`) {
+			t.Fatalf("items = %s", text)
+		}
+	})
+}
+
+// TestMCPRunWaitsForCompletion checks one execution and its duration in milliseconds.
 func TestMCPRunWaitsForCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -165,12 +198,11 @@ func TestMCPRunWaitsForCompletion(t *testing.T) {
 		})
 
 		body := callTool[struct {
-			Name       string            `json:"name"`
-			DurationMS float64           `json:"duration_ms"`
-			Duration   validate.Duration `json:"duration"`
+			Name       string  `json:"name"`
+			DurationMS float64 `json:"duration_ms"`
 		}](t, scheduler.MCPTools("jobs")[1], `{"name":"cleanup"}`)
 
-		if ran != 1 || body.Name != "cleanup" || body.DurationMS != 1500 || body.Duration.Std() != 1500*time.Millisecond {
+		if ran != 1 || body.Name != "cleanup" || body.DurationMS != 1500 {
 			t.Fatalf("ran %d, result %+v", ran, body)
 		}
 	})

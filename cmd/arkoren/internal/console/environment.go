@@ -47,6 +47,9 @@ type Environment struct {
 
 	// Presentation carries formatting options for local results.
 	Presentation Globals
+
+	// Now is the clock for relative times in text output; nil uses time.Now.
+	Now func() time.Time
 }
 
 // Globals holds the global flags of one run.
@@ -65,6 +68,9 @@ type Globals struct {
 
 	// Compact, NoColor, Follow, and Help are the boolean flags.
 	Compact, NoColor, Follow, Help bool
+
+	// JSON prints results and errors as JSON even on a terminal.
+	JSON bool
 
 	// Verbose includes complete diagnostic context and local file lists.
 	Verbose bool

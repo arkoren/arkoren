@@ -72,6 +72,71 @@ func TestCursorFollowUsesTailBoundedWaitAndRestartNotice(t *testing.T) {
 	}
 }
 
+// TestCursorFollowDrainsPagesThatStoppedAtTheirLimit checks that a continuation
+// page flagged with truncated (newer servers) or has_more (older servers) is
+// followed by an immediate call, emits its items and no notice.
+func TestCursorFollowDrainsPagesThatStoppedAtTheirLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, flag := range []string{"truncated", "has_more"} {
+		var calls atomic.Int64
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+
+		server := externalServer(&sdkmcp.Tool{Name: "cursor", InputSchema: map[string]any{"type": "object"},
+			Meta: sdkmcp.Meta{"arkoren.dev/cli": map[string]any{"group": "external", "operation": "events", "cursor": true}}},
+			func(_ context.Context, request *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+				var input map[string]any
+
+				if err := json.Unmarshal(request.Params.Arguments, &input); err != nil {
+					return nil, err
+				}
+
+				switch calls.Add(1) {
+				case 1:
+					return &sdkmcp.CallToolResult{StructuredContent: map[string]any{"cursor": "a", "items": []any{}}}, nil
+				case 2:
+					return &sdkmcp.CallToolResult{StructuredContent: map[string]any{"cursor": "b", "items": []any{"one"}, flag: true}}, nil
+				}
+
+				if input["cursor"] != "b" || input["wait"] != "0s" {
+					t.Errorf("%s: drain input = %v", flag, input)
+				}
+
+				return &sdkmcp.CallToolResult{StructuredContent: map[string]any{"cursor": "c", "items": []any{"two"}}}, nil
+			})
+
+		base, err := ParseBaseURL(nativeServerURL(t, server))
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		native := &Client{Base: base}
+
+		if _, err := native.FetchManifest(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() { _ = native.Session.Close() })
+
+		var emitted []string
+		err = native.Follow(ctx, "cursor", []byte("{}"), func(data []byte) error {
+			emitted = append(emitted, string(data))
+
+			if len(emitted) == 2 {
+				cancel()
+			}
+
+			return nil
+		})
+
+		if err != nil || len(emitted) != 2 || emitted[0] != `"one"` || emitted[1] != `"two"` {
+			t.Fatalf("%s: emitted = %v, err = %v", flag, emitted, err)
+		}
+	}
+}
+
 // externalServer registers one raw SDK tool without assuming any Arkoren
 // conventions. Native fixtures can return scalar/text/multimodal MCP results.
 func externalServer(tool *sdkmcp.Tool, handler sdkmcp.ToolHandler) *sdkmcp.Server {

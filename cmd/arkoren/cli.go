@@ -20,7 +20,7 @@ func rootCLICommand(env console.Environment, flags console.Globals) *cli.Command
 		HideHelpCommand: true,
 		Version:         console.VersionInfo(),
 		HideVersion:     true,
-		Description:     "Run 'arkoren tools' to discover remote MCP tools as JSON. Command results are JSON; use --help for usage.",
+		Description:     "Run 'arkoren tools' to discover remote MCP tools. Results are text on a terminal and JSON otherwise or with --json; use --help for usage.",
 		Flags:           rootCLIFlags(),
 		Reader:          env.Stdin,
 		Writer:          env.Stdout,
@@ -36,7 +36,7 @@ func rootCLICommand(env console.Environment, flags console.Globals) *cli.Command
 		},
 	}
 	root.Flags = append(root.Flags, &cli.BoolFlag{
-		Name: "version", Aliases: []string{"v"}, Usage: "Print version as JSON; --verbose adds safe build identifiers",
+		Name: "version", Aliases: []string{"v"}, Usage: "Print version; --verbose adds safe build identifiers",
 		Action: func(_ context.Context, _ *cli.Command, enabled bool) error {
 			if !enabled {
 				return nil
@@ -183,14 +183,12 @@ func localHelpArgs(root *cli.Command, args []string) []string {
 
 // toolsCLICommand owns whole-catalog discovery. Its native help is offline;
 // the action resolves configuration only after rejecting positional arguments.
-// JSON output contains endpoint context and callable tool summaries.
+// Its result contains endpoint context and callable tool summaries. The
+// global -json flag, not a local one, selects JSON on a terminal.
 func toolsCLICommand(env console.Environment, flags console.Globals) *cli.Command {
 	return &cli.Command{
 		Name:  "tools",
-		Usage: "List remote tool commands, descriptions, and capabilities as JSON",
-		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "json", Usage: "Compatibility flag; tools always prints JSON"},
-		},
+		Usage: "List remote tool commands, descriptions, and capabilities",
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Present() {
 				return console.UsageError("tools takes no arguments; run 'arkoren NAME --help' for command usage")

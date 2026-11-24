@@ -186,7 +186,7 @@ func TestKeyPublicAndCheck(t *testing.T) {
 
 	document := (result{stdout: output.String()}).json(t)
 
-	if document["category"] != "signing" || document["valid"] != true || document["path"] != filepath.Join(env.Dir, "vapid.pem") || len(document) != 3 {
+	if document["category"] != "signing" || document["summary"] != "Valid signing key" || document["path"] != filepath.Join(env.Dir, "vapid.pem") || len(document) != 3 {
 		t.Fatal("validation output leaked material")
 	}
 }

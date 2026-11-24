@@ -149,13 +149,30 @@ func closeCertificateFiles(inventory []files.Destination) {
 	}
 }
 
-// persistCertificate writes the certificate then its matching private key.
-// Pair writes are not atomic. Any failure names both exact paths because either
-// file may remain; paths are never removed after a concurrent replacement.
+// certificateGenerateResult is the JSON result of generating a root or server
+// certificate, in the local action envelope.
+type certificateGenerateResult struct {
+	// Summary reads "Generated root certificate" or "Generated server certificate".
+	Summary string `json:"summary"`
+
+	// Changes lists the created certificate and its private key.
+	Changes []console.Change `json:"changes"`
+
+	// NextSteps explains how to use a new root; it is absent for server
+	// certificates.
+	NextSteps []string `json:"next_steps,omitzero"`
+}
+
+// persistCertificate writes the certificate then its matching private key and
+// reports them; root says the pair is a new root CA, which adds guidance on
+// distributing it. Pair writes are not atomic. Any failure names both exact
+// paths because either file may remain; paths are never removed after a
+// concurrent replacement.
 func persistCertificate(
 	ctx context.Context,
 	inventory []files.Destination,
 	identity certificate.Identity,
+	root bool,
 	env console.Environment,
 ) error {
 	material := [][]byte{identity.Bundle().PEM(), identity.PrivatePEM()}
@@ -167,9 +184,23 @@ func persistCertificate(
 		}
 	}
 
-	return env.Result(map[string]any{
-		"created": true, "certificate": inventory[0].Path, "key": inventory[1].Path, "trust_changed": false,
-	})
+	report := certificateGenerateResult{
+		Summary: "Generated server certificate",
+		Changes: []console.Change{
+			{Action: console.ActionCreate, Path: inventory[0].Path},
+			{Action: console.ActionCreate, Path: inventory[1].Path, Detail: "private key"},
+		},
+	}
+
+	if root {
+		report.Summary = "Generated root certificate"
+		report.NextSteps = []string{
+			"Distribute only the certificate; keep the private key private",
+			"System trust was not changed; install the root with arkoren certificate root trust " + inventory[0].Path,
+		}
+	}
+
+	return env.Result(report)
 }
 
 // writeCertificateFile still uses exclusive creation after preflight. Private

@@ -48,7 +48,7 @@ feature orders constructors: NewService; NewStore
 feature orders above: web(NewHandlers)
 ```
 
-Without `--text`, the same content is one JSON document with `module`,
+Without `--text`, the same content is one document (JSON when piped or with `--json`) with `module`,
 `processes`, `bootstrap`, `features`, `migrations` and `platform`. The listing
 holds names only; open the files for behavior.
 
@@ -122,7 +122,7 @@ runs, and nothing runs until your migrator adds `migrations.All()`.
 
 When a created file imports a module that `go.mod` does not require yet, such
 as `arkoren.dev/foundation/query`, `add` runs `go mod tidy` after writing and
-reports `"tidied": true`. Pass `--skip-tidy` to stay offline and tidy later.
+lists a `tidy` change for `go.mod`. Pass `--skip-tidy` to stay offline and tidy later.
 
 ## Add an Ark Module
 
@@ -162,9 +162,9 @@ there. With the memory queue the process that serves HTTP must also send the
 emails, which is why `server` is the default; move the two lines to a worker when
 you swap the queue driver. The module's pinned version is fetched with `go get`
 before `go mod tidy`, so tidy does not pick a newer release; `--skip-tidy` leaves
-both for you, and the report lists them under `requires`.
+both for you, and the report lists each module as a `require` change.
 
-The report also lists `next_steps`, the work the command cannot do: add
+The report also lists `next_steps` (a numbered list on a terminal), the work the command cannot do: add
 `compose.Use(IAM).Migrations()...` to your `Migrator` (the migrate process then
 builds `IAM` and needs the same environment as the server), set the environment
 variables and key files, and replace the logging mailer before production.
@@ -175,14 +175,20 @@ Add `--dry-run` to any `add` command to print the plan and write nothing:
 
 ```json
 {
+  "summary": "Would add feature orders",
   "dry_run": true,
-  "created": ["internal/orders/orders.go", "internal/orders/service.go"],
-  "edited": [{"path": "internal/bootstrap/server/compose.go", "inserted": ["compose.Use(bootstrap.OrdersRoutes)"]}],
-  "tidied": false
+  "changes": [
+    {"action": "create", "path": "internal/orders/orders.go"},
+    {"action": "create", "path": "internal/orders/service.go"},
+    {"action": "edit", "path": "internal/bootstrap/server/compose.go", "detail": "compose.Use(bootstrap.OrdersRoutes)"}
+  ]
 }
 ```
 
-`add ark` reports `requires` and `next_steps` beside these keys when it has any.
+`changes` holds one `create` per new file and one `edit` per inserted line, whose
+`detail` is that line. `add ark` also reports a `require` change per pinned
+module and `next_steps`; a run that executed `go mod tidy` ends with a `tidy`
+change for `go.mod`. Without `--dry-run` the summary is "Added feature orders".
 
 Without it the command prints the same report after writing. `add` never
 overwrites: if any target path exists, including a feature directory, it fails
@@ -199,9 +205,9 @@ Review the diff with your version control after any `add`.
 arkoren check
 ```
 
-The command prints one JSON document, `{"ok": true, "violations": []}` for a
-conforming project. Each violation has `rule`, `file`, `line` and a `message`
-naming the fix. It exits 1 when there are violations, so it can gate a build.
+The command prints one report: a `summary` ("No layout violations" or "3 layout
+violations"), `ok`, and `violations`, an array that is empty for a conforming
+project. Each violation has `file`, `line`, `rule` and a `message` naming the fix. It exits 1 when there are violations, so it can gate a build.
 Projects created with `arkoren new` run it as part of `make check`; the target
 needs the `arkoren` command on `PATH` (override with `make check ARKOREN=...`).
 

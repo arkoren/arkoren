@@ -51,7 +51,7 @@ arkoren public:routes --help
 Help is text generated from the current schema and metadata. It shows flags,
 declared positionals, owner-supplied examples, output schema when present, and
 follow support. It performs discovery only. Use `tools --verbose` if you need
-the advertised schemas and metadata as JSON instead of a command manual.
+the advertised schemas and metadata instead of a command manual; add `--json` for a machine format on a terminal.
 
 ## Pass Inputs
 
@@ -93,12 +93,13 @@ arrays, literal map keys, and tokens that look like flags.
 
 ## Interpret Results
 
-A successful non-follow call prints one JSON document, without an MCP envelope.
+A successful non-follow call prints one result without an MCP envelope: text on a
+terminal, otherwise (or with `--json`) one JSON document.
 Structured content is preferred. A single text block containing JSON prints as
 JSON; other text prints as a JSON string. Multiple or multimodal blocks retain
 their protocol content records.
 
-For an uncolored, one-line result suitable for capture, add presentation flags:
+For an uncolored, one-line JSON result suitable for capture, add presentation flags:
 
 ```sh
 arkoren public:routes --method POST --path /users --compact --no-color
@@ -121,7 +122,7 @@ Ordinary calls do not retry automatically. An input-required MCP response fails
 with exit 1 after one call, without a successful stdout result. The CLI does not
 fulfill the request, continue automatically, or replay the handler.
 
-Errors appear on stderr as JSON with an `error` object. Server validation
+Errors appear on stderr as text on a terminal, otherwise as JSON with an `error` object. Server validation
 failures can include JSON pointers and the flags or arguments that supplied
 them. Choose `--verbose` on the original invocation if you need complete
 captured safe diagnostics; never replay a mutation merely to get more detail.

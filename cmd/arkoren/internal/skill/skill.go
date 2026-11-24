@@ -4,8 +4,10 @@ package skill
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 
 	"arkoren.dev/cmd/arkoren/internal/console"
@@ -22,6 +24,66 @@ type Options struct {
 	DryRun bool
 }
 
+// Entry is one managed skill in a [Result]: where it lives, its provenance,
+// and what an install or update did or would do to it.
+type Entry struct {
+	// Name is the skill's directory name under the skills parent.
+	Name string `json:"name"`
+
+	// State is "installed", "not installed" or "unmanaged" (a directory Arkoren
+	// did not create).
+	State string `json:"state"`
+
+	// Directory is the skill's absolute installation directory.
+	Directory string `json:"directory"`
+
+	// InstalledRevision is the revision recorded when the skill was installed;
+	// absent when it is not installed.
+	InstalledRevision string `json:"installed_revision,omitzero"`
+
+	// BundledRevision is the revision embedded in this CLI.
+	BundledRevision string `json:"bundled_revision"`
+
+	// ModifiedFileCount counts installed files edited since installation.
+	ModifiedFileCount int `json:"modified_file_count"`
+
+	// WrittenFiles counts files an install or update writes; absent for status.
+	WrittenFiles *int `json:"written_files,omitzero"`
+
+	// RemovedFiles counts files an install or update removes; absent for
+	// status.
+	RemovedFiles *int `json:"removed_files,omitzero"`
+
+	// ConflictCount counts paths that block an install or update; absent for
+	// status.
+	ConflictCount *int `json:"conflict_count,omitzero"`
+
+	// ModifiedFiles lists the edited files with --verbose.
+	ModifiedFiles []string `json:"modified_files,omitzero"`
+
+	// Conflicts lists the blocking paths with --verbose.
+	Conflicts []string `json:"conflicts,omitzero"`
+}
+
+// Result is the JSON result of `arkoren skills install|update|status`: a
+// summary, whether it was a dry run, one flat entry per managed skill, and with
+// --verbose the file changes. Failure and conflicts are errors, not results.
+type Result struct {
+	// Summary reads "Installed 2 skills", "Would update 2 skills", "Skills are
+	// up to date" or "arkoren skill is not installed".
+	Summary string `json:"summary"`
+
+	// DryRun reports that nothing was written; status never sets it.
+	DryRun bool `json:"dry_run,omitzero"`
+
+	// Skills lists every managed skill in installation order.
+	Skills []Entry `json:"skills"`
+
+	// Changes lists each file written or removed, with the path relative to the
+	// skills directory, with --verbose.
+	Changes []console.Change `json:"changes,omitzero"`
+}
+
 // target is one managed skill's destination, bundle, inspected state and plan.
 type target struct {
 	// name is the skill's directory name under the skills parent.
@@ -32,8 +94,8 @@ type target struct {
 	bundle Bundle
 	// installed is the inspected state of folder.
 	installed Installation
-	// report is the skill's own result document.
-	report map[string]any
+	// entry is the skill's own part of the result document.
+	entry Entry
 	// plan is the write plan, set for install and update only.
 	plan Plan
 }
@@ -44,8 +106,7 @@ type target struct {
 //
 // Every skill in [Names] is handled in one operation. All plans are built and
 // checked first, so a conflict in any skill blocks every write. The result
-// document describes the first skill (arkoren) at the top level and each other
-// skill under "related_skills", keyed by name.
+// document lists each skill as one [Entry].
 func Manage(ctx context.Context, options Options, env console.Environment, source fs.FS) error {
 	parent, err := resolveSkillsDir(env.Dir, options.Dir)
 
@@ -53,77 +114,24 @@ func Manage(ctx context.Context, options Options, env console.Environment, sourc
 		return err
 	}
 
-	targets := make([]*target, 0, len(Names))
+	verbose := env.Presentation.Verbose
+	targets, err := loadTargets(ctx, parent, source, verbose)
 
-	for _, name := range Names {
-		bundle, err := LoadNamedBundle(ctx, source, name)
-
-		if err != nil {
-			return err
-		}
-
-		folder := filepath.Join(parent, name)
-		installed, err := Inspect(ctx, folder)
-
-		if err != nil {
-			return err
-		}
-
-		targets = append(targets, &target{
-			name: name, folder: folder, bundle: bundle, installed: installed,
-			report: skillReport(folder, bundle, installed, env.Presentation.Verbose),
-		})
+	if err != nil {
+		return err
 	}
-
-	report := targets[0].report
-	related := make(map[string]any, len(targets)-1)
-
-	for _, other := range targets[1:] {
-		related[other.name] = other.report
-	}
-
-	report["related_skills"] = related
 
 	if options.Operation == "status" {
-		return env.Result(report)
+		return env.Result(result(targets, verbose, statusSummary(targets), false))
 	}
 
-	var conflicts []string
+	conflicts, err := planTargets(ctx, options.Operation, targets, verbose)
 
-	for _, current := range targets {
-		operation := options.Operation
-
-		// A skill added after the project's first install is absent from older
-		// projects: update installs it beside the managed primary skill, while
-		// the primary skill still requires an existing managed installation.
-		if current != targets[0] && operation == "update" && current.installed.Manifest == nil && !current.installed.unmanaged {
-			operation = "install"
-		}
-
-		current.plan, err = NewPlan(ctx, current.folder, operation, current.bundle, current.installed)
-
-		if err != nil {
-			return err
-		}
-
-		current.report["written_files"], current.report["removed_files"] = skillChangeCounts(current.plan)
-		current.report["conflict_count"] = len(current.plan.Conflicts)
-
-		if env.Presentation.Verbose {
-			current.report["changes"], current.report["conflicts"] = skillChanges(current.plan), current.plan.Conflicts
-		}
-
-		for _, conflict := range current.plan.Conflicts {
-			if current != targets[0] {
-				conflict = current.name + ": " + conflict
-			}
-
-			conflicts = append(conflicts, conflict)
-		}
+	if err != nil {
+		return err
 	}
 
-	report["operation"] = options.Operation
-	report["dry_run"] = options.DryRun
+	report := result(targets, verbose, changeSummary(options, len(targets)), options.DryRun)
 
 	if len(conflicts) != 0 {
 		if options.DryRun {
@@ -146,19 +154,169 @@ func Manage(ctx context.Context, options Options, env console.Environment, sourc
 			return err
 		}
 
-		current.report["installed_revision"] = current.bundle.Manifest.Revision
-		current.report["modified_file_count"] = 0
-
-		if env.Presentation.Verbose {
-			current.report["modified_files"] = []string{}
-		}
-
-		current.report["state"] = "installed"
+		current.markInstalled(verbose)
 	}
 
-	report["completed"] = true
+	return env.Result(result(targets, verbose, changeSummary(options, len(targets)), false))
+}
 
-	return env.Result(report)
+// loadTargets loads and inspects every managed skill under parent.
+func loadTargets(ctx context.Context, parent string, source fs.FS, verbose bool) ([]*target, error) {
+	targets := make([]*target, 0, len(Names))
+
+	for _, name := range Names {
+		bundle, err := LoadNamedBundle(ctx, source, name)
+
+		if err != nil {
+			return nil, err
+		}
+
+		folder := filepath.Join(parent, name)
+		installed, err := Inspect(ctx, folder)
+
+		if err != nil {
+			return nil, err
+		}
+
+		targets = append(targets, &target{
+			name: name, folder: folder, bundle: bundle, installed: installed,
+			entry: skillEntry(name, folder, bundle, installed, verbose),
+		})
+	}
+
+	return targets, nil
+}
+
+// planTargets builds every skill's write plan for the operation and returns the
+// conflicts of all plans, each prefixed with its skill name except the first
+// skill's. It records the file counts and conflicts on each entry.
+func planTargets(ctx context.Context, operation string, targets []*target, verbose bool) ([]string, error) {
+	var conflicts []string
+
+	for _, current := range targets {
+		planned := operation
+
+		// A skill added after the project's first install is absent from older
+		// projects: update installs it beside the managed primary skill, while
+		// the primary skill still requires an existing managed installation.
+		if current != targets[0] && operation == "update" && current.installed.Manifest == nil && !current.installed.unmanaged {
+			planned = "install"
+		}
+
+		plan, err := NewPlan(ctx, current.folder, planned, current.bundle, current.installed)
+
+		if err != nil {
+			return nil, err
+		}
+
+		current.plan = plan
+		written, removed := skillChangeCounts(plan)
+		blocked := len(plan.Conflicts)
+
+		current.entry.WrittenFiles = &written
+		current.entry.RemovedFiles = &removed
+		current.entry.ConflictCount = &blocked
+
+		if verbose {
+			current.entry.Conflicts = plan.Conflicts
+		}
+
+		for _, conflict := range plan.Conflicts {
+			if current != targets[0] {
+				conflict = current.name + ": " + conflict
+			}
+
+			conflicts = append(conflicts, conflict)
+		}
+	}
+
+	return conflicts, nil
+}
+
+// markInstalled records on the entry that its plan was written.
+func (current *target) markInstalled(verbose bool) {
+	current.entry.InstalledRevision = current.bundle.Manifest.Revision
+	current.entry.ModifiedFileCount = 0
+	current.entry.State = "installed"
+
+	if verbose {
+		current.entry.ModifiedFiles = nil
+	}
+}
+
+// result assembles the document: one entry per skill and, with verbose, every
+// planned file change.
+func result(targets []*target, verbose bool, summary string, dryRun bool) Result {
+	report := Result{Summary: summary, DryRun: dryRun, Skills: make([]Entry, 0, len(targets))}
+
+	for _, current := range targets {
+		report.Skills = append(report.Skills, current.entry)
+
+		if !verbose {
+			continue
+		}
+
+		for _, change := range current.plan.Changes {
+			action := console.ActionWrite
+
+			if change.remove {
+				action = console.ActionRemove
+			}
+
+			report.Changes = append(report.Changes, console.Change{Action: action, Path: path.Join(current.name, filepath.ToSlash(change.Path))})
+		}
+	}
+
+	return report
+}
+
+// changeSummary words an install or update: "Installed 2 skills" or, for a dry
+// run, "Would update 2 skills".
+func changeSummary(options Options, count int) string {
+	noun := "skills"
+
+	if count == 1 {
+		noun = "skill"
+	}
+
+	if options.DryRun {
+		return fmt.Sprintf("Would %s %d %s", options.Operation, count, noun)
+	}
+
+	past := map[string]string{"install": "Installed", "update": "Updated"}[options.Operation]
+
+	return fmt.Sprintf("%s %d %s", past, count, noun)
+}
+
+// statusSummary answers the status question in one line: the first skill's
+// absence or foreign directory wins, then outdated skills, then local edits.
+func statusSummary(targets []*target) string {
+	first := targets[0].entry
+
+	if first.State != "installed" {
+		return first.Name + " skill is " + first.State
+	}
+
+	outdated, modified := 0, 0
+
+	for _, current := range targets {
+		if current.entry.State == "installed" && current.entry.InstalledRevision != current.entry.BundledRevision {
+			outdated++
+		}
+
+		if current.entry.ModifiedFileCount > 0 {
+			modified++
+		}
+	}
+
+	switch {
+	case outdated > 0:
+		return fmt.Sprintf("%d of %d skills are out of date; run arkoren skills update", outdated, len(targets))
+	case modified > 0:
+		return fmt.Sprintf("%d of %d skills have locally modified files", modified, len(targets))
+	}
+
+	return "Skills are up to date"
 }
 
 // skillChangeCounts keeps ordinary receipts small. Full per-file actions are
@@ -203,48 +361,29 @@ func resolveSkillsDir(dir, parent string) (string, error) {
 	return parent, nil
 }
 
-// skillReport describes installed provenance without implying API compatibility.
-func skillReport(folder string, bundle Bundle, installed Installation, verbose bool) map[string]any {
-	report := map[string]any{"directory": folder, "bundled_revision": bundle.Manifest.Revision}
+// skillEntry describes installed provenance without implying API compatibility.
+func skillEntry(name, folder string, bundle Bundle, installed Installation, verbose bool) Entry {
+	entry := Entry{Name: name, Directory: folder, BundledRevision: bundle.Manifest.Revision}
 
 	if installed.Manifest == nil {
-		state := "not installed"
+		entry.State = "not installed"
 
 		if installed.unmanaged {
-			state = "unmanaged"
+			entry.State = "unmanaged"
 		}
 
-		report["state"] = state
-
-		return report
+		return entry
 	}
 
-	report["state"] = "installed"
-	report["installed_revision"] = installed.Manifest.Revision
-	report["modified_file_count"] = len(installed.Modified)
+	entry.State = "installed"
+	entry.InstalledRevision = installed.Manifest.Revision
+	entry.ModifiedFileCount = len(installed.Modified)
 
 	if verbose {
-		report["modified_files"] = installed.Modified
+		entry.ModifiedFiles = installed.Modified
 	}
 
-	return report
-}
-
-// skillChanges describes deterministic file actions without exposing contents.
-func skillChanges(plan Plan) []map[string]string {
-	changes := make([]map[string]string, 0, len(plan.Changes))
-
-	for _, change := range plan.Changes {
-		operation := "write"
-
-		if change.remove {
-			operation = "remove"
-		}
-
-		changes = append(changes, map[string]string{"operation": operation, "path": filepath.ToSlash(change.Path)})
-	}
-
-	return changes
+	return entry
 }
 
 // skillDirectoryUnmanaged distinguishes an empty destination from foreign data.

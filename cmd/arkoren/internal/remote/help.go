@@ -49,9 +49,14 @@ var GlobalFlagDefs = []GlobalFlagDef{
 		Doc:   "Read this env file instead of ./.env and approve its URL for environment/flag tokens; it must exist; an empty value reads none",
 	},
 	{
+		Names: []string{"json"},
+		Value: "",
+		Doc:   "Print results and errors as JSON on a terminal too; output that is not a terminal is always JSON",
+	},
+	{
 		Names: []string{"compact"},
 		Value: "",
-		Doc:   "Print each JSON document on one line",
+		Doc:   "Print each JSON document on one line (implies -json)",
 	},
 	{
 		Names: []string{"verbose"},
@@ -200,7 +205,7 @@ func writeInputFlags(out io.Writer, root *Schema, color bool) error {
 		fmt.Fprintf(out, "\nThese properties share a name with a global flag, so only -input can set them: %s\n", strings.Join(shadowed, ", "))
 	}
 
-	fmt.Fprintln(out, "\nGlobal flags: -input, -f, -compact, -verbose, -request-timeout, -url, -token, -no-color, -env-file (run 'arkoren --help' for global flag usage).")
+	fmt.Fprintln(out, "\nGlobal flags: -input, -f, -json, -compact, -verbose, -request-timeout, -url, -token, -no-color, -env-file (run 'arkoren --help' for global flag usage).")
 
 	return nil
 }

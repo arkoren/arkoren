@@ -34,7 +34,7 @@ func TestMCPLogPollWakesForMatchingRecord(t *testing.T) {
 
 		result := <-done
 
-		if len(result.Items) != 1 || result.Items[0].Message != "arrived" || result.HasMore {
+		if len(result.Items) != 1 || result.Items[0].Message != "arrived" || result.Truncated {
 			t.Fatalf("result=%+v", result)
 		}
 	})

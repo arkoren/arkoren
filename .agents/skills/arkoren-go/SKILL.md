@@ -885,18 +885,7 @@ in attributes (`arkoren.<component>.<field>`).
 - JSON is `encoding/json/v2`. Prefer `cmp.Or`, type switches, `maps.Clone`,
   `slices.Clone`, `strings.CutPrefix`, `strings.SplitSeq` over hand-written loops
   and single-use helpers. Guard clauses, no `else` after `return`.
-- CLI commands emit one JSON result document, including local mutations and
-  version reporting; follow emits NDJSON. Route local reports through the shared
-  result renderer and retain stdout failure precedence. Errors and trust warnings
-  are JSON records on stderr. Help and interactive prompts remain text; explicit
-  key exports remain raw. Preserve these exceptions when adding output paths.
-  CLI-owned summaries select task-relevant fields rather than dumping MCP
-  catalogs or manuals. Default reports use counts and concise diagnostics;
-  `--verbose` exposes complete safe context, file inventories, tool schemas,
-  status details and safe build identifiers. Keep conflict paths as structured
-  data, not comma-joined messages. Previews emit one stdout report with their exit
-  verdict, without duplicate stderr lists. Preserve arbitrary remote domain
-  payloads, raw exports, redaction and trust warnings in either mode.
+- CLI output follows the shapes in [CLI output shapes](#cli-output-shapes).
 - Value types holding maps or slices return modified copies; copy caller-owned
   input before keeping it and internal state before returning it.
 - Detach owned containers at publication as well as input capture. Retained
@@ -970,6 +959,50 @@ whole records and never alter TTL, handles, identity APIs, or arkoren:auth:user.
 Check secret provider naming constraints and prefer feature subject targeting
 over dynamic keys unless those flags exist. See the corresponding consumer
 guides for provider qualifications and migration examples.
+
+## CLI output shapes
+
+**Rendering.** Every CLI-authored document is JSON. Only `console.Format`,
+reached through `env.Result` or `WriteJSON`, turns it into text, and only when
+the destination stream is a terminal; `-json`, `-compact` or a pipe keep JSON.
+Commands write no text of their own, except help, prompts, raw key exports and
+`map --text`. Keep stdout failure precedence.
+
+**Shapes.** Each command uses exactly one.
+
+- **Local actions** (`new`, `add *`, `skills install|update`, `key generate`,
+  `certificate generate`, trust) use the result envelope in this order:
+  `summary`, `ok` or `dry_run`, command fields, `changes`, `next_steps`.
+  `changes` holds `console.Change` records whose action is one of
+  `create|edit|remove|write|require|tidy`. A dry-run summary starts with "Would".
+- **Local checks and reports** (`check`, `key check`, `certificate check`,
+  `skills status`, `status`) use `summary`, plus `ok` when there is a verdict,
+  and no `changes`.
+- **Listings and inventories** (`tools`, `map`, `--version`) are plain data
+  with no summary.
+- **Errors** are `{"error": ErrorReport}` and **warnings** are
+  `{"warning": {message, ...}}`, both on stderr.
+- **Follow** output is NDJSON. **Remote tool results** pass through unchanged
+  and use the generic renderer. Shipped MCP list tools return
+  `{items, truncated[, cursor]}`; the renderer prints that as a bare table, so
+  new shipped tools keep that wrapper and flat item records. A cursor list
+  signals more records with `truncated` alone, never a second flag. Tools emit
+  absolute RFC 3339 times only, plain numbers (`duration_ms`, `heap_alloc_bytes`)
+  and no relative or derived duplicates such as `age`, `next_in` or a duration
+  string; the CLI adds "(5s ago)" and readable units. Omit empty containers.
+
+**Report types.** A report is a struct whose fields follow reading order, never
+`map[string]any`; shared types (`Change`, `Action`) live in `console`. Add no
+field that is always true or false: a failure is an error. Long lists stay
+lists of plain values. Default reports use counts and concise diagnostics, and
+`--verbose` adds file inventories, schemas and safe build identifiers. Keep
+conflict paths as data, not comma-joined messages; previews print one stdout
+report with their exit verdict. Preserve remote payloads, raw exports,
+redaction and trust warnings in every mode.
+
+**Adding a command.** Pick one shape, add a text-mode golden test
+(`cmd/arkoren/terminal_test.go`), and update the field description in the CLI
+guide under `cmd/arkoren/skills/arkoren/references/guides/cli/`.
 
 ## Tests
 

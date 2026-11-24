@@ -470,7 +470,8 @@ func TestStaticCLIVersionRemainsANativeTool(t *testing.T) {
 }
 
 // TestStaticCLIHelpRemainsANativeTool verifies that removing local help frees
-// its exact native name. JSON is an ordinary schema input, not a help format.
+// its exact native name. A json input property is set through -input because
+// -json is a global flag.
 func TestStaticCLIHelpRemainsANativeTool(t *testing.T) {
 	t.Parallel()
 
@@ -491,7 +492,7 @@ func TestStaticCLIHelpRemainsANativeTool(t *testing.T) {
 		return &sdkmcp.CallToolResult{StructuredContent: input}, nil
 	})
 
-	result := runConnection(t, t.Context(), nativeServerURL(t, server), "", "help", "--json", "--compact")
+	result := runConnection(t, t.Context(), nativeServerURL(t, server), "", "help", "-input", `{"json":true}`, "--compact")
 
 	if result.code != console.ExitOK || result.out != "{\"json\":true}\n" {
 		t.Fatalf("result = %+v", result)
@@ -578,14 +579,15 @@ func TestToolsRejectsTargetsBeforeConfiguration(t *testing.T) {
 }
 
 // TestLocalHelpDoesNotOfferJSON preserves the framework's human-only help.
-// Machine discovery is available only through tools, not local help targets.
+// The only --json mention is the shared global flag; a command must not add a
+// local machine-discovery flag of its own.
 func TestLocalHelpDoesNotOfferJSON(t *testing.T) {
 	t.Parallel()
 
 	page := newRig(t).run("key", "generate", "--help").expectOK(t).stdout
 
-	if strings.Contains(page, "--json") {
-		t.Fatalf("local help offers JSON discovery: %s", page)
+	if strings.Count(page, "--json") != 1 || !strings.Contains(page, "--json                      Print results and errors as JSON") {
+		t.Fatalf("local help offers JSON discovery beyond the global flag: %s", page)
 	}
 }
 
@@ -1819,8 +1821,10 @@ func TestStatusShowsHandshakeHealthAndSources(t *testing.T) {
 		t.Fatalf("status = %v", status)
 	}
 
-	want(t, status["url"], `{"value":"`+rg.url+`","from":"env"}`)
-	want(t, status["token"], `{"set":true,"from":"env"}`)
+	want(t, status["url"], `"`+rg.url+`"`)
+	want(t, status["url_source"], `"env"`)
+	want(t, status["token_set"], `true`)
+	want(t, status["token_source"], `"env"`)
 
 	if strings.Contains(run.stdout, "s3cret") {
 		t.Fatal("status printed the token")
@@ -1850,7 +1854,8 @@ func TestStatusReportsServerVersion(t *testing.T) {
 		t.Fatalf("status = %v", status)
 	}
 
-	want(t, status["url"], `{"value":"`+rg.url+`","from":"flag"}`)
+	want(t, status["url"], `"`+rg.url+`"`)
+	want(t, status["url_source"], `"flag"`)
 }
 
 // TestVersionWithoutURLIsOffline checks native local version reporting.
@@ -1946,8 +1951,10 @@ func TestEnvFileProvidesURLAndToken(t *testing.T) {
 		env: map[string]string{},
 	}, "status").expectOK(t).json(t)
 
-	want(t, status["url"], `{"value":"`+rg.url+`","from":".env"}`)
-	want(t, status["token"], `{"set":true,"from":".env"}`)
+	want(t, status["url"], `"`+rg.url+`"`)
+	want(t, status["url_source"], `".env"`)
+	want(t, status["token_set"], `true`)
+	want(t, status["token_source"], `".env"`)
 }
 
 // TestEnvPrecedenceIsFlagThenEnvThenFile checks configuration precedence.
@@ -1964,13 +1971,15 @@ func TestEnvPrecedenceIsFlagThenEnvThenFile(t *testing.T) {
 
 	fromEnvironment := rg.run("status").expectOK(t).json(t)
 
-	want(t, fromEnvironment["url"], `{"value":"`+rg.url+`","from":"env"}`)
+	want(t, fromEnvironment["url"], `"`+rg.url+`"`)
+	want(t, fromEnvironment["url_source"], `"env"`)
 
 	fromFlag := rg.runWith(t.Context(), runOptions{
 		env: map[string]string{remote.EnvURL: "http://env.invalid"},
 	}, "-url", rg.url, "status").expectOK(t).json(t)
 
-	want(t, fromFlag["url"], `{"value":"`+rg.url+`","from":"flag"}`)
+	want(t, fromFlag["url"], `"`+rg.url+`"`)
+	want(t, fromFlag["url_source"], `"flag"`)
 }
 
 // TestEnvFileFlagReadsAnotherFile checks an explicitly selected env file.
@@ -1988,7 +1997,8 @@ func TestEnvFileFlagReadsAnotherFile(t *testing.T) {
 		env: map[string]string{},
 	}, "-env-file", "other.env", "status").expectOK(t).json(t)
 
-	want(t, status["url"], `{"value":"`+rg.url+`","from":"other.env"}`)
+	want(t, status["url"], `"`+rg.url+`"`)
+	want(t, status["url_source"], `"other.env"`)
 }
 
 // TestEnvFileFlagEmptyDisablesTheFile checks explicit file-loading opt-out.
@@ -2390,8 +2400,10 @@ func TestFlagURLReceivesInheritedToken(t *testing.T) {
 
 	status := run.json(t)
 
-	want(t, status["url"], `{"value":"`+trusted.url+`","from":"flag"}`)
-	want(t, status["token"], `{"set":true,"from":"env"}`)
+	want(t, status["url"], `"`+trusted.url+`"`)
+	want(t, status["url_source"], `"flag"`)
+	want(t, status["token_set"], `true`)
+	want(t, status["token_source"], `"env"`)
 
 	if strings.Contains(run.stdout+run.stderr, fakeInspectorToken) {
 		t.Fatal("trusted URL diagnostics printed the token")
@@ -2414,8 +2426,10 @@ func TestEnvironmentURLReceivesInheritedToken(t *testing.T) {
 
 	status := run.json(t)
 
-	want(t, status["url"], `{"value":"`+trusted.url+`","from":"env"}`)
-	want(t, status["token"], `{"set":true,"from":"env"}`)
+	want(t, status["url"], `"`+trusted.url+`"`)
+	want(t, status["url_source"], `"env"`)
+	want(t, status["token_set"], `true`)
+	want(t, status["token_source"], `"env"`)
 
 	if strings.Contains(run.stdout+run.stderr, fakeInspectorToken) {
 		t.Fatal("trusted URL diagnostics printed the token")
@@ -2434,7 +2448,8 @@ func TestFlagTokenOverridesEnvironmentTokenForTrustedURL(t *testing.T) {
 
 	status := rg.run("-token", fakeInspectorToken, "status").expectOK(t).json(t)
 
-	want(t, status["token"], `{"set":true,"from":"flag"}`)
+	want(t, status["token_set"], `true`)
+	want(t, status["token_source"], `"flag"`)
 }
 
 // expectInspectorBearer checks that an approved configuration sends the
@@ -2472,8 +2487,10 @@ func TestExplicitEnvFileApprovesURLForInheritedToken(t *testing.T) {
 
 	status := run.json(t)
 
-	want(t, status["url"], `{"value":"`+rg.url+`","from":"trusted.env"}`)
-	want(t, status["token"], `{"set":true,"from":"env"}`)
+	want(t, status["url"], `"`+rg.url+`"`)
+	want(t, status["url_source"], `"trusted.env"`)
+	want(t, status["token_set"], `true`)
+	want(t, status["token_source"], `"env"`)
 
 	if strings.Contains(run.stdout+run.stderr, fakeInspectorToken) {
 		t.Fatal("explicit-file diagnostics printed the token")
@@ -2493,8 +2510,10 @@ func TestExplicitDefaultEnvFileApprovesURLForFlagToken(t *testing.T) {
 
 	status := run.json(t)
 
-	want(t, status["url"], `{"value":"`+rg.url+`","from":".env"}`)
-	want(t, status["token"], `{"set":true,"from":"flag"}`)
+	want(t, status["url"], `"`+rg.url+`"`)
+	want(t, status["url_source"], `".env"`)
+	want(t, status["token_set"], `true`)
+	want(t, status["token_source"], `"flag"`)
 
 	if strings.Contains(run.stdout+run.stderr, fakeInspectorToken) {
 		t.Fatal("explicit-file diagnostics printed the token")
@@ -2573,8 +2592,10 @@ func TestImplicitEnvFileTokenStaysPairedWithURL(t *testing.T) {
 
 	status := run.json(t)
 
-	want(t, status["url"], `{"value":"`+rg.url+`","from":".env"}`)
-	want(t, status["token"], `{"set":true,"from":".env"}`)
+	want(t, status["url"], `"`+rg.url+`"`)
+	want(t, status["url_source"], `".env"`)
+	want(t, status["token_set"], `true`)
+	want(t, status["token_source"], `".env"`)
 
 	if strings.Contains(run.stdout+run.stderr, fakeInspectorToken) {
 		t.Fatal("paired-file diagnostics printed the token")
@@ -2596,7 +2617,8 @@ func TestMCPTokenEnvironmentAuthenticates(t *testing.T) {
 
 	run := rg.run("status").expectOK(t)
 
-	want(t, run.json(t)["token"], `{"set":true,"from":"env"}`)
+	want(t, run.json(t)["token_set"], `true`)
+	want(t, run.json(t)["token_source"], `"env"`)
 
 	if strings.Contains(run.stdout+run.stderr, fakeInspectorToken) {
 		t.Fatal("status printed the bearer credential")
@@ -3163,11 +3185,11 @@ func TestProjectPreviewSummarizesFiles(t *testing.T) {
 	output := result{code: code, stdout: env.Stdout.(*bytes.Buffer).String()}
 	document := output.expectOK(t).json(t)
 
-	if document["file_count"].(float64) < 100 || document["conflict_count"] != float64(0) || len(output.stdout) > 1200 {
+	if document["file_count"].(float64) < 100 || document["conflict_count"] != nil || len(output.stdout) > 1200 {
 		t.Fatalf("preview = %s", output.stdout)
 	}
 
-	for _, name := range []string{"files", "conflicts"} {
+	for _, name := range []string{"changes", "conflicts"} {
 		if _, ok := document[name]; ok {
 			t.Fatalf("default preview contains %s", name)
 		}
@@ -3191,7 +3213,9 @@ func TestVerboseProjectPreviewListsFiles(t *testing.T) {
 
 	document := (result{code: code, stdout: env.Stdout.(*bytes.Buffer).String()}).expectOK(t).json(t)
 
-	if len(document["files"].([]any)) != int(document["file_count"].(float64)) || len(document["conflicts"].([]any)) != 0 {
+	conflicts, _ := document["conflicts"].([]any)
+
+	if len(document["changes"].([]any)) != int(document["file_count"].(float64)) || len(conflicts) != 0 {
 		t.Fatal("verbose preview omitted file data")
 	}
 
@@ -3255,11 +3279,13 @@ func TestSkillStatusSummarizesManyEdits(t *testing.T) {
 	output := result{code: code, stdout: env.Stdout.(*bytes.Buffer).String()}
 	document := output.expectOK(t).json(t)
 
-	if document["modified_file_count"] != float64(100) || len(output.stdout) > 1200 {
+	primary := skillEntry(document, "arkoren")
+
+	if primary["modified_file_count"] != float64(100) || len(output.stdout) > 1600 {
 		t.Fatalf("status = %s", output.stdout)
 	}
 
-	if _, ok := document["modified_files"]; ok {
+	if _, ok := primary["modified_files"]; ok {
 		t.Fatal("default status lists every modified file")
 	}
 
@@ -3269,7 +3295,7 @@ func TestSkillStatusSummarizesManyEdits(t *testing.T) {
 
 	document = (result{code: code, stdout: env.Stdout.(*bytes.Buffer).String()}).expectOK(t).json(t)
 
-	if len(document["modified_files"].([]any)) != 100 {
+	if len(skillEntry(document, "arkoren")["modified_files"].([]any)) != 100 {
 		t.Fatal("verbose status omitted modified files")
 	}
 }
@@ -3370,8 +3396,8 @@ func TestVerboseVersionShowsSafeBuildIdentity(t *testing.T) {
 		}
 	}
 
-	if len(console.VersionReport(false)) != 1 {
-		t.Fatal("default version no longer stays concise")
+	if concise := console.VersionReport(false); concise != (console.Version{Version: concise.Version}) {
+		t.Fatalf("default version is not concise: %+v", concise)
 	}
 }
 
@@ -4218,7 +4244,7 @@ func TestHelpBoundaryLiteralHelpRemainsDestination(t *testing.T) {
 	}
 
 	contains(t, string(data), "module example.com/demo")
-	contains(t, stdout.String(), `"created": true`)
+	contains(t, stdout.String(), `"summary": "Created project example.com/demo in `)
 }
 
 // TestInputNestedObjectFlag checks dotted paths into an optional object.
@@ -5506,7 +5532,7 @@ func TestLocalReportsUseTerminalStyle(t *testing.T) {
 
 		output := env.Stdout.(*bytes.Buffer).String()
 
-		if code != console.ExitOK || !strings.Contains(output, "\x1b[") || !strings.Contains(output, "\n  ") {
+		if code != console.ExitOK || !strings.Contains(output, "\x1b[") || strings.Contains(output, "{") {
 			t.Fatalf("%v: exit = %d; stdout = %q; stderr = %s", args, code, output, env.Stderr)
 		}
 	}
@@ -5560,7 +5586,7 @@ func TestProjectCreationPrintsOneJSONResult(t *testing.T) {
 	output := result{code: code, stdout: env.Stdout.(*bytes.Buffer).String(), stderr: env.Stderr.(*bytes.Buffer).String()}
 	document := output.expectOK(t).json(t)
 
-	if document["created"] != true || document["module"] != "billing" || strings.Count(output.stdout, "\n") != 1 {
+	if document["dry_run"] != nil || document["module"] != "billing" || strings.Count(output.stdout, "\n") != 1 {
 		t.Fatalf("project result = %s", output.stdout)
 	}
 }
@@ -5580,11 +5606,13 @@ func TestSkillMutationsPrintOneJSONResult(t *testing.T) {
 		output := result{code: code, stdout: env.Stdout.(*bytes.Buffer).String(), stderr: env.Stderr.(*bytes.Buffer).String()}
 		document := output.expectOK(t).json(t)
 
-		if document["completed"] != true || document["installed_revision"] != document["bundled_revision"] {
+		primary := skillEntry(document, "arkoren")
+
+		if primary["state"] != "installed" || primary["installed_revision"] != primary["bundled_revision"] {
 			t.Fatalf("skill result = %s", output.stdout)
 		}
 
-		if strings.Count(output.stdout, "\n") != 1 || document["modified_file_count"] != float64(0) {
+		if strings.Count(output.stdout, "\n") != 1 || primary["modified_file_count"] != float64(0) {
 			t.Fatalf("skill result = %s", output.stdout)
 		}
 
@@ -5592,7 +5620,7 @@ func TestSkillMutationsPrintOneJSONResult(t *testing.T) {
 			t.Fatal("completed mutation dumped its per-file plan")
 		}
 
-		if _, ok := document["written_files"]; !ok {
+		if _, ok := primary["written_files"]; !ok {
 			t.Fatal("completed mutation omitted file counts")
 		}
 	}
@@ -5686,7 +5714,7 @@ func TestStatusErrorUsesStderrTerminalStyle(t *testing.T) {
 
 	output := env.Stderr.(*bytes.Buffer).String()
 
-	if code != console.ExitFailure || !strings.Contains(output, "\x1b[") || !strings.Contains(output, "\n  ") {
+	if code != console.ExitFailure || !strings.Contains(output, "\x1b[") || strings.Contains(output, "{") {
 		t.Fatalf("exit = %d; stderr = %q", code, output)
 	}
 }
@@ -5729,11 +5757,9 @@ func TestTerminalErrorsHonorNoColor(t *testing.T) {
 
 	output := env.Stderr.(*bytes.Buffer).String()
 
-	if code != console.ExitFailure || !strings.Contains(output, "\n  ") {
+	if code != console.ExitFailure || strings.Contains(output, "\x1b") || strings.Contains(output, "{") || !strings.HasPrefix(output, "✗ ") {
 		t.Fatalf("exit = %d; stderr = %q", code, output)
 	}
-
-	errorDocument(t, output)
 }
 
 // TestTerminalErrorsHonorNoColorEnvironment applies NO_COLOR to stderr too.
@@ -5754,11 +5780,9 @@ func TestTerminalErrorsHonorNoColorEnvironment(t *testing.T) {
 
 	output := env.Stderr.(*bytes.Buffer).String()
 
-	if code != console.ExitFailure || !strings.Contains(output, "\n  ") {
+	if code != console.ExitFailure || strings.Contains(output, "\x1b") || strings.Contains(output, "{") || !strings.HasPrefix(output, "✗ ") {
 		t.Fatalf("exit = %d; stderr = %q", code, output)
 	}
-
-	errorDocument(t, output)
 }
 
 // TestTerminalErrorsHonorCompact keeps machine-oriented overrides available
@@ -6149,7 +6173,7 @@ func TestOutputIsColoredOnATerminal(t *testing.T) {
 		terminal: true,
 	}, "billing:payments").expectOK(t).stdout
 
-	if !strings.Contains(out, console.ColorKey+`"items"`+console.ColorReset) || !strings.Contains(out, "\n  ") {
+	if !strings.Contains(out, "\x1b[1mCENTS"+console.ColorReset) || !strings.Contains(out, console.ColorNumber+"500"+console.ColorReset) || strings.Contains(out, "{") {
 		t.Fatalf("out = %q", out)
 	}
 }
