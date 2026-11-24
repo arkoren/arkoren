@@ -23,6 +23,7 @@ Write as a capable engineer helping another capable engineer. Be warm without be
 - State the capability directly: “The client retries failed requests” rather than “The client makes it easy to retry failed requests.” Reassurance should answer a real concern, not judge how easy the reader should find the task.
 - Use friendly reassurance only to remove real uncertainty: “You do not need to register concrete classes manually.” Do not use empty encouragement.
 - Give each sentence one main job. Keep a condition, reason, or consequence with its claim when separating them would make the relationship harder to follow.
+- Never use em dashes (`—`) in prose. Use commas, colons, semicolons, parentheses, or separate sentences instead.
 
 ## Attention and Progress
 
