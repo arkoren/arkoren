@@ -90,7 +90,7 @@ type ProviderBuilderFunc = func(*ProviderBuilder)
 // login must carry an email the provider proved, or it fails with
 // [federation.ErrEmailUnverified] (403) and creates nothing. It needs users
 // that can be created, which the built-in users always are; with [Builder.Users]
-// that has no [Users.Create], nothing could create the user: [New] ignores
+// that has no [UsersBuilder.Create], nothing could create the user: [New] ignores
 // SignUp, with one warning, and the provider logs in only known identities.
 //
 // Example:
@@ -107,7 +107,7 @@ func (login *ProviderBuilder) SignUp(enabled bool) *ProviderBuilder {
 // enabled. It runs before the facade's own creation and returns the new user's
 // subject, and its errors pass through to the client. Returning "" and no
 // error hands the identity on, so what it declines still gets the facade's
-// creation (a user made through [Users.Create], verified when the provider
+// creation (a user made through [UsersBuilder.Create], verified when the provider
 // proved the email). Calls add up in the order made until one returns a
 // subject. The facade never links by email, so the function must not return an
 // existing user. See [federation.Builder.Create].

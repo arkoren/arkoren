@@ -116,6 +116,7 @@ Read the relevant reference files directly; each contains a table of contents, e
   instructions for them. Never invent
   a version tag or claim that a download was verified without testing it.
 - Address the reader directly, use present-tense product behavior, and state conditions with explicit `if`/`otherwise` language.
+- Never use em dashes (`—`) in prose; use commas, colons, semicolons, parentheses, or separate sentences instead. (Compatibility-matrix cells retain their ` — ` status delimiter only where required by the shared matrix renderer.)
 - Define a new term before using it as an instruction. Use its exact name consistently afterward.
 - Start with the recommended, safe default. Label alternatives with their decision criterion and trade-off.
 - Give each code block a purpose and an interpretation. Include imports, setup, paths, types, or output whenever omission would prevent adaptation.

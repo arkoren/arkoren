@@ -131,7 +131,7 @@ test("former access guides redirect directly to IAM HTML and Markdown guides", (
     overview: "overview",
     passwords: "passwords",
     "email-links": "email-links",
-    registration: "registration",
+    registration: "passwords",
     connections: "federated-sign-in",
     "organization-sign-in": "sso",
     freshness: "freshness",

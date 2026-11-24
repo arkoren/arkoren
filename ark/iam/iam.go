@@ -44,7 +44,7 @@ import (
 //	fmt.Println(errors.Is(err, iam.ErrInvalidConfig)) // true
 var ErrInvalidConfig = errors.New("access: invalid configuration")
 
-// ErrIdentifierTaken is what [Users.Create] returns, or wraps, for an identifier
+// ErrIdentifierTaken is what [UsersBuilder.Create] returns, or wraps, for an identifier
 // that already belongs to a user. Registration then answers 202 like for a new
 // user and notifies the owner. It is
 // [password.ErrIdentifierTaken].
@@ -107,10 +107,10 @@ type IAM struct {
 	pingers     []func(context.Context) error
 
 	// verified tells whether a user's email is verified: the directory's, or
-	// Users.Verified. It is the Verified setting of the packages whose handlers
-	// connect a provider, enroll two-factor or create tokens, and is nil only
-	// with the application's own users and no Users.Verified, validated to
-	// come together with Users.ProveEmail.
+	// the verified function of [UsersBuilder.Verification]. It is the Verified
+	// setting of the packages whose handlers connect a provider, enroll
+	// two-factor or create tokens, and is nil only with the application's own
+	// users without [UsersBuilder.Verification].
 	verified func(context.Context, string) (bool, error)
 
 	// emailProven and keepPersonal are [Builder.OnEmailProven] and

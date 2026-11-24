@@ -38,9 +38,9 @@ func ownRecord(claims map[string]any, value any) auth.UserRecord {
 	return auth.UserRecord{Subject: "42", Version: "0", Claims: claims, Value: value}
 }
 
-// ownUsersOf returns the application's users over one record, found by the
-// identifier "ada@example.com".
-func ownUsersOf(t *testing.T, record auth.UserRecord) iam.Users {
+// ownUsersOf returns the application's user provider and configuration over one
+// record, found by the identifier "ada@example.com".
+func ownUsersOf(t *testing.T, record auth.UserRecord) (*auth.UserProvider, iam.UsersBuilderFunc) {
 	t.Helper()
 
 	driver := memoryauth.New()
@@ -52,16 +52,15 @@ func ownUsersOf(t *testing.T, record auth.UserRecord) iam.Users {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
 
-	return iam.Users{
-		Provider: provider,
-		Lookup: func(_ context.Context, identifier string) (string, string, error) {
+	return provider, func(users *iam.UsersBuilder) {
+		users.Lookup(func(_ context.Context, identifier string) (string, string, error) {
 			if identifier != "ada@example.com" {
 				return "", "", auth.ErrUserNotFound
 			}
 
 			return record.Subject, identifier, nil
-		},
-		Rotate: func(context.Context, string) error { return nil },
+		})
+		users.Rotate(func(context.Context, string) error { return nil })
 	}
 }
 

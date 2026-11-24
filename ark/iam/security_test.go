@@ -482,21 +482,21 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 		proven := false
 		verified := false
 		sys := newAppWith(t, db, instance, wire{reset: true}, func(identity *iam.Builder) {
-			identity.Users(iam.Users{
-				Provider: provider,
-				Lookup:   users.lookup,
-				Create: func(ctx context.Context, identifier string, isVerified bool) (string, error) {
+			identity.Users(provider, func(own *iam.UsersBuilder) {
+				own.Lookup(users.lookup).Rotate(users.rotate)
+				own.Create(func(ctx context.Context, identifier string, isVerified bool) (string, error) {
 					created = append(created, isVerified)
 
 					return users.create(ctx, identifier, isVerified)
-				},
-				Rotate:   users.rotate,
-				Verified: func(context.Context, string) (bool, error) { return verified, nil },
-				ProveEmail: func(context.Context, string) (bool, error) {
-					proven = true
+				})
+				own.Verification(
+					func(context.Context, string) (bool, error) { return verified, nil },
+					func(context.Context, string) (bool, error) {
+						proven = true
 
-					return true, nil
-				},
+						return true, nil
+					},
+				)
 			})
 			identity.Password(hasher(), registration)
 			identity.Tokens()

@@ -86,9 +86,12 @@ func TestOwnUsersPasswordLoginAndReset(t *testing.T) {
 			t.Fatalf("NewUserProvider: %v", err)
 		}
 		sys := newAppWith(t, db, instance, wire{reset: true}, func(identity *iam.Builder) {
-			identity.Users(iam.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
-				Verified:   func(context.Context, string) (bool, error) { return true, nil },
-				ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
+			identity.Users(provider, func(own *iam.UsersBuilder) {
+				own.Lookup(users.lookup).Create(users.create).Rotate(users.rotate)
+				own.Verification(
+					func(context.Context, string) (bool, error) { return true, nil },
+					func(context.Context, string) (bool, error) { return false, nil },
+				)
 			})
 			identity.Password(hasher(), registration)
 		})
@@ -133,17 +136,17 @@ func TestOwnUsersValidation(t *testing.T) {
 
 	users := newOwnUsers(t)
 	provider, _ := auth.NewUserProvider(users.driver)
-	if _, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) { identity.Users(iam.Users{}) }); !errors.Is(err, iam.ErrInvalidConfig) {
+	if _, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) { identity.Users(nil) }); !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Errorf("Users without a provider error = %v", err)
 	}
 	_, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Users(iam.Users{Provider: provider})
+		identity.Users(provider)
 		identity.Password(hasher(), registration)
 	})
 	if !errors.Is(err, iam.ErrInvalidConfig) {
 		t.Errorf("Password without Lookup and Rotate error = %v", err)
 	}
-	identity, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) { identity.Users(iam.Users{Provider: provider}) })
+	identity, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) { identity.Users(provider) })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -161,10 +164,11 @@ func TestRequireVerifiedUsesTheApplicationsVerified(t *testing.T) {
 	users := newOwnUsers(t)
 	provider, _ := auth.NewUserProvider(users.driver)
 	identity, err := newFacadeWith(t, wire{reset: true}, func(identity *iam.Builder) {
-		identity.Users(iam.Users{
-			Provider:   provider,
-			Verified:   func(_ context.Context, subject string) (bool, error) { return subject == "u1", nil },
-			ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
+		identity.Users(provider, func(own *iam.UsersBuilder) {
+			own.Verification(
+				func(_ context.Context, subject string) (bool, error) { return subject == "u1", nil },
+				func(context.Context, string) (bool, error) { return false, nil },
+			)
 		})
 	})
 	if err != nil {

@@ -1,96 +1,46 @@
 ---
 title: IAM Overview
 nav: Overview
-description: Build a minimal login system with IAM, prepare its storage, and register its routes with session and CSRF protection.
+description: Understand how Arkoren IAM works, wire it into your application, run its migrations, and protect your first route.
 order: 10
 summary:
-  - Find every IAM feature and its guide, and separate them from the resources and policies your application owns.
-  - Construct a password-enabled facade, migrate its tables, and provision a known user.
-  - Register the authentication routes and protect application routes without opening registration.
+  - Understand what IAM owns versus the domain data and authorization rules your application keeps.
+  - Install IAM, build a password-enabled facade, and run its database migrations.
+  - Provision a first user, mount the authentication routes with CSRF protection, and guard a private endpoint.
 ---
 
 # IAM Overview
 
-If your application needs ordinary login and account settings, IAM supplies
-the handlers and storage behind them. You enable passwords, authenticator apps,
-API tokens, or external sign-in; the **facade**, an `*iam.IAM`, connects
-those features to one user directory and one login system.
+Most applications need the same identity plumbing: signing users in, managing sessions, recovering forgotten passwords, enrolling authenticators, and issuing API tokens. Arkoren IAM gives you ready-made handlers, storage, and security defaults for that entire layer behind a single **facade**, `*iam.IAM`.
 
-IAM identifies users; it does not decide which posts, projects, or other
-resources they may use. Keep those decisions in your application's
-[authorization rules](../authorization/overview.md). If you need a different
-login flow rather than ready-made routes, use the lower-level
-[authentication packages](../authentication/overview.md) instead.
+IAM answers *who* is making a request and manages their credentials. Your application still owns its business data and decides *what* each user may access using [authorization rules](../authorization/overview.md). If you want to build a custom login protocol from scratch rather than mount ready-made routes, use the lower-level [authentication packages](../authentication/overview.md) directly.
 
-## Features
+## How IAM Fits Together
 
-Every feature is off until you enable it, except the user directory and
-session management, which come with any facade:
+Every IAM setup shares three core pieces:
 
-- **[Accounts](#add-a-user)**: a built-in, email-based user directory, or
-  [your own users](own-users.md) behind the same API.
-- **[Passwords](passwords.md)**: login, confirmation and password changes,
-  with abuse limits; [registration](registration.md) opens self-service
-  sign-up when you choose.
-- **[Email links](email-links.md)**: password reset and email verification
-  through signed, single-use links IAM queues and sends through your mailer.
-- **[Two-factor](two-factor.md)**: authenticator-app codes and recovery codes
-  that finish a pending login.
-- **[Fresh logins](freshness.md)**: recent proof of identity before sensitive
-  account changes.
-- **[Sessions](accounts.md#manage-sessions)**: list a user's logins and log out
-  other devices.
-- **[API and device tokens](tokens.md)**: scoped personal tokens and
-  revocable tokens for first-party apps, capped by what the user may hold.
-- **[Federated sign-in](federated-sign-in.md)**: external providers, per-provider
-  sign-up and user-managed connections; [SSO](sso.md) applies them to
-  organizational sign-in.
-- **[Permissions and roles](permissions.md)**: assign core `gate` roles and
-  permissions to users, check them on sessions and tokens, and manage them
-  through optional routes.
-- **[Account deletion](accounts.md#delete-an-account)**: remove a user and every
-  feature's rows together.
-
-The [route reference](routes.md) lists the HTTP routes each feature registers.
+- **Users**: A built-in, email-based directory (`identity.Directory()`) that identifies each person by a stable string called a **subject**, or [your own users table](own-users.md) behind the same interface.
+- **The guard**: The session and authentication engine (`identity.Guard()`) that verifies credentials, tracks active logins in your cache, and enforces step-up checks for sensitive actions.
+- **Opt-in capabilities**: Passwords, two-factor authentication, external providers, roles and permissions, and API tokens. Everything starts off until you explicitly enable it in `iam.New`.
 
 ## Installation
 
-Install the ark in your application's module:
+Add the IAM module to your application:
 
 ```sh
 go get arkoren.dev/ark/iam
 ```
 
-IAM requires `arkoren.dev/core` v0.14.0 or later; `go get` raises your core
-requirement to that version when it is older. The packages you import from IAM
-use no database driver of their own: your application chooses and installs
-the [database driver](../database/drivers.md), cache, password hasher, and, for
-two-factor, the encryption driver, and passes them to `iam.New`. IAM never
-creates its tables either; add `identity.Migrations()` to your migrator as
-[Prepare Storage](#prepare-storage) shows.
+IAM requires `arkoren.dev/core` v0.14.0 or later. It does not bundle a database driver, cache driver, hasher, or encrypter: you pass your existing `*database.Database`, `*cache.Cache`, and `*hash.Hasher` into `iam.New`. IAM never runs DDL on its own; you register its migrations with your application's migrator.
 
-## Start Small
+## Building the Facade
 
-Assume your application already has a
-[`*database.Database`](../database/overview.md) named `db`, a
-[`*cache.Cache`](../cache/overview.md) named `store`, and a password
-[`*hash.Hasher`](../hashing/overview.md) named `hasher`.
-The database stores accounts and enabled credentials. The cache stores sessions,
-login records, and throttling counters. Use a shared cache when requests can
-reach different application instances; an in-memory cache is process-local.
+The examples throughout this guide assume you already have a configured [`*database.Database`](../database/overview.md) named `db`, a [`*cache.Cache`](../cache/overview.md) named `store`, and a [`*hash.Hasher`](../hashing/overview.md) named `hasher`. The database stores accounts and credentials; the cache stores sessions, login records, and rate-limit counters.
 
-Import `iam` from `arkoren.dev/ark/iam`. The examples are focused
-fragments: handle each returned error before continuing in your application.
-Construction examples are alternatives, not additional facades to create.
-Combine the settings you need in your own `iam.New` callback.
+> [!NOTE]
+> Use a shared cache such as Redis when more than one instance serves traffic. An in-memory cache is process-local, so sessions and throttle counters will not follow requests across instances.
 
-By default IAM uses the host in `RemoteAddr` for abuse limits and ignores
-forwarded headers. If a reverse proxy sits in front of IAM, configure
-`identity.ClientIP` with a function that trusts only your actual proxy chain.
-See [Client Addresses](../http-networking/client-addresses.md) before choosing
-one: trusting arbitrary headers lets clients choose their own throttle key.
-
-Now enable password login, leaving self-service registration closed:
+Import `iam` from `arkoren.dev/ark/iam` and construct the facade with password login enabled:
 
 ```go
 identity, err := iam.New(db, store, func(identity *iam.Builder) {
@@ -98,17 +48,13 @@ identity, err := iam.New(db, store, func(identity *iam.Builder) {
 })
 ```
 
-This builds the built-in email-based directory, password store, and **guard**:
-the component that starts logins, checks sessions, and tracks authentication
-proofs. It does not connect resources, create tables, or start workers.
-Missing required dependencies or incompatible settings return an error wrapping
-`iam.ErrInvalidConfig`.
+`iam.New` performs no network or database I/O. It wires the built-in directory, password verifier, and guard, and returns an error wrapping `iam.ErrInvalidConfig` if a required dependency is missing or a setting is invalid.
 
-A feature is on when you call its method: `Password(hasher)`,
-`TwoFactor(scheme, cipher)`, `Tokens()`, `Permissions()`, `Provider(provider)`
-and `Account()`. A feature you never call stays off, and its required components
-(a hasher, a cipher, a provider) are not needed. To follow a configuration flag,
-wrap the call in an `if`:
+The snippets across these guides keep error results visible while omitting routine error propagation; handle every returned error in your application. Construction examples show the settings relevant to that topic; combine the options you need in your single `iam.New` call.
+
+### Opting In to Capabilities
+
+A capability is active only when you call its builder method: `Password`, `TwoFactor`, `Tokens`, `Permissions`, `Provider`, or `Account`. Because unused methods never run, you do not need to supply dependencies for features you leave off. To gate a capability behind a configuration flag, wrap the call in an `if`:
 
 ```go
 if cfg.TwoFactor {
@@ -116,162 +62,102 @@ if cfg.TwoFactor {
 }
 ```
 
-A later call replaces an earlier one, except `Provider`, which adds one provider
-per call. Methods that only toggle a setting still take a bool, for example
-`password.Builder.Registration(true)` and `ProviderBuilder.SignUp(true)`.
+Keep each capability's settings in one call: calling `Password`, `TwoFactor`, `Tokens`, `Permissions`, or `Account` a second time replaces the earlier call rather than extending it. `Provider` is the exception: each call registers an additional external provider with a unique name.
 
-A setting whose feature is off is ignored with one warning through
-`slog.Default`, naming the setting and the reason. Registration without users
-that can be created, provider sign-up without `Create`, and registration with
-the built-in users without `Reset` are ignored this way. Missing components of a
-called feature, invalid values, contradictions, and anything that would
-weaken a protection still fail with `iam.ErrInvalidConfig`.
+Self-service sign-up (both password registration and first-login provider sign-up) stays closed by default, so you can deploy IAM for an invite-only application without exposing public registration. If you configure a setting whose prerequisite is off, such as password registration without password recovery, IAM ignores that setting and logs one warning through `slog.Default` naming the setting and why it was skipped.
 
-Other login features stay off. Password registration and first-login provider
-sign-up also stay off unless you explicitly enable them. You can therefore add
-IAM to an invite-only application without exposing a public sign-up route.
+### Behind a Reverse Proxy
 
-## Prepare Storage
+By default, IAM identifies clients using the host part of `r.RemoteAddr` and ignores forwarding headers. Behind a load balancer or reverse proxy, `RemoteAddr` is the proxy's address, which makes all users share one rate-limit counter.
 
-Before serving requests, add IAM's migrations to your application's
-[migrator](../migrations/overview.md):
+Configure `identity.ClientIP` with a resolver from [Client Addresses](../http-networking/client-addresses.md) that trusts only your proxy chain. Never trust arbitrary `X-Forwarded-For` headers, or callers can pick their own throttle key.
+
+## Preparing Storage
+
+Add IAM's migrations to your application's [migrator](../migrations/overview.md) before serving traffic:
 
 ```go
 err = migrator.Add(identity.Migrations()...)
 ```
 
-The returned migrations cover every feature of the module for your `Instance`,
-whichever features you enabled, so turning one on later needs no migrator change:
-its tables already exist. The one structural choice that removes a group is your
-own `Users`, which leaves out the built-in users table. Groups are append-only: a
-release that changes a table adds a migration to the end of its group and never
-rewrites a shipped one. Adding migrations does not execute them. Your deployment
-then runs:
+`identity.Migrations()` returns the migration groups for every IAM table (except the built-in users table when you bring [your own users](own-users.md)). Because all tables are created upfront, enabling two-factor or tokens later requires no migrator change. Groups are append-only: future releases only add migrations and never rewrite shipped ones.
+
+Run your migrator as part of deployment:
 
 ```go
 err = migrator.Up(ctx)
 ```
 
-After migration, use `identity.Ping(ctx)` as a read-only readiness check. A missing
-table of an enabled feature returns an error wrapping `iam.ErrNotMigrated` and names the table.
-Your application still owns the database and cache lifecycles.
+To verify at startup or in a readiness probe that every table required by your enabled features exists, call `identity.Ping(ctx)`. A missing table returns an error wrapping `iam.ErrNotMigrated` and names the table.
 
-## Add a User
+## Provisioning a First User
 
-With registration closed, provision users from your application's invitation or
-administration flow. Suppose Ada has already proved ownership of
-`ada@example.com`, for example by accepting your invitation:
+With self-service registration closed, your application creates users from an invitation or admin flow. Suppose Ada has already proved ownership of `ada@example.com` by accepting an invite:
 
 ```go
 subject, err := identity.Directory().CreateVerified(ctx, "ada@example.com")
 ```
 
-The returned **subject** is the stable string that identifies Ada throughout
-IAM. `CreateVerified` trusts your proof; it does not verify the address itself.
-Use `Create` instead when ownership is not proved, then arrange
-[email verification](email-links.md#verify-an-email).
-An address already in use returns `account.ErrEmailTaken`; no account is merged.
+The returned `subject` is Ada's permanent identifier throughout IAM. `CreateVerified` trusts your verification; use `Create` instead when the address has not been proved yet, then send a [verification link](email-links.md#verifying-an-email). If the address already exists, `Create` and `CreateVerified` return `account.ErrEmailTaken` without merging accounts.
 
-For password login, set Ada's initial password through a secure provisioning
-flow. With `initialPassword` supplied by that flow:
+Next, set Ada's initial password:
 
 ```go
 err = identity.Verifier().Set(ctx, subject, initialPassword)
 ```
 
-If account creation and password storage must succeed together, execute both
-inside one [database transaction](../database/transactions.md), passing its
-context to both calls. These direct Go methods are privileged application
-operations; they are not substitutes for the guarded public account routes.
+If account creation and password storage must succeed together, wrap both calls in one [database transaction](../database/transactions.md) and pass its context to each call.
 
-## Register Routes
+## Mounting Routes and Protecting Endpoints
 
-IAM's middleware loads sessions and identifies the caller. It does **not**
-provide CSRF protection. Because the account routes accept session cookies,
-install `csrf.Middleware()` from `arkoren.dev/core/http/middleware/csrf` before
-exposing them:
+IAM's middleware loads the session and authenticates incoming requests, but it does **not** enforce CSRF protection. Because browser sessions rely on cookies, always install `csrf.Middleware()` from `arkoren.dev/core/http/middleware/csrf` alongside `identity.Middleware()`:
 
 ```go
 web := routes.With(csrf.Middleware(), identity.Middleware())
-web.Group("/", identity.Register)
+web.Group("/auth", identity.Register)
 ```
 
-Here `routes` is your existing `*router.Router`. `Register` adds only the
-routes your configuration supports; for this facade, `/login` exists but `/register` does not.
-The [route reference](routes.md) covers the full list and custom paths.
+Here `routes` is your `*router.Router`. `identity.Register` mounts only the routes your configuration supports: with passwords enabled and registration off, `POST /auth/login` is mounted while `POST /auth/register` is not. All paths, including external providers, are relative to the group prefix (`/auth` here, or `"/"` for root paths).
 
-`Register` never installs the middleware itself. Install it once on the router
-that carries every route needing to know who is calling, and register IAM on
-that router: your own routes and IAM's then share one identification step.
-Every route, the providers' included, is relative to the router you register
-on, so `web.Group("/auth", identity.Register)` serves `POST /auth/login` and a
-provider named `google` at `/auth/google`. The connect handler reads the prefix
-from the request, so any prefix works; register each provider's callback URL with
-it. To serve other paths, register the [individual handlers](routes.md#custom-paths).
+Install `identity.Middleware()` once on the shared router that carries both IAM's routes and your own routes so every handler shares a single authentication step. To serve IAM endpoints at different paths, mount the [individual handlers](routes.md#custom-paths) instead of calling `Register`.
 
-Your own routes are not automatically private. After the middleware, require an
-authenticated caller with `auth` from `arkoren.dev/core/auth`:
+> [!NOTE]
+> Every IAM JSON `POST`, `PUT`, or `PATCH` endpoint requires `Content-Type: application/json`, even when the request has no body (such as `POST /auth/logout`). Missing or non-JSON media types return `415`. This check complements CSRF protection; it does not replace it.
+
+Mounting IAM's middleware identifies callers but does not block anonymous traffic on your own routes. Require an authenticated user with `auth.Require()` from `arkoren.dev/core/auth`:
 
 ```go
 private := web.With(auth.Require())
 private.Get("/posts", listPosts)
 ```
 
-`listPosts` is your application handler. An anonymous request receives `401`;
-after Ada [logs in](passwords.md#log-in), the request reaches the handler.
-It must still authorize which posts Ada may read, for example with
-[permissions](permissions.md) and a scoped query.
+Anonymous requests to `/posts` receive `401`. Once Ada [signs in](passwords.md#signing-in), the request reaches `listPosts`, where your application still enforces which posts Ada may read.
 
-Every IAM JSON `POST`, `PUT`, or `PATCH` needs
-`Content-Type: application/json`, even when no body is needed. A missing or
-different media type returns `415`. Provider protocol routes are exempt.
-This content-type check is not a replacement for CSRF protection.
+### Local HTTP Development
 
-### Local HTTP
-
-Use HTTPS in production; session cookies are secure by default.
-For local plain HTTP only, configure the exception through IAM's `Session`
-callback, using `session` from `arkoren.dev/core/http/session`:
+Session cookies are `Secure` by default and require HTTPS in production. For local plain-HTTP development only, relax the cookie flag through `identity.Session` using `session` from `arkoren.dev/core/http/session`:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher)
-	identity.Session(func(cookies *session.Builder) {
-		cookies.AllowInsecure(true)
-	})
+identity.Session(func(cookies *session.Builder) {
+	cookies.AllowInsecure(true)
 })
 ```
 
-Do not enable this in production: HTTP exposes the session credential in transit.
-IAM already installs session middleware; do not add another copy.
-The [session guide](../http-capabilities/sessions.md) explains cookie defaults
-and storage behavior.
+> [!WARNING]
+> Never enable `AllowInsecure(true)` in production. Plain HTTP exposes session cookies in transit.
 
-## Configure Features
+IAM installs session middleware automatically inside `identity.Middleware()`; do not register a second copy of `session.Middleware()` on the same router.
 
-The following pages add one capability at a time. Keep each feature's settings
-together: a later `Password`, `TwoFactor`, `Tokens`, or `Permissions` call replaces that
-feature's earlier configuration rather than extending it. Add each provider
-through its own `Provider` call; provider names must be unique.
+### Sharing One Database Across Instances
 
-All feature stores use the same database and transaction context. If you need
-separate table sets in that database, choose an instance during construction:
+If two separate IAM facades share one database, give each facade a distinct instance name during construction:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Instance("staff")
-	identity.Password(hasher)
-})
+identity.Instance("staff")
 ```
 
-`staff` prefixes the tables and adds `:staff` to each migration group, whose
-base name is `arkoren.dev:ark/access:<package>`. A nonempty instance name is
-1–20 bytes of lowercase letters, digits, and underscores, starting with a letter.
-This separates table names; it is not an authorization or complete session
-isolation boundary.
+An instance name must be 1–20 bytes of lowercase letters, digits, and underscores, starting with a letter. It prefixes every table with `staff_` and appends `:staff` to each migration group (`arkoren.dev:ark/access:<package>`). Instance names separate table names; they do not by themselves isolate sessions or authorization.
 
-Continue with [Passwords](passwords.md) to make the first login and understand
-its response.
+Continue to [Passwords & Registration](passwords.md) to handle sign-in, password changes, and optional self-service sign-up.
 
-For the public entry points, see the
-[`iam` API reference](https://pkg.go.dev/arkoren.dev/ark/iam).
+For every builder method and handler, see the [`iam` API reference](https://pkg.go.dev/arkoren.dev/ark/iam).
