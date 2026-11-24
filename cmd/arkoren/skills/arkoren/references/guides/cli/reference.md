@@ -203,7 +203,8 @@ that reader.
 
 On a terminal, results and errors are translated into colored text: aligned
 labels, nested objects as headed sections, and arrays of flat objects as tables.
-Output that is not a terminal stays JSON, indented by default, so pipes, scripts
+Numbered next steps put each command on its own line, indented below the step's
+text. Output that is not a terminal stays JSON, indented by default, so pipes, scripts
 and agents are unaffected. Pass `--json` for JSON on a terminal, and `--compact`
 for one-line JSON; `--compact` implies `--json` and changes indentation, not
 content. Agents whose shells are not terminals already receive JSON; pass

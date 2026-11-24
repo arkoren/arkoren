@@ -138,7 +138,8 @@ Problems
   arkoren-structure  not installed
 
 Next steps
-  1. Install the skills  arkoren skills install
+  1. Install the skills
+        arkoren skills install
 `
 
 	if got != want {
@@ -318,9 +319,12 @@ Destination  shop
 File count   16
 
 Next steps
-  1. Enter the project       cd DIR/shop
-  2. Fetch the dependencies  go mod tidy
-  3. Start the application   make run
+  1. Enter the project
+        cd DIR/shop
+  2. Fetch the dependencies
+        go mod tidy
+  3. Start the application
+        make run
 `)
 }
 
@@ -388,7 +392,7 @@ func TestInvalidInputErrorText(t *testing.T) {
 
 	for _, want := range []string{
 		"✗ Invalid input\n\nType  invalid_input\n",
-		"\nNext steps\n  1. See usage  arkoren billing:record-payment --help\n",
+		"\nNext steps\n  1. See usage\n        arkoren billing:record-payment --help\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output lacks %q:\n%s", want, got)
@@ -407,7 +411,8 @@ func TestUsageErrorText(t *testing.T) {
 Type  usage
 
 Next steps
-  1. See usage  arkoren key check --help
+  1. See usage
+        arkoren key check --help
 `)
 }
 
@@ -422,7 +427,8 @@ func TestUnknownFlagErrorNamesTheFlag(t *testing.T) {
 Type  usage
 
 Next steps
-  1. See usage  arkoren key generate --help
+  1. See usage
+        arkoren key generate --help
 `)
 }
 
@@ -457,7 +463,8 @@ Changes
 
 Next steps
   1. Distribute only the certificate and keep the private key private
-  2. Trust the root on this machine  arkoren certificate root trust DIR/r.pem
+  2. Trust the root on this machine
+        arkoren certificate root trust DIR/r.pem
 `)
 }
 
@@ -569,7 +576,8 @@ func TestUnknownSubcommandIsUsageError(t *testing.T) {
 Type  usage
 
 Next steps
-  1. See usage  arkoren key --help
+  1. See usage
+        arkoren key --help
 `)
 }
 
@@ -587,7 +595,8 @@ Type  usage
 Next steps
   1. Pass the endpoint with --url
   2. Or set ARKOREN_MCP_URL in your shell or ./.env
-  3. List the local commands  arkoren --help
+  3. List the local commands
+        arkoren --help
 `)
 }
 

@@ -108,28 +108,22 @@ func (value node) steps() bool {
 	})
 }
 
-// steps writes next steps as a numbered list. Steps with a command align their
-// commands in one column after the longest such text, in a distinct color; a
-// step without one is just its text.
+// stepCommandIndent is the fixed left margin of a step's command, which sits
+// on its own line below the numbered text so long commands never wrap into it.
+const stepCommandIndent = "        "
+
+// steps writes next steps as a numbered list. A step with a command shows it on
+// the next line, indented by stepCommandIndent, in a distinct color; a step
+// without one is just its text.
 func (writer *textWriter) steps(value node, depth int) {
 	width := len(strconv.Itoa(len(value.items)))
-	textWidth := 0
-
-	for _, item := range value.items {
-		if member(item, "command").kind == '"' {
-			textWidth = max(textWidth, utf8.RuneCountInString(safe(member(item, "text").text)))
-		}
-	}
 
 	for index, item := range value.items {
-		text := safe(member(item, "text").text)
-		line := fmt.Sprintf("%*d. %s", width, index+1, text)
+		writer.line(depth, fmt.Sprintf("%*d. %s", width, index+1, safe(member(item, "text").text)))
 
 		if command := member(item, "command"); command.kind == '"' {
-			line += strings.Repeat(" ", textWidth-utf8.RuneCountInString(text)+2) + writer.paint(ColorKey, flat(safe(command.text)))
+			writer.line(0, stepCommandIndent+writer.paint(ColorKey, flat(safe(command.text))))
 		}
-
-		writer.line(depth, line)
 	}
 }
 
