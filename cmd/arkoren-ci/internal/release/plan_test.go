@@ -439,7 +439,7 @@ func TestPlanSignedMergeAndAnnotatedBaseline(t *testing.T) {
 	commit(t, root, "ci: elsewhere", map[string]string{"workflow.txt": "ci"})
 	git(t, root, "merge", "--gpg-sign", "--no-ff", "feature", "-m", "Merge signed feature")
 	item := proposed(t, plan(t, root), "core", "v0.1.1")
-	if len(item.Commits) != 1 || item.Commits[0].ID != id || !strings.Contains(item.Notes, "café 😀 <tag> & 'quote'") {
+	if len(item.Commits) != 1 || item.Commits[0].ID != id || !strings.Contains(item.Notes, `café 😀 \<tag> & 'quote'`) {
 		t.Fatalf("signed merge or Unicode notes changed: %+v", item)
 	}
 }
