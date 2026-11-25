@@ -99,7 +99,11 @@ func newSigner(t *testing.T, origin string) *link.Signer {
 	if err != nil {
 		t.Fatalf("GenerateShared: %v", err)
 	}
-	signer, err := link.New(secret, func(signer *link.Builder) {
+	ring, err := key.NewRing(secret)
+	if err != nil {
+		t.Fatalf("NewRing: %v", err)
+	}
+	signer, err := link.New(ring, func(signer *link.Builder) {
 		signer.Origin(origin)
 	})
 	if err != nil {
@@ -350,7 +354,11 @@ func cipher(t *testing.T) *crypto.Encrypter {
 	if err != nil {
 		t.Fatalf("GenerateShared: %v", err)
 	}
-	driver, err := aescrypto.New(secret)
+	ring, err := key.NewRing(secret)
+	if err != nil {
+		t.Fatalf("NewRing: %v", err)
+	}
+	driver, err := aescrypto.New(ring)
 	if err != nil {
 		t.Fatalf("aescrypto.New: %v", err)
 	}
