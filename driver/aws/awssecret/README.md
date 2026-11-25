@@ -32,8 +32,8 @@ Name, and do not log native credential providers directly.
 
 Pass the driver to `secret.New` from `arkoren.dev/core/service/secret`.
 No lifecycle hook is needed; construction loads SDK configuration but does not
-verify read permissions. Writes store binary values; reads also accept
-console-created string values. Deletion schedules the AWS recovery window and
+verify read permissions. Writes store UTF-8 values as `SecretString`, so the AWS console and CLI show
+them as text, and other bytes as `SecretBinary`; reads accept either field. Deletion schedules the AWS recovery window and
 does not immediately free the name for reuse.
 
 Version IDs identify immutable values within a secret resource. AWS's SDK creates

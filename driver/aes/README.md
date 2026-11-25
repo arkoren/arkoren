@@ -1,21 +1,22 @@
 # AES-GCM driver
 
 `arkoren.dev/driver/aes/aescrypto` implements the core crypto driver with AES-GCM.
-Load a `key.Shared` value with exactly 32 bytes before construction; do not use a fixed
-example key in production.
+Construction takes a `key.Ring[key.Shared]`: the first key encrypts and later keys only
+decrypt, which makes rotation a configuration change. Each key is exactly 32 bytes;
+do not use a fixed example key in production.
 
 From your application's module directory, install `go get arkoren.dev/driver/aes`
 and import `aescrypto` from `arkoren.dev/driver/aes/aescrypto`.
 
 To bind ciphertext to a user, set additional authenticated data (AAD). It is
 authenticated but not encrypted, and you must supply it again for decryption.
-Given a `key.Shared` value named `material`, loaded with
-`key.LoadShared` from `arkoren.dev/foundation/key`, and existing `app`, compose
+Given a `key.Ring[key.Shared]` value named `ring`, parsed with
+`key.ParseRing` from `arkoren.dev/foundation/key`, and existing `app`, compose
 the driver with `application` from `arkoren.dev/core/application`:
 
 ```go
 err := app.Run(ctx, func(compose *application.Composer) {
-	driver := compose.Must(aescrypto.New(material, func(encrypter *aescrypto.Builder) {
+	driver := compose.Must(aescrypto.New(ring, func(encrypter *aescrypto.Builder) {
 		encrypter.AdditionalData([]byte("user-42"))
 	}))
 	compose.Cleanup(driver.Stop)
@@ -23,15 +24,18 @@ err := app.Run(ctx, func(compose *application.Composer) {
 })
 ```
 
-The key is copied. No callbacks means no AAD. Callbacks run directly once in
-order on one fresh draft before key validation; supplied nil entries panic,
+Keys are copied. No callbacks means no AAD. Callbacks run directly once in
+order on one fresh draft before ring validation; supplied nil entries panic,
 expanded nil/empty slices omit callbacks. AdditionalData returns the same draft
 and replaces/copies the context immediately; nil or empty clears it. Publication
 copies AAD again, so retained drafts cannot alter a driver. Reusable callback
 policies create independent drafts.
 
-Encryption and decryption must use the same AAD. Rotate keys before about 2^32
-encryptions. Stop clears the driver's raw key, not the caller's or the internal
+Encryption and decryption must use the same AAD. To rotate, put the new key first and
+keep the old key after it: `Decrypt` returns `previous=true` for values the old key
+opened, so re-encrypt those and drop the old key once none remain. The ciphertext
+has no key identifier, so a decryption may try every key in the ring. Rotate keys before about 2^32
+encryptions. Stop clears the driver's raw keys, not the caller's or the internal
 AEAD key schedule, and later operations fail with crypto.ErrEncrypterClosed.
 Stop waits for in-flight operations under its exclusive lock even if its context
 has expired; cancellation does not skip key release. Keep the constructor pointer

@@ -1,5 +1,9 @@
 // Package vaultsecret provides a HashiCorp Vault KV v2 [secret.Driver]. It requires
-// positive decimal version identifiers and non-null JSON-object write values.
+// positive decimal version identifiers. A JSON-object payload is stored as native
+// KV fields; any other UTF-8 payload is stored as {"value": "<text>"} and read
+// back as that text. The literal object {"value": "<string>"} is rejected with
+// [secret.ErrInvalidSecret] because it would be ambiguous, and non-UTF-8 bytes
+// return [secret.ErrUnsupported].
 // Numbers that change value at the native float64 JSON boundary are rejected
 // before writing; use application-authored strings for exact IDs and decimals.
 // Accepted numeric tokens are transmitted unchanged; Get may normalize formatting. Missing,

@@ -33,10 +33,10 @@ one logical secret; they do not reserve its name or retain history.
 | Driver | Versioned Reads | Arbitrary Bytes | Shared Storage | Permanent Delete | Native Access | Observed Mutations |
 | --- | --- | --- | --- | --- | --- | --- |
 | [Memory](#memory) | Yes | Yes | No | Yes | No | Yes |
-| [AWS Secrets Manager](#aws-secrets-manager) | Yes | Yes | Yes | No — Schedules deletion with a recovery window. | Yes | Yes |
-| [Azure Key Vault](#azure-key-vault) | Yes | No — Requires valid UTF-8 text. | Yes | No — Follows soft-delete retention. | Yes | Yes |
+| [AWS Secrets Manager](#aws-secrets-manager) | Yes | Yes — UTF-8 text is stored as a string secret, other bytes as binary. | Yes | No — Schedules deletion with a recovery window. | Yes | Yes |
+| [Azure Key Vault](#azure-key-vault) | Yes | No — Requires valid UTF-8 text; other bytes are unsupported. | Yes | No — Follows soft-delete retention. | Yes | Yes |
 | [Google Cloud Secret Manager](#google-cloud-secret-manager) | Yes | Yes | Yes | Yes | Yes | Yes |
-| [HashiCorp Vault](#hashicorp-vault) | Yes — Explicit selectors must be positive decimal versions. | No — Requires JSON objects and rejects numbers changed by native float64 JSON encoding. | Yes | Yes — Deletes metadata and all version history. | Yes | Yes |
+| [HashiCorp Vault](#hashicorp-vault) | Yes — Explicit selectors must be positive decimal versions. | No — UTF-8 text only. JSON objects are native fields, other text is stored in a single value member, binary is unsupported, and numbers changed by native float64 JSON encoding are rejected. | Yes | Yes — Deletes metadata and all version history. | Yes | Yes |
 
 The [file and environment sources](sources.md) are read-only core sources, not
 provider drivers: they have no versions and their writes return
@@ -138,8 +138,10 @@ For transport, retries, and timeouts beyond those settings, configure a native
 SDK client. The deprecated `Name` builder method is a compatibility no-op; it
 does not select a default secret or namespace.
 
-The driver accepts AWS secret names or supported identifiers. Reads accept text
-or binary values; writes through Arkoren use binary payloads. Explicit
+The driver accepts AWS secret names or supported identifiers. Writes store
+valid UTF-8 as a `SecretString`, so the AWS console and CLI show it as text,
+and any other bytes as a `SecretBinary`. Reads accept either field, so text and
+binary values both round-trip unchanged. Explicit
 `Reference.Version` is an AWS `VersionId`, not a movable staging label. Missing
 and pending-deletion secrets map to `secret.ErrNotFound`.
 
@@ -230,7 +232,8 @@ name `reporting-token`.
 ### Provider Limits
 
 Names are flat and allow letters, digits, and hyphens, not slash paths. Values
-must be valid UTF-8; invalid bytes fail locally before a native write. Encode
+must be valid UTF-8; other bytes return `secret.ErrUnsupported` locally, before any
+native request, and store nothing. Encode
 binary material, for example as base64, and decode it after reading. Missing
 names and versions wrap `secret.ErrNotFound`.
 
@@ -313,6 +316,7 @@ explicit project. Slashes belong to that resource path, not inside a secret ID.
 Use operation contexts to bound calls; native client settings own retry and
 timeout policy.
 
+Values are arbitrary bytes, so text and binary payloads both round-trip.
 `Put` creates an absent secret with automatic replication and then adds a
 version. A failed version write can leave an empty resource. `Update` only adds
 a version to an existing resource. Empty version selects `latest`; concrete
@@ -426,11 +430,24 @@ timeouts and transport cooperation. Ownership remains tracked after an early
 return; restart is rejected until that worker drains, and a later Stop can wait
 again. The native HTTP transport is not closed by the driver.
 
-### JSON Credentials
+### Payload Mapping
 
-Vault requires a non-null JSON object. With a provisioned `reporting-client`
-object, use the [typed read](overview.md#typed-credentials). `String` would return
-the entire JSON object as text, not its `token` field. Names are KV v2 paths
+Vault KV stores JSON objects, so the driver maps payloads as follows:
+
+- A JSON object is stored as native KV fields, which keeps it readable by other
+  Vault clients. With a provisioned `reporting-client` object, use the
+  [typed read](overview.md#typed-credentials); `String` would return the entire
+  JSON object as text, not its `token` field.
+- Any other UTF-8 payload, such as a plain token or JSON that is not an object,
+  is stored as `{"value": "<text>"}` and read back as that text.
+- The literal object `{"value": "<string>"}` is rejected with
+  `secret.ErrInvalidSecret`, because it would read back as text instead of the
+  object you wrote.
+- Bytes that are not valid UTF-8 return `secret.ErrUnsupported` and store
+  nothing; encode binary material, for example as base64.
+
+An object stored by another client with exactly one string member named `value`
+reads back as that string. Names are KV v2 paths
 relative to the selected mount; do not add the mount's API envelope yourself.
 
 Reads re-encode objects, so whitespace and member order can change. Writes
@@ -505,7 +522,7 @@ driver, err := vaultsecret.New(func(provider *vaultsecret.Builder) {
 secrets := secret.New(driver)
 ```
 
-Run the JSON [version check](managing.md#writing-values). A successful pinned
+Run the [version check](managing.md#writing-values). A successful pinned
 read checks this local mount, not production authentication or TLS policy. Stop
 the server with `docker stop arkoren-secrets-vault`; `--rm` discards its data.
 

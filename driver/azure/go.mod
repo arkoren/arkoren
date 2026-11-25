@@ -3,7 +3,7 @@ module arkoren.dev/driver/azure
 go 1.27
 
 require (
-	arkoren.dev/core v0.1.0
+	arkoren.dev/core v0.23.0
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets v1.5.1

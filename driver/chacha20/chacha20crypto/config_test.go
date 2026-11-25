@@ -8,8 +8,8 @@ import (
 	"arkoren.dev/foundation/key"
 )
 
-// encryptionFixture creates deterministic typed material for builder checks.
-func encryptionFixture(t *testing.T) key.Shared {
+// encryptionFixture creates a deterministic one-key ring for builder checks.
+func encryptionFixture(t *testing.T) key.Ring[key.Shared] {
 	t.Helper()
 
 	material, err := key.NewShared(make([]byte, 32))
@@ -18,7 +18,13 @@ func encryptionFixture(t *testing.T) key.Shared {
 		t.Fatal(err)
 	}
 
-	return material
+	ring, err := key.NewRing(material)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return ring
 }
 
 // TestConstructionCallbacksOrderedAndDetached verifies once-only ordered edits,
@@ -123,7 +129,7 @@ func TestConstructionValidatesKeyAfterCallbacks(t *testing.T) {
 	t.Parallel()
 
 	calls := 0
-	_, err := New(key.Shared{}, func(*Builder) {
+	_, err := New(key.Ring[key.Shared]{}, func(*Builder) {
 		calls++
 	}, func(*Builder) {
 		calls++
@@ -145,7 +151,7 @@ func TestConstructionNilCallbackPanics(t *testing.T) {
 		}
 	}()
 
-	_, _ = New(key.Shared{}, nil)
+	_, _ = New(key.Ring[key.Shared]{}, nil)
 }
 
 // TestConstructionCallbackPanicPropagates verifies the constructor does not
@@ -159,7 +165,7 @@ func TestConstructionCallbackPanicPropagates(t *testing.T) {
 		}
 	}()
 
-	_, _ = New(key.Shared{}, func(*Builder) {
+	_, _ = New(key.Ring[key.Shared]{}, func(*Builder) {
 		panic("policy")
 	})
 }
@@ -176,7 +182,13 @@ func TestConstructionKeyOwnershipAndZeroing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	driver, err := New(material)
+	ring, err := key.NewRing(material)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	driver, err := New(ring)
 
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +196,7 @@ func TestConstructionKeyOwnershipAndZeroing(t *testing.T) {
 
 	raw[0] = 1
 
-	if driver.key[0] != 42 {
+	if driver.keys[0][0] != 42 {
 		t.Fatal("driver retained caller key")
 	}
 
@@ -192,7 +204,7 @@ func TestConstructionKeyOwnershipAndZeroing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !bytes.Equal(driver.key, make([]byte, 32)) || raw[0] != 1 {
+	if !bytes.Equal(driver.keys[0], make([]byte, 32)) || raw[0] != 1 {
 		t.Fatal("Stop did not exclusively clear the owned key")
 	}
 }
