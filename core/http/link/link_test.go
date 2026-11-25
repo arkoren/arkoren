@@ -30,7 +30,7 @@ var secret = fixtureSecret([]byte("0123456789abcdef0123456789abcdef"))
 // and verifying an application link.
 func ExampleNew() {
 	signer, err := link.New(
-		secret,
+		ringOf(secret),
 		func(signer *link.Builder) {
 			signer.Origin("https://app.example.com")
 		},
@@ -63,7 +63,7 @@ func ExampleNew() {
 // ExampleNew_relative shows that an origin-free signer produces relative links
 // suitable for applications that supply their own host.
 func ExampleNew_relative() {
-	signer, err := link.New(secret)
+	signer, err := link.New(ringOf(secret))
 
 	if err != nil {
 		fmt.Println(err)
@@ -92,7 +92,7 @@ func ExampleNew_relative() {
 // ExampleNew_invalidSecret shows how callers inspect the construction error
 // returned for an undersized signing secret.
 func ExampleNew_invalidSecret() {
-	_, err := link.New(key.Shared{})
+	_, err := link.New(key.Ring[key.Shared]{})
 	fmt.Println(err)
 	// Output: link signing secret is invalid
 }
@@ -100,7 +100,7 @@ func ExampleNew_invalidSecret() {
 // ExampleSigner_Verify shows that verification accepts an intact signed link
 // and rejects a link whose application parameters changed.
 func ExampleSigner_Verify() {
-	signer, err := link.New(secret)
+	signer, err := link.New(ringOf(secret))
 
 	if err != nil {
 		fmt.Println(err)
@@ -128,7 +128,7 @@ func ExampleSigner_Verify() {
 // ExampleSigner_Temporary shows creating and verifying an expiring link, then
 // checking the error returned for a nonpositive lifetime.
 func ExampleSigner_Temporary() {
-	signer, err := link.New(secret)
+	signer, err := link.New(ringOf(secret))
 
 	if err != nil {
 		fmt.Println(err)
@@ -156,7 +156,7 @@ func ExampleSigner_Temporary() {
 // ExampleExpiredError shows how to distinguish an expired link from other
 // verification failures and extract the expiration timestamp when present.
 func ExampleExpiredError() {
-	signer, err := link.New(secret)
+	signer, err := link.New(ringOf(secret))
 
 	if err != nil {
 		fmt.Println(err)
@@ -187,7 +187,7 @@ func ExampleExpiredError() {
 // ExampleNew_rotation shows accepting links signed with a previous secret
 // while new links use the current secret.
 func ExampleNew_rotation() {
-	previous, err := link.New(secret)
+	previous, err := link.New(ringOf(secret))
 
 	if err != nil {
 		fmt.Println(err)
@@ -211,12 +211,15 @@ func ExampleNew_rotation() {
 		return
 	}
 
-	rotated, err := link.New(
-		replacement,
-		func(signer *link.Builder) {
-			signer.Previous(secret)
-		},
-	)
+	rotation, err := key.NewRing(replacement, secret)
+
+	if err != nil {
+		fmt.Println(err)
+
+		return
+	}
+
+	rotated, err := link.New(rotation)
 
 	if err != nil {
 		fmt.Println(err)
@@ -227,7 +230,7 @@ func ExampleNew_rotation() {
 	fmt.Println(rotated.Verify(signed))
 
 	// Once the old secret is dropped, its links stop verifying.
-	retired, err := link.New(replacement)
+	retired, err := link.New(ringOf(replacement))
 
 	if err != nil {
 		fmt.Println(err)
@@ -245,7 +248,7 @@ func ExampleNew_rotation() {
 // signature while retaining verification of application parameters.
 func ExampleNew_ignoreQuery() {
 	signer, err := link.New(
-		secret,
+		ringOf(secret),
 		func(signer *link.Builder) {
 			signer.IgnoreQuery("utm_source")
 		},
@@ -272,7 +275,7 @@ func ExampleNew_ignoreQuery() {
 // ExampleMiddleware shows applying signature verification before a router
 // handler so a valid signed request can proceed.
 func ExampleMiddleware() {
-	signer, err := link.New(secret)
+	signer, err := link.New(ringOf(secret))
 
 	if err != nil {
 		fmt.Println(err)
@@ -309,7 +312,7 @@ func ExampleMiddleware() {
 // ExampleBind shows binding a link to application state so verification
 // requires the same state value.
 func ExampleBind() {
-	signer, err := link.New(secret)
+	signer, err := link.New(ringOf(secret))
 
 	if err != nil {
 		fmt.Println(err)
@@ -348,6 +351,14 @@ func fixtureSecret(raw []byte) key.Shared {
 	return secret
 }
 
+// ringOf builds a key ring whose first key is current, preserving an invalid
+// key as the zero ring so constructor-boundary rejection is exercised.
+func ringOf(current key.Shared, previous ...key.Shared) key.Ring[key.Shared] {
+	ring, _ := key.NewRing(current, previous...)
+
+	return ring
+}
+
 // testOrigin is the public origin used by absolute signers in tests.
 const testOrigin = "https://app.example.com"
 
@@ -359,7 +370,23 @@ func mustNewSigner(t *testing.T, opts ...func(*link.Builder)) *link.Signer {
 		signer.Origin(testOrigin)
 	}}
 
-	signer, err := link.New(testSecret, append(base, opts...)...)
+	signer, err := link.New(ringOf(testSecret), append(base, opts...)...)
+
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	return signer
+}
+
+// mustNewRotatedSigner creates an absolute signer whose ring has testSecret as
+// current key and oldSecret as previous key, or fails the test.
+func mustNewRotatedSigner(t *testing.T) *link.Signer {
+	t.Helper()
+
+	signer, err := link.New(ringOf(testSecret, oldSecret), func(signer *link.Builder) {
+		signer.Origin(testOrigin)
+	})
 
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -372,7 +399,7 @@ func mustNewSigner(t *testing.T, opts ...func(*link.Builder)) *link.Signer {
 func mustNewRelativeSigner(t *testing.T) *link.Signer {
 	t.Helper()
 
-	signer, err := link.New(testSecret)
+	signer, err := link.New(ringOf(testSecret))
 
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -483,12 +510,12 @@ func TestSignerSignsURLWithoutMutation(t *testing.T) {
 	mustVerifyURL(t, signer, signedURL)
 }
 
-// checkNewError fails the test unless link.New rejects secret and opts with an
+// checkNewError fails the test unless link.New rejects ring and opts with an
 // error matching want.
-func checkNewError(t *testing.T, secret key.Shared, opts []func(*link.Builder), want error) {
+func checkNewError(t *testing.T, ring key.Ring[key.Shared], opts []func(*link.Builder), want error) {
 	t.Helper()
 
-	if _, err := link.New(secret, opts...); !errors.Is(err, want) {
+	if _, err := link.New(ring, opts...); !errors.Is(err, want) {
 		t.Fatalf("New() error = %v, want %v", err, want)
 	}
 }
@@ -497,30 +524,21 @@ func checkNewError(t *testing.T, secret key.Shared, opts []func(*link.Builder), 
 func TestNewRejectsMissingSecret(t *testing.T) {
 	t.Parallel()
 
-	checkNewError(t, key.Shared{}, nil, link.ErrInvalidSecret)
+	checkNewError(t, key.Ring[key.Shared]{}, nil, link.ErrInvalidSecret)
 }
 
 // TestNewRejectsShortSecret verifies construction fails for a short secret.
 func TestNewRejectsShortSecret(t *testing.T) {
 	t.Parallel()
 
-	checkNewError(t, fixtureSecret([]byte("too short")), nil, link.ErrInvalidSecret)
-}
-
-// TestNewRejectsShortPreviousSecret verifies construction fails for a short previous secret.
-func TestNewRejectsShortPreviousSecret(t *testing.T) {
-	t.Parallel()
-
-	checkNewError(t, testSecret, []func(*link.Builder){func(signer *link.Builder) {
-		signer.Previous(oldSecret, key.Shared{})
-	}}, link.ErrInvalidSecret)
+	checkNewError(t, ringOf(fixtureSecret([]byte("too short"))), nil, link.ErrInvalidSecret)
 }
 
 // TestNewRejectsOriginWithPath verifies construction fails for an origin with a path.
 func TestNewRejectsOriginWithPath(t *testing.T) {
 	t.Parallel()
 
-	checkNewError(t, testSecret, []func(*link.Builder){func(signer *link.Builder) {
+	checkNewError(t, ringOf(testSecret), []func(*link.Builder){func(signer *link.Builder) {
 		signer.Origin(testOrigin + "/path")
 	}}, link.ErrInvalidOrigin)
 }
@@ -529,7 +547,7 @@ func TestNewRejectsOriginWithPath(t *testing.T) {
 func TestNewRejectsOriginWithBadScheme(t *testing.T) {
 	t.Parallel()
 
-	checkNewError(t, testSecret, []func(*link.Builder){func(signer *link.Builder) {
+	checkNewError(t, ringOf(testSecret), []func(*link.Builder){func(signer *link.Builder) {
 		signer.Origin("ftp://app.example.com")
 	}}, link.ErrInvalidOrigin)
 }
@@ -538,7 +556,7 @@ func TestNewRejectsOriginWithBadScheme(t *testing.T) {
 func TestNewRejectsUnparsableOrigin(t *testing.T) {
 	t.Parallel()
 
-	checkNewError(t, testSecret, []func(*link.Builder){func(signer *link.Builder) {
+	checkNewError(t, ringOf(testSecret), []func(*link.Builder){func(signer *link.Builder) {
 		signer.Origin("https://%zz")
 	}}, link.ErrInvalidOrigin)
 }
@@ -547,7 +565,7 @@ func TestNewRejectsUnparsableOrigin(t *testing.T) {
 func TestNewRejectsEmptyIgnoredName(t *testing.T) {
 	t.Parallel()
 
-	checkNewError(t, testSecret, []func(*link.Builder){func(signer *link.Builder) {
+	checkNewError(t, ringOf(testSecret), []func(*link.Builder){func(signer *link.Builder) {
 		signer.IgnoreQuery("utm", "")
 	}}, link.ErrInvalidIgnoreQuery)
 }
@@ -556,7 +574,7 @@ func TestNewRejectsEmptyIgnoredName(t *testing.T) {
 func TestNewRejectsReservedSignature(t *testing.T) {
 	t.Parallel()
 
-	checkNewError(t, testSecret, []func(*link.Builder){func(signer *link.Builder) {
+	checkNewError(t, ringOf(testSecret), []func(*link.Builder){func(signer *link.Builder) {
 		signer.IgnoreQuery("signature")
 	}}, link.ErrInvalidIgnoreQuery)
 }
@@ -565,7 +583,7 @@ func TestNewRejectsReservedSignature(t *testing.T) {
 func TestNewRejectsReservedExpires(t *testing.T) {
 	t.Parallel()
 
-	checkNewError(t, testSecret, []func(*link.Builder){func(signer *link.Builder) {
+	checkNewError(t, ringOf(testSecret), []func(*link.Builder){func(signer *link.Builder) {
 		signer.IgnoreQuery("expires")
 	}}, link.ErrInvalidIgnoreQuery)
 }
@@ -575,7 +593,7 @@ func TestNewRejectsReservedExpires(t *testing.T) {
 func TestConstructionCallbacksReplaceSettings(t *testing.T) {
 	t.Parallel()
 
-	signer, err := link.New(testSecret,
+	signer, err := link.New(ringOf(testSecret),
 		func(signer *link.Builder) {
 			signer.Origin("https://ignored.example.com")
 		},
@@ -612,7 +630,7 @@ func TestNewCopiesInputs(t *testing.T) {
 
 	secret := []byte("mutable secret mutable secret 32")
 
-	signer, err := link.New(fixtureSecret(secret))
+	signer, err := link.New(ringOf(fixtureSecret(secret)))
 
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -707,7 +725,7 @@ func TestSignerDerivesMACKey(t *testing.T) {
 func TestSignerVerifiesPreviousSecret(t *testing.T) {
 	t.Parallel()
 
-	oldSigner, err := link.New(oldSecret, func(signer *link.Builder) {
+	oldSigner, err := link.New(ringOf(oldSecret), func(signer *link.Builder) {
 		signer.Origin(testOrigin)
 	})
 
@@ -717,9 +735,7 @@ func TestSignerVerifiesPreviousSecret(t *testing.T) {
 
 	oldURL := mustSign(t, oldSigner, "/unsubscribe/user_123")
 
-	rotated := mustNewSigner(t, func(signer *link.Builder) {
-		signer.Previous(oldSecret)
-	})
+	rotated := mustNewRotatedSigner(t)
 
 	mustVerify(t, rotated, oldURL)
 

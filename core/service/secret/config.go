@@ -29,6 +29,9 @@ type settings struct {
 
 	// events is nil when mutation notifications are disabled.
 	events *event.Bus
+
+	// bindings resolves [NewBinding] keys; nil leaves every binding unbound.
+	bindings func(string) (string, bool)
 }
 
 // Builder configures observability before a Store is published. Callbacks run
@@ -56,6 +59,28 @@ type Builder struct {
 //	})
 func (secrets *Builder) Telemetry(service *telemetry.Telemetry) *Builder {
 	secrets.settings.telemetry = service
+
+	return secrets
+}
+
+// Bindings sets the lookup that resolves binding definitions (see
+// [NewBinding]) to references at each Get. The lookup receives the binding key,
+// for example "DATABASE_PASSWORD", and returns the reference to read, for
+// example "aws:prod/db", with false when the key is unset. Applications
+// normally pass os.LookupEnv, so deployments choose which backend holds each
+// secret without code changes. The lookup is called on every Get, so it may
+// reflect a changing source; it must be safe for concurrent use. A nil lookup,
+// which is the default, leaves every binding unbound and Get fails with
+// [ErrUnbound]; there are no default references. The function is shared, not
+// copied.
+//
+// Example:
+//
+//	secret.New(driver, func(secrets *secret.Builder) {
+//		secrets.Bindings(os.LookupEnv)
+//	})
+func (secrets *Builder) Bindings(lookup func(string) (string, bool)) *Builder {
+	secrets.settings.bindings = lookup
 
 	return secrets
 }

@@ -38,6 +38,10 @@ one logical secret; they do not reserve its name or retain history.
 | [Google Cloud Secret Manager](#google-cloud-secret-manager) | Yes | Yes | Yes | Yes | Yes | Yes |
 | [HashiCorp Vault](#hashicorp-vault) | Yes — Explicit selectors must be positive decimal versions. | No — Requires JSON objects and rejects numbers changed by native float64 JSON encoding. | Yes | Yes — Deletes metadata and all version history. | Yes | Yes |
 
+The [file and environment sources](sources.md) are read-only core sources, not
+provider drivers: they have no versions and their writes return
+`secret.ErrUnsupported`.
+
 Shared storage means processes address the same provider resource and have
 permission to access it; memory is private to one process. Permanent deletion
 describes removal through the contract, not erasure of provider backups or

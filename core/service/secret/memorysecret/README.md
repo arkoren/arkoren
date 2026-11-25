@@ -23,8 +23,8 @@ production secrets.
 
 Wrap it with `secret.New` from `arkoren.dev/core/service/secret` to read typed
 values. Seeded names start at version `"1"`; `Update` adds a version only when
-the name exists. Optional `secret.NewNamespace[T](prefix, separator)` composes
-ordinary typed definitions; seed the final exact names. Memory fixture names
+the name exists. Optional `secret.NewNamespace(prefix, separator)` composes
+ordinary typed definitions through its generic `Secret` method; seed the final exact names. Memory fixture names
 do not establish which separators another provider accepts. See the [local secret setup](../../../../cmd/arkoren/skills/arkoren/references/guides/secrets/drivers.md#memory)
 and [`memorysecret` API reference](https://pkg.go.dev/arkoren.dev/core/service/secret/memorysecret).
 

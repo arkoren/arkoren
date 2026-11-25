@@ -14,8 +14,9 @@
 // CursorPaginate methods of Database run the queries and call these.
 //
 // [CursorEncode] and [CursorDecode] produce plain base64 JSON that a client can
-// forge. A CursorCodec signs cursors with HMAC-SHA256 instead, using key.Shared
-// values of exactly MinSecretLength bytes and optional previous keys for rotation.
+// forge. A CursorCodec signs cursors with HMAC-SHA256 instead, using a key.Ring
+// of key.Shared values of exactly MinSecretLength bytes, whose previous keys
+// support rotation.
 // Database.CursorPaginate selects one through database.Builder.CursorCodec.
 // Both encoders reject tokens longer than the decoders' 4096-byte limit with
 // [ErrCursorEncode], including the signature overhead for signed cursors.
@@ -42,7 +43,7 @@
 //
 // Example:
 //
-//	codec, err := pagination.NewCursorCodec(secret)
+//	codec, err := pagination.NewCursorCodec(ring)
 //	if err != nil {
 //		return err
 //	}

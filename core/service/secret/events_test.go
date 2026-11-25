@@ -155,7 +155,7 @@ func TestListenerPanicDoesNotChangeMutationResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	value, err := store.String(t.Context(), "private")
+	value, err := store.Get(t.Context(), secret.NewSecret[string]("private"))
 
 	if err != nil || value != "value" {
 		t.Fatalf("mutation result changed: %q, %v", value, err)

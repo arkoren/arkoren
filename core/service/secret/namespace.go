@@ -5,22 +5,25 @@ import (
 	"log/slog"
 )
 
-// Namespace composes literal provider names for related Secret definitions
-// sharing one JSON decoding type. It is immutable and does not register schemas,
-// cache values, pin versions, isolate a provider, or provide bulk operations.
-// Its zero value is invalid. Name explicitly exposes the otherwise redacted
-// prefix; provider-specific naming restrictions remain the driver's concern.
+// Namespace composes literal references for related Secret definitions. The
+// prefix normally carries the scheme, as in "aws:tenants", so every leaf is a
+// complete static reference such as "aws:tenants/acme". The namespace is not
+// tied to a decoding type: each [Namespace.Secret] call chooses its own. It is
+// immutable and does not register schemas, cache values, pin versions, isolate
+// a provider, or provide bulk operations. Its zero value is invalid. Name
+// explicitly exposes the otherwise redacted prefix; provider-specific naming
+// restrictions remain the driver's concern.
 //
 // Example:
 //
-//	credentials := secret.NewNamespace[map[string]string]("production", "/")
-//	database := credentials.Secret("database")
+//	credentials := secret.NewNamespace("vault:production", "/")
+//	database := credentials.Secret[map[string]string]("database")
 //	config, err := secrets.Get(ctx, database)
 //	if err != nil {
 //		return err
 //	}
 //	useCredential(config["password"])
-type Namespace[T any] struct {
+type Namespace struct {
 	// name is the literal prefix used for future child and leaf names.
 	name string
 
@@ -29,9 +32,6 @@ type Namespace[T any] struct {
 
 	// err preserves the first declaration failure through descendants.
 	err error
-
-	// _ binds the namespace to T without storing a decoded secret value.
-	_ [0]*T
 }
 
 // NamespaceBuilder is the mutable construction draft for namespace settings.
@@ -40,10 +40,10 @@ type Namespace[T any] struct {
 //
 // Example:
 //
-//	credentials := secret.NewNamespace[string]("production", "/", func(names *secret.NamespaceBuilder) {
+//	credentials := secret.NewNamespace("production", "/", func(names *secret.NamespaceBuilder) {
 //		names.Separator("-")
 //	})
-//	_ = credentials.Secret("token")
+//	_ = credentials.Secret[string]("token")
 type NamespaceBuilder struct {
 	// separator is the exact delimiter to publish, including an empty string.
 	separator string
@@ -56,8 +56,8 @@ type NamespaceBuilder struct {
 // Example:
 //
 //	var policies []secret.NamespaceBuilderFunc
-//	credentials := secret.NewNamespace[string]("production", "/", policies...)
-//	_ = credentials.Secret("token")
+//	credentials := secret.NewNamespace("production", "/", policies...)
+//	_ = credentials.Secret[string]("token")
 type NamespaceBuilderFunc = func(*NamespaceBuilder)
 
 // NewNamespace declares a literal prefix and its required separator without
@@ -69,19 +69,19 @@ type NamespaceBuilderFunc = func(*NamespaceBuilder)
 //
 // Example:
 //
-//	credentials := secret.NewNamespace[string]("production", "/")
+//	credentials := secret.NewNamespace("production", "/")
 //	if err := credentials.Err(); err != nil {
 //		return err
 //	}
-//	_ = credentials.Secret("token")
-func NewNamespace[T any](prefix string, separator string, configure ...NamespaceBuilderFunc) Namespace[T] {
-	return publishNamespace[T](prefix, separator, nil, configure)
+//	_ = credentials.Secret[string]("token")
+func NewNamespace(prefix string, separator string, configure ...NamespaceBuilderFunc) Namespace {
+	return publishNamespace(prefix, separator, nil, configure)
 }
 
 // publishNamespace validates the prefix before running policies and copies
 // completed settings out of the draft. An inherited error takes precedence;
 // callbacks cannot repair a missing prefix or a failed ancestor.
-func publishNamespace[T any](name, separator string, err error, configure []NamespaceBuilderFunc) Namespace[T] {
+func publishNamespace(name, separator string, err error, configure []NamespaceBuilderFunc) Namespace {
 	if err == nil && name == "" {
 		err = ErrInvalidSecret
 	}
@@ -92,7 +92,7 @@ func publishNamespace[T any](name, separator string, err error, configure []Name
 		apply(names)
 	}
 
-	return Namespace[T]{name: name, separator: names.separator, err: err}
+	return Namespace{name: name, separator: names.separator, err: err}
 }
 
 // Separator replaces the draft's future join delimiter and returns the same
@@ -101,10 +101,10 @@ func publishNamespace[T any](name, separator string, err error, configure []Name
 //
 // Example:
 //
-//	credentials := secret.NewNamespace[string]("production", "/", func(names *secret.NamespaceBuilder) {
+//	credentials := secret.NewNamespace("production", "/", func(names *secret.NamespaceBuilder) {
 //		names.Separator("")
 //	})
-//	_ = credentials.Secret("Token").Name() // "productionToken"
+//	_ = credentials.Secret[string]("Token").Name() // "productionToken"
 func (names *NamespaceBuilder) Separator(separator string) *NamespaceBuilder {
 	names.separator = separator
 
@@ -117,9 +117,9 @@ func (names *NamespaceBuilder) Separator(separator string) *NamespaceBuilder {
 //
 // Example:
 //
-//	prefix := secret.NewNamespace[string]("production", "/").Name()
+//	prefix := secret.NewNamespace("production", "/").Name()
 //	_ = prefix // "production"
-func (namespace Namespace[T]) Name() string {
+func (namespace Namespace) Name() string {
 	return namespace.name
 }
 
@@ -128,9 +128,9 @@ func (namespace Namespace[T]) Name() string {
 //
 // Example:
 //
-//	delimiter := secret.NewNamespace[string]("production", "/").Separator()
+//	delimiter := secret.NewNamespace("production", "/").Separator()
 //	_ = delimiter // "/"
-func (namespace Namespace[T]) Separator() string {
+func (namespace Namespace) Separator() string {
 	return namespace.separator
 }
 
@@ -140,10 +140,10 @@ func (namespace Namespace[T]) Separator() string {
 //
 // Example:
 //
-//	if err := secret.NewNamespace[string]("", "/").Err(); err != nil {
+//	if err := secret.NewNamespace("", "/").Err(); err != nil {
 //		return err
 //	}
-func (namespace Namespace[T]) Err() error {
+func (namespace Namespace) Err() error {
 	if namespace.err != nil {
 		return namespace.err
 	}
@@ -161,13 +161,13 @@ func (namespace Namespace[T]) Err() error {
 //
 // Example:
 //
-//	credentials := secret.NewNamespace[string]("production", "/")
+//	credentials := secret.NewNamespace("production", "/")
 //	flat := credentials.Derive(func(names *secret.NamespaceBuilder) {
 //		names.Separator("-")
 //	})
-//	_ = flat.Secret("token").Name() // "production-token"
-func (namespace Namespace[T]) Derive(configure ...NamespaceBuilderFunc) Namespace[T] {
-	return publishNamespace[T](namespace.name, namespace.separator, namespace.Err(), configure)
+//	_ = flat.Secret[string]("token").Name() // "production-token"
+func (namespace Namespace) Derive(configure ...NamespaceBuilderFunc) Namespace {
+	return publishNamespace(namespace.name, namespace.separator, namespace.Err(), configure)
 }
 
 // Subnamespace joins name with the parent's delimiter before applying child
@@ -177,35 +177,37 @@ func (namespace Namespace[T]) Derive(configure ...NamespaceBuilderFunc) Namespac
 //
 // Example:
 //
-//	credentials := secret.NewNamespace[string]("production", "/")
+//	credentials := secret.NewNamespace("production", "/")
 //	database := credentials.Subnamespace("database", func(names *secret.NamespaceBuilder) {
 //		names.Separator("-")
 //	})
-//	_ = database.Secret("password").Name() // "production/database-password"
-func (namespace Namespace[T]) Subnamespace(name string, configure ...NamespaceBuilderFunc) Namespace[T] {
+//	_ = database.Secret[string]("password").Name() // "production/database-password"
+func (namespace Namespace) Subnamespace(name string, configure ...NamespaceBuilderFunc) Namespace {
 	err := namespace.Err()
 
 	if err == nil && name == "" {
 		err = ErrInvalidSecret
 	}
 
-	return publishNamespace[T](namespace.name+namespace.separator+name, namespace.separator, err, configure)
+	return publishNamespace(namespace.name+namespace.separator+name, namespace.separator, err, configure)
 }
 
-// Secret binds a literal joined name to the namespace's JSON decoding type.
-// Empty leaf names and invalid ancestors produce ErrInvalidSecret definitions
-// that Get rejects before provider I/O. Reads still select the current version;
-// this operation neither loads nor registers a secret.
+// Secret declares a static definition of type T for the literal joined
+// reference (see [NewSecret]). T is a type argument of this generic method, so
+// one namespace serves secrets of different types. Empty leaf names and invalid
+// ancestors produce ErrInvalidSecret definitions that Get rejects before
+// provider I/O. Reads still select the current version; this operation neither
+// loads nor registers a secret.
 //
 // Example:
 //
-//	credentials := secret.NewNamespace[string]("production", "/")
-//	token, err := secrets.Get(ctx, credentials.Secret("token"))
+//	credentials := secret.NewNamespace("production", "/")
+//	token, err := secrets.Get(ctx, credentials.Secret[string]("token"))
 //	if err != nil {
 //		return err
 //	}
 //	useCredential(token)
-func (namespace Namespace[T]) Secret(name string) Secret[T] {
+func (namespace Namespace) Secret[T any](name string) Secret[T] {
 	err := namespace.Err()
 
 	if err == nil && name == "" {
@@ -220,9 +222,9 @@ func (namespace Namespace[T]) Secret(name string) Secret[T] {
 //
 // Example:
 //
-//	text := fmt.Sprintf("%#v", secret.NewNamespace[string]("production", "/"))
+//	text := fmt.Sprintf("%#v", secret.NewNamespace("production", "/"))
 //	_ = text // "secret.Namespace([redacted])"
-func (namespace Namespace[T]) Format(state fmt.State, _ rune) {
+func (namespace Namespace) Format(state fmt.State, _ rune) {
 	_, _ = state.Write([]byte("secret.Namespace([redacted])")) // fmt owns write errors.
 }
 
@@ -231,7 +233,7 @@ func (namespace Namespace[T]) Format(state fmt.State, _ rune) {
 //
 // Example:
 //
-//	logger.Info("secret namespace", "namespace", secret.NewNamespace[string]("production", "/"))
-func (namespace Namespace[T]) LogValue() slog.Value {
+//	logger.Info("secret namespace", "namespace", secret.NewNamespace("production", "/"))
+func (namespace Namespace) LogValue() slog.Value {
 	return slog.StringValue("secret.Namespace([redacted])")
 }

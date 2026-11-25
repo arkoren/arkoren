@@ -30,7 +30,7 @@ func observedStore(t *testing.T) (*secret.Store, *telemetrytest.Fake, *event.Bus
 	return store, fake, bus
 }
 
-// TestTypedReadsObserveProviderOnce protects the Raw/String/Get delegation
+// TestTypedReadsObserveProviderOnce protects the Raw/Get delegation
 // boundary, including a JSON decode error after a successful provider read.
 func TestTypedReadsObserveProviderOnce(t *testing.T) {
 	t.Parallel()
@@ -41,7 +41,7 @@ func TestTypedReadsObserveProviderOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.String(t.Context(), "sensitive-name"); err != nil {
+	if _, err := store.Get(t.Context(), secret.NewSecret[string]("sensitive-name")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -70,7 +70,7 @@ func TestTypedReadMetricsCountProviderOnce(t *testing.T) {
 	store, fake, _ := observedStore(t)
 	store.Driver().Put(t.Context(), "private", []byte(`{"password":"fixture"}`))
 
-	if _, err := store.String(t.Context(), "private"); err != nil {
+	if _, err := store.Get(t.Context(), secret.NewSecret[string]("private")); err != nil {
 		t.Fatal(err)
 	}
 

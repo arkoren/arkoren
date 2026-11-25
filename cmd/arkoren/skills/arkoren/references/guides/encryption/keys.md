@@ -77,6 +77,12 @@ enc, err := crypto.New(current, func(encrypter *crypto.Builder) {
 })
 ```
 
+A driver's `Decrypt` returns whether a previous key of its own key ring, not its
+current key, authenticated the ciphertext, and the facade combines that with
+success in a previous driver: `DecryptWithRotation` reports `true` in either case,
+meaning the value should be re-encrypted. Previous drivers are for moving between
+ciphers or parameters; rotating one cipher's key belongs in a `key.Ring`.
+
 Decryption tries the current driver first, then previous drivers in configured
 order; repeated `Previous` calls append to that order. New values always use
 `current`. The facade copies the driver list, not the driver objects, and is

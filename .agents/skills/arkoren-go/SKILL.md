@@ -919,9 +919,16 @@ in attributes (`arkoren.<component>.<field>`).
   memory `Set` and `SetFor` take that same definition and a matching value.
   Zero/empty definitions are invalid. Provider schemas remain external;
   preserve runtime conversion checks and fallback/error behavior.
-- Structured-secret readers share immutable `secret.NewSecret[T](name)`
-  definitions and call `store.Get(ctx, definition)`. The definition binds the
-  provider name and JSON decoding type, not a value or pinned version. Raw
+- Secrets are named by `scheme:name` references (no `?field`/`?version`).
+  Readers share immutable `secret.NewSecret[T](reference)` or
+  `secret.NewBinding[T](key)` definitions (a binding resolves through
+  `Builder.Bindings(lookup)` and is `ErrUnbound` when unset; no defaults) and
+  call `store.Get(ctx, definition)`; the store never parses references, the
+  `secretmux` driver routes on the scheme. Drivers carry bytes; decoding lives in
+  the definition by `T`: string (UTF-8, one trailing newline dropped), `[]byte`,
+  `encoding.TextUnmarshaler`, else JSON. Read-only sources and text-only backends
+  return `secret.ErrUnsupported`. The definition binds the reference and
+  decoding type, not a value or pinned version. Raw
   drivers retain `Reference` and `Value`. JSON-compatible schema drift can
   still decode successfully; definitions do not enforce a provider schema.
   Preserve provider version strings. Concrete versions identify immutable
@@ -940,10 +947,10 @@ in attributes (`arkoren.<component>.<field>`).
   Preserve raw persisted JSON and middleware TTL; the exact-bytes persistence
   test guards the session record shape.
 
-Optional `secret.Namespace[T]`, `feature.Namespace[T Primitive]`, and
+Optional `secret.Namespace` (not generic: its `Secret[T]` method picks each leaf's type), `feature.Namespace[T Primitive]`, and
 `session.Namespace[T]` compose ordinary definitions, not namespace-bound stores.
 Prefer standalone definitions first. Secret requires positional prefix and
-separator (`NewNamespace[T]("tenants", "/")` for AWS/Vault only); feature takes
+separator (`NewNamespace("aws:tenants", "/")`; the prefix carries the scheme); feature takes
 prefix and exact inherited fallback; session takes prefix. Feature/session
 default to `:`. Nongeneric NamespaceBuilder/NamespaceBuilderFunc configure only
 Separator; Derive and Subnamespace publish detached variants. Parent separator

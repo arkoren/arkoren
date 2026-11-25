@@ -259,7 +259,13 @@ func signedCursorDB(t *testing.T, secret byte, ids ...int) *database.Database {
 		t.Fatal(err)
 	}
 
-	codec, err := pagination.NewCursorCodec(material)
+	ring, err := key.NewRing(material)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	codec, err := pagination.NewCursorCodec(ring)
 
 	if err != nil {
 		t.Fatalf("NewCursorCodec() error = %v", err)

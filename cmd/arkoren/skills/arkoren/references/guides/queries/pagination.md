@@ -123,15 +123,16 @@ partial cursor result as success.
 ## Signed Cursors
 
 By default, positions are unsigned base64 JSON and clients can forge them.
-To reject tampering, load private application material with
+To reject tampering, parse private application material into a `key.Ring` with
 `arkoren.dev/foundation/key` and construct a codec:
 
 ```go
-material, err := key.LoadShared("cursor.key")
-codec, err := pagination.NewCursorCodec(material)
+text, err := os.ReadFile("cursor.key")
+ring, err := key.ParseRing[key.Shared](string(text))
+codec, err := pagination.NewCursorCodec(ring)
 ```
 
-The key must contain exactly 32 bytes; follow [key provisioning](../keys/overview.md)
+Each key must contain exactly 32 bytes; follow [key provisioning](../keys/overview.md)
 instead of committing it. After handling those construction errors, configure
 the facade using `arkoren.dev/core/service/database`:
 
@@ -142,9 +143,9 @@ db := database.New(driver, func(connection *database.Builder) {
 ```
 
 The codec rejects unsigned, altered, and wrongly signed tokens. Enabling it
-invalidates previously issued unsigned tokens. Rotate by constructing the new
-codec with the current key first and previous keys afterward, then retire old
-keys according to your cursor-retention policy.
+invalidates previously issued unsigned tokens. Rotate by building the ring with the new key
+first and the old keys after it (`key.NewRing(current, previous...)`), then
+retire old keys according to your cursor-retention policy.
 
 Signing does not encrypt boundary values, enforce expiration, bind filters, or
 authorize access. The codec provides no expiry check. Reapply access filters and

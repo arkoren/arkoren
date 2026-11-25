@@ -29,11 +29,13 @@ Provision a separate random 32-byte shared key using
 [application key tooling](../keys/overview.md). For example, generate the
 application file `link-key.key` with `arkoren key generate shared --out
 link-key.key`; keep it outside source control and restrict access. Import
-`arkoren.dev/foundation/key` and `arkoren.dev/core/http/link`, then load the key
-at startup:
+`arkoren.dev/foundation/key` and `arkoren.dev/core/http/link`, then parse the key
+file into a `key.Ring`, the ordered set of keys the signer takes (a file with one
+key is a ring of one):
 
 ```go
-secret, err := key.LoadShared("link-key.key")
+text, err := os.ReadFile("link-key.key")
+ring, err := key.ParseRing[key.Shared](string(text))
 ```
 
 Handle loading failure before constructing the signer. For email links, give it
@@ -41,13 +43,13 @@ your configured public origin rather than deriving that origin from an untrusted
 request host:
 
 ```go
-signer, err := link.New(secret, func(links *link.Builder) {
+signer, err := link.New(ring, func(links *link.Builder) {
 	links.Origin("https://app.example.com")
 })
 ```
 
 Handle construction errors before issuing links or installing middleware. A zero
-key returns `ErrInvalidSecret`. Origins must be HTTP(S) scheme/host origins,
+ring returns `ErrInvalidSecret`. Origins must be HTTP(S) scheme/host origins,
 without credentials, query, fragment, or an application path; invalid values
 return `ErrInvalidOrigin`. Use HTTPS in production.
 
@@ -102,7 +104,7 @@ If an email system appends tracking parameters, an alternative signer can exclud
 specific names:
 
 ```go
-signer, err := link.New(secret, func(links *link.Builder) {
+signer, err := link.New(ring, func(links *link.Builder) {
 	links.Origin("https://app.example.com")
 	links.IgnoreQuery("utm_source", "utm_medium")
 })
@@ -153,7 +155,7 @@ work again. Construct this alternative signer with the existing `*cache.Cache`
 named `store`:
 
 ```go
-signer, err := link.New(secret, func(links *link.Builder) {
+signer, err := link.New(ring, func(links *link.Builder) {
 	links.Origin("https://app.example.com")
 	links.Cache(store)
 })
@@ -302,13 +304,15 @@ binding; inspection alone is not permission to extend a reset indefinitely.
 
 ## Rotate Keys
 
-To accept existing links during rotation, load `current` and `previous` as
-separate `key.Shared` values, then use an alternative construction:
+To accept existing links during rotation, build a ring whose first key is the
+new one and whose later keys are the old ones. A ring text lists keys separated
+by commas, current first, so `ParseRing` can read it from a file or environment
+variable:
 
 ```go
-signer, err := link.New(current, func(links *link.Builder) {
+ring, err := key.NewRing(current, previous)
+signer, err := link.New(ring, func(links *link.Builder) {
 	links.Origin("https://app.example.com")
-	links.Previous(previous)
 })
 ```
 
@@ -336,7 +340,7 @@ path; event privacy does not scrub it. See
 [signed-link events](../events/http-events.md#signed-links).
 
 `link.Config` is a printable diagnostic record, not an input to `New`. Its
-formatting redacts previous keys and omits service pointers, but displays origin
+formatting omits service pointers, but displays origin
 and ignored query names. Keep credentials out of those settings; this does not
 sanitize arbitrary signers, URLs, returned errors, or inspection results.
 
