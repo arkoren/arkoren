@@ -134,6 +134,29 @@ func ParseSigning(encoded []byte) (Signing, error) {
 	return NewSigning(private)
 }
 
+// UnmarshalText parses the PEM accepted by [ParseSigning] and replaces the
+// identity on success. On failure the identity is unchanged and the error is
+// ErrInvalid. It lets text decoders, which look for [encoding.TextUnmarshaler],
+// fill a Signing directly.
+//
+// Example:
+//
+//	var identity key.Signing
+//	if err := identity.UnmarshalText(pemBytes); err != nil {
+//		return err
+//	}
+func (identity *Signing) UnmarshalText(text []byte) error {
+	parsed, err := ParseSigning(text)
+
+	if err != nil {
+		return err
+	}
+
+	*identity = parsed
+
+	return nil
+}
+
 // LoadSigning reads an explicit PKCS #8 file without modifying it and applies
 // ParseSigning validation. OS errors retain their causes; parser errors never
 // include private material. File reads are bounded to 64 KiB.

@@ -25,6 +25,22 @@ PEM, and `LoadExchange` for X25519 PKCS #8 PEM.
 Parse functions accept secret-store contents; New functions import raw/native
 material. Exports are detached; formatting and structured logging redact secrets.
 
+`Ring` holds the keys of a rotation: the first key is current and the rest are
+previous, accepted only to decrypt or verify. `ParseRing` reads comma-separated
+padded base64 keys on a single line, current first; one key (for example from
+`arkoren key generate shared` or `openssl rand -base64 32`) is a one-key ring.
+`Ring.Encode` exports the same text and is secret material. `Shared.Fingerprint`
+returns a domain-separated SHA-256 in hex that is safe to display. `Ring` and
+`Signing` implement `UnmarshalText` for text decoders and deliberately have no
+marshalers.
+
+```go
+ring, err := key.ParseRing[key.Shared](os.Getenv("APP_KEYS"))
+if err != nil {
+	return err
+}
+```
+
 Asymmetric `PublicPEM()` exports SPKI PEM; `Signing.VAPIDPublicKey()` exports
 the browser-ready base64url point. Apple Sign In requires Apple's issued key,
 not a locally generated replacement. Keep signing and exchange keys separate.
