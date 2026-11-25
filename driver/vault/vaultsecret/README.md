@@ -33,13 +33,17 @@ is not constructor input.
 ## Provider limitations
 
 `Reference.Version` must be a positive decimal integer accepted by `strconv.Atoi`; an
-empty version reads the current Vault version. `Put` and `Update` require a JSON
-object payload, not `null`. Vault's native JSON boundary can round numbers:
+empty version reads the current Vault version. `Put` and `Update` store a JSON object as native KV
+fields. Any other UTF-8 payload (plain text, or JSON that is not an object) is
+stored as `{"value": "<text>"}` and read back as that text; `Get` unwraps an object
+whose only member is a string `value`. The literal object `{"value": "<string>"}`
+is rejected with `secret.ErrInvalidSecret` because it would read back as text,
+and bytes that are not UTF-8 return `secret.ErrUnsupported`. Vault's native JSON boundary can round numbers:
 Vault 1.13.3 returns `9007199254740992` after receiving `9007199254740993`.
 The driver rejects numbers whose value changes under float64 JSON serialization
 before writing, including nested numbers. Equivalent notation such as `1e3` and
 `1000` is accepted. Encode exact identifiers and decimals as JSON strings yourself;
-the driver never converts them or introduces a private persisted envelope.
+the driver never converts them; the `value` wrapper above applies to text only.
 Existing native data is not migrated, and a read cannot reconstruct digits
 already lost by an earlier writer or backend. `Get` JSON-encodes the data map, so its returned bytes need not
 preserve the formatting of the value supplied to a write.

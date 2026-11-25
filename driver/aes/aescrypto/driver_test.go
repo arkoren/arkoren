@@ -22,14 +22,20 @@ func newEncryptionDriver(raw []byte, configure ...aescrypto.BuilderFunc) (*aescr
 		return nil, err
 	}
 
-	return aescrypto.New(material, configure...)
+	ring, err := key.NewRing(material)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return aescrypto.New(ring, configure...)
 }
 
 // TestNewRejectsZeroKey verifies the typed boundary remains fail-closed.
 func TestNewRejectsZeroKey(t *testing.T) {
 	t.Parallel()
 
-	if _, err := aescrypto.New(key.Shared{}); !errors.Is(err, key.ErrInvalid) {
+	if _, err := aescrypto.New(key.Ring[key.Shared]{}); !errors.Is(err, key.ErrInvalid) {
 		t.Fatalf("New(zero) = %v", err)
 	}
 }
@@ -53,13 +59,90 @@ func newDriver(t *testing.T, fill byte) crypto.Driver {
 	return created
 }
 
-// TestDriverConformance verifies the driver passes the crypto conformance suite.
+// newRingDriver builds a driver from the ring the suite generates.
+func newRingDriver(t *testing.T, ring key.Ring[key.Shared]) crypto.Driver {
+	t.Helper()
+
+	created, err := aescrypto.New(ring)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = created.Stop(t.Context()) })
+
+	return created
+}
+
+// TestDriverConformance verifies the driver passes the crypto conformance
+// suite, including key ring rotation.
 func TestDriverConformance(t *testing.T) {
 	cryptotest.Run(t, func(t *testing.T) crypto.Driver {
 		return newDriver(t, 1)
 	}, cryptotest.WithForeignDriver(func(t *testing.T) crypto.Driver {
 		return newDriver(t, 2)
-	}))
+	}), cryptotest.WithRing(newRingDriver))
+}
+
+// TestDecryptReportsPreviousKey verifies a value written under an old key
+// decrypts through a rotated ring with previous=true, and a value written under
+// the new key reports previous=false.
+func TestDecryptReportsPreviousKey(t *testing.T) {
+	t.Parallel()
+
+	oldKey, err := key.NewShared(bytes.Repeat([]byte{1}, 32))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newKey, err := key.NewShared(bytes.Repeat([]byte{2}, 32))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldRing, err := key.NewRing(oldKey)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotated, err := key.NewRing(newKey, oldKey)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := newRingDriver(t, oldRing)
+	after := newRingDriver(t, rotated)
+	legacy, err := before.Encrypt([]byte("legacy"))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plaintext, previous, err := after.Decrypt(legacy)
+
+	if err != nil || !previous || string(plaintext) != "legacy" {
+		t.Fatalf("Decrypt(legacy) = %q, %v, %v", plaintext, previous, err)
+	}
+
+	fresh, err := after.Encrypt([]byte("fresh"))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plaintext, previous, err = after.Decrypt(fresh)
+
+	if err != nil || previous || string(plaintext) != "fresh" {
+		t.Fatalf("Decrypt(fresh) = %q, %v, %v", plaintext, previous, err)
+	}
+
+	if _, _, err := before.Decrypt(fresh); !errors.Is(err, crypto.ErrInvalidCiphertext) {
+		t.Fatalf("old ring decrypted new key data: %v", err)
+	}
 }
 
 // TestOwnedDriverFormattingRedactsKey checks the public constructor's pointer
@@ -73,7 +156,13 @@ func TestOwnedDriverFormattingRedactsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	driver, err := aescrypto.New(material)
+	ring, err := key.NewRing(material)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	driver, err := aescrypto.New(ring)
 
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +247,7 @@ func TestAESEncryptDecryptRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := encrypter.Decrypt(ciphertext)
+	res, _, err := encrypter.Decrypt(ciphertext)
 
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +302,7 @@ func TestAESDecryptWithShortCiphertext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = encrypter.Decrypt([]byte("short"))
+	_, _, err = encrypter.Decrypt([]byte("short"))
 
 	if !errors.Is(err, aescrypto.ErrMismatchedAESNonceSize) {
 		t.Fatalf("expected error %v, got %v", aescrypto.ErrMismatchedAESNonceSize, err)
@@ -240,7 +329,7 @@ func TestAESDecryptWithCorruptedCiphertext(t *testing.T) {
 
 	ciphertext[len(ciphertext)-1] ^= 0xFF
 
-	_, err = encrypter.Decrypt(ciphertext)
+	_, _, err = encrypter.Decrypt(ciphertext)
 
 	if err == nil {
 		t.Fatal("expected an error")
@@ -295,7 +384,7 @@ func TestAESAdditionalDataMustMatchForDecrypt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = decrypter.Decrypt(ciphertext)
+	_, _, err = decrypter.Decrypt(ciphertext)
 
 	if err == nil {
 		t.Fatal("expected an error")
@@ -322,7 +411,7 @@ func TestAESAdditionalDataRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := encrypter.Decrypt(ciphertext)
+	res, _, err := encrypter.Decrypt(ciphertext)
 
 	if err != nil {
 		t.Fatal(err)
@@ -374,7 +463,7 @@ func TestAESDecryptEmptyInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = encrypter.Decrypt([]byte{})
+	_, _, err = encrypter.Decrypt([]byte{})
 
 	if !errors.Is(err, aescrypto.ErrMismatchedAESNonceSize) {
 		t.Fatalf("expected error %v, got %v", aescrypto.ErrMismatchedAESNonceSize, err)
@@ -414,7 +503,7 @@ func TestAESDecryptAfterCloseReturnsError(t *testing.T) {
 
 	encrypter.Stop(context.Background())
 
-	_, err = encrypter.Decrypt([]byte("some ciphertext that is long enough"))
+	_, _, err = encrypter.Decrypt([]byte("some ciphertext that is long enough"))
 
 	if !errors.Is(err, crypto.ErrEncrypterClosed) {
 		t.Fatalf("expected error %v, got %v", crypto.ErrEncrypterClosed, err)
@@ -484,7 +573,7 @@ func TestAESAdditionalDataIsCopied(t *testing.T) {
 
 	copy(data, "user-99")
 
-	if _, err := driver.Decrypt(ciphertext); err != nil {
+	if _, _, err := driver.Decrypt(ciphertext); err != nil {
 		t.Fatal(err)
 	}
 }

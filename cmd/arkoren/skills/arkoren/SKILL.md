@@ -234,7 +234,7 @@ opaque to inference.
 
 - [Encryption Overview](references/guides/encryption/overview.md): Encrypt recoverable application values and reject ciphertext that cannot be authenticated or decoded.
 - [Encryption Drivers](references/guides/encryption/drivers.md): Choose and configure a local authenticated cipher, including purpose binding and cleanup ownership.
-- [Encryption Keys](references/guides/encryption/keys.md): Keep current and previous encryption keys available and rotate writers without losing access to existing ciphertext.
+- [Encryption Keys](references/guides/encryption/keys.md): Keep current and previous encryption keys in a ring and rotate writers without losing access to existing ciphertext.
 - [Storing Data](references/guides/encryption/storing.md): Persist encrypted records with explicit schema, identity binding, encoding, and guarded re-encryption.
 
 #### Secrets

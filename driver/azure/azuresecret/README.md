@@ -18,7 +18,7 @@ driver, err := azuresecret.New(ctx, "https://my-vault.vault.azure.net/")
 
 Pass it to `secret.New` from `arkoren.dev/core/service/secret`. Construction does
 not test permissions; the first read does. Names use letters, digits, and dashes.
-Values must be valid UTF-8 text. Invalid UTF-8 fails before a write instead of
+Values must be valid UTF-8 text. Invalid UTF-8 fails with `secret.ErrUnsupported` before any API call instead of
 being silently replaced by the SDK JSON encoder; base64-encode binary keys.
 Update reads before writing and therefore needs read permission as well as
 write permission. This is an existence check, not a native CAS transaction.

@@ -3,8 +3,8 @@ module arkoren.dev/driver/chacha20
 go 1.27
 
 require (
-	arkoren.dev/core v0.1.0
-	arkoren.dev/foundation/key v0.1.0
+	arkoren.dev/core v0.23.0
+	arkoren.dev/foundation/key v0.2.0
 	golang.org/x/crypto v0.58.0
 )
 

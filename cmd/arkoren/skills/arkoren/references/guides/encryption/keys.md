@@ -1,10 +1,10 @@
 ---
 title: Encryption Keys
-description: Keep current and previous encryption keys available and rotate writers without losing access to existing ciphertext.
+description: Keep current and previous encryption keys in a ring and rotate writers without losing access to existing ciphertext.
 order: 30
 summary:
   - Load durable keys without replacing missing material or exposing it in diagnostics.
-  - Configure current and previous drivers and roll out new writers before retiring old keys.
+  - Configure a key ring and roll out new writers before retiring old keys.
   - Handle missing historical keys and application versions without assuming ciphertext identifies them.
 ---
 
@@ -23,22 +23,26 @@ in [CLI Keys](../cli/keys.md).
 
 ## Loading Keys
 
-Load the persistent key from a protected mounted file or your configured
+Load the persistent keys from a protected mounted file or your configured
 [secret store](../secrets/overview.md). Both encryption drivers take a
-`key.Shared`, which validates exactly 32 bytes. With `key` imported from
-`arkoren.dev/foundation/key`, a mounted file can supply the material:
+`key.Ring[key.Shared]`: an ordered set of keys where the first is current and
+encrypts, and later keys are previous and only decrypt. Each key is exactly 32
+bytes. With `key` imported from `arkoren.dev/foundation/key`, parse the ring
+from its text form, newest key first:
 
 ```go
-material, err := key.LoadShared("/run/secrets/calendar-key.key")
+ring, err := key.ParseRing[key.Shared](encoded)
 if err != nil {
 	return err
 }
 ```
 
-Fail startup on a missing, unreadable, or malformed key; do not print the file
-contents or generate substitute material. For secret-store text, use
-`key.ParseShared(encoded)` after successfully retrieving the value through your
-configured secret facade. No environment variable or secret name is implicit.
+A ring with one key is the ordinary case before any rotation. Build one in code
+with `key.NewRing(current, previous...)`, which rejects zero keys and duplicates.
+Fail startup on a missing or malformed ring; do not print its text or generate
+substitute material. Retrieve `encoded` through your configured secret facade or a
+protected file; no environment variable or secret name is implicit. A ring
+formats as a redacted marker, and `ring.Encode()` is the only way to export it.
 See [Drivers](drivers.md) for constructing the selected cipher and owning its
 cleanup.
 
@@ -49,48 +53,39 @@ recoverable backup.
 
 ## Selecting Keys
 
-An encrypter has one **current driver**, used for every encryption, and an
-ordered list of **previous drivers**, used only as decryption fallbacks. This
-is a configured driver ring, not a remotely managed keyring: Arkoren does not
-fetch missing keys, watch secret changes, or switch the current key at runtime.
+A driver encrypts with its ring's current key and decrypts with the current key
+first, then each previous key in order. Rotating one cipher's key is therefore a
+ring change, not a second driver. Arkoren does not fetch missing keys, watch
+secret changes, or switch the current key at runtime: rebuild the driver to
+change the ring.
 
 Import `aescrypto` from `arkoren.dev/driver/aes/aescrypto` and `crypto` from
 `arkoren.dev/core/service/crypto`. Here `newKey` and `oldKey` are validated
-`key.Shared` values loaded from separate protected entries. Build both drivers
-with the context used for their ciphertext:
+`key.Shared` values loaded from separate protected entries. List the new key
+first:
 
 ```go
-purpose := func(encrypter *aescrypto.Builder) {
+ring, err := key.NewRing(newKey, oldKey)
+driver, err := aescrypto.New(ring, func(encrypter *aescrypto.Builder) {
 	encrypter.AdditionalData([]byte("calendar-credentials:v1"))
-}
-current, err := aescrypto.New(newKey, purpose)
-previous, err := aescrypto.New(oldKey, purpose)
-```
-
-Handle each construction error and register cleanup immediately after each
-successful acquisition. Then publish the facade with the old driver available
-for reads:
-
-```go
-enc, err := crypto.New(current, func(encrypter *crypto.Builder) {
-	encrypter.Previous(previous)
 })
+enc, err := crypto.New(driver)
 ```
 
-A driver's `Decrypt` returns whether a previous key of its own key ring, not its
-current key, authenticated the ciphertext, and the facade combines that with
-success in a previous driver: `DecryptWithRotation` reports `true` in either case,
-meaning the value should be re-encrypted. Previous drivers are for moving between
-ciphers or parameters; rotating one cipher's key belongs in a `key.Ring`.
+Handle each construction error and register cleanup immediately after the
+successful acquisition. A driver's `Decrypt` reports `previous=true` when a
+previous key authenticated the ciphertext, and the facade's `DecryptWithRotation`
+passes that on, meaning the value should be re-encrypted with the current key.
 
-Decryption tries the current driver first, then previous drivers in configured
-order; repeated `Previous` calls append to that order. New values always use
-`current`. The facade copies the driver list, not the driver objects, and is
-immutable after construction. Rebuild it to change the ring.
+The facade's own `Previous` drivers remain for moving between ciphers or
+parameters, such as from AES-GCM to ChaCha20-Poly1305. They are tried after the
+current driver, in configured order, and `DecryptWithRotation` also reports
+`true` when one of them succeeds. The facade copies that driver list, not the
+driver objects, and is immutable after construction.
 
-Stop every current and previous driver only after all consumers finish. The
-facade does not own their lifecycle. Stopping the current driver alone does
-not prevent fallback decryption through an active previous driver.
+Stop every driver only after all consumers finish. The facade does not own their
+lifecycle. Stopping the current driver alone does not prevent fallback
+decryption through an active previous facade driver.
 
 ## Rotating Keys
 
@@ -99,19 +94,21 @@ values. During a rolling deployment, old instances must be able to read new
 ciphertext before any writer switches keys:
 
 1. Provision the new key under a separate protected name; retain the old key.
-2. Deploy all readers with the old driver current and the new driver in their
-   previous list. Wait until every reader can accept either key.
-3. Deploy the new driver as current and the old driver as previous. Readers
+2. Deploy all readers with a ring that lists the old key first and the new key
+   as previous. Wait until every reader can accept either key.
+3. Deploy the ring with the new key first and the old key as previous. Readers
    from the preceding deployment can already read new writes.
-4. [Re-encrypt stored values](storing.md#re-encrypting-values) and verify that
-   no live writer or stored value still depends on the old driver.
-5. Remove the previous driver from active configuration. Retain its key
-   securely for backups that still need it.
+4. [Re-encrypt stored values](storing.md#re-encrypting-values), using the
+   `previous` result to find values that still depend on the old key, and verify
+   that no live writer or stored value still needs it.
+5. Remove the old key from the ring. Retain it securely for backups that still
+   need it.
 
-The previous list is a decryption role, so step 2 can contain a newly provisioned
-key. Deployments must preserve the exact cipher and AAD for each driver. Changing
-from AES-GCM to ChaCha20-Poly1305 also requires retaining the old cipher for old
-reads, even if key material stays available.
+The previous position is a decryption role, so step 2 can contain a newly
+provisioned key. Deployments must preserve the exact cipher and AAD for each
+driver. Changing from AES-GCM to ChaCha20-Poly1305 is not a ring change: keep the
+old cipher as a facade `Previous` driver for old reads, even if key material
+stays available.
 
 Rotate before 2^32 encryptions per key across all replicas sharing that key.
 A time-based schedule alone does not enforce this volume limit. If a key leaks,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -204,8 +205,21 @@ func notFound(err error) bool {
 		strings.Contains(invalidRequest.Error(), "scheduled for deletion"))
 }
 
+// encodePayload chooses the AWS payload field for value: a valid UTF-8 value
+// is sent as SecretString, so the console, CLI and other AWS tooling show it as
+// text, and anything else is sent as SecretBinary. Exactly one result is set.
+// Get returns the same bytes either way.
+func encodePayload(value []byte) (text *string, binary []byte) {
+	if utf8.Valid(value) {
+		return aws.String(string(value)), nil
+	}
+
+	return nil, value
+}
+
 // Put creates name or writes a new current version when it already exists.
-// It returns detached bytes and the newly assigned version, not a rollout signal.
+// UTF-8 values are stored as SecretString and other bytes as SecretBinary; both
+// read back unchanged. It returns detached bytes and the newly assigned version, not a rollout signal.
 //
 // Example:
 //
@@ -215,9 +229,11 @@ func notFound(err error) bool {
 //	}
 //	_ = written.Version
 func (driver *Driver) Put(ctx context.Context, name string, value []byte) (secret.Value, error) {
+	text, binary := encodePayload(value)
 	output, err := driver.client.CreateSecret(ctx, &secretsmanager.CreateSecretInput{
 		Name:         aws.String(name),
-		SecretBinary: value,
+		SecretString: text,
+		SecretBinary: binary,
 	})
 
 	if err == nil {
@@ -250,9 +266,11 @@ func (driver *Driver) Update(ctx context.Context, name string, value []byte) (se
 
 // put appends a current AWS secret version and maps a missing secret.
 func (driver *Driver) put(ctx context.Context, name string, value []byte) (secret.Value, error) {
+	text, binary := encodePayload(value)
 	output, err := driver.client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
 		SecretId:     aws.String(name),
-		SecretBinary: value,
+		SecretString: text,
+		SecretBinary: binary,
 	})
 
 	if notFound(err) {
