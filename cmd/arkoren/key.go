@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,8 +33,14 @@ type keyCheckResult struct {
 	// Kind is the checked key kind: shared, signing or exchange.
 	Kind string `json:"kind"`
 
-	// Path is the checked file, never its contents.
+	// Path is the checked file, never its contents; "-" for a shared key ring
+	// read from standard input.
 	Path string `json:"path"`
+
+	// Keys lists the fingerprints of a valid shared key ring, current first. It
+	// is absent for other kinds and for invalid material. The text presentation
+	// prints the first 12 digits of each fingerprint.
+	Keys []keyEntry `json:"keys,omitzero"`
 
 	// Problems says what is wrong with the material; an empty array when OK.
 	Problems []console.Problem `json:"problems"`
@@ -57,8 +64,27 @@ type keyGenerateResult struct {
 // file that cannot be read is an error.
 func runKeyCheck(kind, path string, env console.Environment) error {
 	full := keyPath(env.Dir, path)
+
+	if kind == "shared" && path == ringStdin {
+		full = ringStdin
+	}
+
 	report := keyCheckResult{Summary: "Valid " + kind + " key", OK: true, Kind: kind, Path: full, Problems: []console.Problem{}}
-	err := checkKey(kind, full)
+
+	var err error
+
+	if kind == "shared" {
+		var ring key.Ring[key.Shared]
+
+		ring, err = readRing(env, path)
+
+		if err == nil {
+			report.Summary = "Valid shared key ring"
+			report.Keys = ringEntries(ring)
+		}
+	} else {
+		err = checkKey(kind, full)
+	}
 
 	if err != nil && !errors.Is(err, key.ErrInvalid) {
 		return inputFailure(fmt.Errorf("check key: %w", err))
@@ -163,14 +189,20 @@ func generateKey(ctx context.Context, kind, out string, env console.Environment)
 		return err
 	}
 
-	if err := writePrivateKey(keyPath(env.Dir, out), encoded); err != nil {
+	path := keyPath(env.Dir, out)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create key directory: %w", err)
+	}
+
+	if err := writePrivateKey(path, encoded); err != nil {
 		return err
 	}
 
 	return env.Result(keyGenerateResult{
 		Summary: "Generated " + kind + " key",
 		Kind:    kind,
-		Changes: []console.Change{{Action: console.ActionCreate, Path: keyPath(env.Dir, out), Detail: "private key"}},
+		Changes: []console.Change{{Action: console.ActionCreate, Path: path, Detail: "private key"}},
 	})
 }
 
@@ -185,7 +217,13 @@ func generateKeyMaterial(kind string) ([]byte, error) {
 			return nil, err
 		}
 
-		return []byte(secret.Base64() + "\n"), nil
+		ring, err := key.NewRing(secret)
+
+		if err != nil {
+			return nil, err
+		}
+
+		return []byte(ring.Encode() + "\n"), nil
 	case "signing":
 		identity, err := key.GenerateSigning()
 
@@ -197,14 +235,11 @@ func generateKeyMaterial(kind string) ([]byte, error) {
 	}
 }
 
-// checkKey validates a kind without exporting material or contacting a
-// host. The caller has already rejected unsupported kind names.
+// checkKey validates a signing or exchange key file without exporting
+// material or contacting a host. Shared keys are rings and go through
+// [readRing]. The caller has already rejected unsupported kind names.
 func checkKey(kind, path string) error {
 	switch kind {
-	case "shared":
-		_, err := key.LoadShared(path)
-
-		return err
 	case "signing":
 		_, err := key.LoadSigning(path)
 
@@ -232,12 +267,15 @@ func keyCLICommand(env console.Environment) *cli.Command {
 	return &cli.Command{
 		Name:  "key",
 		Usage: "Provision and inspect shared, signing, or exchange keys offline",
-		Description: "Kinds: shared (32-byte base64), signing (ECDSA P-256), exchange (X25519). " +
+		Description: "Kinds: shared (a ring of 32-byte base64 keys, current first), signing (ECDSA P-256), exchange (X25519). " +
 			"Use independent keys for each purpose. Exchange keys alone do not provide peer authentication or encryption.",
 		Commands: []*cli.Command{
 			keyGenerateCLICommand(env),
 			keyCheckCLICommand(env),
 			keyPublicCLICommand(env),
+			keyRotateCLICommand(env),
+			keyPromoteCLICommand(env),
+			keyRetireCLICommand(env),
 		},
 	}
 }
@@ -252,7 +290,8 @@ func keyGenerateCLICommand(env console.Environment) *cli.Command {
 		Usage:     "Generate an independent private key",
 		ArgsUsage: "KIND",
 		Description: "Requires an explicit --out destination. Private files use mode 0600 and must not exist, " +
-			"including symlinks. Only --out - explicitly sends private material to stdout.",
+			"including symlinks. Only --out - explicitly sends private material to stdout. " +
+			"A shared key is written as a one-key ring: one line of padded base64 that rotate extends.",
 		Arguments: []cli.Argument{
 			&cli.StringArg{Name: "KIND", Destination: &kind},
 		},
@@ -279,6 +318,8 @@ func keyCheckCLICommand(env console.Environment) *cli.Command {
 		Usage:     "Validate local key material without displaying private bytes",
 		ArgsUsage: "KIND FILE",
 		Description: "Reads FILE and checks that it holds a valid key of KIND: shared, signing or exchange. " +
+			"A shared FILE is a key ring, one key or several separated by commas, and may be - for standard input; " +
+			"the result lists each key's fingerprint, current first. " +
 			"Invalid material is reported as a problem with exit 1; private bytes are never printed.",
 		Arguments: []cli.Argument{
 			&cli.StringArg{Name: "KIND", Destination: &kind},

@@ -341,7 +341,7 @@ func TestNewDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(module) != "module "+name+"\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.2.0\n\tarkoren.dev/core v0.22.1\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
+	if string(module) != "module "+name+"\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.2.0\n\tarkoren.dev/core v0.23.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
 		t.Fatalf("go.mod = %q", module)
 	}
 
@@ -506,7 +506,7 @@ func TestNewNamedDestinationDefaultsModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(content) != "module momentum\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.2.0\n\tarkoren.dev/core v0.22.1\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
+	if string(content) != "module momentum\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.2.0\n\tarkoren.dev/core v0.23.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
 		t.Fatalf("go.mod = %q", content)
 	}
 }

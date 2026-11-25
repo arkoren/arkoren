@@ -5,27 +5,30 @@ import (
 
 	"arkoren.dev/ark/oauth/oauthauth"
 	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/secret"
 	"arkoren.dev/foundation/key"
 )
 
 // Apple is the process's one Sign in with Apple client. It reads
 // APPLE_CLIENT_ID (the Services ID), APPLE_TEAM_ID, APPLE_KEY_ID and
 // APPLE_REDIRECT_URL (the absolute address of the callback route, such as
-// https://app.example.com/auth/apple/callback) from the environment, loads the
-// ECDSA P-256 key Apple issued from the .p8 file named by APPLE_KEY_FILE, and
-// seals its login cookies with the OAuthKey provider. There is no client secret:
-// the client signs a short-lived one with that key for every code exchange.
-// Apple posts the callback cross-site, so keep POST /auth/apple/callback outside
-// CSRF protection or bypass it there, and keep the session cookie SameSite=Lax.
-// Composition fails when the key file is missing or invalid, and the application
-// never generates a key to replace a missing one. Startup performs the
-// provider's OIDC discovery over the network, so the process fails to start when
-// Apple cannot be reached. Pass the client to the identity module with
-// identity.Provider(compose.Use(Apple)), which mounts its login and callback
-// routes.
+// https://app.example.com/auth/apple/callback) from the environment, resolves
+// the binding APPLE_KEY through the Secrets provider to the ECDSA P-256 key
+// Apple issued (the PEM text of the .p8 file; the development default is
+// file:.secrets/apple-key), and seals its login cookies with the OAuthKey
+// provider. There is no client secret: the client signs a short-lived one with
+// that key for every code exchange. Apple posts the callback cross-site, so keep
+// POST /auth/apple/callback outside CSRF protection or bypass it there, and keep
+// the session cookie SameSite=Lax. Composition fails when the binding is unset
+// or the key is missing or invalid, and the application never generates a key to
+// replace a missing one. Startup performs the provider's OIDC discovery over the
+// network, so the process fails to start when Apple cannot be reached. Pass the
+// client to the identity module with identity.Provider(compose.Use(Apple)), which
+// mounts its login and callback routes.
 var Apple = application.Provide(func(compose *application.Composer) *oauthauth.Client {
+	secrets := compose.Use(Secrets)
 	cipher := compose.Use(OAuthKey)
-	signing := compose.Must(key.LoadSigning(os.Getenv("APPLE_KEY_FILE")))
+	signing := compose.Must(secrets.Get(compose.Context(), secret.NewBinding[key.Signing]("APPLE_KEY")))
 	provider := oauthauth.Apple(os.Getenv("APPLE_TEAM_ID"), os.Getenv("APPLE_KEY_ID"), signing)
 
 	client := compose.Must(oauthauth.New(provider, cipher, os.Getenv("APPLE_CLIENT_ID"), func(client *oauthauth.ClientBuilder) {

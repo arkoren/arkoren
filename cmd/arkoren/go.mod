@@ -3,9 +3,9 @@ module arkoren.dev/cmd/arkoren
 go 1.27
 
 require (
-	arkoren.dev/core v0.22.1
+	arkoren.dev/core v0.23.0
 	arkoren.dev/foundation/certificate v0.1.0
-	arkoren.dev/foundation/key v0.1.0
+	arkoren.dev/foundation/key v0.2.0
 	arkoren.dev/foundation/validate v0.1.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/urfave/cli/v3 v3.14.0

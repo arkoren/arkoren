@@ -150,9 +150,9 @@ value such as `google` fails with a usage error whose next step is
 with a provider (`Google`, `GitHub`, `Microsoft`, `Apple`, `OIDC`) that reads its
 settings from the environment (`<PROVIDER>_CLIENT_ID`, `_CLIENT_SECRET` and
 `_REDIRECT_URL`; Microsoft also `MICROSOFT_TENANT`, defaulting to `common`; Apple
-reads `APPLE_TEAM_ID`, `APPLE_KEY_ID` and the Apple-issued `.p8` key from
-`APPLE_KEY_FILE` instead of a secret; OIDC reads `OIDC_ISSUER_URL`), and `OAuthKey`
-once. `github` also writes `GitHubSignUp`, which lets a first GitHub login create a
+reads `APPLE_TEAM_ID`, `APPLE_KEY_ID` and resolves the Apple-issued `.p8` key
+through the `APPLE_KEY` binding instead of a secret; OIDC reads `OIDC_ISSUER_URL`),
+and `OAuthKey` once. `github` also writes `GitHubSignUp`, which lets a first GitHub login create a
 user; the other providers only log in existing users, because creating accounts is
 your decision: write a fragment like `GitHubSignUp` to enable it. When
 `internal/bootstrap/iam.go` exists, the command inserts the matching
@@ -163,9 +163,15 @@ Every shared provider the new code uses is written with a local default when
 `internal/bootstrap` does not declare one by name, and kept when it does:
 `Database` (SQLite), `Cache` (memory), `Hasher` (Argon2id), and with email
 `LinkSigner`, `Mailer` (logs email), `Queue` (memory), `Dispatcher`, `Consumer`
-and `Work`, plus `TwoFactorKey` and `OAuthKey` as selected. Keys load from files
-named by environment variables, such as `LINK_KEY_FILE`; create them with
-`arkoren key generate shared --out FILE`.
+and `Work`, plus `TwoFactorKey` and `OAuthKey` as selected. Providers that need a
+key also get a `Secrets` provider, which builds a secret store over the `file` and
+`env` sources and resolves bindings from the process environment. Each key
+provider reads a binding, such as `LINK_KEY`, whose value in `.env` is the
+reference of the key ring: the command writes `LINK_KEY=file:.secrets/link-key`.
+Create the file with `arkoren key generate shared --out .secrets/link-key`; the
+generated `.gitignore` and `.dockerignore` exclude `.secrets/`. To read a ring
+from a secrets manager instead, see
+[Generated Applications](../secrets/sources.md#generated-applications).
 
 The command inserts `compose.Use(bootstrap.IAMRouter)` into the server's
 `Compose`, and `compose.Use(bootstrap.IAMJobs)` and `compose.Use(bootstrap.Work)`
@@ -190,14 +196,17 @@ process (`compose.Run(compose.Use(bootstrap.Migrator).Up)`); the process ends wh
 It also appends the variables with safe local defaults that `.env` lacks, and
 never changes one it sets: `DATABASE_URL=file:app.db` (when it writes `Database`),
 `PASSWORD_RESET_URL` and `EMAIL_VERIFY_URL`, and each client's `_REDIRECT_URL`,
-all derived from `HTTP_ADDR`. Secrets, client IDs and key paths are never written.
-Each line is an `edit` change on `.env`.
+all derived from `HTTP_ADDR`, plus the key bindings of the providers it writes
+(`LINK_KEY`, `TWO_FACTOR_KEY`, `OAUTH_KEY`, `APPLE_KEY`), each set to a
+`file:.secrets/...` reference. The bindings are also appended to `.env.example`
+when the project has one. Secrets, client IDs and key material are never written.
+Each line is an `edit` change on `.env` or `.env.example`.
 
 The module's pinned version is fetched with `go get` before `go mod tidy`, so tidy
 does not pick a newer release; `--skip-tidy` leaves both for you, and the report
 lists each module as a `require` change. The report also lists `next_steps`, the
 work only you can do: create the key files with the `arkoren key generate shared
---out FILE` command it prints, register each client's callback URL and set its
+--out .secrets/NAME` command it prints, register each client's callback URL and set its
 credentials, replace the logging mailer before production, and run `make run`.
 
 ## Preview and Safety

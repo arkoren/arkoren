@@ -3,13 +3,13 @@ module arkoren.dev/cmd/arkoren-wiring
 go 1.27
 
 require (
-	arkoren.dev/ark/iam v0.5.0
-	arkoren.dev/ark/oauth v0.3.0
-	arkoren.dev/core v0.19.0
-	arkoren.dev/driver/aes v0.1.0
+	arkoren.dev/ark/iam v0.8.0
+	arkoren.dev/ark/oauth v0.9.0
+	arkoren.dev/core v0.23.0
+	arkoren.dev/driver/aes v0.2.0
 	arkoren.dev/driver/bcrypt v0.1.0
 	arkoren.dev/driver/sqlite v0.1.0
-	arkoren.dev/foundation/key v0.1.0
+	arkoren.dev/foundation/key v0.2.0
 	arkoren.dev/foundation/totp v0.2.0
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-jose/go-jose/v4 v4.1.6

@@ -50,7 +50,11 @@ func TestKeyGenerateOffline(t *testing.T) {
 
 		path := filepath.Join(env.Dir, "private.key")
 
-		if err := checkKey(purpose, path); err != nil {
+		if purpose == "shared" {
+			if _, err := readRing(env, "private.key"); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := checkKey(purpose, path); err != nil {
 			t.Fatal(err)
 		}
 

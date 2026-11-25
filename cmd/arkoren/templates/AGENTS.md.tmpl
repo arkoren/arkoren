@@ -34,6 +34,10 @@ Go 1.27 service (`{{.Module}}`) built with Arkoren, a modular Go toolkit.
 - Private CLI outputs use POSIX 0600 or a protected current-user-only Windows
   DACL at exclusive creation. Preserve that protection when adding secrets to
   `.env` or changing local key provisioning; inherited Windows ACLs are not enough.
+- Secrets are read through the `Secrets` provider by binding: `.env` sets a
+  variable such as `LINK_KEY=file:.secrets/link-key` to a `scheme:name` reference,
+  and the provider resolves it. Keep `.secrets/` out of commits; never generate a
+  key at startup to replace a missing one.
 - Return `application.Run` directly and map its error to exit status without logging
   again; the application reports failures before telemetry stops.
 

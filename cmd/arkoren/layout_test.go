@@ -313,23 +313,23 @@ func TestAddArkIAMDryRunReportsPlan(t *testing.T) {
 
 	edits := changesWith(report, "edit")
 
-	if report["summary"] != "Would add ark iam" || len(edits) != 7 || edits[0]["path"] != "internal/bootstrap/server/compose.go" ||
+	if report["summary"] != "Would add ark iam" || len(edits) != 11 || edits[0]["path"] != "internal/bootstrap/server/compose.go" ||
 		edits[0]["detail"] != "compose.Use(bootstrap.Migrate)" || edits[1]["detail"] != "compose.Use(bootstrap.IAMRouter)" {
 		t.Fatalf("report = %v", report)
 	}
 
-	if last := edits[len(edits)-1]; last["path"] != ".env" || last["detail"] != "EMAIL_VERIFY_URL=http://127.0.0.1:8080/verify-email" {
+	if last := edits[len(edits)-1]; last["path"] != ".env.example" || last["detail"] != "TWO_FACTOR_KEY=file:.secrets/two-factor-key" {
 		t.Fatalf("last edit = %v", last)
 	}
 
-	if requires := changesWith(report, "require"); requires[0]["path"] != "arkoren.dev/ark/iam@v0.6.1" {
+	if requires := changesWith(report, "require"); requires[0]["path"] != "arkoren.dev/ark/iam@v0.8.0" {
 		t.Fatalf("requires = %v", requires)
 	}
 
 	steps := report["next_steps"].([]any)
 
-	if first := steps[0].(map[string]any); !strings.Contains(first["text"].(string), "LINK_KEY_FILE=link.key") ||
-		first["command"] != "arkoren key generate shared --out link.key" || steps[len(steps)-1].(map[string]any)["command"] != "make run" {
+	if first := steps[0].(map[string]any); !strings.Contains(first["text"].(string), "LINK_KEY=file:.secrets/link-key") ||
+		first["command"] != "arkoren key generate shared --out .secrets/link-key" || steps[len(steps)-1].(map[string]any)["command"] != "make run" {
 		t.Fatalf("next_steps = %v", steps)
 	}
 
@@ -376,7 +376,7 @@ func TestExamplesMatchAddArkOutput(t *testing.T) {
 
 	for _, name := range []string{
 		"iam", "password_reset", "email_verification", "token_scopes", "roles", "account_view", "github", "github_sign_up",
-		"hasher", "cache", "link_signer", "two_factor_key", "oauth_key", "mailer", "migrator",
+		"hasher", "cache", "secrets", "link_signer", "two_factor_key", "oauth_key", "mailer", "migrator",
 	} {
 		rel := "internal/bootstrap/" + name + ".go"
 		generated, err := os.ReadFile(filepath.Join(env.Dir, rel))

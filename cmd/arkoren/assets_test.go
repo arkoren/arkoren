@@ -1107,11 +1107,11 @@ func TestNewIgnoresKeepDependencyInputs(t *testing.T) {
 
 	git := renderedNewSource(t, ".gitignore")
 
-	contains(t, git, ".env\n", ".env.*\n", "!.env.example\n", "/bin/\n", "/go.work\n")
+	contains(t, git, ".env\n", ".env.*\n", "!.env.example\n", "/.secrets/\n", "/bin/\n", "/go.work\n")
 
 	docker := renderedNewSource(t, ".dockerignore")
 
-	contains(t, docker, ".git\n", ".env\n", ".env.*\n", "bin\n", "go.work\n")
+	contains(t, docker, ".git\n", ".env\n", ".env.*\n", ".secrets\n", "bin\n", "go.work\n")
 
 	for _, pattern := range []string{"vendor", "go.sum", "*.sum"} {
 		if strings.Contains(git+docker, "\n"+pattern+"\n") {

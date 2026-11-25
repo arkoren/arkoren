@@ -273,15 +273,29 @@ func (sys *system) verificationToken() string {
 	return ""
 }
 
-// newCipher returns an AES encrypter over a fresh key.
-func newCipher(t *testing.T) *crypto.Encrypter {
+// newRing returns a one-key ring over a fresh shared key, the form the link
+// signer and the AES driver take.
+func newRing(t *testing.T) key.Ring[key.Shared] {
 	t.Helper()
 
 	secret, err := key.GenerateShared()
 	if err != nil {
 		t.Fatalf("GenerateShared: %v", err)
 	}
-	driver, err := aescrypto.New(secret)
+	ring, err := key.NewRing(secret)
+	if err != nil {
+		t.Fatalf("NewRing: %v", err)
+	}
+
+	return ring
+}
+
+// newCipher returns an AES encrypter over a fresh key.
+func newCipher(t *testing.T) *crypto.Encrypter {
+	t.Helper()
+
+	ring := newRing(t)
+	driver, err := aescrypto.New(ring)
 	if err != nil {
 		t.Fatalf("aescrypto.New: %v", err)
 	}
@@ -325,7 +339,7 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...iam.BuilderF
 	ctx := oidc.ClientContext(t.Context(), sys.provider.httpClient())
 	google, err := oauthauth.New(oauthauth.Google(), newCipher(t), "cid", func(client *oauthauth.ClientBuilder) {
 		client.ClientSecret("secret")
-		client.RedirectURL("http://app.test/auth/google/callback")
+		client.RedirectURL("http://app.test/google/callback")
 		client.Audiences("cid")
 		client.NativeAudiences(nativeAudience)
 		client.AllowInsecure(true)
@@ -336,11 +350,7 @@ func newSystemWith(t *testing.T, builtIn, signUp bool, configure ...iam.BuilderF
 	if err := google.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	secret, err := key.GenerateShared()
-	if err != nil {
-		t.Fatalf("GenerateShared: %v", err)
-	}
-	signer, err := link.New(secret)
+	signer, err := link.New(newRing(t))
 	if err != nil {
 		t.Fatalf("link.New: %v", err)
 	}
