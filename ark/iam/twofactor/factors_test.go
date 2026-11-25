@@ -9,6 +9,8 @@ import (
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/service/crypto"
 	"arkoren.dev/core/service/database"
+	"arkoren.dev/driver/aes/aescrypto"
+	"arkoren.dev/foundation/key"
 	"arkoren.dev/foundation/query"
 	"arkoren.dev/foundation/totp"
 
@@ -274,13 +276,13 @@ func TestSecretKeyRotationReencrypts(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		ctx := testContext(t)
-		oldCipher, oldDriver := newCipher(t)
+		oldCipher, oldKey := newCipher(t)
 		oldSys := newSystem(t, db, instance, oldCipher)
 		enrollment, _ := oldSys.factors.Enroll(ctx, "1", "a")
 		_, _ = oldSys.factors.Activate(ctx, "1", currentCode(t, enrollment.Secret))
 		rewind(t, db, instance)
 
-		rotatedCipher, newDriver := newCipher(t, oldDriver)
+		rotatedCipher, newKey := newCipher(t, oldKey)
 		rotated, err := twofactor.NewFactors(oldSys.provider, db, cacheOf(t), totp.New("Example"), rotatedCipher, func(factors *twofactor.Builder) {
 			factors.Instance(instance)
 		})
@@ -291,7 +293,15 @@ func TestSecretKeyRotationReencrypts(t *testing.T) {
 			t.Fatalf("Verify with the rotated key: %v", err)
 		}
 		// After resealing, a cipher that knows only the new key still reads it.
-		onlyNewCipher, err := crypto.New(newDriver)
+		onlyNewRing, err := key.NewRing(newKey)
+		if err != nil {
+			t.Fatalf("NewRing: %v", err)
+		}
+		onlyNewDriver, err := aescrypto.New(onlyNewRing)
+		if err != nil {
+			t.Fatalf("aescrypto.New: %v", err)
+		}
+		onlyNewCipher, err := crypto.New(onlyNewDriver)
 		if err != nil {
 			t.Fatalf("crypto.New: %v", err)
 		}

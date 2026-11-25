@@ -158,7 +158,11 @@ func newSigner(t *testing.T, origin string) *link.Signer {
 	if err != nil {
 		t.Fatalf("GenerateShared: %v", err)
 	}
-	signer, err := link.New(secret, func(signer *link.Builder) {
+	ring, err := key.NewRing(secret)
+	if err != nil {
+		t.Fatalf("NewRing: %v", err)
+	}
+	signer, err := link.New(ring, func(signer *link.Builder) {
 		signer.Origin(origin)
 	})
 	if err != nil {

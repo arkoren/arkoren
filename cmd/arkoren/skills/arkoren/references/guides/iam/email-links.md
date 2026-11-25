@@ -25,6 +25,8 @@ ring, err := key.ParseRing[key.Shared](string(text))
 signer, err := link.New(ring)
 ```
 
+To rotate the key, put the new key first in the ring and keep the old ones after it, comma-separated: `NEW_KEY,OLD_KEY`. The signer signs with the first key and verifies links with every key in the ring, so links issued before the rotation keep working until you remove the old key.
+
 > [!WARNING]
 > Do not generate a fresh key at startup. Every application instance and every previously issued link must share the same signing key, or valid links will fail verification.
 

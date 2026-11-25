@@ -99,7 +99,8 @@
 // [password.ResetBuilder.Email] and [account.VerificationBuilder.Email] replace
 // one with the application's own, a function of the message and the page link.
 //
-//	signer, err := link.New(secret, func(links *link.Builder) {
+//	ring, err := key.ParseRing[key.Shared](keyText)
+//	signer, err := link.New(ring, func(links *link.Builder) {
 //		links.Origin("https://app.example.com")
 //	})
 //	identity, err := iam.New(db, store, func(identity *iam.Builder) {

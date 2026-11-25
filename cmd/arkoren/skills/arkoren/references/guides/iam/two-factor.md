@@ -25,9 +25,12 @@ scheme := totp.New("Acme")
 
 By default, `totp.New` uses SHA-1, six digits, a 30-second period, and one step of clock-drift tolerance, matching standard authenticator apps.
 
-Enable two-factor in your `iam.New` callback using a `*crypto.Encrypter` (`cipher`) with a key reserved for authenticator secrets:
+Enable two-factor in your `iam.New` callback using a `*crypto.Encrypter` (`cipher`) with a key ring reserved for authenticator secrets. Parse the ring with `key.ParseRing` from `arkoren.dev/foundation/key` and build the encrypter from it with `aescrypto` from `arkoren.dev/driver/aes/aescrypto`:
 
 ```go
+ring, err := key.ParseRing[key.Shared](string(text))
+driver, err := aescrypto.New(ring)
+cipher, err := crypto.New(driver)
 identity.TwoFactor(scheme, cipher)
 ```
 
@@ -127,10 +130,10 @@ To check a user's enrollment status from Go code (for example, to render an acco
 
 ## Rotating Encryption Keys
 
-When you rotate the encryption key used by `cipher`, keep the previous decryption keys in your [encrypter configuration](../encryption/keys.md). Whenever an authenticator secret is decrypted with an older key, IAM automatically re-encrypts it with the current key.
+To rotate the key behind `cipher`, put the new key first in the ring and keep the old ones after it, comma-separated: `NEW_KEY,OLD_KEY`. The ring encrypts with the first key and decrypts with all of them. Whenever an authenticator secret is decrypted with an older key, IAM automatically re-encrypts it with the current key. See [Application Keys](../keys/overview.md) for the ring format.
 
 > [!WARNING]
-> Removing a previous decryption key before existing secrets have been re-encrypted renders those authenticators unreadable.
+> Removing an old key from the ring before existing secrets have been re-encrypted renders those authenticators unreadable.
 
 Two-factor changes emit `twofactor.Enabled`, `twofactor.Disabled`, `twofactor.Regenerated`, `twofactor.RecoveryUsed`, and core's `auth.CredentialEnrolled` when you wire [security events](accounts.md#security-events).
 
