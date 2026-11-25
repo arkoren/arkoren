@@ -198,8 +198,8 @@ normalization changes. Arkoren does not generate or rotate this index for you.
 ## Re-encrypting Values
 
 [Key rotation](keys.md#rotating-keys) only changes future encryption. To replace
-old stored ciphertext, configure current and previous drivers and ask whether
-a previous driver authenticated the value. For an authorized loaded row
+old stored ciphertext, configure a key ring (and, to change ciphers, previous drivers) and ask
+whether a previous key or driver authenticated the value. For an authorized loaded row
 `connection`, read its `Credentials []byte` field:
 
 ```go

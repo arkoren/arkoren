@@ -1,35 +1,27 @@
 ---
-title: SSO
-description: Use a configured identity provider for organizational sign-in while retaining control of local membership and access.
-order: 60
+title: Organization SSO
+nav: Organization SSO
+description: Configure a corporate identity provider for organizational single sign-on, admit invited staff, enforce ongoing membership, and offboard departing users.
+order: 70
 summary:
-  - Restrict a work identity provider and register its client for organizational sign-in.
-  - Admit invited users with verified provider email or choose explicit sign-up.
-  - Check ongoing application membership and revoke local access during offboarding.
+  - Restrict a work identity provider (Google Workspace, Microsoft Entra ID, or OIDC) and register its IAM client.
+  - Choose between invitation-based unverified accounts and explicit open sign-up.
+  - Enforce ongoing application membership on every request and revoke local access during offboarding.
 ---
 
-# SSO
+# Organization SSO
 
-Single sign-on lets people reuse an identity-provider login across applications.
-For organizational SSO, that provider is managed by the organization.
-The provider authenticates the person; IAM maps the
-provider's identity to a local user. Your application still decides who can
-join, what they can access, and when that access ends.
+Organizational single sign-on lets employees sign in with their company identity provider while your application keeps full control over who is a member, what they can access, and when their access ends. The identity provider authenticates the person; IAM maps that verified external identity to a local user subject.
 
-This guide uses an existing IAM database and cache from the
-[IAM overview](overview.md), and a browser client registered with your
-identity provider. Handle each error in these focused fragments before
-continuing.
+This page builds directly on [External Sign-In](federated-sign-in.md) and focuses on the extra boundaries corporate SSO requires: restricting the upstream tenant, admitting staff, checking ongoing membership, and offboarding cleanly.
 
-## Choose a Provider
+## Restricting the Work Identity Provider
 
-Choose **one** of the following provider definitions for your organization.
-Each defines `definition`, which the client construction below uses. Import
-`oauthauth` from `arkoren.dev/ark/oauth/oauthauth`.
+Choose **one** provider definition below to produce `definition` for your OAuth client, importing `oauthauth` from `arkoren.dev/ark/oauth/oauthauth`.
 
 ### Google Workspace
 
-For a single Google Workspace domain, require its hosted domain:
+Restrict sign-in to a single Google Workspace domain with `HostedDomain`:
 
 ```go
 definition := oauthauth.Google(func(definition *oauthauth.GoogleBuilder) {
@@ -37,34 +29,23 @@ definition := oauthauth.Google(func(definition *oauthauth.GoogleBuilder) {
 })
 ```
 
-This sends a domain hint and checks the verified `hd` claim; an email address
-ending in `example.com` alone is not the domain check. Google reports an email
-only when its `email_verified` claim is boolean true.
+This checks Google's verified `hd` claim rather than merely inspecting the email suffix. Google reports an email only when `email_verified` is boolean `true`.
 
 ### Microsoft Entra ID
 
-For one Microsoft Entra tenant, use its tenant UUID, replacing this example
-with your own:
+Pin sign-in to one Entra tenant using its tenant UUID:
 
 ```go
 definition := oauthauth.Microsoft("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 ```
 
-The preset checks the tenant ID and uses the tenant issuer and `oid` as the
-external identity, rather than a mutable email or the token's `sub`. A tenant
-can include guests, so tenant acceptance is not your membership policy. Do not
-use `common` or `organizations` to restrict sign-in to one tenant.
+The preset validates the tenant ID and identifies users by tenant issuer and `oid` (not mutable email or `sub`). Never use `common` or `organizations` when restricting access to one tenant, and remember that a tenant may contain external guests; tenant membership is not your application's authorization policy.
 
-For email-based invitations, Microsoft must provide boolean `xms_edov: true`;
-an ordinary email claim alone is not evidence. Configure and review the
-optional ID-token claim as described in [Microsoft provider setup](../oauth/providers.md#microsoft).
-If the claim is absent or false, IAM cannot use that email to claim an invitation.
+For email-based invitations, Microsoft must emit boolean `xms_edov: true` in the ID token; see [Microsoft provider setup](../oauth/providers.md#microsoft).
 
-### Other OIDC Providers
+### Generic OIDC Providers
 
-For another OpenID Connect (OIDC) provider, use its exact trusted issuer.
-Only enable email trust after reviewing that issuer's address-verification
-policy: a false assertion could give someone ownership of an invited account.
+For Okta, Keycloak, or another OIDC provider, supply its exact trusted issuer URL:
 
 ```go
 definition := oauthauth.OIDC("https://id.example.com/realms/work", func(definition *oauthauth.OIDCBuilder) {
@@ -72,21 +53,14 @@ definition := oauthauth.OIDC("https://id.example.com/realms/work", func(definiti
 })
 ```
 
-With trust enabled, the adapter reports an email only when `email_verified`
-is boolean true. Without `TrustEmail(true)`, it reports no email evidence,
-even if the claim is present. Generic OIDC infers no organization or tenant
-policy; choose an issuer whose policy you have reviewed and enforce any
-additional membership restrictions yourself. If the provider requires the
-email scope, configure it on the client. See [generic OIDC](../oauth/providers.md#generic-oidc).
+> [!WARNING]
+> Only enable `TrustEmail(true)` after reviewing the issuer's email-verification policy. A false `email_verified` claim could allow someone to claim an invited account.
 
-## Build the Client
+Without `TrustEmail(true)`, generic OIDC reports no email evidence. Generic OIDC enforces no tenant policy on its own; add any organization checks yourself and request the `email` scope on the client if the provider requires it.
 
-Register `https://app.example.com/auth/work/callback` with the selected
-provider. Obtain its `clientID` and `clientSecret` from your application's
-configuration or secret provider. Use an existing `cipher *crypto.Encrypter`
-with a stable key shared across instances that may receive the callback; an
-ephemeral key can make an in-flight login fail after a restart or on another
-instance. See [OAuth client setup](../oauth/overview.md#configure-clients).
+## Building and Mounting the Client
+
+Register `https://app.example.com/auth/work/callback` with your identity provider, then build and start the client with your shared `cipher *crypto.Encrypter`:
 
 ```go
 work, err := oauthauth.New(definition, cipher, clientID, func(client *oauthauth.ClientBuilder) {
@@ -94,110 +68,46 @@ work, err := oauthauth.New(definition, cipher, clientID, func(client *oauthauth.
 	client.ClientSecret(clientSecret)
 	client.RedirectURL("https://app.example.com/auth/work/callback")
 })
-```
-
-Construction does not perform discovery. Start the client successfully before
-serving requests:
-
-```go
 err = work.Start(ctx)
 ```
 
-Until discovery succeeds, OIDC handlers return `503`. Your application's
-[startup lifecycle](../oauth/overview.md#start-discovery) can run `work.Start`.
-If users have local two-factor authentication, configure `ChallengeURL` to a
-front-end challenge page; otherwise a login requiring that challenge fails.
-
-## Register Sign-In
-
-Register the started client with IAM, retaining the default closed sign-up.
-Use `iam` from `arkoren.dev/ark/iam`, with the existing `db` and `store`:
+Register the client with IAM, leaving `SignUp` off by default:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(work)
-})
+identity.Provider(work)
 ```
 
-Apply the enabled [migrations](overview.md#prepare-storage) and
-[register the facade](overview.md#register-routes) once with session and CSRF
-protection. The client
-name makes `GET /auth/work` the login entry point and
-`/auth/work/callback` the callback. Offer a link to `/auth/work` on your login
-page. The browser goes to the provider, then returns to IAM: a connected or
-successfully claimed identity starts a local login, subject to any local
-two-factor challenge. An unknown identity otherwise receives `403`
-`federation:no-account`.
+With IAM mounted at `/auth`, `GET /auth/work` begins SSO and `/auth/work/callback` completes it. Configure `ChallengeURL` on the client if staff also use [local two-factor authentication](two-factor.md).
 
-IAM stores a connection by provider issuer and subject, not by email. See
-[federated sign-in](federated-sign-in.md) for connection and callback behavior.
+## Admitting Staff
 
-## Admit Users
-
-With the built-in directory and provider sign-up still off, invite a person
-by pre-creating an **unverified** account for the intended address. This is
-email ownership-based admission, not an invitation-token workflow: it adds no
-invitation expiry or separate invitation-secret check.
-
-> [!WARNING]
-> Claiming an unverified account deletes its existing password, provider
-> connections, authenticator, recovery codes, and tokens. IAM verifies the
-> address, rotates the credential version, and links the new identity in one
-> transaction. Earlier sessions and pending logins become invalid. Trust a
-> provider's email evidence only after reviewing its verification policy.
-
-From an authorized administrative operation, create the new invitation account
-without attaching other credentials:
+With `SignUp` off, you control who can join by pre-creating an **unverified** built-in account for each invited employee from an authorized admin flow:
 
 ```go
 subject, err := identity.Directory().Create(ctx, "ada@example.com")
 ```
 
-`subject` is the local user identifier. On Ada's first provider login, IAM can
-claim this account if the provider proves the same email. If `Create` reports
-that the address is taken, do not overwrite that account or assume it is a new
-invitation: an existing unverified account is subject to the same destructive
-claim. Do not use `CreateVerified` for this invitation: an unknown provider
-identity cannot automatically attach to an already verified account.
+When Ada signs in through `work` for the first time with a verified `ada@example.com` email, IAM claims that unverified account, verifies the email, and links her corporate identity automatically, without needing `SignUp(true)`.
 
-The claim works even when sign-up is off; a disabled user cannot be claimed.
-For application-owned credentials, arrange
-[`OnEmailProven`](own-users.md#additional-credentials) cleanup. Automatic
-takeover is unavailable with a custom user store.
+A few critical rules for this pattern:
 
-An existing verified account is different: the owner must authenticate using
-an existing method and explicitly [connect the provider](federated-sign-in.md#connect-a-provider).
-Matching email alone never links it.
+- **Use `Create`, not `CreateVerified`**: An unknown provider identity can never automatically attach to an already verified account. Existing verified users must sign in another way and [connect the provider](federated-sign-in.md#connecting-and-disconnecting-accounts).
+- **Check for collisions**: If `Create` returns `account.ErrEmailTaken`, do not treat it as a fresh invitation; an existing unverified account is subject to the same destructive [unverified-account takeover](federated-sign-in.md#unverified-account-takeover), which wipes any prior credentials and sessions.
+- **No built-in expiry**: This is email-ownership admission, not an expiring invitation-token workflow. With [custom user stores](own-users.md), automatic takeover is unavailable.
 
-### Open Sign-Up
-
-If your application deliberately permits new users to join on first provider
-login, use this alternative registration instead:
+If everyone in the restricted tenant should be able to join automatically on first login, enable sign-up on the provider instead:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Provider(work, func(login *iam.ProviderBuilder) {
-		login.SignUp(true)
-	})
+identity.Provider(work, func(login *iam.ProviderBuilder) {
+	login.SignUp(true)
 })
 ```
 
-Sign-up requires a nonempty provider-verified email. You can add a `Create`
-hook for an additional creation rule, but it is not a universal admission
-gate: existing connections and unverified-account claims do not pass through
-that sign-up hook. See [first-time sign-in](federated-sign-in.md#first-time-sign-in)
-for hook behavior and collisions.
+You can layer a `login.Create(...)` hook on top to restrict who may sign up, though remember that `Create` runs only for new-user creation, not for existing connections or unverified-account claims.
 
-## Check Access
+## Enforcing Ongoing Membership
 
-A successful provider login does not mean that Ada is still an active member
-of your application or may read every resource. Load current membership from
-your trusted application store, not from a request field or an old provider
-profile. Assume `membership` is your application-owned
-`func(context.Context, string) (bool, error)` that queries current membership
-by local user subject. It returns false for a former member and propagates
-store failures. Use `auth` from `arkoren.dev/core/auth` and `gate` from
-`arkoren.dev/core/auth/gate` to build a rule over the IAM identity:
+Signing in at the identity provider proves identity at login time, not that the person is still an active member of your application. Check current membership from your own trusted store on every request using `gate` from `arkoren.dev/core/auth/gate`:
 
 ```go
 activeMember := func(ctx context.Context, actor auth.Identity) (bool, error) {
@@ -205,53 +115,32 @@ activeMember := func(ctx context.Context, actor auth.Identity) (bool, error) {
 }
 ```
 
-Apply that rule to the session-authenticated `web` group from
-[Register Routes](overview.md#register-routes),
-before your application's `listProjects` handler:
+Apply the rule to your authenticated router:
 
 ```go
 web.With(gate.Require(activeMember)).Get("/projects", listProjects)
 ```
 
-The rule checks membership on each request and denies inactive members with
-`403`; a missing identity produces `401`. Store failures reach the error
-handler rather than granting access or becoming an ordinary denial. Also
-enforce resource-specific access in the handler.
-See [authorization](../authorization/overview.md) for store-backed checks
-and protecting operations used outside HTTP.
+Former members receive `403`, anonymous callers receive `401`, and store failures propagate as errors rather than granting access. Still enforce resource-level rules inside your handlers; see [Authorization](../authorization/overview.md).
 
-## Offboard Users
+## Offboarding Departing Users
 
-Ending an upstream session does not revoke the application's local sessions
-or API tokens. When a person leaves, disable their built-in IAM account and
-rotate its credential version in the same database transaction. Run this from
-an authorized administrative operation; `subject` is the local user selected
-for offboarding, not an unchecked identifier from a public request:
+Signing someone out of Okta, Entra ID, or Google Workspace does **not** end their active local sessions or API tokens in your application. When an employee leaves, disable their IAM account and rotate their credential version in a single database transaction:
 
 ```go
 err := db.WithTransaction(ctx, func(ctx context.Context) error {
 	if err := identity.Directory().Disable(ctx, subject); err != nil {
 		return err
 	}
+
 	return identity.Directory().Rotate(ctx, subject)
 })
 ```
 
-Handle the error: either both database changes commit or neither does.
-Disabling blocks subsequent checks; rotation invalidates old sessions,
-pending logins, and tokens even if the account is later re-enabled. Rotation
-does not delete credentials or connections. Keep the user disabled while
-access must remain blocked, and remove their application membership through
-your own policy. If sign-up is open, deleting an account alone does not prevent
-a later sign-in from creating another user. See
-[suspension](accounts.md#suspend-a-user) for details.
+Disabling blocks every subsequent session, token, and provider check; rotating the version invalidates all existing sessions, pending logins, and tokens permanently even if the account is later re-enabled. Also revoke their application membership in your own store. If `SignUp` is open, keep the account disabled rather than deleting it, because deleting it would allow the upstream identity to sign up again.
 
-Upstream MFA and logout are separate from local IAM controls. A provider login
-is not automatically a fresh local proof; review
-[freshness](freshness.md#provider-logins) before protecting sensitive actions,
-and use [local two-factor authentication](two-factor.md) when your policy
-requires it.
+Keep in mind that upstream MFA and logout are separate from local IAM controls. Review [External Providers and Freshness](freshness.md#external-providers-and-freshness) before relying on SSO for sensitive actions, and enable [local two-factor](two-factor.md) when your security policy requires it.
 
-For the client and facade APIs, see
-[`oauthauth`](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth) and
-[`iam`](https://pkg.go.dev/arkoren.dev/ark/iam).
+Next, see [Roles & Permissions](permissions.md) to assign global roles and permissions directly through IAM.
+
+For the client and facade APIs, see [`oauthauth`](https://pkg.go.dev/arkoren.dev/ark/oauth/oauthauth) and [`iam`](https://pkg.go.dev/arkoren.dev/ark/iam).

@@ -57,7 +57,7 @@ type Inspection struct {
 	//	}
 	Expired bool
 
-	// Previous reports that a secret from [Builder.Previous] signed the
+	// Previous reports that a previous key of the signer's ring signed the
 	// link. Re-issue such links before dropping that secret.
 	//
 	// Example:

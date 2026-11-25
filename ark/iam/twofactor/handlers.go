@@ -113,7 +113,7 @@ func (factors *Factors) enrolledMethods(ctx context.Context, subject string) ([]
 //
 // Example:
 //
-//	web.Post("/two-factor/setup", factors.SetupHandler(guard))
+//	web.Post("/two-factor/setup", factors.SetupHandler(guard), twofactor.SetupOperation)
 func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
@@ -149,7 +149,7 @@ func (factors *Factors) SetupHandler(guard *auth.Guard) router.Handler {
 //
 // Example:
 //
-//	web.Post("/two-factor", factors.EnableHandler(guard))
+//	web.Post("/two-factor", factors.EnableHandler(guard), twofactor.EnableOperation)
 func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
@@ -159,7 +159,7 @@ func (factors *Factors) EnableHandler(guard *auth.Guard) router.Handler {
 		if err := web.Verified(r.Context(), factors.verified, identity.Subject()); err != nil {
 			return err
 		}
-		body, err := web.Decode[codeBody](r)
+		body, err := web.Parse(r, codeSchema)
 		if err != nil {
 			return err
 		}
@@ -216,7 +216,7 @@ func (factors *Factors) enable(guard *auth.Guard, r *http.Request, subject, code
 //
 // Example:
 //
-//	web.Delete("/two-factor", factors.DisableHandler(guard))
+//	web.Delete("/two-factor", factors.DisableHandler(guard), twofactor.DisableOperation)
 func (factors *Factors) DisableHandler(guard *auth.Guard) router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := factors.freshOrRecovered(guard, r)
@@ -251,7 +251,7 @@ func (factors *Factors) DisableHandler(guard *auth.Guard) router.Handler {
 //
 // Example:
 //
-//	web.Post("/two-factor/recovery-codes", factors.RecoveryCodesHandler(guard))
+//	web.Post("/two-factor/recovery-codes", factors.RecoveryCodesHandler(guard), twofactor.RecoveryCodesOperation)
 func (factors *Factors) RecoveryCodesHandler(guard *auth.Guard) router.Handler {
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := factors.freshOrRecovered(guard, r)

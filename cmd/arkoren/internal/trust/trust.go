@@ -193,13 +193,37 @@ func Execute(
 		return err
 	}
 
-	return env.Result(map[string]any{
-		"action": request.Action, "completed": true, "sha256": root.Fingerprint, "target": request.Target,
-	})
+	summary := "Trusted root certificate in " + request.Target
+
+	if request.Action == "untrust" {
+		summary = "Removed trust for root certificate in " + request.Target
+	}
+
+	return env.Result(Result{Summary: summary, Action: request.Action, Target: request.Target, SHA256: root.Fingerprint})
+}
+
+// Result is the JSON result of a completed trust change. Failure is an error,
+// so a result always means the store was changed.
+type Result struct {
+	// Summary reads "Trusted root certificate in <target>" or the removal
+	// wording.
+	Summary string `json:"summary"`
+
+	// Action is "trust" or "untrust".
+	Action string `json:"action"`
+
+	// Target names the system store that changed.
+	Target string `json:"target"`
+
+	// SHA256 is the fingerprint of the exact certificate bytes acted on.
+	SHA256 string `json:"sha256"`
 }
 
 // ApproveCertificateTrust writes the identity and scope warning even with
-// --yes. Failed/short warning writes always prevent platform mutations.
+// --yes: a document with one top-level warning whose message states the
+// consequence and whose details name the action, the target store and the exact
+// SHA-256 of the certificate, then the caveats of the platform. Failed/short
+// warning writes always prevent platform mutations.
 func ApproveCertificateTrust(
 	ctx context.Context,
 	request Request,
@@ -207,16 +231,20 @@ func ApproveCertificateTrust(
 	env console.Environment,
 ) error {
 	output := &console.Output{Writer: env.Stderr}
-	err := console.WriteJSON(output, map[string]any{"warning": map[string]any{
-		"action": request.Action, "sha256": root.Fingerprint, "target": request.Target,
-		"message": "System-wide root trust change.",
-		"effects": []string{
+	err := console.WriteJSON(output, struct {
+		Warnings []console.Warning `json:"warnings"`
+	}{[]console.Warning{{
+		Message: "System-wide root trust change.",
+		Details: []string{
+			"Action: " + request.Action,
+			"Target: " + request.Target,
+			"SHA-256: " + root.Fingerprint,
 			"Trust permits certificates signed by this CA. Removal affects only the selected system store.",
 			"On macOS, removal clears admin trust settings but leaves the public System keychain certificate.",
 			"On Linux, removal deletes only Arkoren digest-named anchors; other installed copies are untouched.",
 			"Browsers, Java, containers, and applications can use separate stores or cached trust.",
 		},
-	}}, env.DiagnosticStyle())
+	}}}, env.DiagnosticStyle())
 
 	if err != nil {
 		return err
@@ -227,7 +255,9 @@ func ApproveCertificateTrust(
 	}
 
 	if !env.InputTerminal {
-		return console.UsageError("system-store changes require terminal confirmation or explicit --yes")
+		return console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Pass --yes to approve the system-store change without a prompt"}},
+			"system-store changes need confirmation and input is not a terminal")
 	}
 
 	if _, err := fmt.Fprint(output, "Continue? [y/N] "); err != nil {

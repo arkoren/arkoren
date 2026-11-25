@@ -142,15 +142,38 @@ related calls together rather than putting every call on its own line.
 A multiline callback body does not require a break before its method call.
 Ordinary mutable builders prefer one setting action per line.
 
-**Package routes.** Opaque protocol endpoints (OAuth server, MCP, webhooks)
-implement `http.Handler` and are attached with `router.Mount(prefix, handler)`.
-A package that adds ordinary application routes exposes one `XHandler()` method
-per route plus `Register(r *router.Router)` (or `Register<Set>` when one type
-owns several route sets, e.g. `Application.RegisterProbes`). `Register`
-registers sensible default paths and operations, applies no middleware or
-prefix of its own, and is used preferably as `routes.Group("/", pkg.Register)`.
-Its signature stays `func(*router.Router)` so the method value works as a group
-callback and as a direct call.
+**Package routes.** Every package that serves HTTP registers its routes on a
+router: one `XHandler()` method per route, where custom paths make sense, plus
+`Register(r *router.Router)` (or `Register<Set>` when one type owns several
+route sets, e.g. `Application.RegisterProbes`). `Register` registers sensible
+default paths and operations, applies no middleware or prefix of its own, and is
+used as `routes.Group(prefix, pkg.Register)`, behind whatever middleware the
+group carries. Its signature stays `func(*router.Router)` so the method value
+works as a group callback and as a direct call. Protocol endpoints register
+exact methods and are not `http.Handler` values: the MCP server registers
+`POST` at the group path (`routes.Group("/mcp", endpoint.Register)`) and the
+router answers every other method with 405. Packages whose routes are coupled by
+fixed relative asset names (`swagger.Viewer`) offer `Register` only, with no
+per-route handler methods. Only applications adapt foreign `http.Handler`
+values, with `router.HTTP` (plus `http.StripPrefix` on a catch-all route when
+the handler needs its prefix removed). There is no `Mount`.
+
+**Handler operations.** Every exported handler (`XHandler()`, a `router.Handler`
+value) ships an exported `XOperation func(*router.OperationBuilder)` in its own
+package, written like `application.LiveOperation`: summary, description, tags,
+every path/query parameter, the body schema, each response with its schema
+(cookies and `Location` as response headers), and every problem the handler
+returns through `Problem` with its real identity. Every registration passes it
+as the last argument: `Register*` functions, templates, doc examples and guides.
+A type that offers only `Register` (`swagger.Viewer`) passes unexported operations
+inside it. Multi-method registrations carry no operation ID. A catch-all
+(`{path...}`, `Any`) cannot export: avoid one, or pass an operation that sets
+`Hidden(true)`.
+A module uses only operations and builder methods of the core it requires.
+Name path wildcards once per template: OpenAPI export rejects `/x/{id}` beside
+`/x/{name}`. Document auth in the description and its 401/403 problems; `Security`
+needs schemes the application declares. Test that the registered routes export
+with no errors and that each operation has a summary and its statuses.
 
 Every public API takes one of three shapes.
 
@@ -543,7 +566,7 @@ delivery, and lifecycle protocols explicit.
   permissions, and with `identity.Permissions(...)` the facade wires `Store.Load`
   as the guard's Grants and `Store.Permissions` as the token ceiling;
   their handlers take `*auth.Guard`, require `Identity.Session()` and call
-  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use.
+  `guard.Fresh` themselves; problems are `tag:arkoren.dev,2026-11:ark/access:<package>:<name>`. Password reset and email verification are off until `password.Builder.Reset(signer, mailer, resetURL, configure...)` and `account.Builder.Verification(signer, mailer, verifyURL, configure...)` are given (the URLs are the app pages the links open, required, absolute, no fragment; `ResetBuilder.Email`/`VerificationBuilder.Email` replace the default plain-text email and are the only override). IAM queues its own jobs on the app's dispatcher and sends through the app's mailer, keeps no token tables and starts no goroutine: `identity.Queue(dispatcher)` (also `Queue` on the `password`/`account` builders for standalone use) is required with either feature or `New` fails with `ErrInvalidConfig`; the jobs are built per instance by `storage.NewJob` (names `iam-password-reset`/`iam-email-verification` plus `-<instance>` with `_` written `-`, queue `iam.QueueName`), the facade never exposes a job, handler or dispatch func, and `identity.RegisterJobs(consumer)` registers the handlers of the enabled features (`Verifier.RegisterJobs`, `Directory.RegisterJobs`; keep a new job's registration there) in the worker process. `RegisterJobs` cannot read the consumer's queue restriction until ark/iam requires a core with `Consumer.Queues()`; a restricted consumer must list `iam.QueueName`. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; a send may run more than once and an email the mailer rejects as `mail.ErrInvalidMessage` is `queue.Permanent`. Keep the forgot route storing the identifier as typed, and the conditional write that makes a reset single use. `IAM.Migrations()` returns every feature's group for the instance whatever is enabled (definitions live in `internal/migration`, the packages' `Migrations` methods delegate to them), omitting only the built-in users with `Builder.Users`; groups are append-only. `IAM.Ping` checks the enabled features only.
 - Webhook `Event.Map` returns a new credential-free definition with the same
   provider key. Run the original decoder before pure, no-I/O conversion and
   preserve the first definition error; nil conversion is a domain error, not
@@ -653,6 +676,12 @@ delivery, and lifecycle protocols explicit.
   accept ordered `ComposerFunc` callbacks. Composition completes before startup
   callbacks, then supervised runners and background checks launch. Only composers
   register lifecycle work; applications expose control and observation.
+  `application.Run(ctx, app, compose...)` and `application.Start` build the
+  application from a root `*Provider[*Application]` on one composer: providers
+  its settings use are ordinary providers whose cleanup the application owns,
+  and `compose.App()` while it is still being built panics with
+  `ErrProviderCycle`. Nil provider panics `ErrNilFunc`; a nil result returns
+  `ErrNilApplication`; build failures report once on stderr.
 - Compose modules with typed function arguments and return values. Register
   cleanup once at the acquiring owner, immediately after acquisition. Cleanup
   runs in reverse order on composition failure, startup failure, and shutdown,
@@ -686,7 +715,7 @@ delivery, and lifecycle protocols explicit.
   dependencies start first and stop last. Re-entering a provider that is still
   building panics with `ErrProviderCycle` naming the type chain; a nil build
   panics with `ErrNilFunc` at `Provide`; a failed build (Must/Require abort) is
-  never cached. Use is composition-only (`ErrInvalidPhase` otherwise). Root
+  never cached. Use is composition-only (`ErrInvalidPhase` otherwise). `Composer.Supply(provider, value)` sets a provider's value for the composition without running its build, so its Startup/Cleanup/Check never register; it panics `ErrNilFunc` for nil and `ErrInvalidPhase` outside composition, for a provider already built or supplied and for one still building. It is for tests: a test root provider passed to `application.Start` supplies values (the root is built first) and returns `compose.Use(server.App)`; `arkoren check` allows `Supply` only in `_test.go` files. Root
   `ComposerFunc = func(*Composer)` remains an alias for `Start`/`Run`.
 - Conditional wiring is a plain Go `if` on `composer.App().Debug()` (the
   construction-time flag, independent of environment or log level) or
@@ -761,6 +790,13 @@ trust are explicit CLI actions, never startup repair or a loader side effect.
   for review; the generic templates in `foundation/problem` stay
   `about:blank`. Domain and contract
   sentinels stay plain errors; applications map them with `http/middleware/errormap`.
+- Request data is parsed with a `foundation/validate` schema through
+  `request.ParseJSON`, and that same schema is the operation's body schema. Every
+  failure a client can cause is a `problem.Details` sentinel with a stable
+  `Type`, rendered by the router; handlers write no ad-hoc validation, plain-text
+  or hand-built JSON error bodies. Exceptions are protocol-fixed formats (probe
+  bodies, MCP JSON-RPC, OAuth redirects), and a plain `http.Handler` without a
+  router (Prometheus) writes the problem document itself.
 - Never discard an error silently; after a side effect, write `_ =` with a
   comment saying why.
 
@@ -849,18 +885,7 @@ in attributes (`arkoren.<component>.<field>`).
 - JSON is `encoding/json/v2`. Prefer `cmp.Or`, type switches, `maps.Clone`,
   `slices.Clone`, `strings.CutPrefix`, `strings.SplitSeq` over hand-written loops
   and single-use helpers. Guard clauses, no `else` after `return`.
-- CLI commands emit one JSON result document, including local mutations and
-  version reporting; follow emits NDJSON. Route local reports through the shared
-  result renderer and retain stdout failure precedence. Errors and trust warnings
-  are JSON records on stderr. Help and interactive prompts remain text; explicit
-  key exports remain raw. Preserve these exceptions when adding output paths.
-  CLI-owned summaries select task-relevant fields rather than dumping MCP
-  catalogs or manuals. Default reports use counts and concise diagnostics;
-  `--verbose` exposes complete safe context, file inventories, tool schemas,
-  status details and safe build identifiers. Keep conflict paths as structured
-  data, not comma-joined messages. Previews emit one stdout report with their exit
-  verdict, without duplicate stderr lists. Preserve arbitrary remote domain
-  payloads, raw exports, redaction and trust warnings in either mode.
+- CLI output follows the shapes in [CLI output shapes](#cli-output-shapes).
 - Value types holding maps or slices return modified copies; copy caller-owned
   input before keeping it and internal state before returning it.
 - Detach owned containers at publication as well as input capture. Retained
@@ -894,9 +919,16 @@ in attributes (`arkoren.<component>.<field>`).
   memory `Set` and `SetFor` take that same definition and a matching value.
   Zero/empty definitions are invalid. Provider schemas remain external;
   preserve runtime conversion checks and fallback/error behavior.
-- Structured-secret readers share immutable `secret.NewSecret[T](name)`
-  definitions and call `store.Get(ctx, definition)`. The definition binds the
-  provider name and JSON decoding type, not a value or pinned version. Raw
+- Secrets are named by `scheme:name` references (no `?field`/`?version`).
+  Readers share immutable `secret.NewSecret[T](reference)` or
+  `secret.NewBinding[T](key)` definitions (a binding resolves through
+  `Builder.Bindings(lookup)` and is `ErrUnbound` when unset; no defaults) and
+  call `store.Get(ctx, definition)`; the store never parses references, the
+  `secretmux` driver routes on the scheme. Drivers carry bytes; decoding lives in
+  the definition by `T`: string (UTF-8, one trailing newline dropped), `[]byte`,
+  `encoding.TextUnmarshaler`, else JSON. Read-only sources and text-only backends
+  return `secret.ErrUnsupported`. The definition binds the reference and
+  decoding type, not a value or pinned version. Raw
   drivers retain `Reference` and `Value`. JSON-compatible schema drift can
   still decode successfully; definitions do not enforce a provider schema.
   Preserve provider version strings. Concrete versions identify immutable
@@ -915,10 +947,10 @@ in attributes (`arkoren.<component>.<field>`).
   Preserve raw persisted JSON and middleware TTL; the exact-bytes persistence
   test guards the session record shape.
 
-Optional `secret.Namespace[T]`, `feature.Namespace[T Primitive]`, and
+Optional `secret.Namespace` (not generic: its `Secret[T]` method picks each leaf's type), `feature.Namespace[T Primitive]`, and
 `session.Namespace[T]` compose ordinary definitions, not namespace-bound stores.
 Prefer standalone definitions first. Secret requires positional prefix and
-separator (`NewNamespace[T]("tenants", "/")` for AWS/Vault only); feature takes
+separator (`NewNamespace("aws:tenants", "/")`; the prefix carries the scheme); feature takes
 prefix and exact inherited fallback; session takes prefix. Feature/session
 default to `:`. Nongeneric NamespaceBuilder/NamespaceBuilderFunc configure only
 Separator; Derive and Subnamespace publish detached variants. Parent separator
@@ -934,6 +966,108 @@ whole records and never alter TTL, handles, identity APIs, or arkoren:auth:user.
 Check secret provider naming constraints and prefer feature subject targeting
 over dynamic keys unless those flags exist. See the corresponding consumer
 guides for provider qualifications and migration examples.
+
+## CLI output shapes
+
+**Rendering.** Every CLI-authored document is JSON. Only `console.Format`,
+reached through `env.Result` or `WriteJSON`, turns it into text, and only when
+the destination stream is a terminal; `--json`, `--compact` or a pipe keep JSON.
+Commands write no text of their own, except help, prompts, raw key exports and
+`map --text`. Keep stdout failure precedence. Text shortens what a reader does
+not need exactly and JSON never does: a 64-character revision or fingerprint
+prints as its first 12 characters, and a path under the working directory
+prints relative to it (`console.Style.Dir`); a step's `command` stays exact.
+
+**Shapes.** Each command uses exactly one.
+
+- **Local actions** (`new`, `add *`, `skills install|update`, `key generate`,
+  `certificate generate`, trust) use the result envelope in this order:
+  `summary`, `ok` or `dry_run`, command fields, `changes`, `warnings`,
+  `next_steps`. `changes` holds `console.Change` records whose action is one of
+  `create|edit|remove|write|require|tidy`; every file a command changes is a
+  change, never a counter such as `written_files`. A change path is
+  project-relative for project files and absolute for any other file. A dry-run
+  summary starts with "Would" and must predict the real outcome: a preview that
+  would fail on conflicts says "Would fail: ...", sets `ok` false, lists the
+  conflicts as `problems` and ends with the exit status the real run would have.
+- **Local checks and reports** (`check`, `key check`, `certificate check`,
+  `skills status`) always carry `ok` and `problems`, an empty array when ok. A
+  `console.Problem` is `{rule or field, path, line, message}`. Invalid material
+  or a stale installation is a problem with `ok` false and exit 1; only a
+  failure to read a file the user named is an error. `status` reports health in
+  `ok`; `state` is a lifecycle word and `status` an outcome. `type` is only an
+  error type; key commands say `kind`.
+- **Listings and inventories** (`tools`, `map`, `--version`) are plain data
+  with no summary.
+- **Errors** are `{"error": ErrorReport, "next_steps": [...]}` on stderr, and
+  **warnings** are `{"warnings": [...]}`.
+- **Follow** output is NDJSON. **Remote tool results** pass through unchanged
+  and use the generic renderer. Shipped MCP list tools return
+  `{items, truncated[, cursor]}`; the renderer prints that as a bare table, so
+  new shipped tools keep that wrapper and flat item records. A cursor list
+  signals more records with `truncated` alone, never a second flag. Tools emit
+  absolute RFC 3339 times only, plain numbers (`duration_ms`, `heap_alloc_bytes`)
+  and no relative or derived duplicates such as `age`, `next_in` or a duration
+  string; the CLI adds "(5s ago)" and readable units. Omit empty containers.
+
+**Next steps.** `next_steps` is always a top-level array of `console.Step`
+(`{text, command}`), on successes and errors, never nested. `text` is one
+imperative sentence. `command` is present only when a single exact, pasteable
+command performs the step; quote values with `console.Quote`. A step that needs
+a value or judgment from the reader is text only. When a nested state reports an
+error (`tools` with an unreachable or unconfigured inspector) keep the nested
+error data and hoist its steps to the top-level `next_steps`.
+
+**Warnings.** A `console.Warning` (`{message, details}`) is something a
+successful command left alone, such as unchanged system trust. It is a top-level
+`warnings` member, rendered `! message` with details as bullets, never a step.
+The trust commands' stderr document is the same shape.
+
+**Errors.** `error.message` says what went wrong and never what to do; every
+remedy is a step. `error.type` is always set from the closed list below, and the
+exit code follows the type (`console.ExitCodeFor`). A remote tool's own type
+passes through, except `usage`, `not_configured` and `unauthorized`, which would
+change the exit code and become `tool_error`.
+
+| Type | Meaning | Exit |
+| --- | --- | --- |
+| `usage` | Unknown command, missing or surplus argument, unknown or malformed flag | 2 |
+| `not_configured` | A required setting such as the inspector URL is absent | 2 |
+| `unreachable` | The inspector did not answer | 1 |
+| `unauthorized` | HTTP 401 | 4 |
+| `invalid_input` | The server rejected the request, or a named file is missing | 1 |
+| `file_conflict` | Existing files block a local action; nothing was written | 1 |
+| `tool_error` | A remote tool or protocol failure without a type of its own | 1 |
+| `internal` | An unexpected local failure | 1 |
+
+Return failures with `console.Fail(type, steps, format, args...)` or
+`console.UsageError`; `remote.DescribeError` classifies everything else
+(`ToolFailure` marks remote-path failures as `tool_error`). Do not hand-write a
+type or an exit code. A usage error names the argument or flag at fault and the
+accepted values, never echoes a pasted value, and gets a "See usage" step with
+`arkoren <command> --help` unless it supplies its own. Bare command groups print
+their help to stdout and exit 0. An abbreviated default view ends its steps with
+the same command line plus `--verbose` (`console.VerboseStep`; a bearer token
+in the line is replaced by `$ARKOREN_MCP_TOKEN`).
+
+**Flags.** Messages, steps, help text and guides spell flags with two dashes
+(`--url`, `--dry-run`); single-letter flags keep one (`-f`). The parser still
+accepts a single dash.
+
+**Report types.** A report is a struct whose fields follow reading order, never
+`map[string]any`; shared types (`Change`, `Action`, `Step`, `Warning`,
+`Problem`) live in `console`. Add no field that is always true or false, except
+`ok` on a check: a failure is otherwise an error. Long lists stay lists of plain
+values. Default reports use counts and concise diagnostics, and `--verbose` adds
+file inventories, schemas and safe build identifiers. Keep conflict paths as
+data, not comma-joined messages; previews print one stdout report with their
+exit verdict. Preserve remote payloads, raw exports, redaction and trust
+warnings in every mode.
+
+**Adding a command.** Pick one shape, add a text-mode golden test
+(`cmd/arkoren/terminal_test.go`) and a JSON shape test, and update the field
+description in the CLI guide under
+`cmd/arkoren/skills/arkoren/references/guides/cli/`.
 
 ## Tests
 

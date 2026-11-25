@@ -16,11 +16,14 @@ type cursorPage struct {
 	Cursor string `json:"cursor"`
 	// Dropped reports records evicted before this observation.
 	Dropped uint64 `json:"dropped"`
-	// HasMore drains available pages without a long poll.
+	// HasMore is the flag older servers send for a continuation page that
+	// stopped at its limit; newer servers set Truncated instead.
 	HasMore bool `json:"has_more"`
 	// InstanceChanged explicitly reports a server restart across observations.
 	InstanceChanged bool `json:"instance_changed"`
-	// Truncated reports a bounded result that omitted records.
+	// Truncated reports more matching records than the page holds. Follow
+	// starts from a tail anchor, so on a continuation page it means more records
+	// are waiting and the next call drains them without a long poll.
 	Truncated bool `json:"truncated"`
 }
 
@@ -56,7 +59,7 @@ func (client *Client) Follow(ctx context.Context, name string, body []byte, emit
 
 		arguments["cursor"], arguments["wait"] = page.Cursor, "25s"
 
-		if page.HasMore {
+		if page.HasMore || page.Truncated {
 			arguments["wait"] = "0s"
 		}
 
@@ -96,15 +99,13 @@ func (client *Client) cursorCall(ctx context.Context, name string, arguments map
 // emitCursorPage preserves loss/restart notices and item order. Write failures
 // return immediately and take precedence over a concurrent cancellation.
 func emitCursorPage(page cursorPage, emit func([]byte) error) error {
-	if page.Dropped > 0 || page.InstanceChanged || page.Truncated {
+	if page.Dropped > 0 || page.InstanceChanged {
 		notice, err := json.Marshal(struct {
 			// Dropped counts evictions; omission distinguishes restart-only notices.
 			Dropped uint64 `json:"dropped,omitzero"`
 			// InstanceChanged explicitly reports a new server epoch.
 			InstanceChanged bool `json:"instance_changed,omitzero"`
-			// Truncated reports a bounded snapshot that omitted available records.
-			Truncated bool `json:"truncated,omitzero"`
-		}{Dropped: page.Dropped, InstanceChanged: page.InstanceChanged, Truncated: page.Truncated})
+		}{Dropped: page.Dropped, InstanceChanged: page.InstanceChanged})
 
 		if err != nil {
 			return err

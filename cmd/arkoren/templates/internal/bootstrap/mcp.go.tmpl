@@ -5,16 +5,17 @@ import (
 	"arkoren.dev/core/application"
 )
 
-// Diagnostics mounts read-only application, route, and telemetry diagnostics at
-// /mcp on the shared router. Application-owned bounded capture keeps recent
-// traces, logs, and metrics in memory; nothing is exported to an external
-// backend.
+// MCP registers read-only application, route, and telemetry diagnostics at /mcp
+// on the shared router and returns the endpoint. Application-owned bounded
+// capture keeps recent traces, logs, and metrics in memory; nothing is exported
+// to an external backend.
 //
-// Compose calls Diagnostics only when application debug is enabled
-// (if compose.App().Debug()). Call it after the registration functions whose
-// routes it should list and before Listen. Endpoint construction errors abort
-// composition before mounting. The endpoint shares the HTTP server's listener
-// and router middleware; it does not start or own a separate listener.
+// Compose uses MCP only when application debug is enabled
+// (if compose.App().Debug()). The tools read the router's routes when called,
+// so the order of MCP and feature providers in Compose does not matter.
+// Endpoint construction errors abort composition before registration. The endpoint
+// shares the HTTP server's listener and router middleware; it does not start or
+// own a separate listener.
 //
 // This starter adds no authentication. Anyone who can reach the listener can
 // read logs and telemetry attributes. Keep APP_DEBUG=false in production and
@@ -24,7 +25,7 @@ import (
 //
 // See https://arkoren.dev/docs/guides/observability/exposing-diagnostics and
 // https://arkoren.dev/docs/guides/mcp/securing-mcp.
-func Diagnostics(compose *application.Composer) {
+var MCP = application.Provide(func(compose *application.Composer) *mcpserver.Server {
 	logger := compose.App().Logger()
 	telemetry := compose.App().Telemetry()
 	routes := compose.Use(Router)
@@ -36,5 +37,7 @@ func Diagnostics(compose *application.Composer) {
 		listener.Tools(routes.MCPTools("http")...)
 	}))
 
-	routes.Mount("/mcp", endpoint)
-}
+	routes.Group("/mcp", endpoint.Register)
+
+	return endpoint
+})

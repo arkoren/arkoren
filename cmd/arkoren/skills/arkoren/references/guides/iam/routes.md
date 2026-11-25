@@ -1,157 +1,83 @@
 ---
-title: Routes
-description: Look up IAM's default routes, availability rules, response problems, and the steps for registering individual handlers on custom paths.
+title: Routes & Errors
+nav: Routes & Errors
+description: Look up every default IAM HTTP route, JSON media-type rule, login response shape, stable problem type, and how to mount handlers on custom paths.
 order: 120
 summary:
-  - Find the routes registered for each enabled feature and distinguish availability from request authorization.
-  - Interpret JSON requirements, login responses, and stable problem types.
-  - Register custom handlers without losing their security checks or breaking provider redirects.
+  - Look up every route registered by identity.Register and the configuration required to enable it.
+  - Reference IAM's JSON contract, login response shapes, HTTP status codes, and stable problem types.
+  - Mount individual IAM handlers on custom paths with OpenAPI annotations and custom provider targets.
 ---
 
-# Routes
+# Routes & Errors
 
-`web.Group("/", identity.Register)` registers the default routes below. `web`
-must already run the [IAM middleware and appropriate CSRF
-protection](overview.md#register-routes). Register once at the root, never under
-a path prefix; register individual handlers instead if your paths must differ.
+Calling `web.Group("/auth", identity.Register)` mounts every route supported by your configuration relative to `/auth` (use `"/"` for no prefix). Ensure `web` already carries `csrf.Middleware()` and `identity.Middleware()` as shown in [IAM Overview](overview.md#mounting-routes-and-protecting-endpoints).
 
-This page is a lookup reference. The feature guides explain request bodies
-and workflows; [Fresh Logins](freshness.md#credential-routes) compares their
-session, freshness, and verified-email requirements.
+This page is a quick reference for HTTP paths, payloads, error codes, and custom route wiring. For session, freshness, and verified-email requirements per action, see [Step-Up & Freshness](freshness.md#what-each-credential-route-requires).
 
 ## Default Routes
 
-“Required feature” determines whether a route is registered, not whether a
-particular request is authorized.
+"Required configuration" controls whether `identity.Register` mounts the route, not whether a given request is authorized.
 
-| Route | Required feature |
+| Route | Required configuration |
 | --- | --- |
-| `POST /login` | Passwords |
-| `POST /register` | Passwords with registration enabled |
-| `GET /login/pending` | A registered second-factor method |
-| `POST /login/challenge` | A registered second-factor method |
+| `POST /login` | `Password` |
+| `POST /register` | `Password` with `Registration(true)` |
+| `GET /login/pending` | Any registered second-factor method |
+| `POST /login/challenge` | Any registered second-factor method |
 | `POST /logout` | Always |
-| `POST /confirm` | A registered step-up method |
-| `POST /password/forgot` | Passwords with reset configured |
-| `POST /password/reset` | Passwords with reset configured |
-| `PUT /password` | Passwords |
-| `POST /email/verify` | Built-in directory with verification configured |
-| `POST /email/verify/resend` | Built-in directory with verification configured |
-| `POST /two-factor/setup` | Two-factor |
-| `POST /two-factor` | Two-factor |
-| `DELETE /two-factor` | Two-factor |
-| `POST /two-factor/recovery-codes` | Two-factor |
-| `GET /tokens` | Tokens |
-| `DELETE /tokens/{id}` | Tokens |
-| `POST /tokens` | Personal tokens enabled |
-| `POST /device-tokens` | Device tokens enabled |
-| `DELETE /device-tokens/current` | Device tokens enabled |
+| `POST /confirm` | Any registered step-up method |
+| `POST /password/forgot` | `Password` with `Reset` |
+| `POST /password/reset` | `Password` with `Reset` |
+| `PUT /password` | `Password` |
+| `POST /email/verify` | Built-in directory with `Verification` |
+| `POST /email/verify/resend` | Built-in directory with `Verification` |
+| `POST /two-factor/setup` | `TwoFactor` |
+| `POST /two-factor` | `TwoFactor` |
+| `DELETE /two-factor` | `TwoFactor` |
+| `POST /two-factor/recovery-codes` | `TwoFactor` |
+| `GET /tokens` | `Tokens` |
+| `DELETE /tokens/{id}` | `Tokens` |
+| `POST /tokens` | `Tokens` with personal tokens enabled (default) |
+| `POST /device-tokens` | `Tokens` with device tokens enabled (default) |
+| `DELETE /device-tokens/current` | `Tokens` with device tokens enabled (default) |
 | `GET /sessions` | Always |
 | `DELETE /sessions/{id}` | Always |
 | `DELETE /sessions` | Always |
-| `GET /auth/{name}` | That provider registered |
-| `GET /auth/{name}/callback` | That provider registered |
-| `POST /auth/{name}/callback` | That provider registered |
-| `GET /auth/{name}/nonce` | Provider implements `iam.NativeProvider` |
-| `POST /auth/{name}/native` | Provider implements `iam.NativeProvider` |
-| `GET /connections` | A provider registered |
-| `POST /connections/{provider}` | A provider registered |
-| `DELETE /connections/{id}` | A provider registered |
-| `GET /me/permissions` | Permissions with self-service |
-| `GET /users/{subject}/permissions` | Permissions with management |
-| `PUT /users/{subject}/permissions/{name}` | Permissions with management |
-| `DELETE /users/{subject}/permissions/{name}` | Permissions with management |
-| `PUT /users/{subject}/roles/{name}` | Permissions with management |
-| `DELETE /users/{subject}/roles/{name}` | Permissions with management |
-| `GET /account` | `Account()` |
+| `GET /{name}` | `Provider` registered with that name |
+| `GET /{name}/callback` | `Provider` registered with that name |
+| `POST /{name}/callback` | `Provider` registered with that name |
+| `GET /{name}/nonce` | Provider implements `iam.NativeProvider` |
+| `POST /{name}/native` | Provider implements `iam.NativeProvider` |
+| `GET /connections` | Any `Provider` registered |
+| `POST /connections/{provider}` | Any `Provider` registered |
+| `DELETE /connections/{id}` | Any `Provider` registered |
+| `GET /me/permissions` | `Permissions` with `SelfService(true)` |
+| `GET /users/{subject}/permissions` | `Permissions` with `Management(...)` |
+| `PUT /users/{subject}/permissions/{name}` | `Permissions` with `Management(...)` |
+| `DELETE /users/{subject}/permissions/{name}` | `Permissions` with `Management(...)` |
+| `PUT /users/{subject}/roles/{name}` | `Permissions` with `Management(...)` |
+| `DELETE /users/{subject}/roles/{name}` | `Permissions` with `Management(...)` |
+| `GET /account` | `Account` |
 | `DELETE /account` | Built-in directory |
 
-Passwords register `pwd` for step-up. Two-factor registers `otp`, then
-`recovery`, for login challenges, and `otp` for step-up.
-`identity.SecondFactor` and `identity.StepUp` can append application credentials.
-Registration, email recovery, and email verification are opt-in.
-Provider sign-up is configured per provider and defaults to off; it does not
-control whether that provider's routes exist.
+`Password` registers `pwd` for step-up; `TwoFactor` registers `otp` and `recovery` for login challenges and `otp` for step-up. Native routes are detected structurally on `*oauthauth.Client`, so presets without native support still mount them and return `oauthauth.ErrUnsupported`; check the [provider matrix](../oauth/providers.md#compatibility-matrix) for actual support.
 
-Native route detection is structural. The shared OAuth client implements the
-native methods even for presets without native support; those handlers return
-`oauthauth.ErrUnsupported`. Google and Apple support native ID-token login
-with explicit audiences. Route presence alone is not a provider-capability
-check; use the [provider comparison](../oauth/providers.md#compatibility-matrix).
+## JSON and Media-Type Rules
 
-## Account
+- All IAM-owned `POST`, `PUT`, and `PATCH` endpoints require `Content-Type: application/json` (parameters like `charset=utf-8` are allowed), even for bodyless requests such as `POST /logout`. Missing or other media types return `415`.
+- `DELETE` handlers do not enforce the JSON media-type check.
+- Body-reading IAM handlers cap JSON payloads at **64 KiB** (`413` above the limit; `/login/challenge` and `/confirm` return `400`).
+- External provider routes (`/{name}` and `/{name}/callback`) use OAuth query/form parsing instead of JSON. See [Apple's Cross-Site Callback](federated-sign-in.md#apples-cross-site-callback) for Apple's CSRF exception.
 
-`GET /account` answers `200` with what IAM knows about the user of the request,
-for a session or a token. Anonymous requests, and logins that still wait for a
-second factor, answer `401`. Without an `Account` call the route does not exist
-and the router answers `404`. `identity.Account(ctx)` returns the same
-`iam.AccountView` as a Go value, with or without the route.
+All media-type, session, freshness, and verified-email checks live inside the handlers themselves, so custom paths keep the exact same protections.
 
-It always carries `subject` and the email facts. With the built-in users these
-come from the directory: `email`, `email_verified`, `verified_at` and
-`created_at`. With your own users they come from the `email` and `email_verified`
-claims of the user record, and there are no timestamps. IAM never encodes your
-user's value. The `Account` callback adds parts:
+## Login Response Shapes
 
-| Method | Adds |
-| --- | --- |
-| `Permissions(true)` | `roles` and `permissions`, as `GET /me/permissions` |
-| `TwoFactor(true)` | `two_factor`: whether an authenticator is confirmed |
-| `Login(true)` | `login`: `session`, `level` and `methods` |
+Password login (`POST /login`) and native login (`POST /{name}/native`) return:
 
-Built-in users with everything on:
-
-```json
-{
-  "subject": "3f9c2a7e1b8d4c6fa0e5d7b9c1a3f2e4",
-  "email": "ada@example.com",
-  "email_verified": true,
-  "verified_at": "2026-11-02T09:14:00Z",
-  "created_at": "2026-10-28T17:40:12Z",
-  "roles": ["editor"],
-  "permissions": ["posts:read", "posts:write"],
-  "two_factor": true,
-  "login": { "session": true, "level": "multi", "methods": ["pwd", "otp"] }
-}
-```
-
-Your own users, with only the claims their record holds:
-
-```json
-{ "subject": "42", "email": "ada@example.com", "email_verified": true }
-```
-
-A request that carries a token has no factors, so everything else stays and
-`login` is `{"session": false, "level": "none", "methods": []}`.
-
-`verified_at` is left out while the email is unverified, and `email_verified` is
-then `false`. A part that is off is absent; a part that is on and empty is `[]`
-or `false`. `login.level` is `single` or `multi`, and `methods` lists the core
-codes `pwd`, `otp`, `hwk` and `swk`. `Permissions(true)` without the permission
-store and `TwoFactor(true)` without two-factor are ignored with a warning.
-[Own Users](own-users.md#show-your-users) shows how to build your own `GET /me`.
-
-## JSON Contract
-
-IAM-owned handlers require `Content-Type: application/json` for `POST`,
-`PUT`, and `PATCH`, including bodyless operations such as logout.
-Media-type parameters such as `charset=utf-8` are allowed; form data,
-missing media types, and different JSON media types return `415`.
-Body-reading IAM handlers limit JSON input to 64 KiB.
-`DELETE` handlers are not wrapped in the JSON media-type check.
-
-The provider protocol routes under `/auth/{name}` follow the OAuth client's
-own parsing rules: callbacks can arrive as a query or a form.
-The [Apple callback](federated-sign-in.md#apple-callback) additionally needs its
-precise CSRF exception. Do not disable CSRF for IAM's JSON routes.
-
-The JSON checks and credential safeguards live in the handler constructors,
-not just in `Register`. Custom paths retain them.
-
-## Login Responses
-
-Password and native login return `204` with no body when complete.
-`202` means a second-factor challenge is still required:
+- **`204 No Content`**: Authentication is complete.
+- **`202 Accepted`**: A second-factor challenge is required:
 
 ```json
 {
@@ -161,7 +87,7 @@ Password and native login return `204` with no body when complete.
 }
 ```
 
-`GET /login/pending` instead returns `200` with a flat methods object:
+`GET /login/pending` returns `200` with a flat object:
 
 ```json
 {
@@ -169,48 +95,32 @@ Password and native login return `204` with no body when complete.
 }
 ```
 
-Methods appear in registration order; the client submits one offered method
-to `/login/challenge`.
+Do not confuse this `202` with the empty `202` returned by `/register`, `/password/forgot`, or `/email/verify/resend`; those acknowledge queued work and never start a login. Browser OAuth callbacks redirect rather than returning JSON.
 
-Do not confuse this `202` with registration, forgot-password, or verification
-resend acceptance. Those return an empty body and do not create a login.
-Browser provider callbacks redirect instead of using the JSON login response.
+## Problem Types and Status Codes
 
-## Problem Responses
-
-Branch on a problem's stable `type`, not its human-readable title or detail.
-IAM types have this form:
+Always branch on the problem's stable `type` URI rather than its human-readable `title` or `detail`. IAM problem types use the format:
 
 ```text
 tag:arkoren.dev,2026-11:ark/access:<package>:<name>
 ```
 
-For example, password-login failure is
-`tag:arkoren.dev,2026-11:ark/access:password:invalid-credentials`.
-Core-owned checks keep their core types.
-
-| Status | Typical meaning |
+| Status | Meaning |
 | --- | --- |
-| `400` | Malformed JSON; challenge and confirm also use this for oversized bodies |
-| `401` | Missing session or pending login, a disallowed bearer identity, or failed token authentication |
-| `403` | Freshness, email verification, provider membership, wrong verification account, scope ceiling, missing management permission, or grant escalation refused the action |
-| `404` | Unknown or unowned token/connection, unknown provider, or unknown user in a permission route |
-| `409` | Conflicting account/credential state, duplicate connection, last login method, or last holder of a protected role |
-| `413` | Body limit exceeded |
-| `415` | Required JSON media type absent or unsupported |
-| `422` | Invalid input, password-login failure, enrollment code failure, or invalid email-link token |
-| `429` | Throttled; inspect `Retry-After` in seconds |
-| `500` | Infrastructure or required-hook failure; consult the feature's partial-success behavior |
+| `400` | Malformed JSON (or oversized body on `/login/challenge` and `/confirm`) |
+| `401` | Missing session or pending login, disallowed bearer token, or failed token auth |
+| `403` | Freshness, verified email, provider membership, wrong verification account, scope ceiling, missing management permission, or grant escalation |
+| `404` | Unknown or unowned token/connection, unknown provider, or unknown user in permission routes |
+| `409` | Conflicting state, duplicate connection, last login method, or last holder of a `KeepOne` role |
+| `413` | JSON body exceeds 64 KiB |
+| `415` | Missing or unsupported `Content-Type` |
+| `422` | Invalid input, failed password login, wrong enrollment code, or invalid email-link token |
+| `429` | Rate-limited; inspect `Retry-After` (seconds) |
+| `500` | Infrastructure or required-hook failure |
 
-Wrong core challenge and confirmation credentials are `403`, not the password-login
-route's `422`. A missing or unknown method is `422`; an exhausted challenge
-budget can discard the pending login and return `401`. Freshness uses
-`tag:arkoren.dev,2026-11:core:auth:step-up-required` with a `methods`
-extension, or `tag:arkoren.dev,2026-11:core:auth:no-step-up-method`.
-The media-type check uses
-`tag:arkoren.dev,2026-09:core:http/middleware/contenttype:unsupported-media-type`.
+Core checks retain their own types, including `tag:arkoren.dev,2026-11:core:auth:step-up-required` (with a `methods` field), `tag:arkoren.dev,2026-11:core:auth:no-step-up-method`, and `tag:arkoren.dev,2026-09:core:http/middleware/contenttype:unsupported-media-type`. Note that wrong challenge or confirmation credentials return core's `403`, whereas wrong password login returns `422`.
 
-For package-specific problem names:
+IAM package problem names:
 
 | Package | Names |
 | --- | --- |
@@ -223,38 +133,27 @@ For package-specific problem names:
 
 ## Custom Paths
 
-If you need different application URLs, register the matching facade handlers
-instead of calling `Register`:
+To serve IAM endpoints at custom URLs, mount the individual handler methods on your `web` router instead of calling `identity.Register`. Pass each handler's matching operation so it appears in your [OpenAPI document](../openapi/built-in-handlers.md#other-annotations):
 
 ```go
-web.Post("/accounts/sign-in", identity.LoginHandler())
-web.Put("/accounts/password", identity.ChangePasswordHandler())
+web.Post("/accounts/sign-in", identity.LoginHandler(), password.LoginOperation)
+web.Put("/accounts/password", identity.ChangePasswordHandler(), password.ChangeOperation)
 ```
 
-Keep the facade middleware and CSRF protection on `web`.
-Session, freshness, verified-email, and JSON checks remain inside the handlers.
-Requesting a disabled feature's handler panics during composition; `Register`
-instead skips unavailable features. Duplicate route patterns, including a
-second `Register`, panic through the router.
+Requesting a handler for a disabled feature panics at startup (unlike `Register`, which skips disabled features). Registering duplicate patterns panics through the router.
 
-Provider paths need additional care: both the client's registered redirect
-URL and the connect-intent redirect must match your chosen routes.
-For a configured Google client whose `RedirectURL` is
-`https://app.example.com/sso/google/callback`, register its handlers:
+### Custom External Provider Paths
+
+When mounting a provider on custom paths, keep both the client's `RedirectURL` and the connect-intent target map aligned with your routes:
 
 ```go
 callback := google.CallbackHandler(identity.Guard(), identity.Resolve)
-web.Get("/sso/google", google.LoginHandler())
-web.Get("/sso/google/callback", callback)
-web.Post("/sso/google/callback", callback)
+web.Get("/sso/google", google.LoginHandler(), oauthauth.LoginOperation)
+web.Get("/sso/google/callback", callback, oauthauth.CallbackOperation)
+web.Post("/sso/google/callback", callback, oauthauth.CallbackOperation)
 ```
 
-`identity.Resolve` uses the shared connection store, including built-in unverified
-account takeover, but **never opens sign-up**. A hand-registered callback does
-not inherit a registered provider's sign-up settings.
-
-For custom callbacks that should create users, first build a resolver using
-`federation` from `arkoren.dev/ark/iam/federation`:
+`identity.Resolve` supports existing connections and unverified-account takeover, but **never opens sign-up**. To allow sign-up on a hand-mounted callback, build a resolver from `identity.Links()` using `federation` from `arkoren.dev/ark/iam/federation` and pass it in place of `identity.Resolve`:
 
 ```go
 resolve, err := identity.Links().Resolver(func(resolver *federation.ResolverBuilder) {
@@ -262,27 +161,11 @@ resolve, err := identity.Links().Resolver(func(resolver *federation.ResolverBuil
 })
 ```
 
-After handling the error, pass `resolve` in place of `identity.Resolve`.
-The facade must already have a provider registered so `identity.Links()` exists.
-
-Finally, define where a connection intent sends the browser:
+Finally, mount the connect handler with an explicit target map so `POST /connections/{provider}` redirects to your custom login path (and update your front-end navigation target to match):
 
 ```go
-targets := map[string]string{
-	"google": "/sso/google",
-}
+targets := map[string]string{"google": "/sso/google"}
+web.Post("/connections/{provider}", identity.Links().ConnectHandler(identity.Guard(), targets), federation.ConnectOperation)
 ```
 
-Register the connect handler with those targets:
-
-```go
-web.Post("/connections/{provider}", identity.Links().ConnectHandler(identity.Guard(), targets))
-```
-
-That preserves the [explicit connection flow](federated-sign-in.md#connect-a-provider).
-Update the front end's navigation target too; the default
-`/auth/{provider}` target is no longer correct. If you customize Apple's path,
-update only that callback's CSRF exception to match it.
-
-For the full handler set, see the
-[`iam` API reference](https://pkg.go.dev/arkoren.dev/ark/iam).
+For the full list of handler methods and operations, see the [`iam` API reference](https://pkg.go.dev/arkoren.dev/ark/iam).

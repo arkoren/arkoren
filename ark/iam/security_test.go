@@ -166,7 +166,7 @@ func TestMailGoesToTheStoredAddress(t *testing.T) {
 		if got := sys.box.lastReset(t).Address; got != "bob@gmail.com" {
 			t.Fatalf("reset sent to %q, want the stored bob@gmail.com", got)
 		}
-		if got := sys.box.dispatchedResets; len(got) != 1 || got[0].Identifier != "bob@gmaİl.com" {
+		if got := sys.box.dispatchedResets(t); len(got) != 1 || got[0].Identifier != "bob@gmaİl.com" {
 			t.Fatalf("dispatched = %+v, want the identifier exactly as typed", got)
 		}
 	})
@@ -482,21 +482,21 @@ func TestOwnUsersCreateGetsVerifiedFlagAndGateHooks(t *testing.T) {
 		proven := false
 		verified := false
 		sys := newAppWith(t, db, instance, wire{reset: true}, func(identity *iam.Builder) {
-			identity.Users(iam.Users{
-				Provider: provider,
-				Lookup:   users.lookup,
-				Create: func(ctx context.Context, identifier string, isVerified bool) (string, error) {
+			identity.Users(provider, func(own *iam.UsersBuilder) {
+				own.Lookup(users.lookup).Rotate(users.rotate)
+				own.Create(func(ctx context.Context, identifier string, isVerified bool) (string, error) {
 					created = append(created, isVerified)
 
 					return users.create(ctx, identifier, isVerified)
-				},
-				Rotate:   users.rotate,
-				Verified: func(context.Context, string) (bool, error) { return verified, nil },
-				ProveEmail: func(context.Context, string) (bool, error) {
-					proven = true
+				})
+				own.Verification(
+					func(context.Context, string) (bool, error) { return verified, nil },
+					func(context.Context, string) (bool, error) {
+						proven = true
 
-					return true, nil
-				},
+						return true, nil
+					},
+				)
 			})
 			identity.Password(hasher(), registration)
 			identity.Tokens()

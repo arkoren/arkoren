@@ -8,8 +8,7 @@ import (
 
 	"arkoren.dev/core/application"
 
-	"{{.Module}}/internal/bootstrap"
-	welcomeweb "{{.Module}}/internal/welcome/web"
+	"{{.Module}}/internal/bootstrap/server"
 )
 
 // main maps run's error to process exit status after cleanup finishes.
@@ -21,14 +20,18 @@ func main() {
 	}
 }
 
-// run constructs the application from bootstrap.Application and runs the graph
-// declared by Compose. Construction applies settings without starting
-// components; app.Run owns composition, startup, supervised work, and shutdown.
+// run builds the application from server.App and runs the graph declared by
+// server.Compose, both in internal/bootstrap/server. application.Run owns
+// construction, composition, startup, supervised work, and shutdown.
+//
+// The godotenv autoload import reads .env during package initialization;
+// existing environment variables take precedence. Settings callbacks run when
+// Run builds the application, before any component starts.
 //
 // SIGINT or SIGTERM cancels the run context and requests shutdown. Registered
-// component cleanup completes before app.Run returns, and deferred signal
-// cleanup completes before main exits. Keep component cleanup in bootstrap so
-// it also runs when composition or startup fails.
+// component cleanup completes before application.Run returns, and deferred
+// signal cleanup completes before main exits. Keep component cleanup in
+// bootstrap providers so it also runs when composition or startup fails.
 //
 // The application reports lifecycle failures before telemetry stops. Return its
 // error directly; logging after Run would miss telemetry capture and duplicate
@@ -36,37 +39,8 @@ func main() {
 //
 // See https://arkoren.dev/docs/guides/application/lifecycle-and-ownership.
 func run() error {
-	// The godotenv autoload import reads .env during package initialization;
-	// existing environment variables take precedence. Configuration callbacks
-	// run during construction, before any component starts.
-	app := application.New(bootstrap.Application())
-
 	ctx, stop := application.NewSignalContext(context.Background())
 	defer stop()
 
-	return app.Run(ctx, Compose)
-}
-
-// Compose is the explicit list of what this process runs. The executable passes
-// it to app.Run; every call finishes composition before any registered startup
-// callback runs.
-//
-// Registration functions mount routes on the shared router, so they come first.
-// Diagnostics is registered only when application debug is enabled. Listen comes
-// last: it serves the router after every route is mounted. compose.Use obtains
-// shared providers such as bootstrap.Router; it constructs a value, not a
-// started service. If composition fails, app.Run cleans up acquired resources
-// and returns the error; startup does not begin.
-//
-// Add a feature by importing its registration package and calling it here. See
-// https://arkoren.dev/docs/guides/application/composition and
-// https://arkoren.dev/docs/guides/first-steps/project-layout.
-func Compose(compose *application.Composer) {
-	welcomeweb.Routes(compose)
-
-	if compose.App().Debug() {
-		bootstrap.Diagnostics(compose)
-	}
-
-	bootstrap.Listen(compose)
+	return application.Run(ctx, server.App, server.Compose)
 }

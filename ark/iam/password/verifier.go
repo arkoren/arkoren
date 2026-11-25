@@ -21,9 +21,11 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/core/service/hash"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/queue"
 	"arkoren.dev/foundation/query"
-	"arkoren.dev/foundation/query/schema"
 
+	"arkoren.dev/ark/iam/internal/migration"
 	"arkoren.dev/ark/iam/internal/storage"
 )
 
@@ -163,8 +165,11 @@ type Verifier struct {
 	events       *event.Bus
 	registration bool
 	signer       *link.Signer
-	dispatch     func(context.Context, ResetRequest) error
-	deliver      func(context.Context, ResetMessage) error
+	mailer       *mail.Mailer
+	resetURL     string
+	resetEmail   ResetEmailFunc
+	dispatcher   *queue.Dispatcher
+	job          queue.Job[ResetRequest]
 	resetTTL     time.Duration
 	policy       func(context.Context, string) error
 	clientIP     func(*http.Request) string
@@ -211,7 +216,8 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		slog.WarnContext(context.Background(), "access: setting ignored", "setting", "password.Builder.Registration", "reason", "Users.Create is nil, so no user can be created")
 		settings.registration = false
 	}
-	if err := settings.validate(); err != nil {
+	job := storage.NewJob[ResetRequest](resetJobName, settings.instance)
+	if err := settings.validate(job); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	verifier := &Verifier{
@@ -225,8 +231,11 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 		events:       settings.events,
 		registration: settings.registration,
 		signer:       settings.signer,
-		dispatch:     settings.dispatch,
-		deliver:      settings.deliver,
+		mailer:       settings.mailer,
+		resetURL:     settings.resetURL,
+		resetEmail:   settings.resetEmail,
+		dispatcher:   settings.dispatcher,
+		job:          job,
 		resetTTL:     cmp.Or(settings.resetTTL, DefaultResetTTL),
 		policy:       settings.policy,
 		clientIP:     clientIP,
@@ -236,6 +245,9 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 	}
 	if verifier.policy == nil {
 		verifier.policy = defaultPolicy
+	}
+	if verifier.resetEmail == nil {
+		verifier.resetEmail = defaultResetEmail
 	}
 	provider.OnForget(verifier.Remove)
 
@@ -249,7 +261,7 @@ func NewVerifier(provider *auth.UserProvider, db *database.Database, store *cach
 // Example:
 //
 //	if verifier.Registration() {
-//		web.Post("/register", verifier.RegisterHandler())
+//		web.Post("/register", verifier.RegisterHandler(), password.RegisterOperation)
 //	}
 func (verifier *Verifier) Registration() bool {
 	return verifier.registration
@@ -276,16 +288,7 @@ func defaultPolicy(_ context.Context, password string) error {
 //		return err
 //	}
 func (verifier *Verifier) Migrations() []migrate.Definition {
-	return storage.Group("password", verifier.instance).Migrations(
-		migrate.NewMigration("hashes-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(verifier.hashes, func(table *schema.Table) {
-				table.String("subject", 255).Bytewise().Primary()
-				table.Text("hash")
-				table.BigInteger("changed_at")
-			})))
-			migration.Down(migrate.Schema(schema.Drop(verifier.hashes)))
-		}),
-	)
+	return migration.Password(verifier.instance)
 }
 
 // Ping verifies, read-only, that the table exists. A missing table returns an

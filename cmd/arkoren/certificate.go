@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -40,7 +41,7 @@ type certificateServerArgs struct {
 // destinations before generation. It never installs the newly created root.
 func generateCertificateRoot(ctx context.Context, name string, paths certificatePaths, env console.Environment) error {
 	if name == "" {
-		return console.UsageError("certificate root generate requires --name NAME")
+		return console.UsageError("missing flag --name: certificate root generate needs a name for the root")
 	}
 
 	inventory, err := prepareCertificateFiles(ctx, paths, env.Dir)
@@ -57,7 +58,7 @@ func generateCertificateRoot(ctx context.Context, name string, paths certificate
 		return fmt.Errorf("generate root certificate: %w", err)
 	}
 
-	return persistCertificate(ctx, inventory, identity, env)
+	return persistCertificate(ctx, inventory, identity, true, env)
 }
 
 // generateCertificateServer loads only the explicitly selected issuer. Both
@@ -65,11 +66,11 @@ func generateCertificateRoot(ctx context.Context, name string, paths certificate
 // SANs arrive in command-line order, with IP literals already normalized.
 func generateCertificateServer(ctx context.Context, options certificateServerArgs, env console.Environment) error {
 	if options.issuer.cert == "" || options.issuer.key == "" {
-		return console.UsageError("certificate generate requires --ca-cert FILE and --ca-key FILE")
+		return console.UsageError("missing flag --ca-cert or --ca-key: certificate generate needs both issuer files")
 	}
 
 	if len(options.hosts) == 0 {
-		return console.UsageError("certificate generate requires at least one --dns HOST or --ip IP")
+		return console.UsageError("missing flag --dns or --ip: certificate generate needs at least one host name or address")
 	}
 
 	inventory, err := prepareCertificateFiles(ctx, options.output, env.Dir)
@@ -92,41 +93,119 @@ func generateCertificateServer(ctx context.Context, options certificateServerArg
 		return fmt.Errorf("generate server certificate: %w", err)
 	}
 
-	return persistCertificate(ctx, inventory, identity, env)
+	return persistCertificate(ctx, inventory, identity, false, env)
 }
 
 // checkCertificate reports structural parsing and optional key matching only.
 // It deliberately does not call x509.Verify or assert temporal validity or trust.
+// Material that does not parse, or a key that does not match, is a problem in an
+// ok:false report with exit status 1; a file that cannot be read is an error.
 func checkCertificate(ctx context.Context, paths certificatePaths, env console.Environment) error {
 	if paths.cert == "" {
-		return console.UsageError("certificate check requires --cert FILE")
+		return console.UsageError("missing flag --cert: certificate check needs the certificate file")
 	}
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	if paths.key == "" {
-		if _, err := certificate.LoadBundle(keyPath(env.Dir, paths.cert)); err != nil {
-			return fmt.Errorf("check certificate material: %w", err)
-		}
-	} else {
-		if _, err := certificate.LoadIdentity(keyPath(env.Dir, paths.cert), keyPath(env.Dir, paths.key)); err != nil {
-			return fmt.Errorf("check certificate/key pair: %w", err)
-		}
-	}
-
-	report := map[string]any{
-		"certificate": keyPath(env.Dir, paths.cert),
-		"parsed":      true, "key_matched": paths.key != "",
-		"expiry_checked": false, "trust_checked": false,
+	report := certificateCheckResult{
+		Summary:     "Certificate parsed",
+		OK:          true,
+		Certificate: keyPath(env.Dir, paths.cert),
+		Problems:    []console.Problem{},
+		NotChecked:  []string{"expiry", "trust"},
 	}
 
 	if paths.key != "" {
-		report["key"] = keyPath(env.Dir, paths.key)
+		report.Key = keyPath(env.Dir, paths.key)
 	}
 
-	return env.Result(report)
+	problem, err := certificateProblem(report.Certificate, report.Key)
+
+	if err != nil {
+		return inputFailure(err)
+	}
+
+	if problem != nil {
+		report.Summary = "Certificate material is invalid"
+		report.OK = false
+		report.Problems = []console.Problem{*problem}
+	}
+
+	if report.OK && report.Key != "" {
+		report.Summary = "Certificate parsed; key matches"
+		report.KeyMatched = true
+	}
+
+	if err := env.Result(report); err != nil {
+		return err
+	}
+
+	if !report.OK {
+		return &console.ExitError{Code: console.ExitFailure}
+	}
+
+	return nil
+}
+
+// certificateProblem loads the certificate, and with a key the pair, and
+// returns what is wrong with the material: nil when it is valid. Only a failure
+// that is not about the material, such as an unreadable file, is an error.
+func certificateProblem(certPath, keyFile string) (*console.Problem, error) {
+	_, err := certificate.LoadBundle(certPath)
+
+	if errors.Is(err, certificate.ErrInvalid) {
+		return &console.Problem{Field: "cert", Message: "not a valid certificate bundle", Path: certPath}, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("check certificate material: %w", err)
+	}
+
+	if keyFile == "" {
+		return nil, nil
+	}
+
+	_, err = certificate.LoadIdentity(certPath, keyFile)
+
+	if errors.Is(err, certificate.ErrInvalid) {
+		return &console.Problem{Field: "key", Message: "not a valid private key for this certificate", Path: keyFile}, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("check certificate/key pair: %w", err)
+	}
+
+	return nil, nil
+}
+
+// certificateCheckResult is the JSON result of `arkoren certificate check`, a
+// verdict in the local check envelope.
+type certificateCheckResult struct {
+	// Summary reads "Certificate parsed", "Certificate parsed; key matches" or
+	// "Certificate material is invalid".
+	Summary string `json:"summary"`
+
+	// OK is false when the certificate does not parse or the key is invalid or
+	// does not match it.
+	OK bool `json:"ok"`
+
+	// Certificate is the checked certificate file.
+	Certificate string `json:"certificate"`
+
+	// Key is the checked private key file, present only when one was given.
+	Key string `json:"key,omitzero"`
+
+	// KeyMatched is true when a key was given and matches; absent otherwise.
+	KeyMatched bool `json:"key_matched,omitzero"`
+
+	// NotChecked names what parsing does not establish: expiry and trust.
+	NotChecked []string `json:"not_checked"`
+
+	// Problems says what is wrong, naming the cert or key field; an empty array
+	// when OK.
+	Problems []console.Problem `json:"problems"`
 }
 
 // certificateCLICommand keeps certificate provisioning offline and declares
@@ -148,15 +227,9 @@ func certificateCLICommand(env console.Environment) *cli.Command {
 					certificateTrustCLICommand(env, "trust"),
 					certificateTrustCLICommand(env, "untrust"),
 				},
-				Action: func(context.Context, *cli.Command) error {
-					return console.UsageError("certificate root requires generate, trust, or untrust")
-				},
 			},
 			certificateGenerateCLICommand(env),
 			certificateCheckCLICommand(env),
-		},
-		Action: func(context.Context, *cli.Command) error {
-			return console.UsageError("use 'arkoren certificate --help' for certificate commands")
 		},
 	}
 }
@@ -178,7 +251,9 @@ func certificateRootGenerateCLICommand(env console.Environment) *cli.Command {
 
 	return &cli.Command{
 		Name: "generate", Flags: flags,
-		Usage:        "Generate a local root certificate and private key without installing trust",
+		Usage: "Generate a local root certificate and private key without installing trust",
+		Description: "Writes a new root certificate to --cert and its private key to --key, named by --name. " +
+			"Existing files are never overwritten. Install trust separately with certificate root trust.",
 		ArgValidator: certificateNoArguments,
 		Action: func(ctx context.Context, command *cli.Command) error {
 			return generateCertificateRoot(ctx, command.String("name"), paths, env)
@@ -203,7 +278,7 @@ func certificateGenerateCLICommand(env console.Environment) *cli.Command {
 			address, err := netip.ParseAddr(host)
 
 			if err != nil {
-				return console.UsageError("invalid IP SAN")
+				return console.UsageError("invalid value for flag --ip: expected an IP address")
 			}
 
 			options.hosts = append(options.hosts, address.String())
@@ -214,7 +289,9 @@ func certificateGenerateCLICommand(env console.Environment) *cli.Command {
 
 	return &cli.Command{
 		Name: "generate", Flags: flags,
-		Usage:        "Issue a server certificate with DNS or IP SANs; never installs trust",
+		Usage: "Issue a server certificate with DNS or IP SANs; never installs trust",
+		Description: "Signs a server certificate with the root given by --ca-cert and --ca-key and writes it to --cert " +
+			"with its private key in --key. Repeat --dns and --ip for each subject alternative name.",
 		ArgValidator: certificateNoArguments,
 		Action: func(ctx context.Context, _ *cli.Command) error {
 			return generateCertificateServer(ctx, options, env)
@@ -246,7 +323,7 @@ func certificateNoArguments(ctx context.Context, command *cli.Command) error {
 	}
 
 	if command.Args().Present() {
-		return console.UsageError("certificate %s accepts flags only", command.Name)
+		return console.UsageError("too many arguments: certificate %s takes no arguments, only flags", command.Name)
 	}
 
 	return nil
@@ -259,23 +336,28 @@ func certificateTrustCLICommand(env console.Environment, action string) *cli.Com
 	request := trust.Request{Action: action}
 
 	return &cli.Command{
-		Name:  action,
-		Usage: "Explicitly " + action + " a public root in the machine-wide system store",
+		Name:      action,
+		Usage:     "Explicitly " + action + " a public root in the machine-wide system store",
+		ArgsUsage: "FILE",
 		Description: "Changes machine-wide trust. Requires default-no confirmation or bare --yes. " +
 			"Never elevates privileges automatically. Supply a public root PEM file, not a private key.",
 		Arguments: []cli.Argument{
-			&cli.StringArg{Name: "FILE", Required: true, Destination: &request.Path},
+			&cli.StringArg{Name: "FILE", Destination: &request.Path},
 		},
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "yes", OnlyOnce: true, Destination: &request.Yes, Usage: "Approve system-store changes"},
 		},
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Present() {
-				return console.UsageError("certificate root %s requires exactly one public root PEM file", action)
+				return console.UsageError("too many arguments: certificate root %s takes one public root PEM file", action)
 			}
 
-			if request.Path == "" || strings.HasPrefix(request.Path, "-") {
-				return console.UsageError("certificate root %s requires a public root PEM file", action)
+			if request.Path == "" {
+				return console.UsageError("missing argument FILE: certificate root %s takes one public root PEM file", action)
+			}
+
+			if strings.HasPrefix(request.Path, "-") {
+				return console.UsageError("invalid argument FILE %q: a public root PEM file is expected, not a flag", request.Path)
 			}
 
 			return trust.Run(ctx, request, env)
@@ -300,7 +382,7 @@ func validateCertificateApproval(args []string) error {
 		valueBearing := strings.HasPrefix(arg, "--yes=") || strings.HasPrefix(arg, "-yes=")
 
 		if arg == "-yes" || valueBearing {
-			return console.UsageError("certificate approval accepts only bare --yes")
+			return console.UsageError("invalid value for flag --yes: it takes no value, pass bare --yes")
 		}
 	}
 

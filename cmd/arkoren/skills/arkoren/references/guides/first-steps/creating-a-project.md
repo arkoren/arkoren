@@ -121,13 +121,13 @@ your first endpoint.
 
 ## Starter Defaults
 
-`cmd/server/main.go` creates the application and calls
-`app.Run(ctx, Compose)`. `Compose` is the explicit list of what the process runs:
-the welcome feature's routes, the diagnostics endpoint when debug is on, and
-the HTTP listener. `internal/bootstrap` holds the shared router provider and the
-`Listen` and `Diagnostics` registration functions, and
-`internal/welcome/web` mounts the welcome page. The application starts
-components only after composition succeeds. The generated signal context requests
+`cmd/server/main.go` calls `application.Run(ctx, server.App, server.Compose)`.
+`App`, in `internal/bootstrap/server`, is the provider that builds the
+application from its settings. `Compose`, in the same package, is the explicit
+list of what the process runs: the diagnostics endpoint when debug is on, and
+the HTTP server. `internal/bootstrap` holds only providers: `LogHandler`,
+`Router`, `Server` and `MCP`. The router also serves the welcome page. The
+application starts components only after composition succeeds. The generated signal context requests
 shutdown on Ctrl+C or `SIGTERM`.
 
 The router serves a welcome page at `/` and probes at `/livez`, `/readyz`, and
@@ -159,7 +159,7 @@ application secret or signing key is generated; provision credentials only when
 the feature needs them.
 
 The starter's logger uses Tint on terminals and JSON when stderr is redirected.
-`NO_COLOR` disables terminal colors. Customize `Logger()` in
+`NO_COLOR` disables terminal colors. Customize the `LogHandler` provider in
 `internal/bootstrap/logging.go`, rather than assuming application environment
 alone selects the starter's log format.
 

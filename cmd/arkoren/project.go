@@ -32,7 +32,7 @@ func newCLICommand(env console.Environment) *cli.Command {
 		},
 		Action: func(ctx context.Context, command *cli.Command) error {
 			if command.Args().Len() > 1 {
-				return console.UsageError("new requires exactly one destination; usage: arkoren new DIR [flags]")
+				return console.UsageError("too many arguments: %s takes one DIR", command.FullName())
 			}
 
 			return scaffold.Create(ctx, scaffold.Options{

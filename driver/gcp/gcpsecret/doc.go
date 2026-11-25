@@ -1,6 +1,7 @@
 // Package gcpsecret provides a Google Cloud Secret Manager [secret.Driver]. It
 // accepts qualified resource names, or unqualified names when Builder.Project
 // supplies their project, and returns [secret.ErrNotFound] for missing secrets.
+// Payloads are arbitrary bytes: text and binary values both round-trip.
 // Constructors invoke ordered Builder callbacks directly once on one fresh
 // draft before native client creation. Nil entries panic; expanded nil/empty
 // slices omit edits. Completed naming settings are copied, not native clients.

@@ -12,6 +12,9 @@ import (
 	"arkoren.dev/core/service/secret"
 )
 
+// binary is a payload that is neither UTF-8 nor JSON.
+var binary = []byte{0, 1, 0xff, '\n', 0x80}
+
 // defaultMissingVersion is a version no driver has issued, in the numeric form
 // used by memory, Vault and Google Secret Manager.
 const defaultMissingVersion = "999999"
@@ -24,6 +27,16 @@ type config struct {
 	// jsonObject restricts payloads to compact, key-sorted JSON objects.
 	jsonObject bool
 
+	// readOnly declares that every write returns [secret.ErrUnsupported].
+	readOnly bool
+
+	// seed creates a secret with the given payload in a read-only backend and
+	// returns the reference that reads it.
+	seed func(t testing.TB, data []byte) string
+
+	// reference maps a plain suite name to the reference the driver expects.
+	reference func(name string) string
+
 	// missingVersion is a well-formed version that was never issued.
 	missingVersion string
 }
@@ -32,9 +45,11 @@ type config struct {
 // the contract's semantics.
 type Option func(*config)
 
-// WithTextValues declares that the backend stores UTF-8 text only, so the
-// suite does not write arbitrary bytes.
-func WithTextValues() Option {
+// WithTextOnly declares that the backend stores UTF-8 text only. The suite then
+// expects a write of non-UTF-8 bytes to fail with [secret.ErrUnsupported],
+// leaving nothing stored, instead of round-tripping them. Environment
+// variables and Azure Key Vault are examples.
+func WithTextOnly() Option {
 	return func(config *config) {
 		config.text = true
 	}
@@ -42,10 +57,50 @@ func WithTextValues() Option {
 
 // WithJSONObjectValues declares that the backend stores JSON objects and
 // returns them re-encoded compactly with sorted keys, so the suite writes only
-// such payloads. It implies [WithTextValues].
+// such payloads. It implies [WithTextOnly]: bytes that are not UTF-8 are
+// expected to fail with [secret.ErrUnsupported].
 func WithJSONObjectValues() Option {
 	return func(config *config) {
-		config.text, config.jsonObject = true, true
+		config.text = true
+		config.jsonObject = true
+	}
+}
+
+// WithReadOnly declares a source that cannot be written, such as files or
+// environment variables. The suite then runs only read scenarios, creating
+// secrets through the hook given to [WithSeed], and expects Put, Update and
+// Delete to fail with [secret.ErrUnsupported] without changing anything.
+// WithReadOnly requires WithSeed. A read-only source has no versions: asking
+// for any concrete version must return [secret.ErrNotFound].
+func WithReadOnly() Option {
+	return func(config *config) {
+		config.readOnly = true
+	}
+}
+
+// WithSeed supplies the hook a read-only source is tested through. The hook
+// makes data readable in the backend (writing a file, setting a variable in
+// the lookup the driver was built with), arranges its cleanup through t, and
+// returns the reference to read it back. The suite derives a reference that
+// was never seeded by appending "_missing" to a seeded one, so the backend
+// must accept that suffix in a name. WithSeed is used with [WithReadOnly].
+func WithSeed(seed func(t testing.TB, data []byte) string) Option {
+	return func(config *config) {
+		config.seed = seed
+	}
+}
+
+// WithReference maps the plain names the suite invents (lowercase letters,
+// digits and hyphens) to the references the driver expects. A multiplexing
+// driver such as secretmux uses it to add its scheme prefix:
+//
+//	secrettest.WithReference(func(name string) string { return "memory:" + name })
+//
+// The mapping must keep names distinct; the suite appends "-other" to a mapped
+// name to get a second secret.
+func WithReference(reference func(name string) string) Option {
+	return func(config *config) {
+		config.reference = reference
 	}
 }
 
@@ -79,7 +134,19 @@ func Run(t *testing.T, newDriver func(t *testing.T) secret.Driver, opts ...Optio
 		opt(&settings)
 	}
 
+	if settings.readOnly && settings.seed == nil {
+		t.Fatal("secrettest: WithReadOnly requires WithSeed")
+	}
+
 	s := suite{newDriver: newDriver, config: settings}
+
+	if settings.readOnly {
+		t.Run("ReadOnly", func(t *testing.T) {
+			readOnly(t, s)
+		})
+
+		return
+	}
 
 	for _, group := range []struct {
 		// name labels the conformance group in test output.
@@ -89,6 +156,7 @@ func Run(t *testing.T, newDriver func(t *testing.T) secret.Driver, opts ...Optio
 	}{
 		{"Get", get},
 		{"Put", creating},
+		{"Payloads", payloads},
 		{"Versions", versions},
 		{"Update", update},
 		{"Delete", deletion},
@@ -132,7 +200,7 @@ func (suite suite) sub(t *testing.T, name string, fn func(t *testing.T, e env)) 
 
 		e := env{
 			driver: suite.newDriver(t),
-			name:   "conformance-" + strings.ToLower(rand.Text()),
+			name:   suite.reference("conformance-" + strings.ToLower(rand.Text())),
 			config: suite.config,
 		}
 		t.Cleanup(func() {
@@ -145,6 +213,15 @@ func (suite suite) sub(t *testing.T, name string, fn func(t *testing.T, e env)) 
 
 		fn(t, e)
 	})
+}
+
+// reference maps a plain suite name to the driver's reference syntax.
+func (suite suite) reference(name string) string {
+	if suite.config.reference == nil {
+		return name
+	}
+
+	return suite.config.reference(name)
 }
 
 // must fails the test immediately when err is not nil.
@@ -252,15 +329,49 @@ func creating(t *testing.T, s suite) {
 			t.Errorf("current Version = %q, want %q", got.Version, second.Version)
 		}
 	})
+}
 
-	if !s.config.text {
-		s.sub(t, "StoresArbitraryBytes", func(t *testing.T, e env) {
-			want := []byte{0, 1, 0xff, '\n', 0x80}
+// payloads covers what a driver may carry: UTF-8 text, a JSON object and, unless
+// the backend is text-only, arbitrary bytes. Drivers move bytes only, so each
+// payload must read back exactly as written, including a trailing newline.
+func payloads(t *testing.T, s suite) {
+	if !s.config.jsonObject {
+		s.sub(t, "TextRoundTrip", func(t *testing.T, e env) {
+			want := []byte("p\u00e4ssword-\u2713\n")
 			write(t, e, want)
 
 			wantData(t, "Get", current(t, e), want)
 		})
 	}
+
+	s.sub(t, "JSONRoundTrip", func(t *testing.T, e env) {
+		want := []byte(`{"password":"p","user":"u"}`)
+		write(t, e, want)
+
+		wantData(t, "Get", current(t, e), want)
+	})
+
+	if s.config.text {
+		s.sub(t, "BinaryIsUnsupported", func(t *testing.T, e env) {
+			_, err := e.driver.Put(t.Context(), e.name, binary)
+
+			if !errors.Is(err, secret.ErrUnsupported) {
+				t.Errorf("Put binary error = %v, want ErrUnsupported", err)
+			}
+
+			_, err = e.driver.Get(t.Context(), secret.Reference{Name: e.name})
+
+			wantNotFound(t, "Get after unsupported Put", err)
+		})
+
+		return
+	}
+
+	s.sub(t, "BinaryRoundTrip", func(t *testing.T, e env) {
+		write(t, e, binary)
+
+		wantData(t, "Get", current(t, e), binary)
+	})
 }
 
 // versions checks concrete-version identity and unchanged payloads within one
@@ -447,5 +558,119 @@ func cancellation(t *testing.T, s suite) {
 		}
 
 		wantData(t, "Get", current(t, e), e.payload(1))
+	})
+}
+
+// readOnly covers sources that can only be read: seeded payloads read back
+// exactly, absent and versioned references are not found, writes are
+// unsupported and change nothing, returned bytes are independent, and a
+// canceled context fails the read.
+func readOnly(t *testing.T, s suite) {
+	seeded := func(t *testing.T, data []byte) (secret.Driver, string) {
+		t.Helper()
+
+		return s.newDriver(t), s.config.seed(t, data)
+	}
+
+	read := func(t *testing.T, driver secret.Driver, reference string) secret.Value {
+		t.Helper()
+
+		value, err := driver.Get(t.Context(), secret.Reference{Name: reference})
+
+		must(t, "Get", err)
+
+		return value
+	}
+
+	t.Run("ReadsSeededText", func(t *testing.T) {
+		t.Parallel()
+
+		want := []byte("p\u00e4ssword-\u2713\n")
+		driver, reference := seeded(t, want)
+
+		wantData(t, "Get", read(t, driver, reference), want)
+	})
+	t.Run("ReadsSeededJSON", func(t *testing.T) {
+		t.Parallel()
+
+		want := []byte(`{"password":"p","user":"u"}`)
+		driver, reference := seeded(t, want)
+
+		wantData(t, "Get", read(t, driver, reference), want)
+	})
+
+	if !s.config.text {
+		t.Run("ReadsSeededBinary", func(t *testing.T) {
+			t.Parallel()
+
+			driver, reference := seeded(t, binary)
+
+			wantData(t, "Get", read(t, driver, reference), binary)
+		})
+	}
+
+	t.Run("UnseededReferenceIsNotFound", func(t *testing.T) {
+		t.Parallel()
+
+		driver, reference := seeded(t, []byte("value"))
+
+		_, err := driver.Get(t.Context(), secret.Reference{Name: reference + "_missing"})
+
+		wantNotFound(t, "Get", err)
+	})
+	t.Run("ConcreteVersionIsNotFound", func(t *testing.T) {
+		t.Parallel()
+
+		driver, reference := seeded(t, []byte("value"))
+
+		_, err := driver.Get(t.Context(), secret.Reference{Name: reference, Version: s.config.missingVersion})
+
+		wantNotFound(t, "Get", err)
+	})
+	t.Run("WritesAreUnsupported", func(t *testing.T) {
+		t.Parallel()
+
+		driver, reference := seeded(t, []byte("value"))
+
+		_, err := driver.Put(t.Context(), reference, []byte("replacement"))
+
+		if !errors.Is(err, secret.ErrUnsupported) {
+			t.Errorf("Put error = %v, want ErrUnsupported", err)
+		}
+
+		_, err = driver.Update(t.Context(), reference, []byte("replacement"))
+
+		if !errors.Is(err, secret.ErrUnsupported) {
+			t.Errorf("Update error = %v, want ErrUnsupported", err)
+		}
+
+		err = driver.Delete(t.Context(), reference)
+
+		if !errors.Is(err, secret.ErrUnsupported) {
+			t.Errorf("Delete error = %v, want ErrUnsupported", err)
+		}
+
+		wantData(t, "Get after unsupported writes", read(t, driver, reference), []byte("value"))
+	})
+	t.Run("ReturnedDataIsIndependent", func(t *testing.T) {
+		t.Parallel()
+
+		driver, reference := seeded(t, []byte("value"))
+		first := read(t, driver, reference)
+		first.Data[0] = 'X'
+
+		wantData(t, "Get", read(t, driver, reference), []byte("value"))
+	})
+	t.Run("CanceledContextFailsRead", func(t *testing.T) {
+		t.Parallel()
+
+		driver, reference := seeded(t, []byte("value"))
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		if _, err := driver.Get(ctx, secret.Reference{Name: reference}); !errors.Is(err, context.Canceled) {
+			t.Errorf("Get error = %v, want context.Canceled", err)
+		}
 	})
 }

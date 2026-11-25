@@ -1,0 +1,32 @@
+package server
+
+import (
+	"arkoren.dev/core/application"
+
+	"{{.Module}}/internal/bootstrap"
+)
+
+// Compose is the explicit list of what the server process runs. cmd/server
+// passes it to application.Run together with App; every call finishes
+// composition before any registered startup callback runs.
+//
+// compose.Use builds a provider on first use and returns its cached value
+// afterwards. Each provider makes its component live: Router mounts its probes,
+// MCP mounts itself on the router, and Server registers the listener's
+// lifecycle. Features add their routes through providers such as
+// bootstrap.OrdersRoutes. List feature providers first so their routes exist,
+// MCP only when application debug is enabled, and Server last so it serves the
+// router after every route is mounted. If composition fails, application.Run
+// cleans up acquired resources and returns the error; startup does not begin.
+//
+// Add a feature with `arkoren add feature NAME --web`, which also adds its
+// compose.Use line here. See
+// https://arkoren.dev/docs/guides/application/composition and
+// https://arkoren.dev/docs/guides/first-steps/project-layout.
+func Compose(compose *application.Composer) {
+	if compose.App().Debug() {
+		compose.Use(bootstrap.MCP)
+	}
+
+	compose.Use(bootstrap.Server)
+}

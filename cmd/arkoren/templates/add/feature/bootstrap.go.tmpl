@@ -1,0 +1,115 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+
+	"{{.Module}}/internal/{{.Feature}}"
+{{- if .Web}}
+	{{.Feature}}web "{{.Module}}/internal/{{.Feature}}/web"
+{{- end}}
+{{- if .Jobs}}
+	{{.Feature}}jobs "{{.Module}}/internal/{{.Feature}}/jobs"
+{{- end}}
+{{- if .Flow}}
+	{{.Feature}}flow "{{.Module}}/internal/{{.Feature}}/flow"
+{{- end}}
+{{- if .Tools}}
+	{{.Feature}}tools "{{.Module}}/internal/{{.Feature}}/tools"
+{{- end}}
+{{- if .Events}}
+	{{.Feature}}events "{{.Module}}/internal/{{.Feature}}/events"
+{{- end}}
+{{- if .Schedules}}
+	{{.Feature}}schedules "{{.Module}}/internal/{{.Feature}}/schedules"
+{{- end}}
+)
+
+// {{.Title}}Store is the process's one {{.Feature}} Store, built by the first
+// compose.Use({{.Title}}Store) of a composition and returned unchanged afterwards.
+//
+// TODO: the Store holds no database yet. Add a Database provider, give
+// {{.Feature}}.NewStore a *database.Database parameter, and pass
+// compose.Use(Database) here.
+var {{.Title}}Store = application.Provide(func(*application.Composer) *{{.Feature}}.Store {
+	return {{.Feature}}.NewStore()
+})
+
+// {{.Title}}Service is the process's one {{.Feature}} Service. Surface providers
+// and other features' providers obtain it with compose.Use({{.Title}}Service).
+var {{.Title}}Service = application.Provide(func(compose *application.Composer) *{{.Feature}}.Service {
+	return {{.Feature}}.NewService(compose.Use({{.Title}}Store))
+})
+{{- if .Web}}
+
+// {{.Title}}Routes mounts the {{.Feature}} routes under /{{.Feature}} on the shared
+// router and returns the handlers. Use it from the Compose of every process
+// that serves HTTP.
+var {{.Title}}Routes = application.Provide(func(compose *application.Composer) *{{.Feature}}web.Handlers {
+	routes := compose.Use(Router)
+
+	handlers := {{.Feature}}web.NewHandlers(compose.Use({{.Title}}Service))
+	handlers.Register(routes.Prefix("/{{.Feature}}"))
+
+	return handlers
+})
+{{- end}}
+{{- if .Jobs}}
+
+// {{.Title}}Jobs builds the {{.Feature}} job handlers and returns them.
+//
+// TODO: the queue driver is an application choice. Add a Consumer provider,
+// then keep the handlers in a variable and register them on it before
+// returning:
+//
+//	compose.Require(handlers.Register(compose.Use(Consumer)))
+var {{.Title}}Jobs = application.Provide(func(compose *application.Composer) *{{.Feature}}jobs.Handlers {
+	return {{.Feature}}jobs.NewHandlers(compose.Use({{.Title}}Service))
+})
+{{- end}}
+{{- if .Flow}}
+
+// {{.Title}}Workflows builds the {{.Feature}} workflow set and returns it.
+//
+// TODO: the workflow engine is an application choice. Add a provider that
+// builds the registry from the set's Definitions with workflow.NewRegistry.
+var {{.Title}}Workflows = application.Provide(func(compose *application.Composer) *{{.Feature}}flow.Workflows {
+	return {{.Feature}}flow.NewWorkflows(compose.Use({{.Title}}Service))
+})
+{{- end}}
+{{- if .Tools}}
+
+// {{.Title}}Tools builds the {{.Feature}} MCP tool set and returns it.
+//
+// TODO: tools are served by an MCP endpoint the application owns. Pass the
+// catalog's Tools to the endpoint's Tools method in the MCP provider, adding
+// any availability policy there.
+var {{.Title}}Tools = application.Provide(func(compose *application.Composer) *{{.Feature}}tools.Catalog {
+	return {{.Feature}}tools.NewCatalog(compose.Use({{.Title}}Service))
+})
+{{- end}}
+{{- if .Events}}
+
+// {{.Title}}Listeners subscribes the {{.Feature}} listeners on the application's
+// event bus and returns them. Unsubscribing is registered for shutdown. Use it
+// from the Compose of the process that emits the events it listens to.
+var {{.Title}}Listeners = application.Provide(func(compose *application.Composer) *{{.Feature}}events.Listeners {
+	events := compose.App().Events()
+
+	listeners := {{.Feature}}events.NewListeners(compose.Use({{.Title}}Service))
+	compose.MustDefer(listeners.Register(events))
+
+	return listeners
+})
+{{- end}}
+{{- if .Schedules}}
+
+// {{.Title}}Schedules builds the {{.Feature}} schedule entries and returns them.
+//
+// TODO: the scheduler is an application choice. Add a Scheduler provider, then
+// keep the entries in a variable and add them to it before returning:
+//
+//	compose.Require(entries.Register(compose.Use(Scheduler)))
+var {{.Title}}Schedules = application.Provide(func(compose *application.Composer) *{{.Feature}}schedules.Entries {
+	return {{.Feature}}schedules.NewEntries(compose.Use({{.Title}}Service))
+})
+{{- end}}

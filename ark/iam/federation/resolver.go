@@ -123,7 +123,7 @@ func (resolver *ResolverBuilder) KeepClaims(names ...string) *ResolverBuilder {
 //	if err != nil {
 //		return err
 //	}
-//	web.Get("/auth/work/callback", work.CallbackHandler(guard, resolve))
+//	web.Get("/auth/work/callback", work.CallbackHandler(guard, resolve), oauthauth.CallbackOperation)
 func (links *Links) Resolver(configure ...ResolverBuilderFunc) (auth.Resolver, error) {
 	settings := ResolverBuilder{signUp: links.onboard.signUp}
 	for _, apply := range configure {

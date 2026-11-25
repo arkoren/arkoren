@@ -291,3 +291,45 @@ func TestSigningRejectsTrailingDER(t *testing.T) {
 		t.Fatal("trailing DER accepted")
 	}
 }
+
+// TestSigningUnmarshalText verifies a PEM decodes through the text interface.
+func TestSigningUnmarshalText(t *testing.T) {
+	t.Parallel()
+
+	provisioned, err := key.GenerateSigning()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var identity key.Signing
+
+	if err := identity.UnmarshalText(provisioned.PEM()); err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(identity.PEM(), provisioned.PEM()) {
+		t.Fatal("UnmarshalText decoded a different identity")
+	}
+}
+
+// TestSigningUnmarshalTextKeepsIdentityOnFailure verifies a failed decode changes nothing.
+func TestSigningUnmarshalTextKeepsIdentityOnFailure(t *testing.T) {
+	t.Parallel()
+
+	identity, err := key.GenerateSigning()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := identity.PEM()
+
+	if err := identity.UnmarshalText([]byte("not pem")); !errors.Is(err, key.ErrInvalid) {
+		t.Fatalf("error = %v", err)
+	}
+
+	if !bytes.Equal(identity.PEM(), before) {
+		t.Fatal("failed decode replaced the identity")
+	}
+}

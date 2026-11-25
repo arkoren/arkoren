@@ -7,7 +7,6 @@ import (
 	"runtime"
 
 	appdiagnostic "arkoren.dev/core/application/internal/diagnostic"
-	"arkoren.dev/core/internal/diagnostic"
 	"arkoren.dev/core/mcp"
 	"arkoren.dev/core/service/telemetry/memorytelemetry"
 )
@@ -193,18 +192,15 @@ type infoView struct {
 	Runtime runtimeView `json:"runtime"`
 }
 
-// runtimeView supplies machine values alongside human-readable byte counts.
+// runtimeView holds the process runtime snapshot. Byte counts are plain
+// numbers; the CLI shows them in readable units.
 type runtimeView struct {
 	// Goroutines counts current goroutines.
 	Goroutines int `json:"goroutines"`
 	// HeapAllocBytes is allocated heap bytes.
 	HeapAllocBytes uint64 `json:"heap_alloc_bytes"`
-	// HeapAlloc formats HeapAllocBytes.
-	HeapAlloc string `json:"heap_alloc"`
 	// SysBytes is memory obtained from the operating system.
 	SysBytes uint64 `json:"sys_bytes"`
-	// Sys formats SysBytes.
-	Sys string `json:"sys"`
 	// NumGC counts completed garbage collections.
 	NumGC uint32 `json:"num_gc"`
 	// GOMAXPROCS is the parallel thread limit.
@@ -219,8 +215,7 @@ func (application *Application) diagnosticInfo(context.Context, mcp.NoInput) (in
 
 	return infoView{Info: application.Info(), Runtime: runtimeView{
 		Goroutines: runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc,
-		HeapAlloc: diagnostic.Bytes(memory.HeapAlloc), SysBytes: memory.Sys,
-		Sys: diagnostic.Bytes(memory.Sys), NumGC: memory.NumGC, GOMAXPROCS: runtime.GOMAXPROCS(0),
+		SysBytes: memory.Sys, NumGC: memory.NumGC, GOMAXPROCS: runtime.GOMAXPROCS(0),
 	}}, nil
 }
 

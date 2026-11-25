@@ -1,0 +1,28 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/ark/oauth/oauthauth"
+	"arkoren.dev/core/application"
+)
+
+// Google is the process's one Google sign-in client. It reads GOOGLE_CLIENT_ID,
+// GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URL (the absolute address of the
+// callback route, such as https://app.example.com/auth/google/callback) from the
+// environment, and seals its login cookies with the OAuthKey provider. Startup
+// performs the provider's OIDC discovery over the network, so the process fails
+// to start when Google cannot be reached. Pass the client to the identity module
+// with identity.Provider(compose.Use(Google)), which mounts its login and
+// callback routes.
+var Google = application.Provide(func(compose *application.Composer) *oauthauth.Client {
+	cipher := compose.Use(OAuthKey)
+
+	client := compose.Must(oauthauth.New(oauthauth.Google(), cipher, os.Getenv("GOOGLE_CLIENT_ID"), func(client *oauthauth.ClientBuilder) {
+		client.ClientSecret(os.Getenv("GOOGLE_CLIENT_SECRET"))
+		client.RedirectURL(os.Getenv("GOOGLE_REDIRECT_URL"))
+	}))
+	compose.Startup(client.Start)
+
+	return client
+})

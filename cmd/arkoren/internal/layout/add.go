@@ -26,6 +26,9 @@ import (
 // hyphens or underscores, starting with a letter.
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$`)
 
+// majorVersion matches a module path's trailing major-version element, such as v2.
+var majorVersion = regexp.MustCompile(`^v[0-9]+$`)
+
 // featurePattern accepts a feature name: lowercase letters and digits only,
 // starting with a letter, because it becomes a Go package name.
 var featurePattern = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
@@ -35,6 +38,13 @@ var featurePattern = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 var reservedFeatureNames = []string{
 	"bootstrap", "migrations", "platform", "application", "router", "http", "context", "time",
 	"queue", "workflow", "mcp", "schedule", "event", "web", "jobs", "flow", "tools", "events", "schedules",
+	"request", "response", "problem", "errormap", "query",
+}
+
+// surfaceExtras are the files a surface child gets beside <surface>.go, as
+// template suffix and file name: web declares its problems in problems.go.
+var surfaceExtras = map[string][][2]string{
+	"web": {{"web_problems", "problems"}},
 }
 
 // Plan is the set of changes one `arkoren add` operation would make: new files
@@ -46,6 +56,15 @@ type Plan struct {
 	Create []files.File
 	// Edit lists existing files changed by inserting lines at one anchor.
 	Edit []Edit
+	// Requires lists the modules, as module@version, that the new files import
+	// and go.mod does not require yet, each pinned by the CLI. Fetch them with
+	// go get before go mod tidy, so tidy does not resolve a newer release.
+	Requires []string
+	// Steps lists what the command could not do itself, such as adding
+	// migrations to an existing Migrator or setting environment variables. Each
+	// is one imperative sentence; none has a command, because each needs a value
+	// or an edit only the reader can make.
+	Steps []console.Step
 }
 
 // Edit is one insertion into an existing file.
@@ -68,30 +87,42 @@ type FeatureOptions struct {
 	// Surfaces are the child packages to create, a subset of web, jobs,
 	// flow, tools, events and schedules.
 	Surfaces []string
-	// Process names the cmd/<process> whose Compose registers the surfaces.
+	// Process names the process root internal/bootstrap/<process> whose Compose
+	// uses the surface providers.
 	// Empty selects "server". It is unused when Surfaces is empty.
 	Process string
 }
 
-// surfaceFunctions names the registration function each surface exports.
-var surfaceFunctions = map[string]string{
-	"web": "Routes", "jobs": "Handlers", "flow": "Workflows", "tools": "Tools", "events": "Listeners", "schedules": "Entries",
+// surfaceProviders names the bootstrap provider each surface gets: the
+// feature's CamelCase name followed by this suffix, such as OrdersRoutes.
+var surfaceProviders = map[string]string{
+	"web": "Routes", "jobs": "Jobs", "flow": "Workflows", "tools": "Tools", "events": "Listeners", "schedules": "Schedules",
 }
 
-// AddFeature plans internal/<name>: the root files (<name>.go, service.go,
-// store.go, feature.go with DefaultStore and DefaultService) and one child
-// package per requested surface exporting a registration function, plus the
-// calls and imports that register each surface in the Compose of the chosen
-// process. Child packages are imported with the alias <name><surface>.
+// AddFeature plans internal/<name>: the root files (<name>.go, service.go and
+// store.go, plain Go that never imports the application package), one child
+// package per requested surface (a struct built by a New constructor over the
+// Service, with a Register method for its target where one exists; web also
+// gets problems.go mapping the root's ErrNotFound to a problem), and
+// internal/bootstrap/<name>.go with the providers that wire them: <Name>Store,
+// <Name>Service and one <Name><Surface> provider per surface. For each surface
+// it also inserts a compose.Use(bootstrap.<Name><Surface>) line into the
+// Compose of the chosen process, adding the bootstrap import if the file lacks
+// it. Child packages are imported by the bootstrap file with the alias
+// <name><surface>.
 //
-// Surface stubs compile as generated. Where a working registration needs a
-// driver the application has not chosen (queue consumer, workflow engine,
-// MCP endpoint, scheduler), the stub defines the job, workflow, tool or entry
-// and leaves a TODO in an empty registration function that says what to add.
+// Surface stubs compile as generated. The web provider registers its handlers
+// on the shared router under /<name> and the events provider subscribes its
+// listeners. Where a working registration needs a driver the application has
+// not chosen (queue consumer, workflow engine, MCP endpoint, scheduler), the
+// provider builds the surface and leaves a TODO that says what to add. The
+// Store holds no database yet, because the scaffold has no Database provider;
+// a TODO in the store provider says how to add one.
 //
 // It returns a usage error when the name is invalid or reserved, internal/<name>
-// exists, a surface is unknown, or the process's Compose cannot be edited. It
-// never changes the project; call [Project.Apply] on the plan.
+// or internal/bootstrap/<name>.go exists, a bootstrap provider of that name is
+// already declared, a surface is unknown, or the process's Compose cannot be
+// edited. It never changes the project; call [Project.Apply] on the plan.
 //
 // Example:
 //
@@ -115,57 +146,87 @@ func (project *Project) AddFeature(options FeatureOptions, templates fs.FS) (*Pl
 		return nil, err
 	}
 
-	data := map[string]string{"Module": project.Module, "Feature": name}
+	title := camel(name)
+	data := map[string]string{"Module": project.Module, "Feature": name, "Title": title}
+	providers := []string{title + "Store", title + "Service"}
+	surfaces := slices.DeleteFunc(slices.Clone(Surfaces), func(surface string) bool { return !slices.Contains(options.Surfaces, surface) })
+
+	for _, surface := range surfaces {
+		data[camel(surface)] = "true"
+		providers = append(providers, title+surfaceProviders[surface])
+	}
+
+	for _, provider := range providers {
+		if project.declares("internal/bootstrap", provider) {
+			return nil, console.UsageError("internal/bootstrap already declares %s", provider)
+		}
+	}
+
 	plan := &Plan{}
-	process := cmp.Or(options.Process, "server")
 
-	for _, file := range [][2]string{{"root", name}, {"service", "service"}, {"store", "store"}, {"feature", "feature"}} {
-		err := project.render(plan, templates, "add/feature/"+file[0]+".go", "internal/"+name+"/"+file[1]+".go", data)
+	outputs := [][2]string{{"root", "internal/" + name + "/" + name}, {"service", "internal/" + name + "/service"},
+		{"store", "internal/" + name + "/store"}, {"bootstrap", "internal/bootstrap/" + name}}
 
-		if err != nil {
+	for _, surface := range surfaces {
+		outputs = append(outputs, [2]string{surface, "internal/" + name + "/" + surface + "/" + surface})
+
+		for _, extra := range surfaceExtras[surface] {
+			outputs = append(outputs, [2]string{extra[0], "internal/" + name + "/" + surface + "/" + extra[1]})
+		}
+	}
+
+	for _, file := range outputs {
+		if err := project.render(plan, templates, "add/feature/"+file[0]+".go", file[1]+".go", data); err != nil {
 			return nil, err
 		}
 	}
 
-	var registrations []registration
-
-	for _, surface := range Surfaces {
-		if !slices.Contains(options.Surfaces, surface) {
-			continue
-		}
-
-		err := project.render(plan, templates, "add/feature/"+surface+".go", "internal/"+name+"/"+surface+"/"+surface+".go", data)
-
-		if err != nil {
-			return nil, err
-		}
-
-		registrations = append(registrations, registration{
-			importPath: project.Module + "/internal/" + name + "/" + surface,
-			alias:      name + surface,
-			function:   surfaceFunctions[surface],
-		})
-	}
-
-	if len(registrations) == 0 {
+	if len(surfaces) == 0 {
 		return plan, nil
 	}
 
-	main := "cmd/" + process + "/main.go"
+	process := cmp.Or(options.Process, "server")
+	target := project.composeFile(process)
 
-	if !slices.ContainsFunc(project.sources, func(src *source) bool { return src.rel == main }) {
-		return nil, console.UsageError("process %q not found: no %s (create it with arkoren add process %s)", process, main, process)
+	if target == "" {
+		return nil, console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Create the process", Command: "arkoren add process " + console.Quote(process)}},
+			"process %q not found: no Compose in internal/bootstrap/%s", process, process)
 	}
 
-	return plan, project.planEdit(plan, main, func(content []byte) ([]byte, []string, error) {
-		return addRegistrations(main, content, project.Module, registrations)
+	uses := make([]string, 0, len(surfaces))
+
+	for _, surface := range surfaces {
+		uses = append(uses, title+surfaceProviders[surface])
+	}
+
+	return plan, project.planEdit(plan, target, func(content []byte) ([]byte, []string, error) {
+		return addUses(target, content, project.Module, uses)
 	})
 }
 
-// AddProcess plans cmd/<name>/main.go: a process that builds the application
-// from bootstrap.Application and runs an empty exported Compose. The name is
-// lowercase words of letters and digits joined by hyphens, and cmd/<name> must
-// not exist.
+// composeFile returns the non-test file of the process root
+// internal/bootstrap/<process> that declares Compose, or "" when there is none.
+func (project *Project) composeFile(process string) string {
+	for _, src := range project.sources {
+		if !src.test && src.dir == "internal/bootstrap/"+process && composeDecl(src.file) != nil {
+			return src.rel
+		}
+	}
+
+	return ""
+}
+
+// AddProcess plans a new process: cmd/<name>/main.go, which runs the process
+// root's App and Compose with application.Run, and the process root
+// internal/bootstrap/<name> with app.go (an App provider that names the service
+// <project>-<name> and uses bootstrap.LogHandler) and compose.go (an empty
+// exported Compose). <project> is the last element of the module path, without
+// a trailing major-version element such as v2, so the name is the same every
+// time the command runs. The name is lowercase words of letters and digits
+// joined by hyphens; the package name drops the hyphens. Neither directory may
+// exist, and internal/bootstrap must declare the LogHandler provider that
+// `arkoren new` generates.
 //
 // Example:
 //
@@ -175,14 +236,42 @@ func (project *Project) AddProcess(name string, templates fs.FS) (*Plan, error) 
 		return nil, console.UsageError("process name %q must be lowercase letters and digits, optionally joined by hyphens", name)
 	}
 
-	if err := project.refuseExisting("cmd/" + name); err != nil {
-		return nil, err
+	for _, dir := range []string{"cmd/" + name, "internal/bootstrap/" + name} {
+		if err := project.refuseExisting(dir); err != nil {
+			return nil, err
+		}
+	}
+
+	pkg := strings.ReplaceAll(name, "-", "")
+
+	if token.IsKeyword(pkg) {
+		return nil, console.UsageError("process name %q is a Go keyword", name)
+	}
+
+	if !project.declares("internal/bootstrap", "LogHandler") {
+		return nil, console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Add a LogHandler provider to internal/bootstrap; arkoren new generates one in internal/bootstrap/logging.go"}},
+			"internal/bootstrap declares no LogHandler provider, which the new process's App uses")
+	}
+
+	base := path.Base(project.Module)
+
+	if majorVersion.MatchString(base) && path.Dir(project.Module) != "." {
+		base = path.Base(path.Dir(project.Module))
 	}
 
 	plan := &Plan{}
-	data := map[string]string{"Module": project.Module, "Process": name}
+	data := map[string]string{"Module": project.Module, "Process": name, "Package": pkg, "Service": base + "-" + name}
+	root := "internal/bootstrap/" + name + "/"
 
-	return plan, project.render(plan, templates, "add/process/main.go", "cmd/"+name+"/main.go", data)
+	for _, file := range [][2]string{{"add/process/app.go", root + "app.go"}, {"add/process/compose.go", root + "compose.go"},
+		{"add/process/main.go", "cmd/" + name + "/main.go"}} {
+		if err := project.render(plan, templates, file[0], file[1], data); err != nil {
+			return nil, err
+		}
+	}
+
+	return plan, nil
 }
 
 // AddProvider plans internal/bootstrap/<name>.go: an exported provider named
@@ -217,7 +306,10 @@ func (project *Project) AddProvider(name string, templates fs.FS) (*Plan, error)
 // migration in All. The sequence is four digits, one more than the highest
 // numbered file already in the directory, so files sort in running order. The
 // migration id is the name with hyphens; the exported variable is its
-// CamelCase form. The stub defines an empty Up step and a TODO.
+// CamelCase form. The stub extracts its schema-builder operations into exported
+// variables beside the migration: a name starting with "create" creates (and
+// on Down drops) the table named by the remaining words, any other name alters
+// that table with an empty change that fails until a TODO is resolved.
 //
 // If internal/migrations declares All, the new variable is appended to the
 // slice literal it returns. Otherwise migrations.go is created with All; an
@@ -258,7 +350,15 @@ func (project *Project) AddMigration(name string, templates fs.FS) (*Plan, error
 	}
 
 	plan := &Plan{}
-	data := map[string]string{"Name": identifier, "ID": id}
+	data := map[string]string{"Name": identifier, "ID": id, "Table": strings.Join(words(name), "_")}
+
+	if parts := words(name); len(parts) > 1 {
+		data["Table"] = strings.Join(parts[1:], "_")
+
+		if parts[0] == "create" {
+			data["Create"] = "true"
+		}
+	}
 	target := dir + "/" + fmt.Sprintf("%04d_%s.go", sequence, strings.ReplaceAll(name, "-", "_"))
 
 	if err := project.render(plan, templates, "add/migration/migration.go", target, data); err != nil {
@@ -276,7 +376,9 @@ func (project *Project) AddMigration(name string, templates fs.FS) (*Plan, error
 	}
 
 	if err := project.refuseExisting(dir + "/migrations.go"); err != nil {
-		return nil, console.UsageError("%s/migrations.go exists without an All function; add `func All() []migrate.Definition` first", dir)
+		return nil, console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Add func All() []migrate.Definition to " + dir + "/migrations.go"}},
+			"%s/migrations.go exists without an All function", dir)
 	}
 
 	if err := project.render(plan, templates, "add/migration/migrations.go", dir+"/migrations.go", data); err != nil {
@@ -306,7 +408,9 @@ func (project *Project) refuseExisting(rel string) error {
 	_, err := os.Lstat(filepath.Join(project.Root, filepath.FromSlash(rel)))
 
 	if err == nil {
-		return console.UsageError("%s already exists; arkoren add never overwrites", rel)
+		return console.Fail(console.TypeFileConflict,
+			[]console.Step{{Text: "Choose another name, or move the existing file aside; arkoren add never overwrites"}},
+			"%s already exists", rel)
 	}
 
 	if !errors.Is(err, fs.ErrNotExist) {
@@ -349,6 +453,10 @@ func (project *Project) planEdit(plan *Plan, rel string, edit func([]byte) ([]by
 		return err
 	}
 
+	if len(inserted) == 0 {
+		return nil
+	}
+
 	plan.Edit = append(plan.Edit, Edit{Path: rel, Inserted: inserted, original: original, content: content})
 
 	return nil
@@ -357,28 +465,37 @@ func (project *Project) planEdit(plan *Plan, rel string, edit func([]byte) ([]by
 // declares reports whether a non-test file of the package in dir declares a
 // top-level function, variable, constant or type called name.
 func (project *Project) declares(dir, name string) bool {
+	return project.declaringSource(dir, name) != nil
+}
+
+// declaringSource returns the non-test file of the package in dir that declares
+// a top-level function, variable, constant or type called name, or nil.
+func (project *Project) declaringSource(dir, name string) *source {
 	for _, src := range project.packageSources(dir) {
 		for _, decl := range src.file.Decls {
 			switch decl := decl.(type) {
 			case *ast.FuncDecl:
 				if decl.Recv == nil && decl.Name.Name == name {
-					return true
+					return src
 				}
 			case *ast.GenDecl:
-				for _, spec := range decl.Specs {
-					switch spec := spec.(type) {
-					case *ast.ValueSpec:
-						if slices.ContainsFunc(spec.Names, func(ident *ast.Ident) bool { return ident.Name == name }) {
-							return true
-						}
-					case *ast.TypeSpec:
-						if spec.Name.Name == name {
-							return true
-						}
-					}
+				if slices.ContainsFunc(decl.Specs, func(spec ast.Spec) bool { return specDeclares(spec, name) }) {
+					return src
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+// specDeclares reports whether a var, const or type spec declares name.
+func specDeclares(spec ast.Spec, name string) bool {
+	switch spec := spec.(type) {
+	case *ast.ValueSpec:
+		return slices.ContainsFunc(spec.Names, func(ident *ast.Ident) bool { return ident.Name == name })
+	case *ast.TypeSpec:
+		return spec.Name.Name == name
 	}
 
 	return false

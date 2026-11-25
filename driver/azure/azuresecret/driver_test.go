@@ -306,7 +306,7 @@ func TestAzureConformance(t *testing.T) {
 		}
 
 		return driver
-	}, secrettest.WithTextValues(), secrettest.WithMissingVersion("00000000000000000000000000000000"))
+	}, secrettest.WithTextOnly(), secrettest.WithMissingVersion("00000000000000000000000000000000"))
 }
 
 // azureHTTPFunc handles real SDK requests in memory. No default Azure
@@ -363,7 +363,7 @@ func TestPutRejectsInvalidUTF8BeforeNativeWrite(t *testing.T) {
 
 	_, err := driver.Put(t.Context(), "example", []byte{0xff})
 
-	if err == nil || requests != 0 {
+	if !errors.Is(err, secret.ErrUnsupported) || requests != 0 {
 		t.Fatalf("Put invalid UTF-8 error = %v, requests = %d; want local rejection", err, requests)
 	}
 }

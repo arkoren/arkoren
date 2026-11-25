@@ -5,12 +5,12 @@ go 1.27
 require (
 	arkoren.dev/core v0.1.0
 	arkoren.dev/foundation/collection v0.1.0
+	arkoren.dev/foundation/problem v0.1.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 )
 
 require (
-	arkoren.dev/foundation/problem v0.1.0 // indirect
 	arkoren.dev/foundation/validate v0.1.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

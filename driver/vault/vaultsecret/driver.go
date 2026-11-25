@@ -3,7 +3,6 @@ package vaultsecret
 import (
 	"cmp"
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -88,7 +87,8 @@ type client interface {
 var ErrNotStarted = errors.New("vault driver not started")
 
 // Driver manages versioned JSON secrets in HashiCorp Vault KV v2.
-// Write values must be objects. Native clients/auth methods remain shared;
+// A JSON-object payload is stored as native KV fields, any other UTF-8 payload
+// as {"value": "<text>"}. Native clients/auth methods remain shared;
 // managed renewal belongs to Start/Stop, not to a secret operation's context.
 //
 // Example:
@@ -211,7 +211,9 @@ func NewFrom(client client) *Driver {
 
 // Get retrieves reference, using its version when supplied.
 // Explicit versions must be positive decimal integers. Missing/deleted/destroyed
-// payloads wrap secret.ErrNotFound; object formatting may differ from a write.
+// payloads wrap secret.ErrNotFound; object formatting may differ from a write. An
+// object whose only member is "value" holding a string is returned as that
+// string's bytes (a text payload).
 //
 // Example:
 //
@@ -281,7 +283,7 @@ func secretValue(name string, response *api.KVSecret) (secret.Value, error) {
 		return secret.Value{}, fmt.Errorf("%w: %s", secret.ErrNotFound, name)
 	}
 
-	contents, err := json.Marshal(response.Data)
+	contents, err := decodeVaultData(response.Data)
 
 	if err != nil {
 		return secret.Value{}, fmt.Errorf("marshal secret %q: %w", name, err)
@@ -303,7 +305,11 @@ func secretVersion(response *api.KVSecret) string {
 }
 
 // Put creates name or writes a new current value version when it already exists.
-// Values must be JSON objects, not null. Numbers that change value under native
+// A JSON object is stored as native KV fields; any other UTF-8 value, including
+// JSON that is not an object, is stored as {"value": "<text>"} and read back
+// as that text. The literal object {"value": "<string>"} is rejected with
+// secret.ErrInvalidSecret as ambiguous, and non-UTF-8 bytes return
+// secret.ErrUnsupported. In objects, numbers that change value under native
 // float64 JSON serialization are rejected before writing; explicitly encode exact
 // identifiers and decimals as JSON strings. Accepted numeric tokens are sent
 // unchanged. Returned bytes are detached; Get may normalize object formatting.
@@ -375,7 +381,8 @@ func (driver *Driver) mapUpdateError(ctx context.Context, name string, err error
 
 // write validates native JSON numeric representability before appending a KV v2
 // version. Member tokens are transmitted unchanged; the driver neither rounds
-// values nor introduces a persisted wrapper. Native formatting is not preserved.
+// values; only non-object text is wrapped, as {"value": "<text>"}. Native
+// formatting is not preserved.
 func (driver *Driver) write(ctx context.Context, name string, value []byte, options ...api.KVOption) (secret.Value, error) {
 	if err := ctx.Err(); err != nil {
 		return secret.Value{}, err
@@ -385,10 +392,10 @@ func (driver *Driver) write(ctx context.Context, name string, value []byte, opti
 		return secret.Value{}, ErrNotStarted
 	}
 
-	data, err := decodeVaultData(value)
+	data, err := encodeVaultData(value)
 
 	if err != nil {
-		return secret.Value{}, fmt.Errorf("decode Vault secret %q: %w", name, err)
+		return secret.Value{}, fmt.Errorf("encode Vault secret %q: %w", name, err)
 	}
 
 	response, err := driver.client.Put(ctx, name, data, options...)

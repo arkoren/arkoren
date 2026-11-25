@@ -35,13 +35,13 @@ const (
 	cursorMACVersion = "v1."
 )
 
-// ErrInvalidSecret reports a zero current/previous key.Shared supplied to
-// NewCursorCodec, or Encode on an unconstructed zero codec. The key package
-// enforces MinSecretLength before publishing nonzero application material.
+// ErrInvalidSecret reports a zero key.Ring supplied to NewCursorCodec, or
+// Encode on an unconstructed zero codec. The key package enforces
+// MinSecretLength on every key before a Ring can be built.
 //
 // Example:
 //
-//	_, err := pagination.NewCursorCodec(key.Shared{})
+//	_, err := pagination.NewCursorCodec(key.Ring[key.Shared]{})
 //	if errors.Is(err, pagination.ErrInvalidSecret) {
 //		fmt.Println("configure a cursor key")
 //	}
@@ -65,7 +65,7 @@ var ErrInvalidSecret = errors.New("cursor signing secret is invalid")
 //
 // Example:
 //
-//	codec, err := pagination.NewCursorCodec(material)
+//	codec, err := pagination.NewCursorCodec(ring)
 //	if err != nil {
 //		return err
 //	}
@@ -79,36 +79,37 @@ type CursorCodec struct {
 	keys [][]byte
 }
 
-// NewCursorCodec returns a codec that signs with secret and also accepts
-// cursors signed with any previous secret, which allows rotation: deploy the
-// new secret first with the old one in previous, and drop the old one once
-// the application's retention policy no longer accepts its cursors. The codec
-// supplies no built-in expiration time or expiry validation.
+// NewCursorCodec returns a codec that signs with the ring's current key and
+// also accepts cursors signed with any of its previous keys, which allows
+// rotation: deploy a ring with the new key current and the old one previous,
+// and drop the old one once the application's retention policy no longer
+// accepts its cursors. The codec supplies no built-in expiration time or
+// expiry validation.
 //
-// Every secret must be a validated key.Shared. Zero current or previous values
-// return [ErrInvalidSecret]. Load or parse material through the key package.
-// HKDF-SHA256 derives purpose-bound keys without retaining the original secrets.
-// Provision separate material for unrelated purposes.
+// Build the ring with key.NewRing or key.ParseRing[key.Shared]. The zero Ring
+// returns [ErrInvalidSecret]. HKDF-SHA256 derives purpose-bound keys without
+// retaining the original keys. Provision separate material for unrelated
+// purposes.
 //
 // Example:
 //
-//	material, err := key.LoadShared("cursor.key")
+//	ring, err := key.ParseRing[key.Shared](os.Getenv("CURSOR_KEYS"))
 //	if err != nil {
 //		return err
 //	}
-//	codec, err := pagination.NewCursorCodec(material)
+//	codec, err := pagination.NewCursorCodec(ring)
 //	if err != nil {
 //		return err
 //	}
 //	_ = codec
-func NewCursorCodec(secret key.Shared, previous ...key.Shared) (*CursorCodec, error) {
+func NewCursorCodec(ring key.Ring[key.Shared]) (*CursorCodec, error) {
+	if ring.Err() != nil {
+		return nil, ErrInvalidSecret
+	}
+
 	codec := &CursorCodec{}
 
-	for _, secret := range append([]key.Shared{secret}, previous...) {
-		if secret.Err() != nil {
-			return nil, ErrInvalidSecret
-		}
-
+	for _, secret := range append([]key.Shared{ring.Current()}, ring.Previous()...) {
 		key, err := hkdf.Key(sha256.New, secret.Bytes(), nil, cursorKeyInfo, sha256.Size)
 
 		if err != nil {
@@ -143,7 +144,7 @@ func cursorMAC(key []byte, payload string) []byte {
 //	if err != nil {
 //		return err
 //	}
-//	codec, err := pagination.NewCursorCodec(material)
+//	codec, err := pagination.NewCursorCodec(ring)
 //	if err != nil {
 //		return err
 //	}
@@ -183,7 +184,7 @@ func (codec *CursorCodec) Encode[T any](value T) (string, error) {
 //
 // Example:
 //
-//	codec, err := pagination.NewCursorCodec(material)
+//	codec, err := pagination.NewCursorCodec(ring)
 //	if err != nil {
 //		return err
 //	}

@@ -109,7 +109,7 @@ func TestCertificateGenerateOfflineRoundTrip(t *testing.T) {
 
 	output := env.Stdout.(*bytes.Buffer).String()
 
-	contains(t, output, `"trust_changed": false`)
+	contains(t, output, `"summary": "Generated root certificate"`, `System trust was not changed`, `arkoren certificate root trust `)
 
 	if strings.Contains(output, "PRIVATE KEY") {
 		t.Fatal("private PEM leaked to stdout")
@@ -190,7 +190,7 @@ func TestCertificateCheckForms(t *testing.T) {
 	}
 
 	contains(t, env.Stdout.(*bytes.Buffer).String(),
-		`"parsed": true`, `"key_matched": true`, `"key_matched": false`, `"expiry_checked": false`, `"trust_checked": false`)
+		`"summary": "Certificate parsed"`, `"summary": "Certificate parsed; key matches"`, `"key_matched": true`, `"not_checked"`, `"expiry"`, `"trust"`)
 }
 
 // TestCertificateIPOnlySAN accepts IP-only servers without fabricating a DNS
@@ -250,7 +250,7 @@ func TestCertificateRejectsUsageBeforeEffects(t *testing.T) {
 	t.Parallel()
 
 	for _, args := range [][]string{
-		{}, {"root"}, {"unknown"}, {"root", "unknown"},
+		{"unknown"}, {"root", "unknown"},
 		{"root", "generate", "--cert", "root.pem", "--key", "root-key.pem"},
 		{"root", "generate", "--name", "Root", "--cert", "root.pem"},
 		{"root", "generate", "--name", "Root", "--cert", "root.pem", "--key", "-"},
@@ -313,7 +313,7 @@ func TestCertificateCheckDoesNotAssertExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contains(t, env.Stdout.(*bytes.Buffer).String(), `"expiry_checked": false`, `"trust_checked": false`)
+	contains(t, env.Stdout.(*bytes.Buffer).String(), `"not_checked"`, `"expiry"`, `"trust"`)
 }
 
 // TestCertificateMismatchedPairFails rejects individually parseable certificates
@@ -343,12 +343,15 @@ func TestCertificateMismatchedPairFails(t *testing.T) {
 	}
 
 	err = runCertificate(t.Context(), []string{"check", "--cert", "root.pem", "--key", "wrong-key.pem"}, env)
+	exit, failed := errors.AsType[*console.ExitError](err)
+	report := env.Stdout.(*bytes.Buffer).String()
 
-	if err == nil || env.Stdout.(*bytes.Buffer).Len() != 0 {
-		t.Fatalf("mismatched pair check = %v", err)
+	if !failed || exit.Code != console.ExitFailure || exit.Err != nil || !strings.Contains(report, `"ok": false`) ||
+		!strings.Contains(report, `"field": "key"`) {
+		t.Fatalf("mismatched pair check = %v\n%s", err, report)
 	}
 
-	if strings.Contains(err.Error(), "PRIVATE KEY") {
+	if strings.Contains(report, "PRIVATE KEY") {
 		t.Fatal("private PEM leaked")
 	}
 }
@@ -365,13 +368,14 @@ func TestCertificateMalformedMaterialSecretFree(t *testing.T) {
 	}
 
 	err := runCertificate(t.Context(), []string{"check", "--cert", "bad.pem"}, env)
+	report := env.Stdout.(*bytes.Buffer).String()
 
-	if err == nil {
-		t.Fatal("accepted malformed certificate")
+	if exit, failed := errors.AsType[*console.ExitError](err); !failed || exit.Code != console.ExitFailure || !strings.Contains(report, `"ok": false`) {
+		t.Fatalf("accepted malformed certificate: %v\n%s", err, report)
 	}
 
-	if strings.Contains(err.Error(), "sensitive-invalid-material") || env.Stdout.(*bytes.Buffer).Len() != 0 {
-		t.Fatalf("unsafe error/output: %v", err)
+	if strings.Contains(report, "sensitive-invalid-material") {
+		t.Fatalf("unsafe output: %s", report)
 	}
 }
 
@@ -659,7 +663,7 @@ func TestCertificatePartialPairReportsExactPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = persistCertificate(t.Context(), inventory, identity, env)
+	err = persistCertificate(t.Context(), inventory, identity, false, env)
 
 	if !errors.Is(err, os.ErrExist) {
 		t.Fatalf("partial pair = %v", err)

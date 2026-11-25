@@ -355,3 +355,51 @@ func TestMiniStackConformance(t *testing.T) {
 		return newMiniStackClient(t, t.Context())
 	}, secrettest.WithMissingVersion("00000000-0000-0000-0000-000000000000"))
 }
+
+// payloadRecorder captures the payload fields of create and put calls.
+type payloadRecorder struct {
+	secretsManagerClient
+
+	// text and binary hold the last SecretString and SecretBinary written.
+	text   *string
+	binary []byte
+}
+
+// CreateSecret records the payload fields of the creation request.
+func (recorder *payloadRecorder) CreateSecret(_ context.Context, input *secretsmanager.CreateSecretInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.CreateSecretOutput, error) {
+	recorder.text = input.SecretString
+	recorder.binary = input.SecretBinary
+
+	return &secretsmanager.CreateSecretOutput{}, nil
+}
+
+// TestPutWritesTextAsSecretString verifies UTF-8 values use SecretString only.
+func TestPutWritesTextAsSecretString(t *testing.T) {
+	t.Parallel()
+
+	recorder := &payloadRecorder{}
+
+	if _, err := NewFrom(recorder).Put(t.Context(), "name", []byte("plain text")); err != nil {
+		t.Fatal(err)
+	}
+
+	if recorder.text == nil || *recorder.text != "plain text" || recorder.binary != nil {
+		t.Fatalf("text = %v, binary = %v", recorder.text, recorder.binary)
+	}
+}
+
+// TestPutWritesNonUTF8AsSecretBinary verifies other bytes use SecretBinary only.
+func TestPutWritesNonUTF8AsSecretBinary(t *testing.T) {
+	t.Parallel()
+
+	recorder := &payloadRecorder{}
+	data := []byte{0xff, 0xfe, 0x00}
+
+	if _, err := NewFrom(recorder).Put(t.Context(), "name", data); err != nil {
+		t.Fatal(err)
+	}
+
+	if recorder.text != nil || string(recorder.binary) != string(data) {
+		t.Fatalf("text = %v, binary = %v", recorder.text, recorder.binary)
+	}
+}

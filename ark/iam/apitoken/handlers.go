@@ -36,7 +36,7 @@ type secretBody struct {
 //
 // Example:
 //
-//	web.Get("/tokens", issuer.ListHandler())
+//	web.Get("/tokens", issuer.ListHandler(), apitoken.ListOperation)
 func (issuer *Issuer) ListHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
@@ -63,7 +63,7 @@ func (issuer *Issuer) ListHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/tokens", issuer.CreateHandler(guard))
+//	web.Post("/tokens", issuer.CreateHandler(guard), apitoken.CreateOperation)
 func (issuer *Issuer) CreateHandler(guard *auth.Guard) router.Handler {
 	if !issuer.personal {
 		panic("apitoken: CreateHandler requires Builder.PersonalTokens")
@@ -77,7 +77,7 @@ func (issuer *Issuer) CreateHandler(guard *auth.Guard) router.Handler {
 		if err := web.Verified(r.Context(), issuer.verified, identity.Subject()); err != nil {
 			return err
 		}
-		body, err := web.Decode[Request](r)
+		body, err := web.Parse(r, requestSchema)
 		if err != nil {
 			return err
 		}
@@ -96,7 +96,7 @@ func (issuer *Issuer) CreateHandler(guard *auth.Guard) router.Handler {
 //
 // Example:
 //
-//	web.Delete("/tokens/{id}", issuer.DeleteHandler())
+//	web.Delete("/tokens/{id}", issuer.DeleteHandler(), apitoken.DeleteOperation)
 func (issuer *Issuer) DeleteHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Session(r)
@@ -131,7 +131,7 @@ func (issuer *Issuer) DeleteHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/device-tokens", issuer.ExchangeHandler(guard))
+//	web.Post("/device-tokens", issuer.ExchangeHandler(guard), apitoken.ExchangeOperation)
 func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
 	if !issuer.device {
 		panic("apitoken: ExchangeHandler requires Builder.DeviceTokens")
@@ -148,9 +148,7 @@ func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
 		if err := guard.RecentLogin(r, ExchangeWindow); err != nil {
 			return err
 		}
-		body, err := web.Decode[struct {
-			Device string `json:"device"`
-		}](r)
+		body, err := web.Parse(r, deviceSchema)
 		if err != nil {
 			return err
 		}
@@ -175,7 +173,7 @@ func (issuer *Issuer) ExchangeHandler(guard *auth.Guard) router.Handler {
 //
 // Example:
 //
-//	api.Delete("/device-tokens/current", issuer.DeleteCurrentHandler())
+//	api.Delete("/device-tokens/current", issuer.DeleteCurrentHandler(), apitoken.DeleteCurrentOperation)
 func (issuer *Issuer) DeleteCurrentHandler() router.Handler {
 	if !issuer.device {
 		panic("apitoken: DeleteCurrentHandler requires Builder.DeviceTokens")

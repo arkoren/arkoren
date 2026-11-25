@@ -89,7 +89,7 @@ func TestMCPTracesSummarizeErrorsAndDurations(t *testing.T) {
 			t.Fatalf("summary=%+v", summary)
 		}
 
-		if summary.DurationMS != 182 || summary.Duration.Std() != 182*time.Millisecond || summary.Age != "12s ago" {
+		if summary.DurationMS != 182 {
 			t.Fatalf("summary=%+v", summary)
 		}
 	})
@@ -136,9 +136,10 @@ func TestMCPTracesFilterBeforeLimit(t *testing.T) {
 	})
 }
 
-// TestMCPTraceTreeJoinsLogsAndPreservesEmptyArrays covers nested spans,
-// span events, failure status, attributes, and deterministic child ordering.
-func TestMCPTraceTreeJoinsLogsAndPreservesEmptyArrays(t *testing.T) {
+// TestMCPTraceTreeJoinsLogsAndOmitsEmptyContainers covers nested spans,
+// span events, failure status, attributes, and deterministic child ordering,
+// and checks that empty attrs, events, logs and children are left out.
+func TestMCPTraceTreeJoinsLogsAndOmitsEmptyContainers(t *testing.T) {
 	t.Parallel()
 
 	capture := newCaptured(t)
@@ -161,7 +162,7 @@ func TestMCPTraceTreeJoinsLogsAndPreservesEmptyArrays(t *testing.T) {
 
 	result := mcptest.Call[traceView](t, mcptest.Find(t, capture.tools, "memory.trace"), `{"id":"`+root.Context().TraceID.String()+`"}`)
 
-	if len(result.Roots) != 1 || result.OrphanLogs == nil || len(result.OrphanLogs) != 0 {
+	if len(result.Roots) != 1 || len(result.OrphanLogs) != 0 {
 		t.Fatalf("trace=%+v", result)
 	}
 
@@ -185,8 +186,17 @@ func TestMCPTraceTreeJoinsLogsAndPreservesEmptyArrays(t *testing.T) {
 		t.Fatalf("charge=%+v", charged)
 	}
 
-	if node.Children[1].Logs == nil || node.Children[1].Children == nil || node.Children[1].Events == nil {
-		t.Fatal("empty arrays became null")
+	raw := mcptest.Call[map[string]any](t, mcptest.Find(t, capture.tools, "memory.trace"), `{"id":"`+root.Context().TraceID.String()+`"}`)
+	auditSpan := raw["roots"].([]any)[0].(map[string]any)["children"].([]any)[1].(map[string]any)
+
+	for _, name := range []string{"attrs", "events", "logs", "children", "age", "duration"} {
+		if _, present := auditSpan[name]; present {
+			t.Fatalf("empty or derived %q present in %v", name, auditSpan)
+		}
+	}
+
+	if _, present := raw["orphan_logs"]; present {
+		t.Fatal("empty orphan_logs present")
 	}
 }
 
@@ -346,13 +356,13 @@ func TestMCPLogCursorTailLossAndPagination(t *testing.T) {
 
 	page := mcptest.Call[diagnostic.Page[logView]](t, tool, `{"cursor":"`+anchor.Cursor+`","limit":1}`)
 
-	if page.Dropped != 1 || !page.HasMore || page.Items[0].Message != "second" {
+	if page.Dropped != 1 || !page.Truncated || page.Items[0].Message != "second" {
 		t.Fatalf("page=%+v", page)
 	}
 
 	next := mcptest.Call[diagnostic.Page[logView]](t, tool, `{"cursor":"`+page.Cursor+`","limit":1}`)
 
-	if next.HasMore || next.Items[0].Message != "third" {
+	if next.Truncated || next.Items[0].Message != "third" {
 		t.Fatalf("next=%+v", next)
 	}
 }
@@ -503,4 +513,29 @@ func TestMCPLogPollCancellation(t *testing.T) {
 			t.Fatalf("err=%v", err)
 		}
 	})
+}
+
+// TestMCPMetricsNameTheLabelsOfEachPoint reports a point's label values under
+// their keys instead of by position, and omits labels for unlabeled counters.
+func TestMCPMetricsNameTheLabelsOfEachPoint(t *testing.T) {
+	t.Parallel()
+
+	capture := newCaptured(t)
+	capture.signals.Meter("test").Counter("shop.orders", telemetry.Keys("region", "result")).Add(t.Context(), 1, telemetry.String("region", "west"), telemetry.String("result", "ok"))
+	capture.signals.Meter("test").Counter("shop.plain").Add(t.Context(), 1)
+
+	result := mcptest.Call[map[string]any](t, mcptest.Find(t, capture.tools, "memory.metrics"), `{"name":"shop."}`)
+	items := result["items"].([]any)
+	orders := items[0].(map[string]any)["points"].([]any)[0].(map[string]any)
+	plain := items[1].(map[string]any)["points"].([]any)[0].(map[string]any)
+
+	labels, _ := orders["labels"].(map[string]any)
+
+	if labels["region"] != "west" || labels["result"] != "ok" || orders["values"] != nil {
+		t.Fatalf("orders point = %v", orders)
+	}
+
+	if _, present := plain["labels"]; present {
+		t.Fatalf("plain point = %v", plain)
+	}
 }

@@ -44,6 +44,29 @@ waiting for runners when its context expires, but still attempts acquired cleanu
 Cleanup and telemetry finalization receive independent minimum budgets, so the
 configured runner-wait timeout is not a hard wall-clock bound on `Run`.
 
+## Build the application from a provider
+
+An entry point can declare the application as a provider and let `Run` build
+it. Its settings take handles from ordinary providers, which the same composer
+shares with the `compose` callbacks and whose cleanup the application owns.
+`Start` takes the same arguments and returns the started application.
+
+```go
+var App = application.Provide(func(compose *application.Composer) *application.Application {
+	return application.New(func(app *application.Builder) {
+		app.Telemetry(compose.Use(Telemetry))
+	})
+})
+
+err := application.Run(ctx, App, Compose)
+```
+
+Here `Telemetry` is your provider of a `*telemetry.Telemetry` and `Compose` is
+your root composition callback. Calling `compose.App()` from a provider the
+application uses panics with `ErrProviderCycle`, because the application does
+not exist yet. A failed build runs registered cleanup, returns the error and
+reports it once on stderr.
+
 ## Distinguish readiness from liveness
 
 Register dependency checks during composition, and mount probes explicitly on

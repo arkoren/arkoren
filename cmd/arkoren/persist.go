@@ -31,7 +31,7 @@ func writePrivateKey(path string, encoded []byte) error {
 	file, err := files.Create(files.Destination{Path: path, Parent: parent, Mode: 0o600})
 
 	if err != nil {
-		return fmt.Errorf("create private key file: %w", err)
+		return existingFileFailure(fmt.Errorf("create private key file: %w", err))
 	}
 
 	written, err := file.Write(encoded)
@@ -51,17 +51,48 @@ func writePrivateKey(path string, encoded []byte) error {
 	return nil
 }
 
+// existingFileFailure classifies a refusal to overwrite: a failure caused by an
+// existing file is a file conflict with the step that resolves it, and every
+// other failure is returned unchanged. Output files are never replaced.
+func existingFileFailure(err error) error {
+	if !errors.Is(err, os.ErrExist) {
+		return err
+	}
+
+	return console.Fail(console.TypeFileConflict, overwriteSteps, "%w", err)
+}
+
+// outputExistsError says a certificate output already exists. It matches
+// [os.ErrExist] under errors.Is without repeating "file exists" in its message.
+type outputExistsError struct {
+	// path is the existing output file.
+	path string
+}
+
+// Error names the existing output.
+func (failure *outputExistsError) Error() string {
+	return fmt.Sprintf("certificate output %q already exists", failure.path)
+}
+
+// Is reports that the failure is [os.ErrExist].
+func (failure *outputExistsError) Is(target error) bool {
+	return target == os.ErrExist
+}
+
+// overwriteSteps resolve a refusal to overwrite an output file.
+var overwriteSteps = []console.Step{{Text: "Choose a path that does not exist; existing files are never overwritten"}}
+
 // prepareCertificateFiles validates both explicit output names without writes.
 // Neither stdout, existing entries (including dangling links), linked parents,
 // nor same-parent names differing only by case are accepted. Case folding avoids
 // ambiguous pair destinations on case-insensitive filesystems.
 func prepareCertificateFiles(ctx context.Context, paths certificatePaths, dir string) ([]files.Destination, error) {
 	if paths.cert == "" || paths.key == "" {
-		return nil, console.UsageError("certificate generation requires --cert FILE and --key FILE")
+		return nil, console.UsageError("missing flag --cert or --key: certificate generation needs both output files")
 	}
 
 	if paths.cert == "-" || paths.key == "-" {
-		return nil, console.UsageError("certificate generation requires separate files, not stdout")
+		return nil, console.UsageError("invalid value for flag --cert or --key: \"-\" is not allowed, give two separate files")
 	}
 
 	inventory := []files.Destination{
@@ -105,7 +136,7 @@ func preflightCertificateFile(ctx context.Context, file *files.Destination) erro
 	_, err = file.Parent.Lstat(filepath.Base(path))
 
 	if err == nil {
-		return fmt.Errorf("certificate output %q already exists: %w", path, os.ErrExist)
+		return console.Fail(console.TypeFileConflict, overwriteSteps, "%w", &outputExistsError{path: path})
 	}
 
 	if !errors.Is(err, os.ErrNotExist) {
@@ -149,13 +180,34 @@ func closeCertificateFiles(inventory []files.Destination) {
 	}
 }
 
-// persistCertificate writes the certificate then its matching private key.
-// Pair writes are not atomic. Any failure names both exact paths because either
-// file may remain; paths are never removed after a concurrent replacement.
+// certificateGenerateResult is the JSON result of generating a root or server
+// certificate, in the local action envelope.
+type certificateGenerateResult struct {
+	// Summary reads "Generated root certificate" or "Generated server certificate".
+	Summary string `json:"summary"`
+
+	// Changes lists the created certificate and its private key.
+	Changes []console.Change `json:"changes"`
+
+	// Warnings says what the command left alone: a new root is not trusted by
+	// the system. It is absent for server certificates.
+	Warnings []console.Warning `json:"warnings,omitzero"`
+
+	// NextSteps explains how to use a new root; it is absent for server
+	// certificates.
+	NextSteps []console.Step `json:"next_steps,omitzero"`
+}
+
+// persistCertificate writes the certificate then its matching private key and
+// reports them; root says the pair is a new root CA, which adds guidance on
+// distributing it. Pair writes are not atomic. Any failure names both exact
+// paths because either file may remain; paths are never removed after a
+// concurrent replacement.
 func persistCertificate(
 	ctx context.Context,
 	inventory []files.Destination,
 	identity certificate.Identity,
+	root bool,
 	env console.Environment,
 ) error {
 	material := [][]byte{identity.Bundle().PEM(), identity.PrivatePEM()}
@@ -167,9 +219,24 @@ func persistCertificate(
 		}
 	}
 
-	return env.Result(map[string]any{
-		"created": true, "certificate": inventory[0].Path, "key": inventory[1].Path, "trust_changed": false,
-	})
+	report := certificateGenerateResult{
+		Summary: "Generated server certificate",
+		Changes: []console.Change{
+			{Action: console.ActionCreate, Path: inventory[0].Path},
+			{Action: console.ActionCreate, Path: inventory[1].Path, Detail: "private key"},
+		},
+	}
+
+	if root {
+		report.Summary = "Generated root certificate"
+		report.Warnings = []console.Warning{{Message: "System trust was not changed"}}
+		report.NextSteps = []console.Step{
+			{Text: "Distribute only the certificate and keep the private key private"},
+			{Text: "Trust the root on this machine", Command: "arkoren certificate root trust " + console.Quote(inventory[0].Path)},
+		}
+	}
+
+	return env.Result(report)
 }
 
 // writeCertificateFile still uses exclusive creation after preflight. Private
@@ -183,7 +250,7 @@ func writeCertificateFile(ctx context.Context, destination files.Destination, co
 	file, err := files.Create(destination)
 
 	if err != nil {
-		return fmt.Errorf("create certificate output %q: %w", destination.Path, err)
+		return existingFileFailure(fmt.Errorf("create certificate output %q: %w", destination.Path, err))
 	}
 
 	err = files.Finish(file, content)

@@ -14,8 +14,8 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/foundation/query"
-	"arkoren.dev/foundation/query/schema"
 
+	"arkoren.dev/ark/iam/internal/migration"
 	"arkoren.dev/ark/iam/internal/storage"
 )
 
@@ -266,7 +266,7 @@ func (store *Store) Catalog() []string {
 // Example:
 //
 //	if permissions.SelfService() {
-//		web.Get("/me/permissions", permissions.SelfHandler())
+//		web.Get("/me/permissions", permissions.SelfHandler(), permission.SelfOperation)
 //	}
 func (store *Store) SelfService() bool {
 	return store.selfService
@@ -278,7 +278,7 @@ func (store *Store) SelfService() bool {
 // Example:
 //
 //	if _, ok := permissions.Management(); ok {
-//		web.Get("/users/{subject}/permissions", permissions.UserHandler())
+//		web.Get("/users/{subject}/permissions", permissions.UserHandler(), permission.UserOperation)
 //	}
 func (store *Store) Management() (gate.Permission, bool) {
 	return store.management, store.managed
@@ -298,19 +298,7 @@ func (store *Store) Management() (gate.Permission, bool) {
 //		return err
 //	}
 func (store *Store) Migrations() []migrate.Definition {
-	return storage.Group("permission", store.instance).Migrations(
-		migrate.NewMigration("permission-grants-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(store.table, func(table *schema.Table) {
-				table.String("subject", 255).Bytewise()
-				table.String("kind", 16).Bytewise()
-				table.String("name", 128).Bytewise()
-				table.BigInteger("created_at")
-				table.Primary("subject", "kind", "name")
-				table.Index("kind", "name")
-			})))
-			migration.Down(migrate.Schema(schema.Drop(store.table)))
-		}),
-	)
+	return migration.Permissions(store.instance)
 }
 
 // Ping verifies, read-only, that the table exists. A missing table returns an

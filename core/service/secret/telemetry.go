@@ -43,6 +43,9 @@ func failureClass(err error) string {
 		return "context.DeadlineExceeded"
 	case errors.Is(err, ErrNotFound):
 		return "secret.ErrNotFound"
+	case errors.Is(err, ErrUnsupported):
+		return "secret.ErrUnsupported"
+
 	default:
 		return "other"
 	}

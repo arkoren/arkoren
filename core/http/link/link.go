@@ -36,12 +36,12 @@ const (
 	MinSecretLength = 32
 )
 
-// ErrInvalidSecret reports an invalid zero current or previous key.Shared.
-// The key package enforces [MinSecretLength] before publishing nonzero values.
+// ErrInvalidSecret reports an invalid, zero-value key.Ring. The key package
+// enforces [MinSecretLength] on every key before a Ring can be built.
 //
 // Example:
 //
-//	_, err := link.New(key.Shared{})
+//	_, err := link.New(key.Ring[key.Shared]{})
 //	if errors.Is(err, link.ErrInvalidSecret) {
 //		fmt.Println("configure a link key")
 //	}
@@ -52,7 +52,7 @@ var ErrInvalidSecret = errors.New("link signing secret is invalid")
 //
 // Example:
 //
-//	_, err := link.New(secret, func(signer *link.Builder) {
+//	_, err := link.New(ring, func(signer *link.Builder) {
 //		signer.Origin("https://app.example.com/account")
 //	})
 //	if errors.Is(err, link.ErrInvalidOrigin) {
@@ -65,7 +65,7 @@ var ErrInvalidOrigin = errors.New("link signing origin is invalid")
 //
 // Example:
 //
-//	_, err := link.New(secret, func(signer *link.Builder) {
+//	_, err := link.New(ring, func(signer *link.Builder) {
 //		signer.IgnoreQuery("signature")
 //	})
 //	if errors.Is(err, link.ErrInvalidIgnoreQuery) {
@@ -220,7 +220,7 @@ var ErrLinkUsed = problem.New(func(details *problem.Builder) {
 //
 // Example:
 //
-//	signer, err := link.New(secret)
+//	signer, err := link.New(ring)
 //	if err != nil {
 //		return err
 //	}
@@ -235,8 +235,8 @@ type Signer struct {
 	// origin is the normalized public origin, or nil for a relative signer.
 	origin *url.URL
 
-	// keys holds the HKDF-derived MAC keys; keys[0] creates all new signatures
-	// and the rest verify links during secret rotation.
+	// keys holds the HKDF-derived MAC keys; keys[0] is the ring's current key
+	// and creates all new signatures, and the rest are its previous keys.
 	keys [][]byte
 
 	// ignoredQuery names parameters excluded from the signature.
@@ -254,10 +254,13 @@ type Signer struct {
 // fresh draft. Nil entries panic; expanded nil/empty slices supply no callbacks.
 // Validation follows all callbacks, and retained drafts cannot change the signer.
 //
-// secret creates all new signatures. Load a validated key.Shared through the
-// key package. New rejects a zero current or previous secret with
-// [ErrInvalidSecret]. HKDF-SHA256 derives purpose-bound MAC keys without retaining
-// the original secret. Provision separate material for unrelated purposes.
+// ring supplies the signing keys: its current key creates all new signatures,
+// and links signed by any of its previous keys still verify, which is how a
+// key is rotated without invalidating links in flight. Build it with
+// key.NewRing or key.ParseRing[key.Shared]. New rejects the zero Ring with
+// [ErrInvalidSecret]. HKDF-SHA256 derives purpose-bound MAC keys without
+// retaining the original keys. Provision separate material for unrelated
+// purposes.
 //
 // An empty origin yields a relative signer that signs path-and-query values
 // only; otherwise the origin must be an HTTP or HTTPS origin without a path,
@@ -269,7 +272,7 @@ type Signer struct {
 // Example:
 //
 //	signer, err := link.New(
-//		secret,
+//		ring,
 //		func(signer *link.Builder) {
 //			signer.Origin("https://app.example.com")
 //		},
@@ -282,7 +285,7 @@ type Signer struct {
 //		return err
 //	}
 //	_ = signed
-func New(secret key.Shared, configure ...BuilderFunc) (*Signer, error) {
+func New(ring key.Ring[key.Shared], configure ...BuilderFunc) (*Signer, error) {
 	config := newSettings(configure...)
 
 	signer := &Signer{
@@ -291,11 +294,11 @@ func New(secret key.Shared, configure ...BuilderFunc) (*Signer, error) {
 		cache:        config.Cache,
 	}
 
-	for _, secret := range append([]key.Shared{secret}, config.PreviousSecrets...) {
-		if secret.Err() != nil {
-			return nil, ErrInvalidSecret
-		}
+	if ring.Err() != nil {
+		return nil, ErrInvalidSecret
+	}
 
+	for _, secret := range append([]key.Shared{ring.Current()}, ring.Previous()...) {
 		material, err := signature.Derive(secret.Bytes())
 
 		if err != nil {

@@ -49,13 +49,17 @@
 //     Zero affected rows means the link was already used, so of two concurrent
 //     submits exactly one wins, and ownership proof and rotation run only for
 //     that one. Every invalid, forged, expired or used link is [ErrInvalidToken].
-//   - The forgot handler calls the dispatch function of [Builder.Reset] with a
-//     [ResetRequest] holding the identifier as typed, whether or not the user
+//   - The forgot handler stores a reset job on the [Builder.Queue] dispatcher with
+//     a [ResetRequest] holding the identifier as typed, whether or not the user
 //     exists, and answers an empty 202; nothing is looked up in the request. The
-//     worker runs [Verifier.SendReset], which looks the user up and calls deliver
-//     with a [ResetMessage] addressed to the address [Users.Lookup] returned,
-//     never to the text of the request. deliver may run more than once for one
-//     request, because its error makes the queue retry.
+//     worker, which registers the job with [Verifier.RegisterJobs], runs
+//     [Verifier.SendReset]: it looks the user up and sends the reset email
+//     through the mailer of [Builder.Reset], to the address [Users.Lookup]
+//     returned, never to the text of the request. The send may run more than once
+//     for one request, because its error makes the queue retry. The email is a
+//     short plain-text message; [ResetBuilder.Email] replaces it. The job runs on
+//     the queue "iam", named "iam-password-reset" plus "-<instance>" for a named
+//     [Builder.Instance].
 //
 // # Storage
 //
@@ -74,7 +78,7 @@
 //		Create: directory.Create,
 //		Rotate: directory.Rotate,
 //	}, func(passwords *password.Builder) {
-//		passwords.Registration(true).Reset(signer, dispatch, deliver)
+//		passwords.Queue(dispatcher).Registration(true).Reset(signer, mailer, "https://app.example.com/reset-password")
 //	})
 //	if err != nil {
 //		return err
@@ -82,6 +86,6 @@
 //	guard, err := auth.NewGuard(provider, store, func(policy *auth.GuardBuilder) {
 //		policy.StepUp(verifier.Credential())
 //	})
-//	web.Post("/register", verifier.RegisterHandler())
-//	web.Post("/login", verifier.LoginHandler(guard))
+//	web.Post("/register", verifier.RegisterHandler(), password.RegisterOperation)
+//	web.Post("/login", verifier.LoginHandler(guard), password.LoginOperation)
 package password

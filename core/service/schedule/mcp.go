@@ -17,22 +17,21 @@ type entryView struct {
 	// Spec is the entry's cron expression.
 	Spec string `json:"spec"`
 
-	// Description is the entry's description; may be empty.
-	Description string `json:"description,omitzero"`
-
 	// Timeout is the per-run timeout; omitted when there is none.
 	Timeout validate.Duration `json:"timeout,omitzero"`
 
-	// WithoutOverlapping reports that a run is skipped while the previous
-	// one is still running.
-	WithoutOverlapping bool `json:"without_overlapping"`
+	// WithoutOverlapping is true when a run is skipped while the previous one
+	// is still running. It is omitted when overlap is allowed, which is the
+	// default for entries.
+	WithoutOverlapping bool `json:"without_overlapping,omitzero"`
 
-	// NextRun is the next scheduled time; omitted when the entry never runs
-	// again.
+	// NextRun is the next scheduled time as an absolute timestamp; omitted
+	// when the entry never runs again.
 	NextRun time.Time `json:"next_run,omitzero"`
 
-	// NextIn is how long after the response NextRun is, such as "in 3m".
-	NextIn string `json:"next_in,omitzero"`
+	// Description is the entry's description, last because it can be long;
+	// omitted when empty.
+	Description string `json:"description,omitzero"`
 }
 
 // runView reports one completed manual execution without its application data.
@@ -45,9 +44,6 @@ type runView struct {
 
 	// DurationMS is how long the run took in milliseconds.
 	DurationMS float64 `json:"duration_ms"`
-
-	// Duration is DurationMS as text, such as "182.1ms".
-	Duration validate.Duration `json:"duration"`
 }
 
 // runInput is the input of the run operation.
@@ -104,11 +100,10 @@ func (scheduler *Scheduler) MCPTools(prefix string) []mcp.Tool {
 			items = append(items, entryView{
 				Name:               entry.Name(),
 				Spec:               entry.Spec().Expression(),
-				Description:        entry.DescriptionValue(),
 				Timeout:            validate.Duration(entry.TimeoutValue()),
 				WithoutOverlapping: !entry.Overlapping(),
 				NextRun:            next,
-				NextIn:             diagnostic.Age(now, next),
+				Description:        entry.DescriptionValue(),
 			})
 		}
 
@@ -159,6 +154,5 @@ func (scheduler *Scheduler) runTool(ctx context.Context, input runInput) (runVie
 		Name:       input.Name,
 		StartedAt:  started,
 		DurationMS: diagnostic.Millis(elapsed),
-		Duration:   diagnostic.DurationText(elapsed),
 	}, nil
 }

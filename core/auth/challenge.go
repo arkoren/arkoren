@@ -390,7 +390,7 @@ func (guard *Guard) Pending(r *http.Request) (PendingLogin, error) {
 //
 // Example:
 //
-//	web.Get("/login/second-factor", guard.PendingHandler())
+//	web.Get("/login/second-factor", guard.PendingHandler(), auth.PendingOperation)
 func (guard *Guard) PendingHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		pending, err := guard.Pending(r)
@@ -550,7 +550,7 @@ func (guard *Guard) check(r *http.Request, subject string, credentials []Credent
 //
 // Example:
 //
-//	web.Post("/login/second-factor", guard.ChallengeHandler())
+//	web.Post("/login/second-factor", guard.ChallengeHandler(), auth.ChallengeOperation)
 func (guard *Guard) ChallengeHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		current, err := guard.session(r)
@@ -626,7 +626,7 @@ func (guard *Guard) ChallengeHandler() router.Handler {
 //
 // Example:
 //
-//	web.With(auth.RequireSession()).Post("/confirm", guard.ConfirmHandler())
+//	web.With(auth.RequireSession()).Post("/confirm", guard.ConfirmHandler(), auth.ConfirmOperation)
 func (guard *Guard) ConfirmHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		identity, ok := FromContext(r.Context())

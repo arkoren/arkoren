@@ -1,0 +1,21 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/database"
+	"arkoren.dev/driver/sqlite/sqlitedatabase"
+)
+
+// Database is the process's primary database, opened from DATABASE_URL with the
+// SQLite driver. The pool starts with the application and stops when it shuts
+// down. Swap in another driver here, such as arkoren.dev/driver/postgres, without
+// touching features. The schema comes from migrations, never from this provider.
+var Database = application.Provide(func(compose *application.Composer) *database.Database {
+	driver := compose.Must(sqlitedatabase.New(os.Getenv("DATABASE_URL")))
+	compose.Cleanup(driver.Stop)
+	compose.Startup(driver.Start)
+
+	return database.New(driver)
+})

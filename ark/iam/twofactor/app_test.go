@@ -38,26 +38,29 @@ type system struct {
 	enrolled []auth.CredentialEnrolledEvent
 }
 
-// newCipher returns an AES encrypter over a fresh key.
-func newCipher(t *testing.T, previous ...crypto.Driver) (*crypto.Encrypter, crypto.Driver) {
+// newCipher returns an AES encrypter over a ring whose current key is fresh and
+// whose previous keys are previous, plus the current key.
+func newCipher(t *testing.T, previous ...key.Shared) (*crypto.Encrypter, key.Shared) {
 	t.Helper()
 
 	secret, err := key.GenerateShared()
 	if err != nil {
 		t.Fatalf("GenerateShared: %v", err)
 	}
-	driver, err := aescrypto.New(secret)
+	ring, err := key.NewRing(secret, previous...)
+	if err != nil {
+		t.Fatalf("NewRing: %v", err)
+	}
+	driver, err := aescrypto.New(ring)
 	if err != nil {
 		t.Fatalf("aescrypto.New: %v", err)
 	}
-	encrypter, err := crypto.New(driver, func(encrypter *crypto.Builder) {
-		encrypter.Previous(previous...)
-	})
+	encrypter, err := crypto.New(driver)
 	if err != nil {
 		t.Fatalf("crypto.New: %v", err)
 	}
 
-	return encrypter, driver
+	return encrypter, secret
 }
 
 // newSystem migrates the factors on db and serves their handlers. Users "1" and

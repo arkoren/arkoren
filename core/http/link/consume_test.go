@@ -104,7 +104,7 @@ func TestConsumeMalformedURLPrecedesMissingCache(t *testing.T) {
 // temporary link only once and report later reuse.
 func ExampleSigner_Consume() {
 	signer, err := link.New(
-		secret,
+		ringOf(secret),
 		func(signer *link.Builder) {
 			signer.Cache(cache.New(memorycache.New()))
 		},
@@ -744,7 +744,7 @@ func TestInspectChecksBinding(t *testing.T) {
 func TestInspectReportsPreviousSecret(t *testing.T) {
 	t.Parallel()
 
-	oldSigner, err := link.New(oldSecret, func(signer *link.Builder) {
+	oldSigner, err := link.New(ringOf(oldSecret), func(signer *link.Builder) {
 		signer.Origin(testOrigin)
 	})
 
@@ -753,9 +753,7 @@ func TestInspectReportsPreviousSecret(t *testing.T) {
 	}
 
 	signed := mustTemporary(t, oldSigner, "/reset")
-	rotated := mustNewSigner(t, func(signer *link.Builder) {
-		signer.Previous(oldSecret)
-	})
+	rotated := mustNewRotatedSigner(t)
 
 	details, err := rotated.Inspect(t.Context(), signed)
 

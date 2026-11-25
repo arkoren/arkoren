@@ -57,8 +57,13 @@ These tools use the explicit prefix `app`.
 After successful startup, info includes `uptime`, a Go duration string truncated
 to whole seconds, and `uptime_seconds`, the elapsed whole seconds. Both are
 omitted before startup completes. Runtime statistics include goroutines, heap
-allocation and system memory in bytes and formatted text, GC count, and
-`gomaxprocs`.
+allocation and system memory in bytes (`heap_alloc_bytes`, `sys_bytes`), GC
+count, and `gomaxprocs`.
+
+Tools report absolute RFC 3339 timestamps only, never relative text such as an
+age or a time until the next run, and plain numbers such as `duration_ms` and
+byte counts. The CLI adds the relative part and readable units when it prints
+text on a terminal; see [Output Formats](../cli/reference.md#output-formats).
 
 Health statuses are `ok`, `pending`, `failing`, and `stale`. Cached individual
 check records preserve their last verdict, transition time, and check time even
@@ -74,7 +79,7 @@ cannot forcibly interrupt application code that ignores cancellation.
 Event `name` uses Go `path.Match` syntax, such as `billing.*`, not the event bus's
 subscription-pattern syntax. `since` is a nonnegative duration relative to each
 call; zero has no age restriction. Event pages default to 100 items and accept
-normalized limits of 1–1000. Records contain `time`, `age`, `name`, `payload_type`,
+normalized limits of 1–1000. Records contain `time`, `name`, `payload_type`,
 and optional `trace_id`, never payload values.
 
 ### Condition Waits
@@ -135,13 +140,17 @@ and log limits normalize to 1–1000; omission or zero selects the listed defaul
 
 For traces, `route` exactly matches the root's `http.route` or span name; `name`
 matches a substring of any retained span's name. `min_duration` tests the root's
-duration; `since` tests trace start age. A summary reports root duration,
-retained span and error counts, status, and optional HTTP status and error type.
+duration; `since` tests trace start age. A summary reports the root duration as
+`duration_ms`, retained span and error counts, status, and optional HTTP status
+and error type.
 Summary status is `error` if any retained span ended in error; otherwise `ok`.
 
 A trace tree can have multiple roots when parents are remote or evicted.
 Retained logs whose spans are unfinished or evicted appear as orphans. Log
 prefix filtering does not require a unique trace match; trace lookup does.
+Empty `attrs`, `events`, `logs`, `children` and `orphan_logs` are omitted.
+Metric points name their label values under `labels`, keyed by the instrument's
+`keys`; an unlabeled instrument has no `labels`.
 
 | Lookup Failure | Meaning And Recovery |
 | --- | --- |
@@ -177,8 +186,8 @@ These commands require prefix `jobs`.
 
 | Command | Inputs | Result |
 | --- | --- | --- |
-| `jobs:entries` | None. | All entries in registration order: cron spec, description, timeout, overlap setting, and optional next-run time. `truncated` is false; this is configuration, not execution history. |
-| `jobs:run NAME` | Required `name`: string identifying an existing entry. | Executes once and waits; success reports name, start time, and duration. |
+| `jobs:entries` | None. | All entries in registration order: `name`, cron `spec`, `timeout`, `without_overlapping`, `next_run` and `description`. `without_overlapping` appears only when true (overlap is allowed by default), `next_run` only when the entry runs again, and the possibly long `description` comes last. `truncated` is false; this is configuration, not execution history. |
+| `jobs:run NAME` | Required `name`: string identifying an existing entry. | Executes once and waits; success reports the name, `started_at` and `duration_ms`. |
 
 `run` is non-idempotent application execution, not an inspection read. Publish
 and invoke it only with explicit operator authorization, established overlap
@@ -227,9 +236,8 @@ cancelable.
 | --- | --- |
 | `items` | Matching records, oldest first; never null. |
 | `cursor` | Next opaque position, even on an empty page; not an authorization token. |
-| `truncated` | An initial snapshot omitted older matching history; following cannot page backward. |
+| `truncated` | More matching records exist than `items` holds: an initial snapshot omitted older history (following cannot page backward), or a continuation page stopped at its limit, so drain another page without waiting. |
 | `dropped` | Records overwritten since the supplied position, possibly including nonmatches. |
-| `has_more` | Retained matching records remain; drain another page without waiting. Nonmatching records also advance the position. |
 | `instance_changed` | Reset or replacement detected; this response is empty with a fresh tail cursor, not a mixture of store generations. |
 
 If `instance_changed` is true and you need the new store's history, make a

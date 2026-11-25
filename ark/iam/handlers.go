@@ -21,11 +21,11 @@ func need(enabled bool, handler, requirement string) {
 
 // RegisterHandler returns the handler of POST /register; see
 // [password.Verifier.RegisterHandler]. It always answers 202 and does not log
-// the user in. With the built-in users it dispatches nothing unless
+// the user in. With the built-in users it stores no job unless
 // [account.Builder.Verification] is also configured: then a new user gets a
 // verification email and, for a taken address, nothing is created and the owner
 // gets a reset notice ([password.Builder.Reset], which registration with the
-// built-in users requires). With Reset only, nothing is dispatched for a new or
+// built-in users requires). With Reset only, nothing is stored for a new or
 // a taken address, so both cost the same. The work is the same on both paths,
 // so the answer and its time do not tell them apart; a failing dispatch is
 // logged and the answer stays 202. It panics unless [Builder.Password] is
@@ -33,7 +33,7 @@ func need(enabled bool, handler, requirement string) {
 //
 // Example:
 //
-//	web.Post("/register", identity.RegisterHandler())
+//	web.Post("/register", identity.RegisterHandler(), password.RegisterOperation)
 func (identity *IAM) RegisterHandler() router.Handler {
 	need(identity.verifier != nil, "RegisterHandler", "Builder.Password")
 	need(identity.registration, "RegisterHandler", "password.Builder.Registration, with password.Builder.Reset for the built-in users")
@@ -47,7 +47,7 @@ func (identity *IAM) RegisterHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/login", identity.LoginHandler())
+//	web.Post("/login", identity.LoginHandler(), password.LoginOperation)
 func (identity *IAM) LoginHandler() router.Handler {
 	need(identity.verifier != nil, "LoginHandler", "Builder.Password")
 
@@ -61,7 +61,7 @@ func (identity *IAM) LoginHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/login/challenge", identity.ChallengeHandler())
+//	web.Post("/login/challenge", identity.ChallengeHandler(), iam.ChallengeOperation)
 func (identity *IAM) ChallengeHandler() router.Handler {
 	need(identity.secondFactor, "ChallengeHandler", "Builder.TwoFactor or Builder.SecondFactor")
 
@@ -74,7 +74,7 @@ func (identity *IAM) ChallengeHandler() router.Handler {
 //
 // Example:
 //
-//	web.Get("/login/pending", identity.PendingHandler())
+//	web.Get("/login/pending", identity.PendingHandler(), iam.PendingOperation)
 func (identity *IAM) PendingHandler() router.Handler {
 	need(identity.secondFactor, "PendingHandler", "Builder.TwoFactor or Builder.SecondFactor")
 
@@ -86,7 +86,7 @@ func (identity *IAM) PendingHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/logout", identity.LogoutHandler())
+//	web.Post("/logout", identity.LogoutHandler(), iam.LogoutOperation)
 func (identity *IAM) LogoutHandler() router.Handler {
 	return web.RequireJSON(identity.guard.LogoutHandler())
 }
@@ -98,7 +98,7 @@ func (identity *IAM) LogoutHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/confirm", identity.ConfirmHandler())
+//	web.Post("/confirm", identity.ConfirmHandler(), iam.ConfirmOperation)
 func (identity *IAM) ConfirmHandler() router.Handler {
 	need(identity.stepUp, "ConfirmHandler", "Builder.Password, Builder.TwoFactor or Builder.StepUp")
 
@@ -113,7 +113,7 @@ func (identity *IAM) ConfirmHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/email/verify", identity.VerifyEmailHandler())
+//	web.Post("/email/verify", identity.VerifyEmailHandler(), account.VerifyOperation)
 func (identity *IAM) VerifyEmailHandler() router.Handler {
 	need(identity.verification(), "VerifyEmailHandler", "the built-in users table and account.Builder.Verification")
 
@@ -123,12 +123,12 @@ func (identity *IAM) VerifyEmailHandler() router.Handler {
 // ResendVerificationHandler returns the handler of POST /email/verify/resend;
 // see [account.Directory.ResendHandler]. It panics without the built-in
 // directory or without [account.Builder.Verification]. It is throttled per user
-// and per client address and dispatches the work for the worker that runs
-// [IAM.SendVerification].
+// and per client address and stores the work as a job for the worker that
+// [IAM.RegisterJobs] registers.
 //
 // Example:
 //
-//	web.Post("/email/verify/resend", identity.ResendVerificationHandler())
+//	web.Post("/email/verify/resend", identity.ResendVerificationHandler(), account.ResendOperation)
 func (identity *IAM) ResendVerificationHandler() router.Handler {
 	need(identity.verification(), "ResendVerificationHandler", "the built-in users table and account.Builder.Verification")
 
@@ -137,13 +137,13 @@ func (identity *IAM) ResendVerificationHandler() router.Handler {
 
 // ForgotPasswordHandler returns the handler of POST /password/forgot; see
 // [password.Verifier.ForgotHandler]. It panics unless [Builder.Password] is
-// enabled with [password.Builder.Reset]. The work is dispatched for the worker
-// that runs [IAM.SendReset], and the answer is an empty 202 whether or not
-// the user exists.
+// enabled with [password.Builder.Reset]. The work is stored as a job for the
+// worker that [IAM.RegisterJobs] registers, and the answer is an empty 202
+// whether or not the user exists.
 //
 // Example:
 //
-//	web.Post("/password/forgot", identity.ForgotPasswordHandler())
+//	web.Post("/password/forgot", identity.ForgotPasswordHandler(), password.ForgotOperation)
 func (identity *IAM) ForgotPasswordHandler() router.Handler {
 	need(identity.reset(), "ForgotPasswordHandler", "Builder.Password and password.Builder.Reset")
 
@@ -156,7 +156,7 @@ func (identity *IAM) ForgotPasswordHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/password/reset", identity.ResetPasswordHandler())
+//	web.Post("/password/reset", identity.ResetPasswordHandler(), password.ResetOperation)
 func (identity *IAM) ResetPasswordHandler() router.Handler {
 	need(identity.reset(), "ResetPasswordHandler", "Builder.Password and password.Builder.Reset")
 
@@ -180,7 +180,7 @@ func (identity *IAM) verification() bool {
 //
 // Example:
 //
-//	web.Put("/password", identity.ChangePasswordHandler())
+//	web.Put("/password", identity.ChangePasswordHandler(), password.ChangeOperation)
 func (identity *IAM) ChangePasswordHandler() router.Handler {
 	need(identity.verifier != nil, "ChangePasswordHandler", "Builder.Password")
 
@@ -193,11 +193,11 @@ func (identity *IAM) ChangePasswordHandler() router.Handler {
 //
 // An unverified email is 403 [account.ErrEmailUnverified]: whoever registered
 // an address first must not attach this before its owner proves it (with your
-// own users, see [Users.Verified]).
+// own users, see [UsersBuilder.Verification]).
 //
 // Example:
 //
-//	web.Post("/two-factor/setup", identity.SetupTwoFactorHandler())
+//	web.Post("/two-factor/setup", identity.SetupTwoFactorHandler(), twofactor.SetupOperation)
 func (identity *IAM) SetupTwoFactorHandler() router.Handler {
 	need(identity.factors != nil, "SetupTwoFactorHandler", "Builder.TwoFactor")
 
@@ -209,11 +209,11 @@ func (identity *IAM) SetupTwoFactorHandler() router.Handler {
 // enabled.
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
-// [Users.Verified] with your own users). Enabling ends the user's other logins.
+// [UsersBuilder.Verification] with your own users). Enabling ends the user's other logins.
 //
 // Example:
 //
-//	web.Post("/two-factor", identity.EnableTwoFactorHandler())
+//	web.Post("/two-factor", identity.EnableTwoFactorHandler(), twofactor.EnableOperation)
 func (identity *IAM) EnableTwoFactorHandler() router.Handler {
 	need(identity.factors != nil, "EnableTwoFactorHandler", "Builder.TwoFactor")
 
@@ -226,7 +226,7 @@ func (identity *IAM) EnableTwoFactorHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/two-factor", identity.DisableTwoFactorHandler())
+//	web.Delete("/two-factor", identity.DisableTwoFactorHandler(), twofactor.DisableOperation)
 func (identity *IAM) DisableTwoFactorHandler() router.Handler {
 	need(identity.factors != nil, "DisableTwoFactorHandler", "Builder.TwoFactor")
 
@@ -239,7 +239,7 @@ func (identity *IAM) DisableTwoFactorHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/two-factor/recovery-codes", identity.RecoveryCodesHandler())
+//	web.Post("/two-factor/recovery-codes", identity.RecoveryCodesHandler(), twofactor.RecoveryCodesOperation)
 func (identity *IAM) RecoveryCodesHandler() router.Handler {
 	need(identity.factors != nil, "RecoveryCodesHandler", "Builder.TwoFactor")
 
@@ -251,7 +251,7 @@ func (identity *IAM) RecoveryCodesHandler() router.Handler {
 //
 // Example:
 //
-//	web.Get("/tokens", identity.ListTokensHandler())
+//	web.Get("/tokens", identity.ListTokensHandler(), apitoken.ListOperation)
 func (identity *IAM) ListTokensHandler() router.Handler {
 	need(identity.issuer != nil, "ListTokensHandler", "Builder.Tokens")
 
@@ -264,11 +264,11 @@ func (identity *IAM) ListTokensHandler() router.Handler {
 // hold is 403 [apitoken.ErrScopeNotGranted].
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
-// [Users.Verified] with your own users).
+// [UsersBuilder.Verification] with your own users).
 //
 // Example:
 //
-//	web.Post("/tokens", identity.CreateTokenHandler())
+//	web.Post("/tokens", identity.CreateTokenHandler(), apitoken.CreateOperation)
 func (identity *IAM) CreateTokenHandler() router.Handler {
 	need(identity.issuer != nil, "CreateTokenHandler", "Builder.Tokens")
 	need(identity.issuer.PersonalTokens(), "CreateTokenHandler", "apitoken.Builder.PersonalTokens")
@@ -282,7 +282,7 @@ func (identity *IAM) CreateTokenHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/tokens/{id}", identity.DeleteTokenHandler())
+//	web.Delete("/tokens/{id}", identity.DeleteTokenHandler(), apitoken.DeleteOperation)
 func (identity *IAM) DeleteTokenHandler() router.Handler {
 	need(identity.issuer != nil, "DeleteTokenHandler", "Builder.Tokens")
 
@@ -295,11 +295,11 @@ func (identity *IAM) DeleteTokenHandler() router.Handler {
 // enabled with [apitoken.Builder.DeviceTokens] (the default).
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
-// [Users.Verified] with your own users).
+// [UsersBuilder.Verification] with your own users).
 //
 // Example:
 //
-//	web.Post("/device-tokens", identity.ExchangeHandler())
+//	web.Post("/device-tokens", identity.ExchangeHandler(), apitoken.ExchangeOperation)
 func (identity *IAM) ExchangeHandler() router.Handler {
 	need(identity.issuer != nil, "ExchangeHandler", "Builder.Tokens")
 	need(identity.issuer.DeviceTokens(), "ExchangeHandler", "apitoken.Builder.DeviceTokens")
@@ -314,7 +314,7 @@ func (identity *IAM) ExchangeHandler() router.Handler {
 //
 // Example:
 //
-//	api.Delete("/device-tokens/current", identity.DeleteDeviceTokenHandler())
+//	api.Delete("/device-tokens/current", identity.DeleteDeviceTokenHandler(), apitoken.DeleteCurrentOperation)
 func (identity *IAM) DeleteDeviceTokenHandler() router.Handler {
 	need(identity.issuer != nil, "DeleteDeviceTokenHandler", "Builder.Tokens")
 	need(identity.issuer.DeviceTokens(), "DeleteDeviceTokenHandler", "apitoken.Builder.DeviceTokens")
@@ -328,7 +328,7 @@ func (identity *IAM) DeleteDeviceTokenHandler() router.Handler {
 //
 // Example:
 //
-//	web.Get("/sessions", identity.ListSessionsHandler())
+//	web.Get("/sessions", identity.ListSessionsHandler(), iam.ListSessionsOperation)
 func (identity *IAM) ListSessionsHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		if _, err := web.Session(r); err != nil {
@@ -350,7 +350,7 @@ func (identity *IAM) ListSessionsHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/sessions/{id}", identity.DeleteSessionHandler())
+//	web.Delete("/sessions/{id}", identity.DeleteSessionHandler(), iam.DeleteSessionOperation)
 func (identity *IAM) DeleteSessionHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		user, err := web.Session(r)
@@ -371,7 +371,7 @@ func (identity *IAM) DeleteSessionHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/sessions", identity.DeleteOtherSessionsHandler())
+//	web.Delete("/sessions", identity.DeleteOtherSessionsHandler(), iam.DeleteOtherSessionsOperation)
 func (identity *IAM) DeleteOtherSessionsHandler() router.Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		if _, err := web.Session(r); err != nil {
@@ -390,7 +390,7 @@ func (identity *IAM) DeleteOtherSessionsHandler() router.Handler {
 //
 // Example:
 //
-//	web.Get("/connections", identity.ListConnectionsHandler())
+//	web.Get("/connections", identity.ListConnectionsHandler(), federation.ListOperation)
 func (identity *IAM) ListConnectionsHandler() router.Handler {
 	need(identity.links != nil, "ListConnectionsHandler", "Builder.Provider")
 
@@ -398,20 +398,34 @@ func (identity *IAM) ListConnectionsHandler() router.Handler {
 }
 
 // ConnectHandler returns the handler of POST /connections/{provider}: it starts
-// connecting the provider to the logged-in user and redirects (303) to
-// "/auth/<name>"; see [federation.Links.ConnectHandler]. It panics unless
-// [Builder.Provider] is used.
+// connecting the provider to the logged-in user and redirects (303) to the
+// provider's login route, "/<name>" beside the route itself: the prefix is the
+// path of the request before "/connections/", so a handler mounted at "/auth"
+// redirects to "/auth/<name>". A handler registered on a custom path that has
+// no "/connections/" segment redirects to "/<name>". See
+// [federation.Links.ConnectHandler]. It panics unless [Builder.Provider] is
+// used.
 //
 // An unverified email is 403 [account.ErrEmailUnverified] (see
-// [Users.Verified] with your own users).
+// [UsersBuilder.Verification] with your own users).
 //
 // Example:
 //
-//	web.Post("/connections/{provider}", identity.ConnectHandler())
+//	web.Post("/connections/{provider}", identity.ConnectHandler(), federation.ConnectOperation)
 func (identity *IAM) ConnectHandler() router.Handler {
 	need(identity.links != nil, "ConnectHandler", "Builder.Provider")
 
-	return identity.links.ConnectHandler(identity.guard, identity.connectTargets())
+	return func(w http.ResponseWriter, r *http.Request) error {
+		targets := identity.connectTargets(mountPrefix(r.URL.Path))
+
+		for _, target := range targets {
+			if err := response.ValidateRedirectTarget(target); err != nil {
+				return err
+			}
+		}
+
+		return identity.links.ConnectHandler(identity.guard, targets)(w, r)
+	}
 }
 
 // DeleteConnectionHandler returns the handler of DELETE /connections/{id}; see
@@ -419,7 +433,7 @@ func (identity *IAM) ConnectHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/connections/{id}", identity.DeleteConnectionHandler())
+//	web.Delete("/connections/{id}", identity.DeleteConnectionHandler(), federation.DeleteOperation)
 func (identity *IAM) DeleteConnectionHandler() router.Handler {
 	need(identity.links != nil, "DeleteConnectionHandler", "Builder.Provider")
 
@@ -437,7 +451,7 @@ func (identity *IAM) DeleteConnectionHandler() router.Handler {
 //
 // Example:
 //
-//	web.Delete("/account", identity.DeleteAccountHandler())
+//	web.Delete("/account", identity.DeleteAccountHandler(), iam.DeleteAccountOperation)
 func (identity *IAM) DeleteAccountHandler() router.Handler {
 	need(identity.directory != nil, "DeleteAccountHandler", "the built-in users table")
 
@@ -465,17 +479,17 @@ func (identity *IAM) DeleteAccountHandler() router.Handler {
 // With the built-in users it is [account.RequireVerified]: it judges by the
 // "email_verified" claim of the user the guard read from the directory for this
 // request, so a user who just verified passes at once. With [Builder.Users] it
-// asks [Users.Verified] for the user's current state on every request, so the
+// asks [UsersBuilder.Verification] for the user's current state on every request, so the
 // answer is as fresh as the application's own lookup; an error of that function
 // passes through. It panics at
 // composition only when there is neither the built-in directory nor
-// [Users.Verified].
+// [UsersBuilder.Verification].
 //
 // Example:
 //
 //	posts := web.With(auth.Require(), identity.RequireVerified())
 func (identity *IAM) RequireVerified() router.Middleware {
-	need(identity.verified != nil, "RequireVerified", "the built-in users table or Users.Verified")
+	need(identity.verified != nil, "RequireVerified", "the built-in users table or UsersBuilder.Verification")
 	if identity.directory != nil {
 		return account.RequireVerified()
 	}

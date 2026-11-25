@@ -1,10 +1,11 @@
 ---
 title: Key Commands
-description: Provision purpose-specific keys offline, check stored material, and export public PEM or VAPID values.
+description: Provision purpose-specific keys offline, check and rotate shared key rings, and export public PEM or VAPID values.
 order: 60
 summary:
   - Choose independent shared, signing, or exchange keys and create protected new files offline.
-  - Validate stored material without disclosing it or implying deployment trust.
+  - Validate stored material and list ring fingerprints without disclosing keys or implying deployment trust.
+  - Rotate, promote and retire shared key rings in a file or through a pipe.
   - Export public PEM or signing-only VAPID values and recover safely from partial writes.
 ---
 
@@ -25,7 +26,7 @@ Choose the type your application's protocol requires:
 
 | Type | Generated material | Ordinary purpose |
 | --- | --- | --- |
-| `shared` | 32 random bytes, padded standard base64 with a newline | Symmetric encryption or HMAC signing. |
+| `shared` | A [ring](../keys/overview.md#key-rings) of one 32-byte key: one line of padded standard base64 with a newline | Symmetric encryption or HMAC signing, rotated with `rotate`. |
 | `signing` | ECDSA P-256, unencrypted PKCS #8 private-key PEM | Signing, including a Web Push VAPID identity. |
 | `exchange` | X25519, unencrypted PKCS #8 private-key PEM | Key agreement within an authenticated protocol. |
 
@@ -39,13 +40,14 @@ an Apple Sign In key must come from Apple, not this generator.
 For an application's encryption key, select a new explicit destination:
 
 ```sh
-arkoren key generate shared --out app-key.key
+arkoren key generate shared --out .secrets/app-key
 ```
 
-Success prints JSON with `created: true`, `category: "shared"`, and the absolute
-`path`, never the private contents. There is no implicit destination or overwrite
-flag. Existing files and symlinks are refused, and missing parent directories
-fail.
+Success reports the `summary` "Generated shared key", the `kind`, and a
+`changes` entry that creates the absolute `path`, never the private contents. There is no implicit destination or overwrite
+flag. Existing files and symlinks are refused. A missing parent directory is
+created with mode `0700`, so the first key of a new `.secrets/` directory needs no
+setup; keep that directory out of version control.
 
 The file is created exclusively with POSIX mode `0600`, subject to umask.
 On Windows, creation atomically installs a protected discretionary access
@@ -80,13 +82,22 @@ environment files, or replaces an application's deployed credential.
 Before configuring the application, check the file as its intended type:
 
 ```sh
-arkoren key check shared app-key.key
+arkoren key check shared .secrets/app-key
 ```
 
-Success prints `valid: true`, the selected `category`, and the absolute `path`,
-without the secret. Shared material must decode to exactly 32 bytes from padded
-standard base64. This checks representation and length, not entropy or
-deployment permissions.
+Success prints `ok: true`, the selected `kind`, the absolute `path`, the `keys` of
+the ring and an empty `problems` array, without the secret. Each entry of `keys`
+holds a `fingerprint`, the full SHA-256 digest in JSON and its first 12 digits in
+terminal output, and `current: true` for the first key. The fingerprint identifies
+a key for [promote and retire](#rotate-rings) without revealing it.
+
+Material that does not parse is `ok: false` with a problem and exit 1; only a file
+that cannot be read is an error. A shared file is a ring: one or more padded
+standard base64 keys of exactly 32 bytes each, separated by commas on one line,
+with one trailing newline allowed. A duplicate key or an empty entry is invalid.
+`FILE` may be `-` to read the ring from standard input, as in
+`aws secretsmanager get-secret-value ... | arkoren key check shared -`. This checks
+representation and length, not entropy or deployment permissions.
 
 For the signing identity, select its type explicitly:
 
@@ -98,6 +109,65 @@ Signing requires ECDSA P-256 PKCS #8 PEM; checking `exchange-private.pem` with
 `arkoren key check exchange exchange-private.pem` requires X25519 PKCS #8 PEM.
 A successful check does not prove provider registration, message delivery, or
 peer trust. Missing or malformed files fail without printing private contents.
+
+## Rotate Rings
+
+Three commands change a shared [key ring](../keys/overview.md#key-rings) without
+you editing base64 by hand. They take the ring from `FILE` and apply to shared
+keys only, so they have no `KIND` argument. The
+[rotation procedure](../keys/overview.md#rotate-keys) says when to run each one.
+
+```sh
+arkoren key rotate --stage .secrets/app-key
+```
+
+`rotate` generates a key and adds it to the ring. By default it becomes the current
+key and the old keys follow it. With `--stage` it is appended at the end instead,
+as a previous key, so you can deploy it to every instance before any of them uses it.
+The report names the staged key's fingerprint in a `next_steps` entry with the
+`promote` command.
+
+```sh
+arkoren key promote 3f9a1c07be52 .secrets/app-key
+```
+
+`promote` moves the key whose fingerprint starts with the given digits to the
+front of the ring, making it current. The order of the other keys is kept, and
+promoting the current key changes nothing.
+
+```sh
+arkoren key retire 8c20d4f6a1e9 .secrets/app-key
+```
+
+`retire` removes a key from the ring. It refuses the current key, which includes
+the only key of a one-key ring: promote another key first. Data protected only by
+a retired key can no longer be read or verified.
+
+`promote` and `retire` match a fingerprint prefix of at least 12 digits, as
+`key check` prints them, case-insensitively. A prefix that is shorter, matches no
+key or matches more than one key is invalid input and changes nothing. Every
+command refuses text that is not a valid ring without printing it.
+
+For a file, the command rewrites it atomically: it writes a temporary file in the
+same directory with mode `0600`, syncs it and renames it over the original, so a
+failure leaves the old ring intact. A symlink is followed and its target replaced.
+The result has the `summary`, the `kind`, the `keys` of the new ring and an `edit`
+change for the file; it never contains key material.
+
+With `FILE` set to `-`, the commands read the ring from standard input and write
+only the new ring to standard output, so you can move it through a secrets manager
+without a file. The report goes to standard error:
+
+```sh
+aws secretsmanager get-secret-value --secret-id link-key --query SecretString --output text \
+  | arkoren key rotate --stage - \
+  | aws secretsmanager put-secret-value --secret-id link-key --secret-string file:///dev/stdin
+```
+
+Standard output carries private material in this form: send it only to a protected
+pipeline, and check the pipeline's exit status, since a failed downstream command
+leaves the stored ring unchanged while your terminal shows nothing. Both commands
+above are the provider's own CLI, which this CLI does not call or depend on.
 
 ## Export Public Keys
 
@@ -138,7 +208,8 @@ incomplete output after confirming it is not deployed, or choose a fresh path.
 Do not regenerate keys on startup to hide a missing configuration file.
 
 Relative paths resolve from the command's working directory. Success exits 0;
-invalid usage exits 2; file, validation, or output failure exits 1. A broken pipe
+invalid usage exits 2; a refused overwrite, an unreadable file, invalid material
+or an output failure exits 1. A broken pipe
 or short stdout write is failure even if a file was already created. Inspect
 state before retrying rather than treating missing output as proof no key exists.
 

@@ -1,11 +1,11 @@
 ---
 title: Routing
-description: Register request handlers, capture path values, group routes, and mount standard HTTP handlers.
+description: Register request handlers, capture path values, group routes, and adapt standard HTTP handlers.
 order: 10
 summary:
   - Register error-returning handlers and distinguish their response ownership from native handlers.
   - Match path parameters and organize routes with scoped middleware.
-  - Mount existing HTTP handlers and inspect or test registered routes.
+  - Adapt foreign HTTP handlers and inspect or test registered routes.
 ---
 
 # Routing
@@ -130,7 +130,7 @@ router's middleware, so rejection responses can carry security and CORS headers.
 The fallback middleware chain is built on its first request and reused; its
 captured values must support concurrent requests.
 
-## Mount Native Handlers
+## Adapt Foreign Handlers
 
 For an existing `http.Handler` named `metrics`, adapt one endpoint:
 
@@ -138,34 +138,29 @@ For an existing `http.Handler` named `metrics`, adapt one endpoint:
 routes.Get("/metrics", router.HTTP(metrics))
 ```
 
-The native handler writes its own errors: there is no returned error for the
+The foreign handler writes its own errors: there is no returned error for the
 router to render. Native middleware has a separate
 [adapter boundary](middleware.md#native-middleware).
 
-If an existing handler `tools` has its own paths, mount the entire handler:
+If a foreign handler expects to see its paths without your prefix, as
+`net/http/pprof` does, register a catch-all and strip the prefix yourself:
 
 ```go
-routes.Mount("/tools", tools)
+routes.Any("/debug/pprof/{path...}", router.HTTP(http.StripPrefix("/debug/pprof", pprofMux)))
 ```
 
-The exact prefix and everything below it reach `tools`, with the prefix removed:
-`/tools` and `/tools/` become `/`, and `/tools/jobs` becomes `/jobs`. Mounts
-inherit middleware and cover the same methods as `Any`.
-
-The local mount prefix must contain literal segments, not wildcards. Parent
-groups may contain single-segment wildcards; those path values remain available
-to the handler. Mounting strips the whole group prefix and preserves query
-parameters and escaped path-segment boundaries. It copies the request and URL,
-not the body or mutable context values. A mount remains an opaque catch-all for
-OpenAPI: omit operation metadata or mark it hidden.
+The route is an ordinary registration: it inherits the group's middleware and
+appears in `Routes`. `http.StripPrefix` is plain `net/http`; Arkoren has no
+prefix-stripping router API. A catch-all is opaque to OpenAPI, so omit operation
+metadata or mark it hidden. Only applications adapt foreign handlers this way;
+Arkoren packages register their own routes with `Register`.
 
 ## Package Routes
 
 A package that ships ordinary application routes offers one `XHandler()` method
 per route, so you can register any of them on your own path, and a `Register`
-method that registers all of them at sensible default paths. Unlike a mounted
-handler, which owns its whole path space, these routes are yours to wrap,
-prefix, and document like any others.
+method that registers all of them at sensible default paths. These routes are
+yours to wrap, prefix, and document like any others.
 
 `app.RegisterProbes` is the example. It registers `GET /livez`, `GET /readyz`,
 and `GET /startupz` with their handlers and OpenAPI operations:
@@ -183,9 +178,12 @@ twice panics, like any duplicate route. `RegisterProbes` leaves out the welcome
 page and the information endpoint, which you register yourself when you want
 them.
 
-Use [Mount Native Handlers](#mount-native-handlers) instead for an existing
-`http.Handler` that has its own paths and writes its own errors, such as a
-protocol endpoint.
+Protocol endpoints follow the same shape and register exact methods: the MCP
+server's `Register` adds a single `POST` route, so
+`routes.Group("/mcp", endpoint.Register)` serves the endpoint at `/mcp` and
+answers `GET` and `DELETE` with `405`. Use
+[Adapt Foreign Handlers](#adapt-foreign-handlers) for an existing `http.Handler`
+that is not an Arkoren package.
 
 ## Inspect Routes
 

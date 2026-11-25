@@ -1,0 +1,30 @@
+package server
+
+import (
+	"os"
+
+	"arkoren.dev/core/application"
+
+	"{{.Module}}/internal/bootstrap"
+)
+
+// App is the server process's application. The first application.Run or
+// application.Start that receives it builds the application from these
+// settings, before composition and startup. It sets the service name to
+// {{.Name}}; change that name here if the service is renamed.
+//
+// Debug is enabled only when APP_DEBUG is exactly "true". Any other value,
+// including an unset variable, disables it. The generated development .env
+// enables debug; production must set APP_DEBUG=false because the starter's
+// debug diagnostics endpoint has no authentication.
+//
+// See https://arkoren.dev/docs/guides/first-steps/configuration for construction
+// callbacks and https://arkoren.dev/docs/guides/observability/exposing-diagnostics
+// for debug diagnostics.
+var App = application.Provide(func(compose *application.Composer) *application.Application {
+	return application.New(func(app *application.Builder) {
+		app.Name("{{.Name}}")
+		app.Debug(os.Getenv("APP_DEBUG") == "true")
+		app.LogHandler(compose.Use(bootstrap.LogHandler))
+	})
+})

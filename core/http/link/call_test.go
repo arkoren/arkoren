@@ -19,7 +19,13 @@ func TestMiddlewareBindingIsStoredAndRootDetached(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signer, err := New(material)
+	ring, err := key.NewRing(material)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signer, err := New(ring)
 
 	if err != nil {
 		t.Fatal(err)

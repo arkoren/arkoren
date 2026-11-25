@@ -30,7 +30,9 @@ type MutationEvent struct {
 	Operation string
 
 	// ErrorType is empty on success; otherwise it is "secret.ErrNotFound",
-	// "context.Canceled", "context.DeadlineExceeded", or "other". No provider
+	// "secret.ErrUnsupported", "context.Canceled", "context.DeadlineExceeded",
+	// or "other". No provider
+
 	// error text or secret identity is retained in this classification.
 	//
 	// Example:

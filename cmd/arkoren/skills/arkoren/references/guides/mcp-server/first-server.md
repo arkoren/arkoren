@@ -110,10 +110,11 @@ func newEndpoint() (*mcpserver.Server, error) {
 ```
 
 The name and version identify your server. Construction rejects invalid tool
-definitions and duplicate names. The returned endpoint is an `http.Handler`,
-not a listening server.
+definitions and duplicate names. The returned endpoint is not a listening
+server and not an `http.Handler`: its `Register` method adds the route to your
+router.
 
-## HTTP Mount
+## HTTP Route
 
 This unauthenticated sample is safe only for the fixed public result shown
 above. Keep it on loopback. Before exposing private tools or remote access,
@@ -130,7 +131,7 @@ func main() {
 
 	routes := router.New()
 	routes.Use(csrf.Middleware())
-	routes.Mount("/mcp", endpoint)
+	routes.Group("/mcp", endpoint.Register)
 
 	log.Print("serving MCP at http://127.0.0.1:8080/mcp")
 	log.Fatal(http.ListenAndServe("127.0.0.1:8080", routes))
@@ -138,8 +139,10 @@ func main() {
 ```
 
 The [CSRF middleware](../browser-security/csrf-protection.md) rejects unsafe
-cross-origin browser requests. It is not authentication. Your application owns
-the listener and mount; the MCP endpoint has no `Start` or `Stop` method.
+cross-origin browser requests. It is not authentication. `Register` adds one
+`POST` route at the group path (`/mcp`); `GET` and `DELETE` answer `405` because
+the stateless endpoint has no event stream or session. Your application owns the
+listener, middleware and route; the MCP endpoint has no `Start` or `Stop` method.
 
 Run the project:
 

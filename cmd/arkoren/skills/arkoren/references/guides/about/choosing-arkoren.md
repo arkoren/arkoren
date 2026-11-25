@@ -71,10 +71,11 @@ lifecycle is required.
 If you later adopt Arkoren HTTP handlers, its router and error-returning handler
 type both implement `http.Handler`. An existing router can serve them wherever it
 accepts that interface. In the other direction, `router.HTTP` adapts a standard
-handler, and `Mount` serves a handler tree beneath a prefix. `Mount` strips that
-prefix before forwarding the request, so test path handling and middleware order
-at the boundary. [Routing](../http-fundamentals/routing.md#mount-native-handlers)
-shows the integration.
+handler; for a handler that expects its own prefix removed, combine it with
+`http.StripPrefix` on a catch-all route and test path handling and middleware
+order at the boundary.
+[Routing](../http-fundamentals/routing.md#adapt-foreign-handlers) shows the
+integration.
 
 ## Try One Capability
 

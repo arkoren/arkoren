@@ -254,18 +254,27 @@ unsigned hints requiring authenticated resource lookup, not authenticated
 reconciliation, and fulfillment; these integrations introduce no billing ark or
 driver-owned tables. See the consumer payments guides for supported profiles.
 
-**Package routes** follow the rule in `arkoren-go` (API shapes): opaque
-protocol endpoints are `http.Handler` values attached with `router.Mount`;
-ordinary routes come as `XHandler()` methods plus `Register`/`Register<Set>`
-(`Application.RegisterProbes`), with no middleware or prefix of their own. The
-generated starter will use `RegisterProbes` after the next core release.
+**Package routes** follow the rule in `arkoren-go` (API shapes): every package
+serving HTTP offers `XHandler()` methods where custom paths make sense plus
+`Register`/`Register<Set>` (`Application.RegisterProbes`, `mcpserver.Server`,
+`swagger.Viewer`), attached as `routes.Group(prefix, pkg.Register)` with no
+middleware or prefix of their own. Protocol endpoints register exact methods
+(MCP: `POST`); only applications adapt foreign handlers with `router.HTTP`.
+`router.Router` has no `Mount`. The generated starter will use `RegisterProbes`
+after the next core release.
 
 **HTTP documentation** belongs to the router's actual registrations. Optional
 operation callbacks describe requests and responses; they do not change handler,
 validation, error-mapping, or authentication behavior. Keep the public route-list
 and MCP diagnostic wire shapes unchanged. OpenAPI JSON and Swagger UI handlers
-are explicitly registered by the application. The Swagger UI package lives at
-`core/http/swagger`, with pinned frontend assets and no third-party Go dependency.
+are explicitly registered by the application (`swagger.New(url)` returns a
+`Viewer` whose `Register` adds four exact GET routes with relative asset URLs and
+their operations). Every shipped handler has its own `XOperation` and every
+registration in the repository passes it (see Handler operations in `arkoren-go`);
+each module defines operations with only the core API its `go.mod` requires, so an
+ark never calls an operation added to core in the same change. The Swagger UI
+package lives at `core/http/swagger`, with pinned frontend assets and no
+third-party Go dependency.
 Keep its assets and rendering out of router imports. Document schema-export
 limitations instead of claiming that annotations enforce wire conformance.
 
@@ -286,7 +295,7 @@ handlers own resource Gate checks for all transports. Policies filter complete,
 unpaginated discovery and guard calls before decode; failures fail closed even
 when wrapping `ToolError`. Keep SDK imports in adapter/composition and authenticate
 outer HTTP with `auth.Middleware(auth.Bearer(verifyAccessToken))` followed by
-`auth.Require()` before `routes.Mount("/mcp", endpoint)`; attach the same
+`auth.Require()` before `routes.Group("/mcp", endpoint.Register)`; attach the same
 concrete application user type to the identity's record in the verifier that
 policy lookups read. Optional
 `gate.Require(canUseMCP)` controls endpoint admission, not resource access.
@@ -391,7 +400,7 @@ iam.ProviderBuilder.SignUp, per provider), and the token scope catalog takes its
 twofactor, apitoken, federation and permission never import each other; subjects are strings
 and cross-package writes join the context transaction of the one Database. A
 password reset calls Users.Rotate, which bumps UserRecord.Version and ends
-sessions, pending logins and API tokens; tokens never carry factors. Password reset and email verification are off until `password.Builder.Reset(signer, dispatch, deliver)` and `account.Builder.Verification(signer, dispatch, deliver)` are given; the module sends no mail, keeps no token tables and starts no goroutine. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; `dispatch` stores the work in the request, a worker runs `identity.SendReset` or `identity.SendVerification`, and `deliver` may run more than once. Keep the forgot route dispatching the identifier as typed, and the conditional write that makes a reset single use. ark/oauth requires core v0.8.x: Client.Name(),
+sessions, pending logins and API tokens; tokens never carry factors. Password reset and email verification are off until `password.Builder.Reset(signer, mailer, resetURL, configure...)` and `account.Builder.Verification(signer, mailer, verifyURL, configure...)` are given (the URLs are the app pages the links open, required, absolute, no fragment; `ResetBuilder.Email`/`VerificationBuilder.Email` replace the default plain-text email and are the only override). IAM queues its own jobs on the app's dispatcher and sends through the app's mailer, keeps no token tables and starts no goroutine: `identity.Queue(dispatcher)` (also `Queue` on the `password`/`account` builders for standalone use) is required with either feature or `New` fails with `ErrInvalidConfig`; the jobs are built per instance by `storage.NewJob` (names `iam-password-reset`/`iam-email-verification` plus `-<instance>` with `_` written `-`, queue `iam.QueueName`), the facade never exposes a job, handler or dispatch func, and `identity.RegisterJobs(consumer)` registers the handlers of the enabled features (`Verifier.RegisterJobs`, `Directory.RegisterJobs`; keep a new job's registration there) in the worker process. `RegisterJobs` cannot read the consumer's queue restriction until ark/iam requires a core with `Consumer.Queues()`; a restricted consumer must list `iam.QueueName`. Links are core `link.Signer` values bound to the password hash (reset) or to the email and verified flag (verification), so state changes kill them; a send may run more than once and an email the mailer rejects as `mail.ErrInvalidMessage` is `queue.Permanent`. Keep the forgot route storing the identifier as typed, and the conditional write that makes a reset single use. `IAM.Migrations()` returns every feature's group for the instance whatever is enabled (definitions live in `internal/migration`, the packages' `Migrations` methods delegate to them), omitting only the built-in users with `Builder.Users`; groups are append-only. `IAM.Ping` checks the enabled features only. ark/oauth requires core v0.8.x: Client.Name(),
 LoginHandler() and CallbackHandler(guard, auth.Resolver) (with NonceHandler() and
 NativeHandler(guard, auth.Resolver) for Google and Apple ID tokens) match the
 Provider and NativeProvider interfaces that ark/iam declares, so Client
@@ -557,7 +566,7 @@ callable by exact name. Do not infer diagnostic roles from names or hardcode
 owner operations. Local command names win only unqualified. Schema-guided JSON
 input remains server-validated. Snake_case properties accept kebab-case flag
 aliases; exact properties win and map keys remain literal. Follow uses bounded
-cursor calls, not a second transport. Never replay a mutation automatically.
+cursor calls, not a second transport. Never replay a mutation automatically. Output shapes: `arkoren-go`, CLI output shapes.
 Keep output failures, safe structured failures, timeout budgets, and cancellation
 explicit in the CLI and its end-to-end MCP tests.
 
@@ -607,15 +616,26 @@ positional destination (`arkoren new billing` or `arkoren new .`), with optional
 skills-dir (project-relative, default `.agents/skills`), no-agent-files,
 dry-run, skip-tidy, and yes flags. Bare `new` reports usage with exit 2 without writing; `--folder` is
 removed. Help needs no destination. It writes application files: a cmd executable
-(main.go for infallible application.New construction/identity, signals, logging, exit status and the
-exported `Compose`, the explicit list of what the process runs), internal/bootstrap (app.go for application
-settings, logging.go for log handlers, router.go for the `Router` provider, listener.go for `Listen`, which owns
-listener policy and lifecycle, mcp.go for `Diagnostics`), internal/welcome/web (the example feature, `Routes`
-mounting the welcome page), go.mod, README, Makefile,
+(main.go for signals, exit status and `application.Run(ctx, server.App, server.Compose)`),
+internal/bootstrap (providers only: logging.go for the `LogHandler` provider, router.go for `Router` with the
+welcome route, server.go for `Server`, which owns listener policy and lifecycle, mcp.go for `MCP`),
+internal/bootstrap/server (app.go: the `App` provider with the application settings; compose.go: the explicit
+list of what the process runs), go.mod, README, Makefile,
 Dockerfile, .dockerignore, .gitignore, .editorconfig, .env and .env.example.
-No application tests are generated. `bootstrap.Router` is an `application.Provide` provider; `Listen` and
-`Diagnostics` are plain registration functions that `Use` it, and bootstrap never imports a feature.
-The go.mod template pins `arkoren.dev/core` to the release that ships with the CLI (the Provider API), so bump
+No application tests are generated. Every exported declaration of internal/bootstrap is an `application.Provide`
+variable that returns the component it makes live or a construction callback for one (a fragment provider such as
+`PasswordReset` returning `password.BuilderFunc`, resolved with `compose.Use` inside the facade's callback, which
+`arkoren check` treats as composition: a function literal taking `*pkg.XBuilder` of an `arkoren.dev` package); `arkoren add feature` writes `internal/bootstrap/<feature>.go`
+with the store, service and surface providers, features never import `application` or bootstrap, and
+`arkoren check` enforces both (`feature-imports-application`, `bootstrap-action-func`) and `composer-supply-outside-tests`
+(`Composer.Supply` only in `_test.go`). `arkoren add ark iam --with ...` (features only; sign-in providers moved to `add ark oauth`) and `arkoren add ark oauth <provider>...` (google, github, microsoft, apple, oidc; inserts `identity.Provider` into an existing `iam.go`, and `add ark iam` wires declared clients) write the
+ark's providers from `templates/add/ark/` (IAM, IAMRouter, IAMJobs, one fragment file per feature, and every missing shared
+provider by name with local defaults), insert `compose.Use` lines (`Migrate`, which applies migrations at server startup through a generated `Migrator`, or `IAM.Migrations` inserted into an existing one; `IAMRouter`, mounted under `/auth`), append safe defaults to `.env` (never secrets or key paths), and fetch the ark with `go get` at the version pinned in
+`internal/layout/ark.go` (`modulePins`; bump a pin with the release plan's proposal in the same change as the template or
+API it needs). The IAM code in `skills/arkoren-structure/references/examples.md` is compared with the generator's output
+by `TestExamplesMatchAddArkOutput`; regenerate the example when a template changes.
+The go.mod template pins `arkoren.dev/core` to the release that ships with the CLI (the Provider API and
+`application.Run`), so bump
 it in the same change as any core API the templates need, using the version the release plan proposes
 (`arkoren-ci release plan`). Tests build the scaffold against checkout modules with local replaces because
 that version does not exist on the proxy until the release is published.
@@ -628,20 +648,20 @@ toolkit-contributor rules. Existing instruction and skill
 paths participate in the same no-overwrite preflight as application files.
 Templates mirror the output tree under cmd/arkoren/templates, with .tmpl suffixes and fixed cmd/server for
 the command directory. Rendering discovers files recursively in lexical order; add templates at their
-output-relative paths rather than maintaining a separate file list. bootstrap.Listen reads HTTP_ADDR during
+output-relative paths rather than maintaining a separate file list. bootstrap.Server reads HTTP_ADDR during
 composition; empty/unset preserves :8080. The executable blank-imports
 godotenv/autoload: initialization loads .env, preserves existing environment values,
-and ignores loading errors. bootstrap.Application enables debug only for APP_DEBUG=true.
-Listen owns its Started subscription through MustDefer and unsubscribe cleanup; an inline
+and ignores loading errors. server.App enables debug only for APP_DEBUG=true.
+Server owns its Started subscription through MustDefer and unsubscribe cleanup; an inline
 callback logs Addr as address after `app started` and runner launch. Keep logging separate from Serve and readiness
 transitions; do not format browser URLs or infer schemes, hosts, or public domains.
-Compose selects Diagnostics with `if compose.App().Debug()`. Providers construct and register lifecycle;
-route mutations belong in registration functions called from Compose, ordered routes, diagnostics, then Listen.
-The welcome handler serves embedded, self-contained HTML with documentation links
-at the explicitly registered root route. Full application InfoHandler remains
+Compose selects MCP with `if compose.App().Debug()`. Providers construct the component and make it live; Compose
+is a list of `compose.Use` calls: feature providers, MCP, then Server. The router tools read routes at call time,
+so MCP's position does not matter. The welcome handler serves embedded, self-contained HTML with documentation
+links at the root route registered by the Router provider. Full application InfoHandler remains
 opt-in and unmounted; applications own access controls for its operational data.
 The unauthenticated endpoint selects read-only application, route, and telemetry
-tools. Diagnostics registers `compose.Must(compose.MCPTools("app"))` and
+tools. MCP registers `compose.Must(compose.MCPTools("app"))` and
 `routes.MCPTools("http")` with separate appending `listener.Tools` calls,
 without a redundant read-only filter. Composer.MCPTools attaches bounded
 in-memory capture with no external export. Router registers the application's telemetry
@@ -660,11 +680,11 @@ production and loopback binding for development.
 The generated .env selects loopback and debug, is exclusive-created with mode 0600,
 and is gitignored. The example disables debug. Neither needs secrets; no unused keys
 or tokens are generated. ARKOREN_MCP_URL points the CLI at /mcp on the HTTP listener.
-The starter uses direct constructor calls only: no DI flag, providers, or container
-dependency. app.Run(ctx, bootstrap.Compose) composes and runs the supplied app; MCP
+The starter uses providers and direct constructor calls only: no DI flag or container
+dependency. application.Run builds server.App, composes server.Compose and runs the app; MCP
 construction errors and real lifecycle failures propagate. The application reports
 failures before telemetry finalization; pre-start and finalization errors reach
-the configured handler only. The executable's run helper returns app.Run directly,
+the configured handler only. The executable's run helper returns application.Run directly,
 using application.NewSignalContext(context.Background()) and deferring its stop
 function before main maps failure to exit 1 (0 on clean shutdown). Core owns
 SIGINT/SIGTERM registration through os/signal.NotifyContext; terminal echo is
@@ -795,6 +815,14 @@ Settled; reopen only with the owner.
   - The constructor's readiness check (`Ping` or `Start`) verifies the tables
     exist, read-only, and fails with the contract's `ErrNotFound`, naming
     `Migrations()`. It never creates them.
+  - `Migrations()` depends only on the instance and structural choices (such as
+    the application's own users replacing the built-in users table), never on
+    feature switches: a module with optional features returns every feature's
+    groups, generated without constructing the disabled features (share the
+    definitions through the module's `internal/` package and have the
+    subpackages' methods delegate), so enabling a feature later needs no new
+    migrator call. Groups are append-only; never rename a group or an id or edit
+    a shipped step. Readiness checks still cover the enabled features only.
 
 ## Publishing
 

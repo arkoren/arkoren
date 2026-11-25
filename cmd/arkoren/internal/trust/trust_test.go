@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -89,7 +90,7 @@ func TestCertificateTrustAcceptsIndependentCA(t *testing.T) {
 		t.Fatalf("missing SHA-256 identity: %q", warning.String())
 	}
 
-	if !strings.Contains(output.String(), "completed") {
+	if !strings.Contains(output.String(), "Trusted root certificate in") {
 		t.Fatalf("missing completion: %q", output.String())
 	}
 }
@@ -490,7 +491,7 @@ func TestCertificateTrustWarningNamesConcreteTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(warning.String(), `"target": "/isolated/distribution/anchors"`) {
+	if !strings.Contains(warning.String(), `"Target: /isolated/distribution/anchors"`) {
 		t.Fatalf("missing concrete target: %q", warning.String())
 	}
 }
@@ -659,18 +660,22 @@ func TestJSONWarningIsMachineReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var document map[string]map[string]any
+	var document struct {
+		Warnings []console.Warning `json:"warnings"`
+	}
 	output := env.Stderr.(*bytes.Buffer).String()
 
-	if err := json.Unmarshal([]byte(output), &document); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal([]byte(output), &document); err != nil || len(document.Warnings) != 1 {
+		t.Fatalf("warning document = %s: %v", output, err)
 	}
 
-	if document["warning"]["target"] != "isolated store" || document["warning"]["sha256"] != "fixture" {
+	details := document.Warnings[0].Details
+
+	if !slices.Contains(details, "Target: isolated store") || !slices.Contains(details, "SHA-256: fixture") {
 		t.Fatalf("warning = %s", output)
 	}
 
-	if len(document["warning"]["effects"].([]any)) != 4 {
+	if len(details) != 7 {
 		t.Fatalf("warning omitted trust scope: %s", output)
 	}
 }

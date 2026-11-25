@@ -18,7 +18,7 @@ func skillsCLICommand(env console.Environment) *cli.Command {
 	// Extra positionals fail before bundle inspection or any filesystem change.
 	action := func(ctx context.Context, command *cli.Command) error {
 		if command.Args().Present() {
-			return console.UsageError("skills takes no positional arguments after its subcommand")
+			return console.UsageError("too many arguments: %s takes no arguments, only flags", command.FullName())
 		}
 
 		return skill.Manage(ctx, skill.Options{
@@ -38,12 +38,15 @@ func skillsCLICommand(env console.Environment) *cli.Command {
 			&cli.BoolFlag{Name: "dry-run", Usage: "Show the plan without writing"},
 		},
 		Commands: []*cli.Command{
-			{Name: "install", Usage: "Install into an empty directory or matching installation", Action: action},
-			{Name: "update", Usage: "Update a managed installation, preserving unrelated files", Action: action},
-			{Name: "status", Usage: "Show bundled and installed revisions and local modifications", Action: action},
-		},
-		Action: func(context.Context, *cli.Command) error {
-			return console.UsageError("usage: arkoren skills install|update|status [--dir PATH] [--dry-run]")
+			{Name: "install", Usage: "Install into an empty directory or matching installation", Action: action,
+				Description: "Copies the bundled skills into --dir. It fails when the directory holds files that are not a matching " +
+					"installation, and never overwrites a file. Use --dry-run to preview."},
+			{Name: "update", Usage: "Update a managed installation, preserving unrelated files", Action: action,
+				Description: "Replaces the managed skills in --dir with the bundle of this CLI. Locally modified files and unsafe " +
+					"links block the update, and unrelated files are kept. Use --dry-run to preview."},
+			{Name: "status", Usage: "Show bundled and installed revisions and local modifications", Action: action,
+				Description: "Compares the skills in --dir with this CLI's bundle and reports each skill's state and revisions. " +
+					"A stale or modified installation is a problem and exits 1; nothing is written."},
 		},
 	}
 }

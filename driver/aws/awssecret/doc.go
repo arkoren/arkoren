@@ -3,7 +3,9 @@
 // New loads AWS configuration after ordered Builder callbacks run directly once
 // on a fresh draft. Nil entries panic; expanded nil/empty slices omit edits.
 // Completed values are copied; native providers remain shared. NewFrom has no
-// settings and leaves its native client's ownership with the caller.
+// settings and leaves its native client's ownership with the caller. Valid
+// UTF-8 payloads are written as SecretString and other bytes as SecretBinary;
+// reads accept either, so text and binary values both round-trip.
 //
 // Example:
 //

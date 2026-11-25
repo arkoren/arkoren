@@ -229,7 +229,7 @@ concurrency boundaries.
 routes:
 
 ```go
-web.Post("/logout", guard.LogoutHandler())
+web.Post("/logout", guard.LogoutHandler(), auth.LogoutOperation)
 ```
 
 It answers `204`. A server-rendered application redirects instead, with `303 See
@@ -239,8 +239,11 @@ configuration error returned on every request:
 ```go
 web.Post("/logout", guard.LogoutHandler(func(logout *auth.LogoutBuilder) {
 	logout.Redirect("/")
-}))
+}), auth.LogoutOperation)
 ```
+
+`auth.LogoutOperation` describes both answers, `204` and `303`, and the re-issued session cookie in the
+router's [OpenAPI document](../openapi/operations.md).
 
 Logging out a session with no logged-in user succeeds, and a request without a
 session returns `session.ErrNoSession` (`500`, a missing `session.Middleware`).

@@ -20,9 +20,9 @@ import (
 	"arkoren.dev/ark/iam/permission"
 )
 
-// ownUsersWithoutCreate returns the application's users without a Create
+// ownUsersWithoutCreate configures the application's users without a Create
 // function, so nothing can create a user.
-func ownUsersWithoutCreate(t *testing.T) iam.Users {
+func ownUsersWithoutCreate(t *testing.T) (*auth.UserProvider, iam.UsersBuilderFunc) {
 	t.Helper()
 
 	users := newOwnUsers(t)
@@ -31,7 +31,9 @@ func ownUsersWithoutCreate(t *testing.T) iam.Users {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
 
-	return iam.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}
+	return provider, func(draft *iam.UsersBuilder) {
+		draft.Lookup(users.lookup).Rotate(users.rotate)
+	}
 }
 
 // TestRegistrationWithoutCreateIsIgnored verifies Registration(true) over users
@@ -60,8 +62,8 @@ func TestSignUpWithoutCreateIsIgnored(t *testing.T) {
 	if got := warnings.Settings(); !slices.ContainsFunc(got, func(setting string) bool { return strings.HasPrefix(setting, "ProviderBuilder.SignUp") }) {
 		t.Fatalf("warnings = %v, want one naming ProviderBuilder.SignUp", got)
 	}
-	if !sys.router.Has(http.MethodGet, "/auth/fake") {
-		t.Fatal("GET /auth/fake is not mounted, want the provider kept without sign-up")
+	if !sys.router.Has(http.MethodGet, "/fake") {
+		t.Fatal("GET /fake is not mounted, want the provider kept without sign-up")
 	}
 }
 
@@ -312,14 +314,14 @@ func TestProviderNotCalledMountsNoProvider(t *testing.T) {
 	t.Parallel()
 
 	without := newApp(t, memoryDatabase(t), newInstance(t))
-	if without.router.Has(http.MethodGet, "/auth/fake") || without.identity.Links() != nil {
+	if without.router.Has(http.MethodGet, "/fake") || without.identity.Links() != nil {
 		t.Fatal("a provider is mounted without a Provider call")
 	}
 	with := newApp(t, memoryDatabase(t), newInstance(t), func(identity *iam.Builder) {
 		identity.Provider(fakeProvider{name: "fake"})
 	})
-	if !with.router.Has(http.MethodGet, "/auth/fake") {
-		t.Fatal("GET /auth/fake is not mounted for the called provider")
+	if !with.router.Has(http.MethodGet, "/fake") {
+		t.Fatal("GET /fake is not mounted for the called provider")
 	}
 }
 

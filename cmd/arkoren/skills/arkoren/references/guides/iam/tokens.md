@@ -1,102 +1,61 @@
 ---
-title: API Tokens
-description: Issue restricted personal tokens, authenticate API requests, and exchange a recent mobile login for a revocable device token.
+title: API & Device Tokens
+nav: API Tokens
+description: Issue scoped personal access tokens for scripts and revocable device tokens for mobile apps, enforce live permission ceilings, and prune expired rows.
 order: 90
 summary:
-  - Limit token scopes to both an application catalog and the owner's current permissions, automatically with the permission store.
-  - Create, use, list, and revoke personal tokens without giving them credential-management access.
-  - Exchange mobile sessions for device tokens and schedule cleanup of unusable token rows.
+  - Define what scopes tokens may hold, either automatically from IAM Permissions or with a custom grant function.
+  - Issue personal access tokens, authenticate Bearer API routes, and control how quickly permission revocations take effect.
+  - Exchange a fresh mobile login for a device token and schedule periodic pruning of unusable token rows.
 ---
 
-# API Tokens
+# API & Device Tokens
 
-A script needs a credential it can send without keeping an interactive login
-session. A mobile app can also log in once, then retain a revocable credential
-instead of a cookie. IAM supports both through opaque API tokens:
-**personal tokens** are named and scoped by the user; **device tokens** are
-issued by exchanging a recent login.
+Browser sessions work great for web apps, but scripts need a non-interactive credential and mobile apps need a revocable token instead of a browser cookie. IAM supports both with opaque, hashed Bearer tokens:
 
-Tokens identify their owner but never become a session or carry authentication
-factors. They cannot change a password, enroll two-factor, list other tokens,
-or create more tokens.
+- **Personal access tokens**: Named, user-scoped credentials created from account settings for scripts and integrations.
+- **Device tokens**: Revocable credentials issued to first-party mobile or desktop apps by exchanging a recent login.
 
-## Define the Ceiling
+Tokens identify their owner and carry scopes, but they **never** become a browser session or carry authentication factors. A stolen API token cannot change a password, enroll two-factor authentication, connect a provider, list other tokens, or mint new tokens.
 
-A **scope** names an API permission, such as `posts:read`. A token may carry
-only scopes from a catalog, and only those its owner may hold now: the
-**ceiling**.
+## Defining the Scope Ceiling
 
-If you enable [permissions](permissions.md), the ceiling is set for you: the
-catalog is every permission the store defines, and each user's ceiling is the
-permissions they hold through their roles and direct grants. Enable both
-features and the tokens follow the store:
+Every token scope (such as `posts:read`) must belong to a **catalog** and fall within its owner's current **ceiling**: the scopes that user is allowed to hold right now.
+
+If you already enabled [Roles & Permissions](permissions.md), simply enable `Tokens()` and IAM wires the ceiling automatically: the catalog is every permission in your permission store, and each user's ceiling is the permissions they currently hold:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Permissions(func(policy *permission.Builder) {
-		policy.Roles(Viewer, Editor)
-	})
-	identity.Tokens()
+identity.Permissions(func(policy *permission.Builder) {
+	policy.Roles(Viewer, Editor)
+})
+identity.Tokens()
+```
+
+If you are **not** using IAM's permission store, supply your own grant function (`func(context.Context, string) ([]string, error)`) and scope catalog using `apitoken` from `arkoren.dev/ark/iam/apitoken`:
+
+```go
+identity.Tokens(func(tokens *apitoken.Builder) {
+	tokens.Grants(grantable, "posts:read", "posts:write")
 })
 ```
 
-Revoking a role then removes its permissions from the user's existing tokens on
-their next request, with the default `GrantTTL` of zero. A positive `GrantTTL`
-caches the ceiling on top of the store's `CacheTTL`, so a revoke can take both
-lifetimes to reach a token: keep `GrantTTL` at zero and set `CacheTTL` on the
-store instead. Calling
-`tokens.Grants` yourself replaces this ceiling entirely, including the catalog.
+Without `Grants` (and without `Permissions`), tokens carry no scopes. Passing a catalog without a grant function fails `iam.New`. `apitoken.AnyScope` is a built-in helper that grants every catalog scope to every user; use it only when your resource-level authorization already enforces all access rules. A literal `"*"` is treated as an ordinary scope name, not a wildcard.
 
-Without the permission store, declare the catalog and a grant function that
-returns which catalog scopes a subject may hold now. Assume your authorization
-layer provides `grantable`, a `func(context.Context, string) ([]string, error)`.
+Calling `identity.Tokens()` enables both personal and device tokens. Disable one kind inside the callback with `tokens.DeviceTokens(false)` or `tokens.PersonalTokens(false)` (disabling both fails construction).
 
-Import `apitoken` from `arkoren.dev/ark/iam/apitoken` and enable tokens
-in your existing constructor:
+## Issuing Personal Access Tokens
 
-```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Tokens(func(tokens *apitoken.Builder) {
-		tokens.Grants(grantable, "posts:read", "posts:write")
-	})
-})
-```
-
-The constructor shows token configuration only; retain your password or
-provider login configuration. Apply the added migrations before using it.
-A catalog without a grant function is invalid. Without a catalog, tokens
-carry no scopes.
-
-For example, if Ada's grant function returns only `posts:read`, she can create
-a read-only token, but cannot request `posts:write`. A device token receives
-all catalog scopes she may hold. Names returned outside the catalog are ignored.
-
-`apitoken.AnyScope` is an alternative grant function that gives every user
-every catalog scope. Use it only when your resource-level authorization
-already limits those scopes to the owner's permissions. A literal `"*"`
-returned by your own function is merely a scope named `"*"`, not a wildcard.
-
-Both token kinds are enabled by `Tokens(true)`. In its callback,
-`DeviceTokens(false)` removes the exchange and current-device revocation routes;
-`PersonalTokens(false)` removes personal-token creation. Listing and individual
-revocation remain. Disabling both makes construction fail.
-
-## Create a Token
-
-Personal-token creation requires a session, a
-[fresh proof](freshness.md#renew-a-proof), and a verified email.
-From Ada's account settings, send `POST /tokens`:
+Creating a personal token requires a browser session, a [fresh proof](freshness.md), and a verified email. Send `POST /tokens`:
 
 ```json
 {
-  "name": "Read posts",
+  "name": "CI deploy script",
   "scopes": ["posts:read"],
   "expires_at": "2027-01-01T00:00:00Z"
 }
 ```
 
-The response is `201`, with metadata in `token` and the usable text in
-`secret`. This abbreviated response shows their relationship:
+IAM responds with `201 Created`, returning the token metadata in `token` and the full plaintext secret once in `secret`:
 
 ```json
 {
@@ -107,170 +66,92 @@ The response is `201`, with metadata in `token` and the usable text in
 }
 ```
 
-Display the secret once for Ada to copy to her script. IAM stores only
-its hash and cannot show it again. The default format is
-`ark_<public id>_<secret>`, with 130 random bits in the secret.
-Keep it out of logs and source control.
+Show `secret` to the user immediately, because IAM stores only its SHA-256 hash and can never display it again. Secrets carry 130 random bits formatted as `<prefix>_<id>_<secret>`.
 
-The name must be nonempty and at most 255 bytes. An unknown scope, past expiry,
-or invalid name returns `422`; a catalog scope above Ada's grant ceiling
-returns `403` `apitoken:scope-not-granted`.
+Names must be nonempty and at most 255 bytes. An unknown scope, invalid name, or past expiry returns `422`; requesting a catalog scope above the user's ceiling returns `403` `apitoken:scope-not-granted`.
 
-An omitted `expires_at` has **no date expiry by default**. To enforce a maximum,
-configure it alongside the catalog:
+By default, omitting `expires_at` creates a token with **no expiry date**. To enforce a maximum lifetime (which also applies to device tokens), set `MaxTTL`:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Tokens(func(tokens *apitoken.Builder) {
-		tokens.Grants(grantable, "posts:read", "posts:write")
-		tokens.MaxTTL(30 * 24 * time.Hour)
-	})
+identity.Tokens(func(tokens *apitoken.Builder) {
+	tokens.MaxTTL(30 * 24 * time.Hour)
 })
 ```
 
-With that cap, an omitted expiry becomes 30 days after issue, and a later
-requested expiry returns `422`. The cap also applies to device tokens.
-`MaxTTL(0)` means no cap.
+With `MaxTTL` set, omitted expirations default to that cap, and requesting a later date returns `422`.
 
-## Authenticate Requests
+## Authenticating API Requests
 
-The script sends the secret as an HTTP header:
+Clients present tokens in the `Authorization` header:
 
 ```http
 Authorization: Bearer ark_<id>_<secret>
 ```
 
-`identity.Middleware()` tries the session first, then IAM tokens, then any
-additional authenticators. For a token-only endpoint, reject cookie-only
-callers by installing the issuer's authenticator instead of the combined
-facade middleware. Import `auth` and `gate` from `arkoren.dev/core/auth`
-and its `gate` subpackage:
+`identity.Middleware()` checks sessions first, then IAM tokens, then any custom authenticators. For an API group that must accept **tokens only** (rejecting browser cookies), mount `identity.Issuer().Authenticator()` directly using `auth` and `gate`:
 
 ```go
 api := routes.With(auth.Middleware(identity.Issuer().Authenticator()), auth.Require())
-posts := api.With(gate.Require(gate.HasScopes("posts:read")))
-posts.Get("/api/posts", listPosts)
+api.With(gate.Require(gate.HasScopes("posts:read"))).Get("/api/posts", listPosts)
 ```
 
-`routes` is the application's router; `listPosts` must also authorize which
-posts the owner can read. On a mixed session/token endpoint, use the facade's
-middleware, but do not assume a session identity carries token scopes.
+Malformed, unknown, expired, revoked, or version-outdated IAM tokens return `401` with a `Bearer` challenge. Tokens with a different prefix fall through to other authenticators, such as an [OIDC bearer verifier](../oauth/bearer-tokens.md). Disabled or deleted users cannot authenticate with tokens.
 
-Malformed, unknown, expired, revoked, or version-outdated IAM tokens receive
-`401` with a Bearer challenge. A different prefix falls through to another
-authenticator, such as an [OIDC verifier](../oauth/bearer-tokens.md).
-A deleted or disabled user cannot authenticate with a token.
-IAM tokens cannot pass a positive factor-level or freshness requirement.
+To help secret scanners recognize your app's tokens, set a custom 2–16 character lowercase alphanumeric prefix with `tokens.Prefix("acme")`. Changing the prefix stops recognizing tokens issued under the previous prefix.
 
-If secret scanners need an application-specific prefix, set
-`tokens.Prefix("acme")` in the token callback. It must be 2–16 lowercase
-letters or digits. Changing it leaves stored rows intact but stops recognizing
-tokens issued with the old prefix.
+## Rechecking Permissions on Requests
 
-## Recheck Permissions
+When a token authenticates, IAM intersects its originally issued scopes with its owner's current grant ceiling. If a user loses `posts:write`, their existing tokens lose it too; gaining a new permission never widens a token that was issued without it.
 
-At authentication, IAM intersects a token's originally issued scopes
-with its owner's grant ceiling. Losing `posts:write` therefore removes that
-effective scope from existing tokens; gaining a permission does not add it
-to a token that never held it.
+Control how often IAM queries the grant ceiling with `tokens.GrantTTL(d)`:
 
-Choose how quickly permission changes apply with `tokens.GrantTTL(d)`,
-in the same token callback as `Grants`:
+| Value | Behavior |
+| --- | --- |
+| `0` (default) | Checks on every token-authenticated request; revocations apply immediately. |
+| Positive duration | Caches the ceiling per subject in `store`; revocations apply after the TTL expires. |
+| Negative duration | Checks at creation only; revocations require revoking the token. |
 
-| Value | Grant lookup | Permission changes apply |
-| --- | --- | --- |
-| `0`, the default | Every token-authenticated request | Next request |
-| Positive duration | Cached per subject in the shared store | After the cached grant expires |
-| Negative duration | At creation only | Only after revoking and replacing the token |
+If you use IAM's permission store with `policy.CacheTTL`, leave `GrantTTL` at `0` so revocations do not wait through two stacked caches. Grant-lookup or cache errors fail authentication closed with `401`.
 
-Keep the default if your lookup is inexpensive. A short positive cache lifetime
-trades lookup cost for delayed permission changes. A negative value lets
-demoted users retain the scopes originally issued to their tokens.
-Grant-function or cache errors fail authentication with `401`; IAM does
-not fall back to a wider saved grant. Credential-version changes invalidate
-every token regardless of this setting.
+## Mobile Device Tokens
 
-## Exchange a Mobile Login
+First-party mobile and desktop apps use a temporary cookie jar only for login, then trade that session for a device token:
 
-A first-party app uses a cookie jar temporarily:
-
-1. Complete password login and any challenge, or the provider's
-   [native login](federated-sign-in.md#native-login).
-2. While that login is at most five minutes old, exchange it for a device token.
-3. Store the token in the platform's secure credential storage and use Bearer
-   authentication thereafter.
-
-For the exchange, send `POST /device-tokens` with the login cookie:
+1. Complete password login (plus any second-factor challenge) or [mobile native login](federated-sign-in.md#mobile-native-login).
+2. Within **5 minutes** of that login, send `POST /device-tokens` with the login cookie:
 
 ```json
 {
-  "device": "Ada's phone"
+  "device": "Ada's iPhone"
 }
 ```
 
-The response is `201` with the same `token`/`secret` envelope as a personal
-token. It ends the login session, and the token carries every catalog scope
-the user may hold. The user needs a verified email.
-A blank trimmed device name or one over 255 bytes returns `422`.
+IAM responds with `201` and the same `token`/`secret` payload as a personal token, **ends the browser session**, and grants the token every catalog scope the user currently holds. The user must have a verified email, and the device name must be 1–255 trimmed bytes. If the login is older than 5 minutes, IAM returns `403` `no-step-up-method`; end the session and [start a fresh login](freshness.md#requiring-a-new-login).
 
-An older login returns `403` `no-step-up-method`.
-Confirmation or re-login in the same authenticated session does not renew
-the exchange window; [start a new login](freshness.md#require-a-new-login).
-The window uses application login age, not proof that the provider requested
-credentials.
+Device tokens expire automatically after **90 days without recorded use** by default (personal tokens have no idle limit). Configure this with `tokens.DeviceIdleTTL(d)` (`0` uses 90 days; a negative value disables idle expiry). Because last-used timestamps are written at most once per hour, the cutoff can occur up to an hour early, and a lapsed token cannot be revived.
 
-Device tokens stop working after 90 days without recorded use by default.
-Set `tokens.DeviceIdleTTL(d)` to change that; zero selects 90 days, and a
-negative value disables the idle limit. Idle time starts at creation for a
-never-used token. Successful-use timestamps are written at most hourly,
-so the idle cutoff can be up to an hour early; failed timestamp writes can
-leave an older recorded time. A lapsed token cannot be revived by presenting it.
-Any `MaxTTL` date cap still applies. Personal tokens have no idle limit.
+To sign a device out, send `DELETE /device-tokens/current` with that device's Bearer token (`204`). This endpoint accepts Bearer tokens only (either personal or device tokens), never a session cookie.
 
-To log the device out, send `DELETE /device-tokens/current` with its Bearer
-token. `204` means that presented token was revoked; this route does not accept
-a session as a substitute. It can revoke either kind of IAM token.
+## Listing, Revoking, and Pruning
 
-## Manage and Prune
+From account settings, a browser session can manage all of a user's tokens without needing a fresh proof:
 
-Account settings use the session-only `GET /tokens` to list metadata, newest
-first, without secrets. Entries include kind, name, scopes, creation time,
-optional expiry, and optional last-use time. Expired rows can remain visible
-until cleanup; tokens from an older credential version are hidden.
-`DELETE /tokens/{id}` returns `204` for the user's token, or `404` for an
-unknown token or someone else's token. Neither operation requires freshness.
+- `GET /tokens` returns token metadata (newest first, never secrets), including kind, name, scopes, creation time, optional expiry, and optional last-use time. Tokens from an outdated credential version are hidden.
+- `DELETE /tokens/{id}` revokes a single token (`204`, or `404` if unknown or owned by another user).
 
-Password changes and enabling two-factor revoke all tokens by default.
-[Account policy](accounts.md#credential-changes) can retain personal tokens
-for those two changes; a password reset or version rotation always ends all
-tokens. Issuing and revoking publish `apitoken.Issued` and `apitoken.Revoked`.
+Password changes and enabling two-factor revoke all tokens by default unless you configure [`KeepPersonalTokens`](accounts.md#credential-change-revocation). Password resets and credential-version rotations always invalidate every token. Token issuance and revocation emit `apitoken.Issued` and `apitoken.Revoked`.
 
-IAM starts no cleanup goroutine. Schedule `identity.Prune` daily to delete
-expired tokens, tokens from outdated or deleted users, and device tokens past
-their idle limit. It removes only unusable rows, is safe to repeat or run
-concurrently, and returns nil when tokens are not enabled.
-
-With `schedule` from `arkoren.dev/core/service/schedule`, define the task:
+IAM never starts background cleanup goroutines on its own. Schedule `identity.Prune` daily with [Scheduled Tasks](../scheduled-tasks/calendar-schedules.md) to remove expired, version-outdated, deleted-user, and idle-lapsed device tokens:
 
 ```go
 prune := schedule.NewEntry("access-prune", identity.Prune, func(entry *schedule.EntryBuilder) {
 	entry.When(schedule.UTC().Hour(3))
 })
+err = scheduler.Add(prune)
 ```
 
-Then add it to your existing [scheduler](../scheduled-tasks/calendar-schedules.md):
+`identity.Prune` is safe to repeat or run concurrently, returns `nil` when tokens are disabled, and leaves disabled users' tokens intact in case those accounts are re-enabled.
 
-```go
-err := scheduler.Add(prune)
-```
+Next, learn how to inspect accounts, manage active sessions, suspend or delete users, and subscribe to [Sessions & Accounts](accounts.md).
 
-A failed delete stops the run; the next run retries the remaining work.
-Personal tokens are not pruned for idleness, and disabled-user status alone
-does not cause version cleanup because re-enabling can restore those tokens.
-Finding outdated versions reads each remaining token owner's current record.
-
-Next, add [Federated Sign-In](federated-sign-in.md) if users should sign in through
-external accounts.
-
-For issuance, grants, and cleanup, see the
-[`apitoken` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/apitoken).
+For all token options and types, see the [`apitoken` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/apitoken).

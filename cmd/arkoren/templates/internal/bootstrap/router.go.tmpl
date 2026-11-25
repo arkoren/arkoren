@@ -10,12 +10,13 @@ import (
 // Router is the process's one shared HTTP router, built by the first
 // compose.Use(Router) of a composition and returned unchanged afterwards. The
 // provider constructs the router, its middleware, and the health probes; it
-// mounts no feature routes. Feature registration functions called from
-// Compose add routes to this router, and Listen serves it.
+// mounts no feature routes. Feature providers such as bootstrap.OrdersRoutes
+// add routes to this router, and Server serves it.
 //
-// The router serves the probes at /livez, /readyz, and /startupz. Unknown paths
-// remain not-found. The probe handlers observe the application's lifecycle and
-// health. The provider opens no network listener.
+// The router serves the probes at /livez, /readyz, and /startupz and the
+// welcome page at GET /. Other unknown paths remain not-found. The probe
+// handlers observe the application's lifecycle and health. The provider opens
+// no network listener.
 //
 // Shared middleware is registered before routes. Tracing uses the application's
 // handle and ignores incoming trace context. Without debug capture or a
@@ -40,9 +41,10 @@ var Router = application.Provide(func(compose *application.Composer) *router.Rou
 	routes.Use(router.Recover())
 	routes.Use(csrf.Middleware())
 
-	routes.Get(application.LivePath, app.LiveHandler(), application.LiveOperation)
-	routes.Get(application.ReadyPath, app.ReadyHandler(), application.ReadyOperation)
-	routes.Get(application.StartupPath, app.StartupHandler(), application.StartupOperation)
+	routes.Group("/", app.RegisterProbes)
+
+	// Welcome page for a new project. Remove it once the application serves its own "/".
+	routes.Get("/", app.WelcomeHandler(), application.WelcomeOperation)
 
 	return routes
 })

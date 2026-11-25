@@ -177,7 +177,7 @@ func TestRegisterTakenDispatchFailureStaysAccepted(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
-			passwords.Reset(newSigner(t, ""), func(context.Context, password.ResetRequest) error { return errors.New("queue down") }, func(context.Context, password.ResetMessage) error { return nil })
+			passwords.Queue(failingQueue())
 		})
 		sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"correct horse"}`)
 		reply := sys.client.NewDevice().Post("/register", `{"email":"ada@example.com","password":"another horse"}`)
@@ -420,7 +420,7 @@ func TestForgotDispatchErrorIs500(t *testing.T) {
 
 	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
 		sys := newConfiguredSystem(t, db, instance, func(passwords *password.Builder) {
-			passwords.Reset(newSigner(t, ""), func(context.Context, password.ResetRequest) error { return errors.New("queue down") }, func(context.Context, password.ResetMessage) error { return nil })
+			passwords.Queue(failingQueue())
 		})
 		if reply := sys.client.Post("/password/forgot", `{"email":"ada@example.com"}`); reply.Status != http.StatusInternalServerError {
 			t.Fatalf("forgot with a failing dispatch = %d %s, want 500", reply.Status, reply.Body)
@@ -596,6 +596,28 @@ func TestChangePasswordCounterIsIndependentOfLoginCounter(t *testing.T) {
 		change := sys.client.Do(http.MethodPut, "/password", `{"current_password":"correct horse","password":"brand new horse"}`)
 		if change.Status != http.StatusNoContent {
 			t.Fatalf("change after ten failed logins for subject:%s = %d %s, want 204", subject, change.Status, change.Body)
+		}
+	})
+}
+
+// TestLoginRejectsMistypedMembersWithValidationProblem verifies a body whose
+// members have the wrong JSON type is parsed through the handler's schema and
+// answered with the request package's 422 validation problem, never with a
+// plain error body.
+func TestLoginRejectsMistypedMembersWithValidationProblem(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newSystem(t, db, instance)
+
+		reply := sys.client.Post("/login", `{"email":5,"password":"correct horse"}`)
+
+		if reply.Status != http.StatusUnprocessableEntity {
+			t.Fatalf("mistyped email = %d %s, want 422", reply.Status, reply.Body)
+		}
+
+		if !strings.Contains(reply.Body, "validation-failed") {
+			t.Fatalf("body = %s, want the validation-failed problem", reply.Body)
 		}
 	})
 }

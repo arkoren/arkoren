@@ -14,23 +14,6 @@ import (
 	"arkoren.dev/ark/iam/internal/web"
 )
 
-// requestBody is the JSON body shared by the handlers of this package; each
-// reads the members it needs and ignores the rest. The identifier is "email" in
-// the usual case; "identifier" is accepted for applications whose users log in
-// with something else.
-type requestBody struct {
-	Email      string `json:"email"`
-	Identifier string `json:"identifier"`
-	Password   string `json:"password"`
-	Current    string `json:"current_password"`
-	Token      string `json:"token"`
-}
-
-// value returns the identifier the client sent.
-func (body requestBody) value() string {
-	return cmp.Or(body.Email, body.Identifier)
-}
-
 // passwordFactor is the factor a password proof records.
 var passwordFactor = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKnowledge}
 
@@ -54,14 +37,14 @@ var passwordFactor = auth.Factor{Method: auth.MethodPassword, Kind: auth.KindKno
 //
 // Example:
 //
-//	web.Post("/login", verifier.LoginHandler(guard))
+//	web.Post("/login", verifier.LoginHandler(guard), password.LoginOperation)
 func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
-		body, err := web.Decode[requestBody](r)
+		body, err := web.Parse(r, credentialsSchema)
 		if err != nil {
 			return err
 		}
-		identifier := body.value()
+		identifier := cmp.Or(body.Email, body.Identifier)
 		if identifier == "" || body.Password == "" {
 			return ErrInvalidCredentials
 		}
@@ -101,7 +84,7 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 // ([Verifier.LoginHandler]). When [Users.Create] returns [ErrIdentifierTaken] it
 // creates nothing, still hashes the password so the time taken matches, and runs
 // the [Builder.Taken] hook, which is where the application tells the owner (the
-// facade dispatches a reset notice or a verification there). The hook runs at
+// facade stores a reset notice or a verification job there). The hook runs at
 // most as often as the throttle lets registrations through, so the route cannot
 // be used to flood a mailbox. Any other error of [Users.Create] (an invalid
 // identifier, say) passes through. The answer does not say whether the identifier
@@ -115,18 +98,18 @@ func (verifier *Verifier) LoginHandler(guard *auth.Guard) router.Handler {
 //
 // Example:
 //
-//	web.Post("/register", verifier.RegisterHandler())
+//	web.Post("/register", verifier.RegisterHandler(), password.RegisterOperation)
 func (verifier *Verifier) RegisterHandler() router.Handler {
 	if !verifier.registration {
 		panic("password: RegisterHandler requires Builder.Registration")
 	}
 
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
-		body, err := web.Decode[requestBody](r)
+		body, err := web.Parse(r, credentialsSchema)
 		if err != nil {
 			return err
 		}
-		identifier := body.value()
+		identifier := cmp.Or(body.Email, body.Identifier)
 		if err := verifier.throttleAction(r, "register", identifier, maxRegistrations, maxClientRegistrations); err != nil {
 			return err
 		}
@@ -174,14 +157,14 @@ func (verifier *Verifier) notifyOwner(ctx context.Context, identifier, password 
 //
 // Example:
 //
-//	web.Put("/password", verifier.ChangeHandler(guard))
+//	web.Put("/password", verifier.ChangeHandler(guard), password.ChangeOperation)
 func (verifier *Verifier) ChangeHandler(guard *auth.Guard) router.Handler {
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
 		identity, err := web.Fresh(guard, r)
 		if err != nil {
 			return err
 		}
-		body, err := web.Decode[requestBody](r)
+		body, err := web.Parse(r, changeSchema)
 		if err != nil {
 			return err
 		}
@@ -284,11 +267,11 @@ func (verifier *Verifier) endOtherLogins(guard *auth.Guard, r *http.Request, sub
 
 // ForgotHandler returns the handler of POST /password/forgot. The body is
 // {"email": "..."} (or "identifier"). It counts the request, then calls the
-// dispatch function of [Builder.Reset] with a [ResetRequest] holding the
+// reset job on the [Builder.Queue] dispatcher with a [ResetRequest] holding the
 // identifier exactly as typed, whether or not the user exists, and answers an
 // empty 202. Nothing is looked up in the request, so the answer and its time
 // say nothing about which identifiers exist; the lookup, the signing and the
-// email happen in the worker that runs [Verifier.SendReset], and the email goes
+// email happen in the worker that runs [Verifier.RegisterJobs], and the email goes
 // to the address stored with the user, never to the text of the request.
 //
 // Requests are counted before anything else: more than 5 per identifier as
@@ -299,18 +282,18 @@ func (verifier *Verifier) endOtherLogins(guard *auth.Guard, r *http.Request, sub
 //
 // Example:
 //
-//	web.Post("/password/forgot", verifier.ForgotHandler())
+//	web.Post("/password/forgot", verifier.ForgotHandler(), password.ForgotOperation)
 func (verifier *Verifier) ForgotHandler() router.Handler {
 	if !verifier.ResetEnabled() {
 		panic("password: ForgotHandler requires Builder.Reset")
 	}
 
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
-		body, err := web.Decode[requestBody](r)
+		body, err := web.Parse(r, forgotSchema)
 		if err != nil {
 			return err
 		}
-		identifier := body.value()
+		identifier := cmp.Or(body.Email, body.Identifier)
 		if err := verifier.throttleAction(r, "forgot", identifier, maxForgot, maxClientForgot); err != nil {
 			return err
 		}
@@ -333,14 +316,14 @@ func (verifier *Verifier) ForgotHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/password/reset", verifier.ResetHandler(guard))
+//	web.Post("/password/reset", verifier.ResetHandler(guard), password.ResetOperation)
 func (verifier *Verifier) ResetHandler(guard *auth.Guard) router.Handler {
 	if !verifier.ResetEnabled() {
 		panic("password: ResetHandler requires Builder.Reset")
 	}
 
 	return web.RequireJSON(func(w http.ResponseWriter, r *http.Request) error {
-		body, err := web.Decode[requestBody](r)
+		body, err := web.Parse(r, resetSchema)
 		if err != nil {
 			return err
 		}

@@ -25,7 +25,7 @@ func TestRegisterOnlyRegistersEnabledFeatures(t *testing.T) {
 		"twofactor": {{"POST", "/two-factor/setup"}, {"POST", "/two-factor"}, {"DELETE", "/two-factor"}, {"POST", "/two-factor/recovery-codes"},
 			{"POST", "/login/challenge"}, {"GET", "/login/pending"}},
 		"tokens":    {{"GET", "/tokens"}, {"POST", "/tokens"}, {"DELETE", "/tokens/abc"}, {"POST", "/device-tokens"}, {"DELETE", "/device-tokens/current"}},
-		"providers": {{"GET", "/auth/fake"}, {"GET", "/auth/fake/callback"}, {"GET", "/connections"}, {"POST", "/connections/fake"}, {"DELETE", "/connections/abc"}},
+		"providers": {{"GET", "/fake"}, {"GET", "/fake/callback"}, {"GET", "/connections"}, {"POST", "/connections/fake"}, {"DELETE", "/connections/abc"}},
 		"always":    {{"POST", "/logout"}, {"GET", "/sessions"}, {"DELETE", "/sessions"}, {"DELETE", "/sessions/abc"}, {"DELETE", "/account"}, {"POST", "/email/verify"}, {"POST", "/email/verify/resend"}},
 	}
 	features := map[string]iam.BuilderFunc{
@@ -102,23 +102,29 @@ func TestRegisterNeverPanicsOnAcceptedConfiguration(t *testing.T) {
 		}, nil},
 		{"own users without create", wire{}, func(t *testing.T, identity *iam.Builder) {
 			provider, users := ownProvider(t)
-			identity.Users(iam.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}).Password(hasher())
+			identity.Users(provider, func(own *iam.UsersBuilder) { own.Lookup(users.lookup).Rotate(users.rotate) }).Password(hasher())
 		}, slices.Concat([]string{"POST /register", "DELETE /account"}, emailRoutes, resetRoutes)},
 		{"own users without create, with reset", wire{reset: true}, func(t *testing.T, identity *iam.Builder) {
 			provider, users := ownProvider(t)
-			identity.Users(iam.Users{Provider: provider, Lookup: users.lookup, Rotate: users.rotate}).Password(hasher(), reset)
+			identity.Users(provider, func(own *iam.UsersBuilder) { own.Lookup(users.lookup).Rotate(users.rotate) }).Password(hasher(), reset)
 		}, slices.Concat([]string{"POST /register", "DELETE /account"}, emailRoutes)},
 		{"own users with create and registration", wire{}, func(t *testing.T, identity *iam.Builder) {
 			provider, users := ownProvider(t)
-			identity.Users(iam.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher(), registration)
+			identity.Users(provider, func(own *iam.UsersBuilder) {
+				own.Lookup(users.lookup).Create(users.create).Rotate(users.rotate).Verification(verified, proved)
+			}).Password(hasher(), registration)
 		}, slices.Concat([]string{"DELETE /account"}, emailRoutes, resetRoutes)},
 		{"own users with create, without registration", wire{}, func(t *testing.T, identity *iam.Builder) {
 			provider, users := ownProvider(t)
-			identity.Users(iam.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved}).Password(hasher())
+			identity.Users(provider, func(own *iam.UsersBuilder) {
+				own.Lookup(users.lookup).Create(users.create).Rotate(users.rotate).Verification(verified, proved)
+			}).Password(hasher())
 		}, []string{"POST /register", "DELETE /account"}},
 		{"own users with everything", wire{reset: true}, func(t *testing.T, identity *iam.Builder) {
 			provider, users := ownProvider(t)
-			identity.Users(iam.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate, Verified: verified, ProveEmail: proved})
+			identity.Users(provider, func(own *iam.UsersBuilder) {
+				own.Lookup(users.lookup).Create(users.create).Rotate(users.rotate).Verification(verified, proved)
+			})
 			identity.Password(hasher(), registration).TwoFactor(totp.New("Example"), cipher(t)).Tokens().Provider(fakeProvider{name: "fake"}, signUp)
 		}, slices.Concat([]string{"DELETE /account"}, emailRoutes)},
 	}

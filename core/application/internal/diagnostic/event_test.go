@@ -21,13 +21,13 @@ func TestMCPEventRingBoundsAndCursorLoss(t *testing.T) {
 
 	page := mcptest.Call[diagnostic.Page[EventView]](t, tool, `{"cursor":"`+anchor.Cursor+`","limit":1}`)
 
-	if page.Dropped != 1 || !page.HasMore || len(page.Items) != 1 || page.Items[0].Name != "second" {
+	if page.Dropped != 1 || !page.Truncated || len(page.Items) != 1 || page.Items[0].Name != "second" {
 		t.Fatalf("page=%+v", page)
 	}
 
 	next := mcptest.Call[diagnostic.Page[EventView]](t, tool, `{"cursor":"`+page.Cursor+`","limit":1}`)
 
-	if next.HasMore || next.Items[0].Name != "third" {
+	if next.Truncated || next.Items[0].Name != "third" {
 		t.Fatalf("next=%+v", next)
 	}
 

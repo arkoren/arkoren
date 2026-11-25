@@ -215,13 +215,13 @@ func TestOpenAPIEquivalentTemplatesRejectDifferentNames(t *testing.T) {
 	}
 }
 
-// TestOpenAPIOpaqueAnnotatedMountRejectsExport ensures catch-alls are never
+// TestOpenAPIOpaqueAnnotatedCatchAllRejectsExport ensures catch-alls are never
 // converted into misleading one-segment path templates.
-func TestOpenAPIOpaqueAnnotatedMountRejectsExport(t *testing.T) {
+func TestOpenAPIOpaqueAnnotatedCatchAllRejectsExport(t *testing.T) {
 	t.Parallel()
 
 	routes := router.New()
-	routes.Mount("/files", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+	routes.Any("/files/{path...}", metadataHandler,
 		func(operation *router.OperationBuilder) {
 			operation.Summary("Files")
 		})
@@ -364,4 +364,35 @@ func (writer *failingSpecWriter) WriteHeader(int) {}
 // Write simulates a disconnected client.
 func (writer *failingSpecWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+// TestOpenAPIOperationDescribesItsOwnRoute verifies the document handler can be
+// registered with OpenAPIOperation, export without errors and list 200 and 500.
+func TestOpenAPIOperationDescribesItsOwnRoute(t *testing.T) {
+	t.Parallel()
+
+	routes := router.New()
+	routes.Get("/openapi.json", routes.OpenAPIHandler("Test", "1"), router.OpenAPIOperation)
+
+	data, err := routes.OpenAPI("Test", "1")
+	if err != nil {
+		t.Fatalf("OpenAPI() error = %v", err)
+	}
+
+	var document struct {
+		Paths map[string]map[string]struct {
+			Summary   string                    `json:"summary"`
+			Responses map[string]map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+
+	operation := document.Paths["/openapi.json"]["get"]
+
+	if operation.Summary == "" || operation.Responses["200"] == nil || operation.Responses["500"] == nil {
+		t.Fatalf("operation = %+v, want summary, 200 and 500", operation)
+	}
 }

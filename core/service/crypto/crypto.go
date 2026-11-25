@@ -84,22 +84,34 @@ type Driver interface {
 	//	_ = ciphertext
 	Encrypt(value []byte) ([]byte, error)
 
-	// Decrypt decrypts raw bytes. Input that fails authentication yields an
-	// error wrapping [ErrInvalidCiphertext]. The input is not modified and the
-	// returned plaintext does not alias it. This driver alone does not try the
-	// Encrypter's previous keys; the facade owns fallback ordering.
+	// Decrypt decrypts raw bytes with the driver's key ring, trying the current
+	// key first and then the previous keys. previous reports that a previous
+	// key, not the current one, authenticated the ciphertext, so the caller
+	// should re-encrypt the plaintext with Encrypt; it is false on every error
+	// and for ciphertext made with the current key. Input that fails
+	// authentication under every key yields an error wrapping
+	// [ErrInvalidCiphertext]. The input is not modified and the returned
+	// plaintext does not alias it. A driver's previous keys are its own ring;
+	// the Encrypter's previous drivers (see [Builder.Previous]) are a separate,
+	// facade-owned fallback for moving between ciphers.
 	//
 	// Example:
 	//
-	//	plaintext, err := driver.Decrypt(ciphertext)
+	//	plaintext, previous, err := driver.Decrypt(ciphertext)
 	//	if err != nil {
 	//		return err
 	//	}
+	//	if previous {
+	//		scheduleReencryption(plaintext)
+	//	}
 	//	useCredential(plaintext)
-	Decrypt(value []byte) ([]byte, error)
+	Decrypt(value []byte) (plaintext []byte, previous bool, err error)
 }
 
-// Encrypter provides typed encryption over a [Driver]. It is immutable after
+// Encrypter provides typed encryption over a [Driver]. A "previous key" signal
+// from its Rotation methods means the ciphertext needs re-encryption, either
+// because the driver decrypted it with a previous key of its own ring or because
+// a previous driver from [Builder.Previous] did. It is immutable after
 // [New] and safe for concurrent use whenever its drivers are.
 // Aggregate metrics describe complete calls, not individual fallback attempts.
 // The zero Encrypter has no driver; construct it with New before use.
@@ -129,10 +141,12 @@ type Encrypter struct {
 	instruments *telemetry.Instruments[instruments]
 }
 
-// New creates an Encrypter that encrypts and decrypts with driver. To
-// migrate stored values, pass older drivers with [Builder.Previous], then decrypt
-// with DecryptWithRotation and, when it reports a previous key, encrypt with
-// this Encrypter and persist the replacement in the caller's transaction.
+// New creates an Encrypter that encrypts and decrypts with driver. To rotate
+// keys of one cipher, give the driver a key.Ring whose previous keys still
+// decrypt. To move between ciphers, pass older drivers with [Builder.Previous].
+// Either way, decrypt with DecryptWithRotation and, when it reports a previous
+// key, encrypt with this Encrypter and persist the replacement in the caller's
+// transaction.
 //
 // It returns [ErrInvalidDriver] when driver or any previous driver is nil.
 // The primary driver is validated before callbacks; fallback validation follows
@@ -274,7 +288,8 @@ func (encrypter *Encrypter) Decrypt[T any](value []byte) (res T, err error) {
 }
 
 // DecryptWithRotation decrypts and JSON-decodes value, reporting whether a
-// previous driver authenticated the ciphertext. The boolean remains true if
+// previous key of the driver's ring, or a previous driver, authenticated the
+// ciphertext. The boolean remains true if
 // that driver's plaintext later fails JSON decoding; inspect err before using
 // the result or replacing stored data. Only after a nil error, encrypt the
 // decoded result with this Encrypter and persist the replacement using the
@@ -360,7 +375,7 @@ func (encrypter *Encrypter) DecryptRaw(value []byte) ([]byte, error) {
 }
 
 // DecryptRawWithRotation decrypts raw bytes and reports whether a previous
-// driver succeeded. When it does, encrypt the plaintext with this Encrypter
+// key of the driver's ring, or a previous driver, succeeded. When it does, encrypt the plaintext with this Encrypter
 // and persist the replacement using the caller's normal write path.
 // Metrics combine all driver attempts into one final outcome, preserving the
 // primary error if all fail. Successful fallback never implies persisted rotation.
@@ -394,18 +409,21 @@ func (encrypter *Encrypter) DecryptRawWithRotation(value []byte) (result []byte,
 }
 
 // decrypt tries the complete key chain without recording individual attempts.
-// It preserves the primary error if every key fails, regardless of fallback errors.
+// The primary driver's answer wins, including its own previous-key signal;
+// success in any of the Builder.Previous drivers always reports previous,
+// whatever that driver's ring says. It preserves the primary error if every
+// driver fails, regardless of fallback errors.
 func (encrypter *Encrypter) decrypt(value []byte) ([]byte, bool, error) {
-	plaintext, err := encrypter.driver.Decrypt(value)
+	plaintext, previous, err := encrypter.driver.Decrypt(value)
 
 	if err == nil {
-		return plaintext, false, nil
+		return plaintext, previous, nil
 	}
 
 	for _, driver := range encrypter.previous {
-		plaintext, err := driver.Decrypt(value)
+		plaintext, _, fallbackErr := driver.Decrypt(value)
 
-		if err == nil {
+		if fallbackErr == nil {
 			return plaintext, true, nil
 		}
 	}

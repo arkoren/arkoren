@@ -1,9 +1,14 @@
 // Package mcpserver adapts core/mcp tools to the official MCP Go SDK's
 // stateless Streamable HTTP transport. It is not an LLM model driver or an
-// separate inspection protocol. The application owns authentication and HTTP lifecycle.
+// separate inspection protocol. The application owns authentication, Origin
+// validation, timeouts and the HTTP lifecycle.
 //
 // Construct tools with core/mcp.NewTool, register them through Builder.Tools,
-// and mount the resulting Server behind authorization middleware:
+// and attach the resulting Server to a router group behind the application's
+// middleware. [Server.Register] adds one exact POST route at the group path;
+// the router answers GET and DELETE with 405, as the Streamable HTTP
+// specification allows for a server without sessions or an event stream. Use
+// [Server.EndpointHandler] to choose another path or method set:
 //
 //	status := mcp.NewTool("status", func(context.Context, mcp.NoInput) (struct{}, error) {
 //		return struct{}{}, nil
@@ -14,7 +19,7 @@
 //	if err != nil {
 //		return err
 //	}
-//	mux.Handle("/mcp", server)
+//	routes.With(auth.Middleware(authenticator), auth.Require()).Group("/mcp", server.Register)
 //
 // Managed calls decode and parse input once in core, validate encoded output
 // without normalization, and never retry application handlers. Errors are safe

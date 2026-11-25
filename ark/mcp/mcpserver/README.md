@@ -17,17 +17,20 @@ go get arkoren.dev/core arkoren.dev/ark/mcp
 
 Import `mcpserver` from `arkoren.dev/ark/mcp/mcpserver` and `mcp` from
 `arkoren.dev/core/mcp`. With your published `lookup mcp.Tool` and existing
-`mux *http.ServeMux`, register only the operations intended for this endpoint:
+`routes *router.Router`, register only the operations intended for this endpoint:
 
 ```go
 endpoint, err := mcpserver.New("catalog", "1.0", func(listener *mcpserver.Builder) {
     listener.Tools(lookup) // A published core/mcp.Tool.
 })
-mux.Handle("/mcp", endpoint) // Put your authentication middleware outside it.
+// Put authentication, Origin validation and timeouts on the group.
+routes.With(auth.Middleware(verifier), auth.Require()).Group("/mcp", endpoint.Register)
 ```
 
-The application owns the HTTP listener, authentication, authorization, origin
-policy, and timeouts. `New` performs no network I/O of its own. Tools run concurrently and
+`Register` adds a single `POST` route at the group path; `GET` and `DELETE`
+get the router's 405, and there are no sessions or event streams. Use
+`endpoint.EndpointHandler()` to pick another path. The application owns the HTTP
+listener, authentication, authorization, Origin validation, and timeouts. `New` performs no network I/O of its own. Tools run concurrently and
 receive the outer request context. The SDK bounds bodies to 4 MiB by default.
 Managed calls never replay a handler after an output-validation failure.
 Bind a nonsensitive local demonstration to loopback; require authentication,

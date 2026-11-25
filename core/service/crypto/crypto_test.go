@@ -161,8 +161,8 @@ func (driver driver) Encrypt(value []byte) ([]byte, error) {
 }
 
 // Decrypt returns value unchanged.
-func (driver driver) Decrypt(value []byte) ([]byte, error) {
-	return value, nil
+func (driver driver) Decrypt(value []byte) ([]byte, bool, error) {
+	return value, false, nil
 }
 
 // errMismatchedKey is returned when keyedDriver cannot decrypt a ciphertext.
@@ -180,14 +180,14 @@ func (keyedDriver keyedDriver) Encrypt(value []byte) ([]byte, error) {
 }
 
 // Decrypt returns value only when it has the driver key prefix.
-func (keyedDriver keyedDriver) Decrypt(value []byte) ([]byte, error) {
+func (keyedDriver keyedDriver) Decrypt(value []byte) ([]byte, bool, error) {
 	prefix := []byte(keyedDriver.key + ":")
 
 	if len(value) < len(prefix) || string(value[:len(prefix)]) != string(prefix) {
-		return nil, errMismatchedKey
+		return nil, false, errMismatchedKey
 	}
 
-	return value[len(prefix):], nil
+	return value[len(prefix):], false, nil
 }
 
 // successfulDriver always returns its configured plaintext when decrypting.
@@ -202,8 +202,56 @@ func (successfulDriver successfulDriver) Encrypt(value []byte) ([]byte, error) {
 }
 
 // Decrypt returns the driver's configured plaintext.
-func (successfulDriver successfulDriver) Decrypt([]byte) ([]byte, error) {
-	return successfulDriver.plaintext, nil
+func (successfulDriver successfulDriver) Decrypt([]byte) ([]byte, bool, error) {
+	return successfulDriver.plaintext, false, nil
+}
+
+// ringDriver models a driver whose key ring decrypted with a previous key.
+type ringDriver struct {
+	// plaintext is returned by every decryption.
+	plaintext []byte
+}
+
+// Encrypt returns value unchanged.
+func (ringDriver ringDriver) Encrypt(value []byte) ([]byte, error) {
+	return value, nil
+}
+
+// Decrypt returns the configured plaintext and reports a previous key.
+func (ringDriver ringDriver) Decrypt([]byte) ([]byte, bool, error) {
+	return ringDriver.plaintext, true, nil
+}
+
+// TestDriverPreviousKeySignalsRotation verifies a driver's own previous-key
+// result reaches the rotation methods even with no Builder.Previous driver.
+func TestDriverPreviousKeySignalsRotation(t *testing.T) {
+	t.Parallel()
+
+	encrypter := newTestEncrypter(t, ringDriver{plaintext: []byte(`"value"`)})
+
+	value, previous, err := encrypter.DecryptWithRotation[string]([]byte("ciphertext"))
+
+	if err != nil || !previous || value != "value" {
+		t.Fatalf("DecryptWithRotation() = %q, %v, %v, want value, true, nil", value, previous, err)
+	}
+
+	raw, previous, err := encrypter.DecryptRawWithRotation([]byte("ciphertext"))
+
+	if err != nil || !previous || string(raw) != `"value"` {
+		t.Fatalf("DecryptRawWithRotation() = %q, %v, %v, want plaintext, true, nil", raw, previous, err)
+	}
+}
+
+// TestCurrentDriverKeyDoesNotSignalRotation verifies a driver reporting the
+// current key leaves the rotation signal false.
+func TestCurrentDriverKeyDoesNotSignalRotation(t *testing.T) {
+	t.Parallel()
+
+	encrypter := newTestEncrypter(t, successfulDriver{plaintext: []byte("value")})
+
+	if _, previous, err := encrypter.DecryptRawWithRotation([]byte("ciphertext")); err != nil || previous {
+		t.Fatalf("DecryptRawWithRotation() previous = %v, error = %v, want false, nil", previous, err)
+	}
 }
 
 // newTestEncrypter creates an encrypter or fails the test.

@@ -58,8 +58,8 @@ HTTP error response when no metrics can be served.
 
 Handler serves Prometheus text or negotiated OpenMetrics, including sampled-span
 exemplars for counters and histograms. A registerer-only configuration without a
-gatherer answers 501. Typed-nil native pointers instead fail Start and make the
-handler answer a fixed 503, including before Start. Construction keeps ordinary
+gatherer answers the 501 problem ErrNoGatherer. Typed-nil native pointers instead fail Start and make the
+handler answer the fixed 503 problem ErrInvalidRegistry, including before Start. Construction keeps ordinary
 nil-interface default resolution unchanged.
 
 See the [package API](https://pkg.go.dev/arkoren.dev/driver/prometheus/prometheustelemetry)

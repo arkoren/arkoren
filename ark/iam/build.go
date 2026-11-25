@@ -11,7 +11,6 @@ import (
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/http/session"
-	"arkoren.dev/core/service/database/migrate"
 
 	"arkoren.dev/ark/iam/account"
 	"arkoren.dev/ark/iam/apitoken"
@@ -23,15 +22,17 @@ import (
 
 // build constructs the packages and the guard from validated settings: users,
 // passwords, two-factor, permissions, tokens, connections. The permission store
-// comes before the tokens because their ceiling reads it. Migrations are added
-// in the order their tables depend on each other, with the permissions last.
-// Hooks that need a package built later read it when they run, not here.
+// comes before the tokens because their ceiling reads it, and each enabled
+// package adds its readiness check. Migrations are not collected here: they
+// depend only on the instance, so [IAM.Migrations] ships every feature's group
+// whether or not the feature was built. Hooks that need a package built later
+// read it when they run, not here.
 func (identity *IAM) build(settings *Builder) error {
 	users, err := identity.buildUsers(settings)
 	if err != nil {
 		return err
 	}
-	identity.provider, identity.verified = users.Provider, users.Verified
+	identity.provider, identity.verified = users.provider, users.verified
 	if err := identity.buildPassword(settings, users); err != nil {
 		return err
 	}
@@ -48,7 +49,7 @@ func (identity *IAM) build(settings *Builder) error {
 		return err
 	}
 	if identity.permissions != nil {
-		identity.add(identity.permissions.Migrations(), identity.permissions.Ping)
+		identity.pingers = append(identity.pingers, identity.permissions.Ping)
 	}
 
 	identity.buildAccount(settings)
@@ -63,33 +64,27 @@ func ignore(setting, reason string) {
 	slog.WarnContext(context.Background(), "access: setting ignored", "setting", setting, "reason", reason)
 }
 
-// add records the migrations and readiness check of an enabled package.
-func (identity *IAM) add(migrations []migrate.Definition, ping func(context.Context) error) {
-	identity.migrations = append(identity.migrations, migrations...)
-	identity.pingers = append(identity.pingers, ping)
-}
-
-// buildUsers returns the application's [Users], or builds the built-in
-// directory and presents it as [Users].
-func (identity *IAM) buildUsers(settings *Builder) (Users, error) {
+// buildUsers returns the application's [UsersBuilder], or builds the built-in
+// directory and presents it as [UsersBuilder].
+func (identity *IAM) buildUsers(settings *Builder) (UsersBuilder, error) {
 	if settings.users != nil {
 		return *settings.users, nil
 	}
 	configure := append([]account.BuilderFunc{func(accounts *account.Builder) {
-		accounts.Instance(settings.instance).Events(settings.events)
+		accounts.Instance(settings.instance).Events(settings.events).Queue(settings.dispatcher)
 	}}, settings.directory...)
 	directory, err := account.NewDirectory(identity.db, identity.store, identity.clientIP, configure...)
 	if err != nil {
-		return Users{}, err
+		return UsersBuilder{}, err
 	}
 	identity.directory = directory
-	identity.add(directory.Migrations(), directory.Ping)
+	identity.pingers = append(identity.pingers, directory.Ping)
 
 	return directoryUsers(directory), nil
 }
 
 // buildPassword builds the password verifier when [Builder.Password] is enabled.
-func (identity *IAM) buildPassword(settings *Builder, users Users) error {
+func (identity *IAM) buildPassword(settings *Builder, users UsersBuilder) error {
 	if !settings.passwordOn {
 		return nil
 	}
@@ -104,7 +99,7 @@ func (identity *IAM) buildPassword(settings *Builder, users Users) error {
 		identity.registration = false
 	}
 	identity.verifier = verifier
-	identity.add(verifier.Migrations(), verifier.Ping)
+	identity.pingers = append(identity.pingers, verifier.Ping)
 
 	return nil
 }
@@ -112,11 +107,11 @@ func (identity *IAM) buildPassword(settings *Builder, users Users) error {
 // passwordUsers adapts users to the password package: registration creates
 // unverified users, a taken address is [password.ErrIdentifierTaken] (the
 // directory's [account.ErrEmailTaken] is mapped), and a reset proves the email.
-func (identity *IAM) passwordUsers(users Users) password.Users {
-	adapted := password.Users{Lookup: users.Lookup, Rotate: users.Rotate, ProveEmail: identity.proveEmail(users.ProveEmail)}
-	if users.Create != nil {
+func (identity *IAM) passwordUsers(users UsersBuilder) password.Users {
+	adapted := password.Users{Lookup: users.lookup, Rotate: users.rotate, ProveEmail: identity.proveEmail(users.proveEmail)}
+	if users.create != nil {
 		adapted.Create = func(ctx context.Context, identifier string) (string, error) {
-			subject, err := users.Create(ctx, identifier, false)
+			subject, err := users.create(ctx, identifier, false)
 			if errors.Is(err, account.ErrEmailTaken) {
 				return "", password.ErrIdentifierTaken
 			}
@@ -135,7 +130,7 @@ func (identity *IAM) passwordUsers(users Users) password.Users {
 // ([IAM.tellOwner]).
 func (identity *IAM) passwordPolicy(settings *Builder) password.BuilderFunc {
 	return func(passwords *password.Builder) {
-		passwords.Instance(settings.instance).Events(settings.events).AfterChange(identity.revokeTokens)
+		passwords.Instance(settings.instance).Events(settings.events).Queue(settings.dispatcher).AfterChange(identity.revokeTokens)
 		if identity.directory != nil {
 			passwords.Registered(identity.verifyNew).Taken(identity.tellOwner)
 		}
@@ -156,7 +151,7 @@ func (identity *IAM) buildTwoFactor(settings *Builder) error {
 		return err
 	}
 	identity.factors = factors
-	identity.add(factors.Migrations(), factors.Ping)
+	identity.pingers = append(identity.pingers, factors.Ping)
 
 	return nil
 }
@@ -200,7 +195,7 @@ func (identity *IAM) buildTokens(settings *Builder) error {
 		return err
 	}
 	identity.issuer = issuer
-	identity.add(issuer.Migrations(), issuer.Ping)
+	identity.pingers = append(identity.pingers, issuer.Ping)
 
 	return nil
 }
@@ -212,7 +207,7 @@ func (identity *IAM) buildTokens(settings *Builder) error {
 // are the store's, and a provider's [ProviderBuilder.Create] runs before the
 // facade's own creation, so an application function can refuse or handle an
 // identity first.
-func (identity *IAM) buildLinks(settings *Builder, users Users) error {
+func (identity *IAM) buildLinks(settings *Builder, users UsersBuilder) error {
 	if len(settings.providers) == 0 {
 		return nil
 	}
@@ -224,15 +219,15 @@ func (identity *IAM) buildLinks(settings *Builder, users Users) error {
 		if identity.directory != nil {
 			links.TakeOver(identity.takeOver(users))
 		}
-		links.Create(createExternal(users.Create))
+		links.Create(createExternal(users.create))
 	})
 	if err != nil {
 		return err
 	}
 	for _, setup := range settings.providers {
 		signUp := setup.settings.signUp
-		if signUp && users.Create == nil {
-			ignore("ProviderBuilder.SignUp ("+setup.provider.Name()+")", "Users.Create is nil, so no user can be created")
+		if signUp && users.create == nil {
+			ignore("ProviderBuilder.SignUp ("+setup.provider.Name()+")", "UsersBuilder.Create is unset, so no user can be created")
 			signUp = false
 		}
 		resolve, err := links.Resolver(func(resolver *federation.ResolverBuilder) {
@@ -244,7 +239,7 @@ func (identity *IAM) buildLinks(settings *Builder, users Users) error {
 		identity.providers = append(identity.providers, mountedProvider{provider: setup.provider, resolve: resolve})
 	}
 	identity.links = links
-	identity.add(links.Migrations(), links.Ping)
+	identity.pingers = append(identity.pingers, links.Ping)
 
 	return nil
 }
@@ -322,7 +317,7 @@ func (identity *IAM) chain(settings *Builder, lifetime time.Duration) router.Mid
 // identity with the provider's email. Sign-up refuses an identity without a
 // proven email before it gets here, so the user is created verified; the flag
 // still follows [auth.External.EmailVerified], because the application's own
-// [Users.Create] receives it. It is nil without [Users.Create], which makes
+// [UsersBuilder.Create] receives it. It is nil without [UsersBuilder.Create], which makes
 // [ProviderBuilder.SignUp] fail construction. Whether it is used at all is
 // SignUp's decision.
 func createExternal(create func(context.Context, string, bool) (string, error)) func(context.Context, auth.External) (string, error) {
@@ -364,7 +359,7 @@ func (identity *IAM) verifyNew(ctx context.Context, subject, _ string) error {
 
 // tellOwner is the work of a registration that meets a taken address, chosen so
 // that it costs what the work for a new address costs ([IAM.verifyNew]):
-// without [account.Builder.Verification] nothing is dispatched on either path.
+// without [account.Builder.Verification] no job is stored on either path.
 // With it, the owner gets a reset notice ([password.Builder.Reset], which
 // registration with the built-in users requires), whose link also proves the
 // mailbox. An unknown identifier is no owner.

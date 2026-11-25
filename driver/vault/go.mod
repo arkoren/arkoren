@@ -3,7 +3,7 @@ module arkoren.dev/driver/vault
 go 1.27
 
 require (
-	arkoren.dev/core v0.1.0
+	arkoren.dev/core v0.23.0
 	github.com/hashicorp/vault/api v1.23.0
 )
 

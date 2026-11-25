@@ -17,7 +17,7 @@ const iamGuideMoves = {
   overview: "overview",
   passwords: "passwords",
   "email-links": "email-links",
-  registration: "registration",
+  registration: "passwords",
   connections: "federated-sign-in",
   "organization-sign-in": "sso",
   freshness: "freshness",

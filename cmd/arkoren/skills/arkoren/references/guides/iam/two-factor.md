@@ -1,55 +1,46 @@
 ---
-title: Two-Factor
-description: Enroll an authenticator, finish a pending login, and recover from a lost device without weakening the account through an old session.
-order: 80
+title: Two-Factor Authentication
+nav: Two-Factor
+description: Add TOTP authenticator apps and single-use recovery codes to your login flow, handle challenges, and rotate encryption keys safely.
+order: 50
 summary:
-  - Enable TOTP with an encryption key and activate enrollment with the first code.
-  - Complete login challenges with an authenticator or a single-use recovery code.
-  - Replace recovery codes or disable two-factor using recent second-factor proof.
+  - Enable TOTP with a dedicated encryption key and enroll authenticators in a two-step flow.
+  - Complete pending login challenges with an authenticator code or a single-use recovery code.
+  - Regenerate recovery codes or disable two-factor safely, and rotate encryption keys without breaking enrolled users.
 ---
 
-# Two-Factor
+# Two-Factor Authentication
 
-An authenticator adds a possession proof when a password is stolen.
-IAM supports time-based one-time passwords (**TOTP**) and recovery codes
-for a lost device. A user enrolls once, then completes a second-factor
-challenge during later logins.
+Passwords can be leaked or reused. Adding a time-based one-time password (**TOTP**) authenticator requires possession of a second device to finish signing in, while single-use recovery codes give users a way back in if they lose that device.
 
-This page assumes [registered IAM routes](overview.md#register-routes).
-Enrollment requires a verified email, a session, and a
-[fresh login](freshness.md); a bearer token cannot enroll credentials.
+Enrollment requires an authenticated browser session, a verified email address, and a [fresh proof](freshness.md). Bearer tokens cannot enroll or modify two-factor settings.
 
-## Enable the Feature
+## Enabling Two-Factor
 
-Use an existing `*crypto.Encrypter` named `cipher` with a key reserved for
-authenticator secrets. Import `totp` from `arkoren.dev/foundation/totp`:
+Create a TOTP scheme with `totp` from `arkoren.dev/foundation/totp` using the service name you want authenticator apps to display (nonempty, with no colons):
 
 ```go
 scheme := totp.New("Acme")
 ```
 
-`Acme` is the service name shown in authenticator apps. It must be nonempty
-and contain no colon. The defaults are SHA-1, six digits, a 30-second period,
-and one time step of accepted drift; keep them unless your clients require
-different parameters.
+By default, `totp.New` uses SHA-1, six digits, a 30-second period, and one step of clock-drift tolerance, matching standard authenticator apps.
 
-Enable the feature alongside your existing login method:
+Enable two-factor in your `iam.New` callback using a `*crypto.Encrypter` (`cipher`) with a key ring reserved for authenticator secrets. Parse the ring with `key.ParseRing` from `arkoren.dev/foundation/key` and build the encrypter from it with `aescrypto` from `arkoren.dev/driver/aes/aescrypto`:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher)
-	identity.TwoFactor(scheme, cipher)
-})
+ring, err := key.ParseRing[key.Shared](string(text))
+driver, err := aescrypto.New(ring)
+cipher, err := crypto.New(driver)
+identity.TwoFactor(scheme, cipher)
 ```
 
-An invalid scheme or nil cipher returns `iam.ErrInvalidConfig`.
-Apply the newly enabled feature's migrations before serving its routes.
-Each user can enroll one authenticator.
+An invalid scheme or nil cipher makes `iam.New` fail with `iam.ErrInvalidConfig`. Each user can enroll one authenticator, and IAM encrypts every TOTP secret before storing it.
 
-## Enroll an Authenticator
+## Enrolling an Authenticator
 
-From Ada's session, send `POST /two-factor/setup` with the JSON content-type
-header and no body. It returns `200` with a pending enrollment:
+Enrollment is a two-step handshake so a user never locks themselves out before their app is configured.
+
+First, start enrollment by sending `POST /two-factor/setup` with `Content-Type: application/json` and an empty body. IAM responds with `200`:
 
 ```json
 {
@@ -58,12 +49,12 @@ header and no body. It returns `200` with a pending enrollment:
 }
 ```
 
-Render `uri` as a QR code and offer `secret` for manual entry. Both expose
-the authenticator secret; show them only to Ada and keep them out of logs.
-Setup alone does not enable two-factor. Calling setup again replaces the
-pending secret; after activation it returns `409`.
+Render `uri` as a QR code and show `secret` as a manual-entry fallback. Calling setup again replaces the pending secret; once two-factor is active, setup returns `409`.
 
-Ask Ada for the first code from her app, then send `POST /two-factor`:
+> [!WARNING]
+> Both `secret` and `uri` expose the raw authenticator key. Show them only to the signed-in user and never log them.
+
+Next, ask the user for the first 6-digit code from their authenticator app and confirm enrollment with `POST /two-factor`:
 
 ```json
 {
@@ -71,7 +62,7 @@ Ask Ada for the first code from her app, then send `POST /two-factor`:
 }
 ```
 
-Success is `200` with recovery codes:
+IAM responds with `200` and a set of single-use recovery codes:
 
 ```json
 {
@@ -79,23 +70,15 @@ Success is `200` with recovery codes:
 }
 ```
 
-Offer a way to save them now: the full codes are returned only at creation.
-A wrong enrollment code is `422`, the next attempt after ten failures in
-15 minutes is `429`, and activation without setup is `409`.
+Prompt the user to store these codes immediately, because IAM hashes them with SHA-256 and never displays them again. A wrong activation code returns `422` (throttled to `429` after 10 failures in 15 minutes), and activating without calling setup first returns `409`.
 
-Activation ends the user's other logins and, by default, revokes every
-personal and device token. If activation or its required revocation steps fail,
-the database activation rolls back and no codes are returned. On success,
-the current session records the authenticator proof; if refreshing that proof
-fails, the codes are still returned so they are not lost.
-The user may need to confirm again before the next sensitive action.
+Activating two-factor ends the user's other browser sessions and revokes all API and device tokens by default (unless you opt into [`KeepPersonalTokens`](accounts.md#credential-change-revocation)). If activation or revocation fails, the database transaction rolls back and no codes are returned. On success, IAM records the new authenticator proof on the current session; if refreshing that proof fails, the recovery codes are still returned so they are not lost, and the user may be asked to confirm again before their next sensitive action.
 
-## Complete a Login
+## Completing a Login
 
-On a later password login, an enrolled user receives `202` with
-`second_factor.methods`, normally `["otp", "recovery"]` in that order.
-Keep the same cookie jar and submit one offered method to
-`POST /login/challenge`:
+When an enrolled user signs in with a password (or through an external provider), login pauses in a **pending login** state instead of creating a full session. For passwords, `POST /login` returns `202` with the offered methods, normally `["otp", "recovery"]` in that order.
+
+Keep the same cookie jar and submit an authenticator code to `POST /login/challenge`:
 
 ```json
 {
@@ -104,8 +87,7 @@ Keep the same cookie jar and submit one offered method to
 }
 ```
 
-Success is `204`; the session now authenticates the user. To recover a lost
-authenticator, use one saved code at the same route:
+On `204`, the session is now fully authenticated. If the user lost their phone, submit a saved recovery code to the same endpoint instead:
 
 ```json
 {
@@ -114,73 +96,47 @@ authenticator, use one saved code at the same route:
 }
 ```
 
-Recovery codes ignore case, dashes, and spaces. They contain 80 random bits,
-are stored only as hashes, and can be spent once. A recovery code is not
-accepted at `/confirm`; an authenticator code is.
+Recovery codes contain 80 random bits, ignore case, spaces, and dashes, and work once. They are accepted at `/login/challenge`, never at `/confirm`.
 
-Pending logins expire after five minutes by default. The guard limits
-attempts per user across challenge methods, so restarting password login
-does not reset that budget. Wrong, replayed, spent, or unenrolled credentials
-receive core's `403`. An absent or expired pending login receives `401`;
-exhausting the challenge budget also discards the pending login, and later
-challenge attempts receive `401`.
+Key challenge rules to keep in mind:
 
-An accepted TOTP time step must be newer than the last accepted step.
-Concurrent copies of the same code cannot both succeed. If session completion
-fails after the code was accepted, it is already spent: wait for the next
-authenticator code or use another recovery code.
+- **Pending-login expiry**: Pending logins expire after 5 minutes by default (`401` afterward).
+- **Shared attempt budget**: The guard limits failed attempts per user across all challenge methods, so restarting password login does not reset the budget. Exhausting the budget discards the pending login (`401`).
+- **Replay protection**: Every accepted TOTP code must belong to a newer time step than the last accepted code, enforced atomically so concurrent copies cannot both succeed. If session completion fails after a code is accepted, that step is already spent; wait for the next code or use a recovery code.
+- **Error codes**: Wrong, replayed, spent, or unenrolled codes return core's `403`.
 
-## Recover or Disable
+## Disabling or Regenerating Codes
 
-To weaken two-factor, an old session and the password alone are insufficient.
-Both removal and recovery-code replacement need a fresh login **and** a recent
-second-factor proof, normally within 15 minutes. If required, confirm an
-authenticator code at `POST /confirm`, then retry.
+A stolen password alone must not be enough to remove two-factor protection. Both regenerating recovery codes and disabling two-factor require a fresh login **and** a recent second-factor proof (within 15 minutes by default). If the session lacks that proof, IAM returns `403` with `methods: ["otp"]` so the user can confirm at `POST /confirm` and retry.
 
-A person who lost the authenticator can instead log in with a recovery code.
-For these two operations only, that recent recovery proof also satisfies the
-freshness check. Complete the change within the window:
+If the user lost their authenticator app, they can sign in with a recovery code instead. For these two endpoints only, a recent recovery-code login satisfies both the freshness check and the second-factor requirement:
 
 | Request | Result |
 | --- | --- |
-| `POST /two-factor/recovery-codes` | `200` with new codes; every old code stops working |
-| `DELETE /two-factor` | `204`; authenticator, pending enrollment, and recovery codes are removed |
+| `POST /two-factor/recovery-codes` | `200` with a new set of recovery codes; all old codes stop working |
+| `DELETE /two-factor` | `204`; removes the authenticator, pending setup, and recovery codes |
 
-Send the JSON content-type header for the `POST`, even without a body.
-Both operations return `409` when two-factor is not enabled.
-An insufficient second-factor proof returns `403` with methods the user can
-confirm, normally `["otp"]`.
+Both endpoints return `409` if two-factor is not enabled. Remember to include `Content-Type: application/json` on `POST /two-factor/recovery-codes` even without a body.
 
-If you shorten the guard's freshness window, consider the separate
-second-factor management window too. Import `twofactor` from
-`arkoren.dev/ark/iam/twofactor` and configure it during construction:
+If you shorten the guard's freshness window, consider tightening the separate second-factor management window too using `twofactor` from `arkoren.dev/ark/iam/twofactor`:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.TwoFactor(scheme, cipher, func(factors *twofactor.Builder) {
-		factors.StepUpWindow(5 * time.Minute)
-	})
+identity.TwoFactor(scheme, cipher, func(factors *twofactor.Builder) {
+	factors.StepUpWindow(5 * time.Minute)
 })
 ```
 
-This fragment shows that setting only; retain your login features in the
-application's actual constructor. Read account-page state through
-`identity.Factors().Status(ctx, subject)`.
+To check a user's enrollment status from Go code (for example, to render an account settings page), call `identity.Factors().Status(ctx, subject)`.
 
-## Keep Secrets Usable
+## Rotating Encryption Keys
 
-When rotating encryption keys, retain previous decryption keys in the
-[encrypter configuration](../encryption/keys.md). IAM decrypts old secrets
-with those keys and re-encrypts them with the current key on their next use.
-Removing an old key before its secrets have moved makes those authenticators
-unusable.
+To rotate the key behind `cipher`, put the new key first in the ring and keep the old ones after it, comma-separated: `NEW_KEY,OLD_KEY`. The ring encrypts with the first key and decrypts with all of them. Whenever an authenticator secret is decrypted with an older key, IAM automatically re-encrypts it with the current key. See [Application Keys](../keys/overview.md) for the ring format.
 
-Activation emits `twofactor.Enabled` and core's `auth.CredentialEnrolled`.
-`Disabled`, `Regenerated`, and `RecoveryUsed` support
-[security notifications](accounts.md#security-notifications).
+> [!WARNING]
+> Removing an old key from the ring before existing secrets have been re-encrypted renders those authenticators unreadable.
 
-Next, use [API Tokens](tokens.md) for scripts or first-party mobile clients
-without giving them account-management powers.
+Two-factor changes emit `twofactor.Enabled`, `twofactor.Disabled`, `twofactor.Regenerated`, `twofactor.RecoveryUsed`, and core's `auth.CredentialEnrolled` when you wire [security events](accounts.md#security-events).
 
-For enrollment, recovery, and configuration, see the
-[`twofactor` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/twofactor).
+Next, explore [External Sign-In](federated-sign-in.md) to let users sign in with Google, GitHub, Apple, or any OIDC provider.
+
+For all two-factor options and types, see the [`twofactor` API reference](https://pkg.go.dev/arkoren.dev/ark/iam/twofactor).

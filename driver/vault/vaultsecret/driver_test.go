@@ -373,7 +373,7 @@ func TestVaultConformance(t *testing.T) {
 
 	secrettest.Run(t, func(t *testing.T) secret.Driver {
 		return newVaultClient(t)
-	}, secrettest.WithJSONObjectValues())
+	}, secrettest.WithTextOnly())
 }
 
 // vaultTransport exercises real Vault SDK encoding and error handling without
@@ -529,9 +529,64 @@ func TestUpdateRejectsLossyNumbersWithoutNativeWrite(t *testing.T) {
 	}
 }
 
-// TestPutRejectsNullBeforeNativeWrite distinguishes a JSON object from JSON
-// null. The provider must not receive an invalid object or create a version.
-func TestPutRejectsNullBeforeNativeWrite(t *testing.T) {
+// TestPutWrapsTextAsValueMember verifies a payload that is not a JSON object,
+// including JSON null, is sent as the single member {"value": "<text>"}.
+func TestPutWrapsTextAsValueMember(t *testing.T) {
+	t.Parallel()
+
+	var body string
+	driver := nativeVaultDriver(t, vaultTransport(func(request *http.Request) (*http.Response, error) {
+		contents, err := io.ReadAll(request.Body)
+		body = string(contents)
+
+		return vaultResponse(http.StatusOK, `{"data":{"version":1}}`), err
+	}))
+
+	for input, want := range map[string]string{
+		"null":       `{"data":{"value":"null"}}`,
+		"plain text": `{"data":{"value":"plain text"}}`,
+		"[1,2]":      `{"data":{"value":"[1,2]"}}`,
+	} {
+		if _, err := driver.Put(t.Context(), "application", []byte(input)); err != nil {
+			t.Fatal(err)
+		}
+
+		if body != want {
+			t.Fatalf("Put(%q) body = %s, want %s", input, body, want)
+		}
+	}
+}
+
+// TestGetUnwrapsTextValue verifies a single string "value" member reads back as
+// text while other objects, including a "value" member beside others, stay JSON.
+func TestGetUnwrapsTextValue(t *testing.T) {
+	t.Parallel()
+
+	body := `{"data":{"data":{"value":"plain text"},"metadata":{"version":1}}}`
+	driver := nativeVaultDriver(t, vaultTransport(func(*http.Request) (*http.Response, error) {
+		return vaultResponse(http.StatusOK, body), nil
+	}))
+
+	value, err := driver.Get(t.Context(), secret.Reference{Name: "application"})
+
+	if err != nil || string(value.Data) != "plain text" {
+		t.Fatalf("Get = %q, %v", value.Data, err)
+	}
+
+	body = `{"data":{"data":{"value":"x","other":"y"},"metadata":{"version":1}}}`
+	value, err = driver.Get(t.Context(), secret.Reference{Name: "application"})
+
+	var object map[string]string
+
+	if err != nil || json.Unmarshal(value.Data, &object) != nil || len(object) != 2 || object["value"] != "x" || object["other"] != "y" {
+		t.Fatalf("Get = %q, %v", value.Data, err)
+	}
+}
+
+// TestPutRejectsAmbiguousAndBinaryBeforeNativeWrite verifies the literal text
+// wrapper object is invalid and non-UTF-8 bytes are unsupported, each without a
+// native request.
+func TestPutRejectsAmbiguousAndBinaryBeforeNativeWrite(t *testing.T) {
 	t.Parallel()
 
 	requests := 0
@@ -541,10 +596,16 @@ func TestPutRejectsNullBeforeNativeWrite(t *testing.T) {
 		return vaultResponse(http.StatusOK, `{"data":{"version":1}}`), nil
 	}))
 
-	_, err := driver.Put(t.Context(), "application", []byte("null"))
+	if _, err := driver.Put(t.Context(), "application", []byte(`{"value": "x"}`)); !errors.Is(err, secret.ErrInvalidSecret) {
+		t.Fatalf("Put(wrapper object) = %v", err)
+	}
 
-	if err == nil || requests != 0 {
-		t.Fatalf("Put(null) error = %v, requests = %d; want local rejection", err, requests)
+	if _, err := driver.Put(t.Context(), "application", []byte{0xff, 0xfe}); !errors.Is(err, secret.ErrUnsupported) {
+		t.Fatalf("Put(binary) = %v", err)
+	}
+
+	if requests != 0 {
+		t.Fatalf("rejected payloads made %d native requests", requests)
 	}
 }
 

@@ -1,0 +1,17 @@
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/queue"
+)
+
+// Work runs the consumer as a supervised runner and returns it. List it last in
+// the Compose of the process that consumes jobs, after every provider that
+// registers handlers.
+var Work = application.Provide(func(compose *application.Composer) *queue.Consumer {
+	consumer := compose.Use(Consumer)
+
+	compose.Run(consumer.Run)
+
+	return consumer
+})

@@ -180,7 +180,7 @@ func (driver *Driver) write(ctx context.Context, name string, value []byte) (sec
 	}
 
 	if !utf8.Valid(value) {
-		return secret.Value{}, errors.New("azure Key Vault secret value must be valid UTF-8")
+		return secret.Value{}, fmt.Errorf("%w: azure Key Vault secret value must be valid UTF-8", secret.ErrUnsupported)
 	}
 
 	text := string(value)

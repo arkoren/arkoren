@@ -23,7 +23,15 @@ func ExampleCursorCodec() {
 		return
 	}
 
-	codec, err := pagination.NewCursorCodec(material)
+	ring, err := key.NewRing(material)
+
+	if err != nil {
+		fmt.Println(err)
+
+		return
+	}
+
+	codec, err := pagination.NewCursorCodec(ring)
 
 	if err != nil {
 		fmt.Println(err)
@@ -68,7 +76,13 @@ func secret(b byte) key.Shared {
 func newCodec(t *testing.T, current key.Shared, previous ...key.Shared) *pagination.CursorCodec {
 	t.Helper()
 
-	codec, err := pagination.NewCursorCodec(current, previous...)
+	ring, err := key.NewRing(current, previous...)
+
+	if err != nil {
+		t.Fatalf("NewRing() error = %v", err)
+	}
+
+	codec, err := pagination.NewCursorCodec(ring)
 
 	if err != nil {
 		t.Fatalf("NewCursorCodec() error = %v", err)
@@ -154,18 +168,12 @@ func TestCursorCodecRotation(t *testing.T) {
 	}
 }
 
-// TestNewCursorCodecRejectsShortSecret verifies secrets under the minimum fail.
-func TestNewCursorCodecRejectsShortSecret(t *testing.T) {
+// TestNewCursorCodecRejectsZeroRing verifies the zero key.Ring fails.
+func TestNewCursorCodecRejectsZeroRing(t *testing.T) {
 	t.Parallel()
 
-	short := key.Shared{}
-
-	if _, err := pagination.NewCursorCodec(short); !errors.Is(err, pagination.ErrInvalidSecret) {
-		t.Fatalf("short secret error = %v, want ErrInvalidSecret", err)
-	}
-
-	if _, err := pagination.NewCursorCodec(secret(1), short); !errors.Is(err, pagination.ErrInvalidSecret) {
-		t.Fatalf("short previous error = %v, want ErrInvalidSecret", err)
+	if _, err := pagination.NewCursorCodec(key.Ring[key.Shared]{}); !errors.Is(err, pagination.ErrInvalidSecret) {
+		t.Fatalf("zero ring error = %v, want ErrInvalidSecret", err)
 	}
 }
 

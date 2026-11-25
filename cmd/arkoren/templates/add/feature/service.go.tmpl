@@ -1,7 +1,5 @@
 package {{.Feature}}
 
-import "arkoren.dev/core/application"
-
 // Service is the API of the {{.Feature}} feature. Routes, jobs and the other
 // surfaces call it and never reach the Store directly. Add methods here as the
 // feature gains behavior; take ctx first on any that does I/O.
@@ -9,11 +7,9 @@ type Service struct {
 	store *Store
 }
 
-// NewService builds the Service over the process's shared Store. It obtains the
-// Store with compose.Use, so the Store is constructed first, and registers no
-// lifecycle of its own. DefaultService memoizes it once per process.
-func NewService(compose *application.Composer) *Service {
-	store := compose.Use(DefaultStore)
-
+// NewService builds the Service over store. The {{.Title}}Service provider in
+// internal/bootstrap/{{.Feature}}.go passes the process's one Store;
+// tests pass a Store of their own. It registers no lifecycle and does no I/O.
+func NewService(store *Store) *Service {
 	return &Service{store: store}
 }

@@ -14,8 +14,9 @@ summary:
 Choose AES-GCM for a server with hardware AES support. Consider
 ChaCha20-Poly1305 when AES acceleration is unavailable; benchmark your workload
 if performance determines the choice. Both run in your process without a cloud
-encryption service and require a persistent 32-byte `key.Shared` value.
-[Encryption Keys](keys.md) explains loading and rotating that material.
+encryption service and require a persistent `key.Ring[key.Shared]`: one current 32-byte key that encrypts
+plus any previous keys that only decrypt. [Encryption Keys](keys.md) explains
+loading the ring and rotating its keys.
 
 ## Compatibility matrix
 
@@ -23,16 +24,20 @@ This compares Arkoren's shipped drivers, not every cipher mode available from
 their underlying libraries. Facade metrics apply only when operations go through
 `crypto.Encrypter`.
 
-| Driver | Authenticated encryption | Purpose AAD | 32-byte keys | 16- or 24-byte keys | 192-bit nonces | Facade metrics |
-| --- | --- | --- | --- | --- | --- | --- |
-| [AES-GCM](#aes-gcm) | Yes | Yes | Yes | No | No | Yes |
-| [ChaCha20-Poly1305](#chacha20-poly1305) | Yes | Yes | Yes | No | No | Yes |
+| Driver | Authenticated encryption | Purpose AAD | 32-byte keys | Key ring rotation | 16- or 24-byte keys | 192-bit nonces | Facade metrics |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [AES-GCM](#aes-gcm) | Yes | Yes | Yes | Yes | No | No | Yes |
+| [ChaCha20-Poly1305](#chacha20-poly1305) | Yes | Yes | Yes | Yes | No | No | Yes |
 
 Both use a random 96-bit nonce and add 28 bytes to the raw plaintext length.
 Rotate before 2^32 encryptions under one key across all replicas. Neither
 driver exposes XChaCha20 or a caller-supplied nonce. Changing cipher requires
 keeping the original driver available to decrypt old values; see
-[Rotating Keys](keys.md#rotating-keys).
+[Rotating Keys](keys.md#rotating-keys). Key ring rotation means the driver
+encrypts with the ring's current key and decrypts with every key in the ring,
+reporting when a previous key was needed. Ciphertext carries no key
+identifier, so a value written under an old key is tried against each key in
+order; keep rings short.
 
 ## AES-GCM
 
@@ -50,17 +55,17 @@ go get arkoren.dev/driver/aes
 ### Creating Encrypters
 
 Import `crypto` from `arkoren.dev/core/service/crypto` and `aescrypto` from
-`arkoren.dev/driver/aes/aescrypto`. With validated material named `material`,
+`arkoren.dev/driver/aes/aescrypto`. With a validated `key.Ring[key.Shared]` named `ring`,
 construct the driver and then its facade:
 
 ```go
-driver, err := aescrypto.New(material)
+driver, err := aescrypto.New(ring)
 enc, err := crypto.New(driver)
 ```
 
 These are focused fragments; handle each construction error before continuing.
-The driver builds its cipher locally and rejects a zero `key.Shared` with
-`key.ErrInvalid`. Key import rejects lengths other than 32 bytes, so this is
+The driver builds one cipher per ring key locally and rejects a zero or invalid
+ring with `key.ErrInvalid`. Key import rejects lengths other than 32 bytes, so this is
 not an AES-128 or AES-192 interface. `crypto.New` rejects nil current or previous
 drivers with `crypto.ErrInvalidDriver`.
 
@@ -77,7 +82,7 @@ without encrypting that context. For a calendar-only driver, use a stable
 purpose string when constructing it instead of the unconfigured constructor:
 
 ```go
-driver, err := aescrypto.New(material, func(encrypter *aescrypto.Builder) {
+driver, err := aescrypto.New(ring, func(encrypter *aescrypto.Builder) {
 	encrypter.AdditionalData([]byte("calendar-credentials:v1"))
 })
 ```
@@ -93,7 +98,7 @@ settings.
 ### Handling Shutdown
 
 Operations support concurrent use. `Stop` waits for in-flight operations, clears
-the driver's owned raw key copy, and releases its cipher reference. Cancellation
+the driver's owned raw key copies, and releases its cipher reference. Cancellation
 of the cleanup context does not interrupt that wait or skip release. Repeated
 stops are safe; later operations return `crypto.ErrEncrypterClosed`.
 
@@ -126,15 +131,15 @@ go get arkoren.dev/driver/chacha20
 ### Creating Encrypters
 
 Import `crypto` from `arkoren.dev/core/service/crypto` and `chacha20crypto` from
-`arkoren.dev/driver/chacha20/chacha20crypto`. With persistent `key.Shared`
-material named `material`, construct the driver and facade:
+`arkoren.dev/driver/chacha20/chacha20crypto`. With a persistent
+`key.Ring[key.Shared]` named `ring`, construct the driver and facade:
 
 ```go
-driver, err := chacha20crypto.New(material)
+driver, err := chacha20crypto.New(ring)
 enc, err := crypto.New(driver)
 ```
 
-Construction is local. Handle each error before proceeding: a zero key returns
+Construction is local. Handle each error before proceeding: a zero or invalid ring returns
 `key.ErrInvalid`, and key import rejects any length other than 32 bytes.
 Register `driver.Stop` with [application cleanup](../application/lifecycle-and-ownership.md)
 after acquiring it. Retain the pointer, not a copy, and stop it only after its
@@ -146,7 +151,7 @@ consumers finish. The facade does not own cleanup. Use the shared
 To restrict this driver to calendar credentials, use the alternative constructor:
 
 ```go
-driver, err := chacha20crypto.New(material, func(encrypter *chacha20crypto.Builder) {
+driver, err := chacha20crypto.New(ring, func(encrypter *chacha20crypto.Builder) {
 	encrypter.AdditionalData([]byte("calendar-credentials:v1"))
 })
 ```
@@ -159,7 +164,7 @@ is not stored in its output. There are no timeout, retry, or network settings.
 ### Handling Shutdown
 
 Operations are safe for concurrent use. `Stop` waits for in-flight operations
-even with a canceled context, clears its owned raw key copy, and releases the
+even with a canceled context, clears its owned raw key copies, and releases the
 cipher reference. It is repeatable; subsequent calls to encrypt or decrypt
 return `crypto.ErrEncrypterClosed`. The caller's key and all internal cipher
 copies are not erased.

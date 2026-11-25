@@ -1,0 +1,25 @@
+package bootstrap
+
+import (
+	"os"
+
+	"arkoren.dev/ark/iam/account"
+	"arkoren.dev/core/application"
+)
+
+// EmailVerification is the identity module's directory settings: email
+// verification of the built-in users. Verification emails go through the Mailer
+// provider and carry a link signed by LinkSigner to the page at
+// EMAIL_VERIFY_URL, an absolute URL without a fragment, such as
+// https://app.example.com/verify-email. That page reads the signed value from
+// the fragment and posts it to POST /auth/email/verify. Verification never blocks
+// login; protect routes that need a verified email with IAM.RequireVerified.
+var EmailVerification = application.Provide(func(compose *application.Composer) account.BuilderFunc {
+	signer := compose.Use(LinkSigner)
+	mailer := compose.Use(Mailer)
+	verifyURL := os.Getenv("EMAIL_VERIFY_URL")
+
+	return func(accounts *account.Builder) {
+		accounts.Verification(signer, mailer, verifyURL)
+	}
+})

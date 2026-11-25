@@ -113,8 +113,9 @@ might report:
 {"instance_changed":true}
 ```
 
-Consumers must distinguish notices from application records. A notice can also
-contain `truncated: true`, and one notice can combine fields. A replaced or reset
+Consumers must distinguish notices from application records. One notice can
+combine fields. A page that stopped at its limit is drained immediately, with
+no notice. A replaced or reset
 store establishes a fresh tail rather than replaying the new generation's
 history.
 
@@ -131,7 +132,7 @@ problem:
 arkoren app:logs --level warn --limit 100
 ```
 
-This prints one JSON result, not a live stream. A snapshot followed by a new
+This prints one result, not a live stream. A snapshot followed by a new
 `--follow` invocation is not an atomic handoff: records can fall between them.
 For controlled continuation, use ordinary calls with `--cursor` and retain the
 returned cursor according to the

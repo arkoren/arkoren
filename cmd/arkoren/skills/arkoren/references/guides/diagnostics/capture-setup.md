@@ -149,7 +149,7 @@ listener.Telemetry(telemetry)
 ```
 
 Keep the admin listener private, authenticate and admit requests before the
-`/mcp` mount, and apply the Host/Origin and TLS controls in
+`/mcp` route, and apply the Host/Origin and TLS controls in
 [Securing MCP](../mcp-server/securing.md). A loopback listener with an authenticated
 tunnel limits reachability, but the tunnel does not replace endpoint
 authentication. Tool construction creates no inspection token or access policy.
@@ -164,7 +164,7 @@ After starting the application, use an [authenticated CLI connection](../cli/con
 to inspect the published catalog:
 
 ```sh
-arkoren tools --json
+arkoren tools
 ```
 
 Confirm that only the intended tools appear for that operator. Then check the

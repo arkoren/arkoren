@@ -1,50 +1,45 @@
 ---
-title: Fresh Logins
-description: Distinguish a session, a verified email, a fresh credential proof, and a new login before allowing sensitive actions.
-order: 70
+title: Step-Up & Freshness
+nav: Freshness
+description: Understand how IAM protects sensitive actions with session checks, verified emails, fresh credential proofs, and recent logins.
+order: 40
 summary:
-  - Understand the independent checks that protect credential changes.
-  - Confirm a stale session with an enrolled method, or start a new login when confirmation cannot help.
-  - Apply the same checks to application routes without overstating what provider sign-in proves.
+  - Distinguish the four independent checks IAM applies before allowing credential changes.
+  - Renew a stale session in place with POST /confirm instead of forcing a full logout.
+  - Know which operations require a genuinely new login and how to apply the same guards to your own routes.
 ---
 
-# Fresh Logins
+# Step-Up & Freshness
 
-An authenticated session says who logged in, not whether the person holding
-the cookie can still prove that identity. Before issuing or changing
-credentials, IAM therefore checks more than ordinary login. Understanding
-these checks lets your front end recover from a `403` without discarding a
-session unnecessarily.
+A valid session cookie proves that someone signed in earlier, not that the person at the keyboard right now can still prove their identity. If a laptop is left unlocked, an attacker with the cookie should not be able to change the password, disable two-factor authentication, or mint a long-lived API token.
 
-## Independent Checks
+IAM therefore layers targeted checks on top of ordinary authentication. Understanding these checks lets your front end prompt for a quick confirmation instead of discarding a healthy session, and lets you apply the same protection to sensitive routes of your own, such as billing or account exports.
 
-The credential routes distinguish four questions:
+## Four Independent Checks
 
-- **Session:** did the caller authenticate through the guard's session rather
-  than an API token? Credential-management routes reject bearer identities with
-  `401`, even when the token is valid.
-- **Verified email:** has the account proved its address? Adding a provider,
-  authenticator, or token requires this proof. Login itself does not.
-- **Fresh proof:** did the user recently prove an enrolled password or
-  authenticator? A confirmation can renew this.
-- **Recent login:** was this application's login record created recently?
-  Confirmation cannot renew it.
+Every credential-management route evaluates up to four separate questions:
 
-These checks do not replace application authorization. A fresh user still
-needs permission to perform the requested business action.
+- **Browser session**: Did the caller authenticate with a session cookie rather than an API token? All credential-management routes reject bearer tokens with `401`, even when the token is valid.
+- **Verified email**: Has the account proved ownership of its email address? Connecting a provider, enrolling two-factor, and creating tokens require this; ordinary login does not.
+- **Fresh proof**: Did the user recently prove an enrolled password or authenticator code? A stale session can renew this in place with `POST /confirm`.
+- **Recent login**: Was this application's login record created within the last few minutes? Confirmation cannot renew it; the user must start a new login.
 
-## Renew a Proof
+None of these checks replace application authorization. A freshly verified user still needs permission to act on a given resource.
 
-A **step-up method** is a credential the user can present again without
-starting a new login. IAM registers passwords (`pwd`), then authenticator
-codes (`otp`), when those features are enabled. Only methods the user has
-actually enrolled count.
+## Renewing a Proof
 
-By default, a proof of one of those methods stays fresh for 15 minutes.
-When it is stale, a credential route returns
-`tag:arkoren.dev,2026-11:core:auth:step-up-required` with the enrolled
-methods in `methods`. Ask the user for one, submit it to `POST /confirm`,
-then retry the action. For an authenticator:
+A **step-up method** is a credential the user can present again without signing out. IAM registers passwords (`pwd`) and authenticator codes (`otp`) automatically when those features are enabled. Only methods the user has actually enrolled count.
+
+By default, a proof stays fresh for **15 minutes**. When it expires, a protected route returns `403` with problem type `tag:arkoren.dev,2026-11:core:auth:step-up-required` and a `methods` array listing what the user can confirm. Prompt the user for one of those methods and submit it to `POST /confirm`:
+
+```json
+{
+  "method": "pwd",
+  "password": "correct horse battery"
+}
+```
+
+Or with an authenticator code:
 
 ```json
 {
@@ -53,89 +48,56 @@ then retry the action. For an authenticator:
 }
 ```
 
-A correct confirmation returns `204`. A wrong code returns `403` and consumes
-the guard's attempt budget. Recovery codes are not step-up methods: they are
-accepted at a login challenge, not at `/confirm`.
+A `204` response refreshes the session's proof; retry the original request. A wrong password or code returns `403` (not `422`) and consumes the guard's confirmation attempt budget. Recovery codes are accepted only at a login challenge, never at `POST /confirm`.
 
-To change the default freshness window, configure the guard during construction.
-This uses `auth` from `arkoren.dev/core/auth` and standard-library `time`:
+To shorten or lengthen the default freshness window, configure the guard during construction using `auth` from `arkoren.dev/core/auth`:
 
 ```go
-identity, err := iam.New(db, store, func(identity *iam.Builder) {
-	identity.Password(hasher)
-	identity.Guard(func(policy *auth.GuardBuilder) {
-		policy.FreshFor(5 * time.Minute)
-	})
+identity.Guard(func(policy *auth.GuardBuilder) {
+	policy.FreshFor(5 * time.Minute)
 })
 ```
 
-If the user has **no** enrolled step-up method, any recent login factor can
-make them fresh. This allows a provider-only user to enroll a first credential.
-Once that factor is too old, the response is `403`
-`tag:arkoren.dev,2026-11:core:auth:no-step-up-method`: there is nothing to
-confirm, so the user logs in again.
+If a user has **no** enrolled step-up method (for example, a user who signed in only through Google), any recent login factor satisfies freshness so they can enroll their first password or authenticator. Once that factor ages out, IAM returns `403` `tag:arkoren.dev,2026-11:core:auth:no-step-up-method`: because there is no local credential to confirm, the user must sign in again.
 
-## Require a New Login
+## Requiring a New Login
 
-Some operations should not turn an old session into a long-lived credential,
-even after confirmation. The device-token exchange therefore requires a login
-record created at most five minutes ago.
+Some operations should never convert an old session into a long-lived credential, even after confirmation. Exchanging a session for a [mobile device token](tokens.md#mobile-device-tokens) therefore requires a login record created at most **5 minutes ago**.
 
-`POST /confirm` does not reset that age. Logging in again as the same user
-inside an already authenticated session also preserves the original login
-record. After `no-step-up-method` from `/device-tokens`, end that session and
-perform a new login before retrying the exchange.
+Neither `POST /confirm` nor signing in again inside the same active session resets the login record's creation time. If `POST /device-tokens` returns `403` `no-step-up-method`, end the current session and perform a brand-new login before retrying the exchange.
 
-This check concerns the age of **your application's** login. It does not
-prove that an external provider asked the person to type credentials.
+## What Each Credential Route Requires
 
-## Credential Routes
+Use this table to decide what your account settings UI should prompt for. "Fresh" uses the guard's freshness window (15 minutes by default).
 
-Use this comparison when deciding what your account UI must ask for.
-“Fresh” uses the configured guard window, normally 15 minutes.
-
-| Action | Session | Proof required | Verified email |
+| Action | Browser session | Proof required | Verified email |
 | --- | --- | --- | --- |
 | Change or set a password | Yes | Fresh | No |
 | Set up or enable two-factor | Yes | Fresh | Yes |
-| Disable two-factor or replace recovery codes | Yes | Fresh and a recent second factor; see below | No |
+| Disable two-factor or replace recovery codes | Yes | Fresh + recent second factor | No |
 | Create a personal token | Yes | Fresh | Yes |
-| Exchange a login for a device token | Yes | New login within five minutes | Yes |
-| Connect a provider | Yes | Fresh | Yes |
-| Disconnect a provider or delete the account | Yes | Fresh | No |
-| List or revoke tokens, list connections, manage sessions | Yes | No freshness check | No |
-| Verify email or request another verification | Yes | No freshness check | No |
+| Exchange a login for a device token | Yes | New login within 5 minutes | Yes |
+| Connect an external provider | Yes | Fresh | Yes |
+| Disconnect a provider or delete account | Yes | Fresh | No |
+| List or revoke tokens, connections, or sessions | Yes | None | No |
+| Verify email or resend verification | Yes | None | No |
 
-Weakening two-factor additionally requires a recent authenticator or recovery
-proof, within its own 15-minute window by default. For those two operations
-only, a recently used recovery code also satisfies freshness. A password alone
-is insufficient; [Two-Factor](two-factor.md#recover-or-disable) explains the
-lost-device path.
+Weakening two-factor authentication (disabling it or regenerating recovery codes) requires a recent authenticator or recovery-code proof in addition to freshness, so a stolen password alone cannot remove the second factor. See [Two-Factor Authentication](two-factor.md#disabling-or-regenerating-codes) for details.
 
-With the built-in directory, verified-email checks are always installed.
-With [your own users](own-users.md#verified-emails), they depend on the
-`Users.Verified` function you supply.
+These checks live inside the handlers themselves, so they still apply if you mount handlers on [custom paths](routes.md#custom-paths).
 
-The handlers enforce these checks themselves, including on custom paths.
-The [route reference](routes.md) maps actions to their default URLs.
+## Protecting Your Own Routes
 
-## Protect Application Routes
-
-To require a session and a recent credential proof on your own billing route,
-start from the authenticated `web` router in
-[Overview](overview.md#register-routes):
+You can enforce the same step-up boundary on sensitive routes in your own application. Attach `auth.RequireSession()` and `identity.Guard().RequireFresh(...)` to a route group derived from your authenticated `web` router:
 
 ```go
 billing := web.With(auth.RequireSession(), identity.Guard().RequireFresh(5*time.Minute))
 billing.Post("/billing", updateBilling)
 ```
 
-`updateBilling` is your authorized application handler.
-`RequireFresh` uses its explicit window, independently of the default
-`FreshFor`; a zero or negative window admits no request.
+`RequireFresh` enforces its own explicit window independently of `FreshFor`. Passing a zero or negative duration admits no requests.
 
-If your operation requires a new login instead, check its age inside an
-authenticated session handler, before the sensitive work:
+When an action requires a genuinely new login rather than confirmation, call `RecentLogin` inside your handler before performing the sensitive work:
 
 ```go
 if err := identity.Guard().RecentLogin(r, 5*time.Minute); err != nil {
@@ -143,41 +105,20 @@ if err := identity.Guard().RecentLogin(r, 5*time.Minute); err != nil {
 }
 ```
 
-Do not continue after an error. `RecentLogin` checks the actual session login,
-not just the factors on an identity.
+Always return on error before continuing. `RecentLogin` inspects the underlying session login record rather than just the identity's factor list.
 
-## Provider Logins
+## External Providers and Freshness
 
-External login records a `federated` factor, which is **not** a step-up method.
-If a user has a password or authenticator, another provider login alone does
-not refresh their credential-change permission: they confirm a registered
-step-up method.
+Signing in through an external provider records a `federated` factor, which is **not** a step-up method. If a user already has a password or authenticator enrolled, another provider sign-in does not refresh their credential-change proof; they confirm one of their enrolled step-up methods instead.
 
-For a provider-only user, freshness comes from the federated factor's age.
-The factor is stamped at the callback unless an ID token supplies an earlier
-`auth_time`. An earlier claim can make the factor older; a missing or future
-claim cannot make it newer than the callback.
+For a provider-only user, freshness comes from the federated factor's timestamp:
 
-This matters when an existing provider session approves sign-in silently.
-Microsoft can supply `auth_time` through an
-[optional ID-token claim](../oauth/providers.md#microsoft).
-Do not rely on Google always supplying it; GitHub's OAuth2 flow has no ID
-token. Review other OIDC providers' behavior before relying on their claims.
+- IAM stamps the factor at the OAuth callback unless the provider's ID token includes an earlier `auth_time` claim (an earlier `auth_time` can make the factor older, while a missing or future claim never makes it newer than the callback).
+- Not all providers supply `auth_time`: Microsoft supports it as an [optional claim](../oauth/providers.md#microsoft), Google does not guarantee it, and GitHub's OAuth2 flow has no ID token at all.
+- To hint that a provider-only user should re-authenticate, send them to `/auth/google?fresh=1` (substituting the provider name). IAM preserves `fresh=1` in the sealed state and sends `prompt=login&max_age=0` to OIDC providers, though providers are not forced to honor the hint.
 
-For a provider-only user who needs to authenticate again, navigate to
-`/auth/google?fresh=1`, substituting the provider name.
-`fresh=1` is preserved in the sealed login state and requests
-`prompt=login&max_age=0`. It is a hint, not a guarantee that the provider
-requests credentials; GitHub's OAuth2 flow cannot provide that assurance.
+Keep in mind that `RecentLogin` measures the age of *your application's* login record, not whether an external provider prompted the user for credentials.
 
-A new application login can still pass the device exchange after silent
-provider approval. The recent-login check prevents renewing an old
-application session; it does not establish the provider's authentication
-ceremony.
+Next, add [Two-Factor Authentication](two-factor.md) so users can protect their accounts with an authenticator app and recovery codes.
 
-Next, add [Two-Factor](two-factor.md) when users need an authenticator and
-recovery codes.
-
-For freshness and session checks, see the
-[`auth` API](https://pkg.go.dev/arkoren.dev/core/auth) and the composed
-[`iam` API](https://pkg.go.dev/arkoren.dev/ark/iam).
+For the guard and freshness APIs, see [`auth`](https://pkg.go.dev/arkoren.dev/core/auth) and [`iam`](https://pkg.go.dev/arkoren.dev/ark/iam).

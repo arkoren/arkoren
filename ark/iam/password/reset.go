@@ -10,6 +10,8 @@ import (
 
 	"arkoren.dev/core/auth"
 	"arkoren.dev/core/http/link"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/queue"
 	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/iam/internal/web"
@@ -21,10 +23,14 @@ import (
 // "subject"; it is only trusted after the signature verified.
 const resetPath = "/password/reset"
 
-// ResetRequest is what [Builder.Reset]'s dispatch function receives for every
-// forgot-password request, and what [Verifier.SendReset] takes: the work of
-// sending one reset email. It is plain data with JSON tags, so a queue job or a
-// workflow input can carry it as is.
+// resetJobName is the base name of the reset job; a named instance appends its
+// own name (see [storage.NewJob]).
+const resetJobName = "iam-password-reset"
+
+// ResetRequest is the payload of the reset job that every forgot-password
+// request stores on the [Builder.Queue] dispatcher, and what [Verifier.SendReset]
+// takes: the work of sending one reset email. It is plain data with JSON tags, so
+// a queue job or a workflow input can carry it as is.
 //
 // Stored requests must stay decodable across upgrades: new fields are only ever
 // added, never renamed, repurposed or removed, and a missing field keeps its
@@ -32,8 +38,8 @@ const resetPath = "/password/reset"
 //
 // Example:
 //
-//	job := queue.NewJob[password.ResetRequest]("send-reset")
-//	err := dispatcher.Dispatch(ctx, job, password.ResetRequest{Identifier: "ada@example.com"})
+//	request := password.ResetRequest{Identifier: "ada@example.com"}
+//	err := verifier.SendReset(ctx, request)
 type ResetRequest struct {
 	// Identifier is exactly what the user typed, never looked up before the
 	// request was dispatched: the response of the forgot-password route must
@@ -45,9 +51,9 @@ type ResetRequest struct {
 	Notice bool `json:"notice,omitzero"`
 }
 
-// ResetMessage is what [Builder.Reset]'s deliver function receives to write one
-// reset email. Signed is a credential until it expires or the password changes;
-// never log it.
+// ResetMessage describes one reset email to the function of [ResetBuilder.Email].
+// Signed is a credential until it expires or the password changes; never log
+// it.
 //
 // Example:
 //
@@ -94,17 +100,18 @@ func (message ResetMessage) Link(base string) string {
 // Example:
 //
 //	if verifier.ResetEnabled() {
-//		web.Post("/password/forgot", verifier.ForgotHandler())
+//		web.Post("/password/forgot", verifier.ForgotHandler(), password.ForgotOperation)
 //	}
 func (verifier *Verifier) ResetEnabled() bool {
 	return verifier.signer != nil
 }
 
-// RequestReset calls the dispatch function of [Builder.Reset] with request, in
-// the caller's request, which is how the forgot-password route and a [Builder.Taken]
-// hook ask for a reset email. The email is sent later by the worker that runs
-// [Verifier.SendReset]. It returns the error of dispatch, which means the work
-// was not stored, or one wrapping [ErrInvalidConfig] without [Builder.Reset].
+// RequestReset stores a reset job for request on the [Builder.Queue]
+// dispatcher, in the caller's request, which is how the forgot-password route
+// and a [Builder.Taken] hook ask for a reset email. The email is sent later by
+// the worker that runs [Verifier.RegisterJobs]. It returns the dispatch error,
+// which means the work was not stored, or one wrapping [ErrInvalidConfig] without
+// [Builder.Reset].
 //
 // Example:
 //
@@ -113,31 +120,55 @@ func (verifier *Verifier) RequestReset(ctx context.Context, request ResetRequest
 	if !verifier.ResetEnabled() {
 		return fmt.Errorf("%w: RequestReset requires Builder.Reset", ErrInvalidConfig)
 	}
-	if err := verifier.dispatch(ctx, request); err != nil {
+	if err := verifier.dispatcher.Dispatch(ctx, verifier.job, request); err != nil {
 		return fmt.Errorf("password: dispatch reset: %w", err)
 	}
 
 	return nil
 }
 
-// SendReset is the worker side of a password reset: it looks request.Identifier
-// up with [Users.Lookup], signs a link bound to the user's current password hash
-// and calls the deliver function of [Builder.Reset] with the address that
-// Lookup returned, never the text of the identifier. An unknown or disabled
-// user gets nothing and the call returns nil, so a retry never repeats pointless
-// work. The error of deliver is returned as is, so a queue retries; because of
-// that, deliver may run more than once for one request, and the links of the
-// attempts all work until the password changes or they expire. An error is also
-// returned when [Users.Lookup] returns no address. It does not throttle:
-// [Verifier.ForgotHandler] does, before dispatching. Without
-// [Builder.Reset] it returns an error wrapping [ErrInvalidConfig].
-//
-// It has the shape func(context.Context, ResetRequest) error, so it plugs into
-// a queue consumer or a workflow step directly.
+// RegisterJobs registers the handler of the reset job on consumer, which the
+// worker process runs. It registers nothing, and returns nil, without
+// [Builder.Reset]. The job is named "iam-password-reset", with "-<instance>"
+// appended (underscores written as hyphens) for a named [Builder.Instance], and
+// runs on the queue "iam": a consumer restricted with queue.ConsumerBuilder.Queues
+// must list it. It returns an error wrapping [queue.ErrDuplicateName] when the
+// handler is already registered. Through the facade, call IAM.RegisterJobs
+// instead, which registers the jobs of every enabled package.
 //
 // Example:
 //
-//	consumer.Handle(resetJob, verifier.SendReset)
+//	if err := verifier.RegisterJobs(consumer); err != nil {
+//		return err
+//	}
+func (verifier *Verifier) RegisterJobs(consumer *queue.Consumer) error {
+	if !verifier.ResetEnabled() {
+		return nil
+	}
+
+	return consumer.Handle(verifier.job, verifier.SendReset)
+}
+
+// SendReset is the worker side of a password reset: it looks request.Identifier
+// up with [Users.Lookup], signs a link bound to the user's current password hash
+// and sends the reset email through the mailer of [Builder.Reset] to the address
+// that Lookup returned, never the text of the identifier. An unknown or disabled
+// user gets nothing and the call returns nil, so a retry never repeats pointless
+// work. A mailer error is returned as is, so a queue retries; because of that,
+// one request may send more than once, and the links of the attempts all work
+// until the password changes or they expire. An email that fails validation
+// (see [ResetEmailFunc]) is returned wrapped with [queue.Permanent], because
+// retrying cannot fix it. An error is also returned when [Users.Lookup] returns
+// no address. It does not throttle: [Verifier.ForgotHandler] does, before
+// dispatching. Without [Builder.Reset] it returns an error wrapping
+// [ErrInvalidConfig].
+//
+// It has the shape func(context.Context, ResetRequest) error, so a workflow step
+// can use it directly; a queue worker uses [Verifier.RegisterJobs].
+//
+// Example:
+//
+//	err := verifier.SendReset(ctx, password.ResetRequest{Identifier: "ada@example.com"})
 func (verifier *Verifier) SendReset(ctx context.Context, request ResetRequest) error {
 	if !verifier.ResetEnabled() {
 		return fmt.Errorf("%w: SendReset requires Builder.Reset", ErrInvalidConfig)
@@ -157,12 +188,38 @@ func (verifier *Verifier) SendReset(ctx context.Context, request ResetRequest) e
 	if err != nil {
 		return fmt.Errorf("password: sign reset link: %w", err)
 	}
-
-	return verifier.deliver(ctx, ResetMessage{
+	message := ResetMessage{
 		Address:   address,
 		Signed:    signed,
 		ExpiresAt: time.Now().Add(verifier.resetTTL),
 		Notice:    request.Notice,
+	}
+	email := verifier.resetEmail(message, message.Link(verifier.resetURL))
+	if _, err := verifier.mailer.Send(ctx, email); err != nil {
+		if errors.Is(err, mail.ErrInvalidMessage) {
+			return queue.Permanent(fmt.Errorf("password: reset email: %w", err))
+		}
+
+		return fmt.Errorf("password: send reset email: %w", err)
+	}
+
+	return nil
+}
+
+// defaultResetEmail is the reset email when [ResetBuilder.Email] is not used: a
+// plain-text message with the link and its expiry. The notice for the owner of an
+// address someone else tried to register says so, because the owner did nothing.
+func defaultResetEmail(message ResetMessage, href string) mail.Message {
+	subject := "Reset your password"
+	reason := "We received a request to reset the password of your account."
+	if message.Notice {
+		subject = "Someone tried to register with your email address"
+		reason = "Someone tried to register an account with this email address, which already has one. If it was you, you can set a new password with the link below."
+	}
+	body := reason + "\n\n" + href + "\n\nThe link works until " + message.ExpiresAt.UTC().Format(time.RFC1123) + " and only once. If you did not ask for this, you can ignore this email."
+
+	return mail.NewMessage(mail.Recipients{To: []mail.Address{{Email: message.Address}}}, mail.Body{Text: body}, func(letter *mail.MessageBuilder) {
+		letter.Subject(subject)
 	})
 }
 

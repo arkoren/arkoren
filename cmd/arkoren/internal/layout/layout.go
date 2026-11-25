@@ -1,8 +1,9 @@
 // Package layout reads and extends a project that follows the structure
 // described by the arkoren-structure skill: one cmd/<process>/main.go per
-// process with an exported Compose, shared providers in internal/bootstrap,
-// one internal/<feature> directory per feature, internal/migrations and
-// internal/platform.
+// process, run with the App and Compose of its process root
+// internal/bootstrap/<process>; internal/bootstrap holding only providers;
+// one plain-Go internal/<feature> directory per feature, wired by
+// internal/bootstrap/<feature>.go; internal/migrations and internal/platform.
 //
 // The package analyzes source with go/parser only. It never type-checks,
 // builds, or reaches the network, so it works on a project whose dependencies
@@ -37,9 +38,9 @@ import (
 const applicationPackage = "arkoren.dev/core/application"
 
 // Surfaces lists the child packages that sit above a feature root, in the
-// order flags and registration calls are presented. Each imports the root and
-// is imported only by cmd. The `<feature>test` fixtures package is also above
-// the root but is created by hand, not by `arkoren add`.
+// order flags and providers are presented. Each imports the root and is
+// imported only by internal/bootstrap. The `<feature>test` fixtures package is
+// also above the root but is created by hand, not by `arkoren add`.
 var Surfaces = []string{"web", "jobs", "flow", "tools", "events", "schedules"}
 
 // bannedNames are package names the structure skill rejects because they name
@@ -56,8 +57,11 @@ const (
 	_ kind = iota
 	// kindCmd is a package below cmd/.
 	kindCmd
-	// kindBootstrap is internal/bootstrap and anything below it.
+	// kindBootstrap is the internal/bootstrap package itself.
 	kindBootstrap
+	// kindProcess is a process root, internal/bootstrap/<process> or anything
+	// below it: it holds the process's App provider and Compose.
+	kindProcess
 	// kindMigrations is internal/migrations.
 	kindMigrations
 	// kindPlatform is internal/platform and anything below it.
@@ -93,6 +97,10 @@ func classify(dir string) class {
 
 	switch parts[1] {
 	case "bootstrap":
+		if len(parts) > 2 {
+			return class{kind: kindProcess}
+		}
+
 		return class{kind: kindBootstrap}
 	case "migrations":
 		return class{kind: kindMigrations}
@@ -123,6 +131,9 @@ type source struct {
 	file *ast.File
 	// test is true for _test.go files.
 	test bool
+	// imports maps the local name each import binds in this file to its import
+	// path. Imports for side effects or with a dot bind no name.
+	imports map[string]string
 }
 
 // Project is a loaded project: its module path and the parsed Go files below
@@ -139,11 +150,13 @@ type Project struct {
 }
 
 // errNotConforming is the usage error for a directory without the layout. It
-// names the missing piece and points at the skill that defines the layout.
+// names the missing piece; its steps say what the layout needs and where it is
+// defined.
 func errNotConforming(reason string) error {
-	return console.UsageError(
-		"not an Arkoren project layout: %s; the layout needs go.mod, cmd/<process>/main.go and internal/bootstrap "+
-			"(see the arkoren-structure skill; arkoren new creates it)", reason)
+	return console.Fail(console.TypeUsage, []console.Step{
+		{Text: "Run the command in the project root, which needs go.mod, cmd/<process>/main.go and internal/bootstrap"},
+		{Text: "Create a conforming project with arkoren new DIR; the arkoren-structure skill defines the layout"},
+	}, "not an Arkoren project layout: %s", reason)
 }
 
 // Load reads the project in dir. A project conforms when dir holds go.mod,
@@ -277,7 +290,7 @@ func (project *Project) parseTree(ctx context.Context, top string) error {
 
 		rel = filepath.ToSlash(rel)
 		project.sources = append(project.sources, &source{
-			rel: rel, dir: path.Dir(rel), file: parsed, test: strings.HasSuffix(name, "_test.go"),
+			rel: rel, dir: path.Dir(rel), file: parsed, test: strings.HasSuffix(name, "_test.go"), imports: importPaths(parsed),
 		})
 
 		return nil
@@ -326,6 +339,23 @@ func importName(file *ast.File, importPath string) string {
 	return ""
 }
 
+// importPaths maps the local name each import of file binds to its import path.
+// Blank and dot imports bind no name and are omitted.
+func importPaths(file *ast.File) map[string]string {
+	paths := make(map[string]string, len(file.Imports))
+
+	for _, spec := range file.Imports {
+		value, err := strconv.Unquote(spec.Path.Value)
+		name := importSpecName(spec)
+
+		if err == nil && name != "_" && name != "." {
+			paths[name] = value
+		}
+	}
+
+	return paths
+}
+
 // isComposerParam reports whether field is declared as *application.Composer,
 // where app is the file's local name for the application package.
 func isComposerParam(field *ast.Field, app string) bool {
@@ -356,16 +386,6 @@ func composerParamName(typ *ast.FuncType, app string) string {
 	}
 
 	return ""
-}
-
-// isRegistration reports whether decl is an exported function whose only
-// parameter is a *application.Composer and which returns nothing: the shape
-// of a registration function such as Routes, Listen or Compose.
-func isRegistration(decl *ast.FuncDecl, app string) bool {
-	params := decl.Type.Params.List
-
-	return decl.Recv == nil && decl.Name.IsExported() && decl.Type.Results == nil &&
-		len(params) == 1 && len(params[0].Names) <= 1 && isComposerParam(params[0], app)
 }
 
 // providerVars returns the names of package-level variables initialized with

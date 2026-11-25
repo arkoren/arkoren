@@ -3,8 +3,9 @@ package schedules
 import (
 	"context"
 
-	"arkoren.dev/core/application"
 	"arkoren.dev/core/service/schedule"
+
+	"{{.Module}}/internal/{{.Feature}}"
 )
 
 // Report is a placeholder daily schedule entry for the {{.Feature}} feature. It
@@ -15,9 +16,20 @@ var Report = schedule.NewEntry("{{.Feature}}-report", func(ctx context.Context) 
 	entry.When(schedule.UTC().Hour(3))
 })
 
-// Entries registers the {{.Feature}} schedule entries with the process's
-// scheduler.
-//
-// TODO: the scheduler is an application choice. Add a bootstrap provider for it,
-// obtain it here with compose.Use, and add Report with its Add method.
-func Entries(compose *application.Composer) {}
+// Entries is the {{.Feature}} feature's set of schedule entries over its
+// Service.
+type Entries struct {
+	service *{{.Feature}}.Service
+}
+
+// NewEntries builds the entries over service. It does no I/O and adds nothing
+// to a scheduler; call Register to add them.
+func NewEntries(service *{{.Feature}}.Service) *Entries {
+	return &Entries{service: service}
+}
+
+// Register adds the entries to scheduler. It returns the scheduler's error for
+// a duplicate or invalid entry, and adds nothing in that case.
+func (entries *Entries) Register(scheduler *schedule.Scheduler) error {
+	return scheduler.Add(Report)
+}

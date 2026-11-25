@@ -1,9 +1,9 @@
 ---
 title: Serving Tools
-description: Register typed tools with the MCP Server ark, mount its HTTP endpoint, and understand its transport, availability, telemetry, and native SDK behavior.
+description: Register typed tools with the MCP Server ark, add its HTTP route, and understand its transport, availability, telemetry, and native SDK behavior.
 order: 20
 summary:
-  - Register selected tool definitions and mount the endpoint in your HTTP service.
+  - Register selected tool definitions and add the endpoint route to your router.
   - Understand the stateless Streamable HTTP transport and its limits.
   - See when availability runs for listing and calls, and how tool calls are recorded.
   - Recognize what native SDK additions bypass and test the endpoint over HTTP.
@@ -13,9 +13,9 @@ summary:
 
 Tool definitions from [core MCP](../mcp/tools.md) do nothing until you serve
 them. The MCP Server ark, `arkoren.dev/ark/mcp/mcpserver`, registers the
-definitions you select with the official Go MCP SDK and returns an
-`http.Handler`. Your application mounts that handler and owns the listener,
-authentication, deadlines, and shutdown. Install it with:
+definitions you select with the official Go MCP SDK and returns a server whose
+`Register` method adds one `POST` route to a router group. Your application owns
+the listener, authentication, Origin validation, deadlines, and shutdown. Install it with:
 
 ```sh
 go get arkoren.dev/ark/mcp
@@ -37,14 +37,16 @@ endpoint, err := mcpserver.New("shipping", "1.0.0", func(listener *mcpserver.Bui
 })
 ```
 
-Handle `err` before mounting `endpoint` at `/mcp` in your HTTP service.
+Handle `err`, then attach the endpoint to a group at `/mcp`:
+`routes.Group("/mcp", endpoint.Register)`. `endpoint.EndpointHandler()` returns
+the same handler for a path or method set of your own.
 Construction opens no port and rejects invalid declarations, duplicate names,
 and unsupported output schemas before registering any tool with the SDK.
 `Tools` appends registrations and copies supplied slices. Importing a package or
 calling its `MCPTools(prefix)` factory does not expose anything by itself.
 
-Follow the [HTTP mount](first-server.md#http-mount) for the public local sample,
-or [authenticated mounting](securing.md#typed-authentication) for private
+Follow the [HTTP route](first-server.md#http-route) for the public local sample,
+or [authenticated registration](securing.md#typed-authentication) for private
 tools. Authentication, Host/Origin checks, request deadlines, and listener
 timeouts remain application responsibilities.
 
@@ -61,7 +63,8 @@ stop application work.
 
 The adapter uses stateless Streamable HTTP with JSON responses and the SDK's
 default 4 MiB request-body limit. It issues no persistent session ID, stores no
-events for resumable delivery, and returns 405 for GET/DELETE and 413 for
+events for resumable delivery, and returns 405 for GET/DELETE (the router, since
+only `POST` is registered) and 413 for
 oversized bodies. It does not serve legacy HTTP+SSE or managed server-initiated
 requests.
 

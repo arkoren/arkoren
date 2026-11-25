@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -16,12 +15,12 @@ import (
 // ExampleNewNamespace shows exact-name composition with a separator selected
 // for the provider. A child policy changes future joins, not its own prefix.
 func ExampleNewNamespace() {
-	credentials := secret.NewNamespace[map[string]string]("production", "/")
+	credentials := secret.NewNamespace("production", "/")
 	database := credentials.Subnamespace("database", func(names *secret.NamespaceBuilder) {
 		names.Separator("-")
 	})
 
-	definition := database.Secret("credentials")
+	definition := database.Secret[map[string]string]("credentials")
 
 	if err := definition.Err(); err != nil {
 		fmt.Println(err)
@@ -52,8 +51,8 @@ func ExampleNewNamespace() {
 func TestNamespaceLiteralNames(t *testing.T) {
 	t.Parallel()
 
-	credentials := secret.NewNamespace[int](" prod/ ", "/")
-	leaf := credentials.Subnamespace("/database ").Secret(" /password")
+	credentials := secret.NewNamespace(" prod/ ", "/")
+	leaf := credentials.Subnamespace("/database ").Secret[int](" /password")
 
 	if leaf.Name() != " prod/ //database / /password" || leaf.Err() != nil {
 		t.Fatalf("literal name = %q, error = %v", leaf.Name(), leaf.Err())
@@ -65,9 +64,9 @@ func TestNamespaceLiteralNames(t *testing.T) {
 func TestNamespaceExplicitEmptySeparator(t *testing.T) {
 	t.Parallel()
 
-	credentials := secret.NewNamespace[int]("prod", "").Derive().Subnamespace("Database")
+	credentials := secret.NewNamespace("prod", "").Derive().Subnamespace("Database")
 
-	if credentials.Separator() != "" || credentials.Secret("Password").Name() != "prodDatabasePassword" {
+	if credentials.Separator() != "" || credentials.Secret[int]("Password").Name() != "prodDatabasePassword" {
 		t.Fatal("empty separator was not preserved")
 	}
 }
@@ -77,9 +76,9 @@ func TestNamespaceExplicitEmptySeparator(t *testing.T) {
 func TestNamespaceMultibyteSeparator(t *testing.T) {
 	t.Parallel()
 
-	credentials := secret.NewNamespace[int]("prod", "🗝::")
+	credentials := secret.NewNamespace("prod", "🗝::")
 
-	if credentials.Secret("password").Name() != "prod🗝::password" {
+	if credentials.Secret[int]("password").Name() != "prod🗝::password" {
 		t.Fatal("multibyte separator changed")
 	}
 }
@@ -89,7 +88,7 @@ func TestNamespaceMultibyteSeparator(t *testing.T) {
 func TestNamespaceChildOverridesOnlyFutureJoins(t *testing.T) {
 	t.Parallel()
 
-	credentials := secret.NewNamespace[int]("prod", "/", func(names *secret.NamespaceBuilder) {
+	credentials := secret.NewNamespace("prod", "/", func(names *secret.NamespaceBuilder) {
 		names.Separator(":")
 	})
 
@@ -97,11 +96,11 @@ func TestNamespaceChildOverridesOnlyFutureJoins(t *testing.T) {
 		names.Separator("-")
 	}).Derive()
 
-	if database.Name() != "prod:database" || database.Secret("password").Name() != "prod:database-password" {
+	if database.Name() != "prod:database" || database.Secret[int]("password").Name() != "prod:database-password" {
 		t.Fatal("child override rewrote its prefix or was lost")
 	}
 
-	if credentials.Secret("password").Name() != "prod:password" {
+	if credentials.Secret[int]("password").Name() != "prod:password" {
 		t.Fatal("child override mutated parent")
 	}
 }
@@ -117,7 +116,7 @@ func TestNamespacePublicationDetachesDraft(t *testing.T) {
 		names.Separator(":")
 	}
 
-	credentials := secret.NewNamespace[int]("prod", "/", capture)
+	credentials := secret.NewNamespace("prod", "/", capture)
 	retained.Separator("bad")
 
 	variant := credentials.Derive(capture)
@@ -126,11 +125,11 @@ func TestNamespacePublicationDetachesDraft(t *testing.T) {
 	child := credentials.Subnamespace("database", capture)
 	retained.Separator("bad")
 
-	if credentials.Secret("token").Name() != "prod:token" || variant.Secret("token").Name() != "prod:token" {
+	if credentials.Secret[int]("token").Name() != "prod:token" || variant.Secret[int]("token").Name() != "prod:token" {
 		t.Fatal("retained draft changed published root or variant")
 	}
 
-	if child.Secret("token").Name() != "prod:database:token" {
+	if child.Secret[int]("token").Name() != "prod:database:token" {
 		t.Fatal("retained draft changed published child")
 	}
 }
@@ -151,7 +150,7 @@ func TestNamespaceCallbacksRunInOrderOnInvalid(t *testing.T) {
 		names.Separator("-")
 	}
 
-	credentials := secret.NewNamespace[int]("", "/", first, second)
+	credentials := secret.NewNamespace("", "/", first, second)
 	credentials = credentials.Derive(first, second).Subnamespace("child", first, second)
 
 	if strings.Join(calls, ",") != "first,second,first,second,first,second" {
@@ -173,7 +172,7 @@ func TestNamespaceNilCallbackPanics(t *testing.T) {
 			t.Fatal("nil callback did not panic")
 		}
 	}()
-	secret.NewNamespace[int]("", "/", nil)
+	secret.NewNamespace("", "/", nil)
 }
 
 // TestNamespaceDeriveNilCallbackPanics verifies that inherited invalidity
@@ -186,7 +185,7 @@ func TestNamespaceDeriveNilCallbackPanics(t *testing.T) {
 			t.Fatal("nil derivation callback did not panic")
 		}
 	}()
-	(secret.Namespace[int]{}).Derive(nil)
+	(secret.Namespace{}).Derive(nil)
 }
 
 // TestNamespaceChildCallbackPanicPropagates verifies construction does not
@@ -199,7 +198,7 @@ func TestNamespaceChildCallbackPanicPropagates(t *testing.T) {
 			t.Fatalf("callback panic = %v", recovered)
 		}
 	}()
-	(secret.Namespace[int]{}).Subnamespace("", func(names *secret.NamespaceBuilder) {
+	(secret.Namespace{}).Subnamespace("", func(names *secret.NamespaceBuilder) {
 		names.Separator(":")
 		panic("callback failed")
 	})
@@ -211,10 +210,10 @@ func TestNamespaceExpandedNilCallbacks(t *testing.T) {
 	t.Parallel()
 
 	var policies []secret.NamespaceBuilderFunc
-	credentials := secret.NewNamespace[int]("prod", "", policies...).Derive(policies...)
+	credentials := secret.NewNamespace("prod", "", policies...).Derive(policies...)
 	child := credentials.Subnamespace("Database", policies...)
 
-	if child.Secret("Password").Name() != "prodDatabasePassword" || child.Err() != nil {
+	if child.Secret[int]("Password").Name() != "prodDatabasePassword" || child.Err() != nil {
 		t.Fatal("expanded nil callbacks changed settings")
 	}
 }
@@ -224,20 +223,20 @@ func TestNamespaceExpandedNilCallbacks(t *testing.T) {
 func TestNamespaceInvalidAncestorsStayInvalid(t *testing.T) {
 	t.Parallel()
 
-	valid := secret.NewNamespace[int]("private-prefix", "/")
+	valid := secret.NewNamespace("private-prefix", "/")
 
-	for _, credentials := range []secret.Namespace[int]{
+	for _, credentials := range []secret.Namespace{
 		{},
-		secret.NewNamespace[int]("", "/"),
+		secret.NewNamespace("", "/"),
 		valid.Subnamespace(""),
 		valid.Subnamespace("").Derive(),
-		(secret.Namespace[int]{}).Subnamespace("child"),
+		(secret.Namespace{}).Subnamespace("child"),
 	} {
 		if !errors.Is(credentials.Err(), secret.ErrInvalidSecret) {
 			t.Fatal("invalid namespace accepted")
 		}
 
-		leaf := credentials.Derive().Subnamespace("nested").Secret("password")
+		leaf := credentials.Derive().Subnamespace("nested").Secret[int]("password")
 
 		if _, err := secret.New(nil).Get(t.Context(), leaf); !errors.Is(err, secret.ErrInvalidSecret) {
 			t.Fatalf("invalid leaf Get = %v", err)
@@ -250,7 +249,7 @@ func TestNamespaceInvalidAncestorsStayInvalid(t *testing.T) {
 func TestNamespaceEmptyLeafIsInvalid(t *testing.T) {
 	t.Parallel()
 
-	leaf := secret.NewNamespace[int]("private-prefix", "/").Secret("")
+	leaf := secret.NewNamespace("private-prefix", "/").Secret[int]("")
 
 	if !errors.Is(leaf.Err(), secret.ErrInvalidSecret) {
 		t.Fatal("empty leaf accepted")
@@ -273,7 +272,7 @@ func TestNamespaceCancellationPrecedesValidation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	leaf := (secret.Namespace[int]{}).Secret("password")
+	leaf := (secret.Namespace{}).Secret[int]("password")
 
 	if _, err := secret.New(nil).Get(ctx, leaf); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Get error = %v", err)
@@ -286,7 +285,7 @@ func TestNamespaceReadsCurrentAndPreservesPinnedAccess(t *testing.T) {
 	t.Parallel()
 
 	store := secret.New(memorysecret.New())
-	leaf := secret.NewNamespace[map[string]string](" prod/", "/").Secret("database ")
+	leaf := secret.NewNamespace(" prod/", "/").Secret[map[string]string]("database ")
 
 	first, err := store.Put(t.Context(), " prod//database ", []byte(`{"password":"old"}`))
 
@@ -322,7 +321,7 @@ func TestNamespaceReadsCurrentAndPreservesPinnedAccess(t *testing.T) {
 func TestNamespaceFormattingRedactsIdentity(t *testing.T) {
 	t.Parallel()
 
-	credentials := secret.NewNamespace[int]("private-prefix", "private-separator")
+	credentials := secret.NewNamespace("private-prefix", "private-separator")
 	text := fmt.Sprintf("%v %+v %#v %s %q %x", credentials, credentials, credentials, credentials, credentials, credentials)
 
 	if strings.Contains(text, "private") || strings.Contains(slog.AnyValue(credentials).Resolve().String(), "private") {
@@ -339,31 +338,5 @@ func TestNamespaceFormattingRedactsIdentity(t *testing.T) {
 
 	if credentials.Name() != "private-prefix" {
 		t.Fatal("explicit name access changed")
-	}
-}
-
-// TestNamespaceRetypingRejected checks namespace assignment and conversion,
-// and generated leaf conversion and explicit reader type arguments, all fail.
-func TestNamespaceRetypingRejected(t *testing.T) {
-	t.Parallel()
-
-	command := exec.CommandContext(t.Context(), "go", "test", "-gcflags=-e", "./testdata/namespaceretyping")
-
-	output, err := command.CombinedOutput()
-
-	if err == nil {
-		t.Fatal("namespace retyping compiled")
-	}
-
-	for _, diagnostic := range []string{
-		"cannot convert secret.NewNamespace[string]",
-		"cannot use secret.NewNamespace[string]",
-		"cannot convert names.Secret",
-		"cannot use names.Secret",
-		"argument to store.Get[int]",
-	} {
-		if !strings.Contains(string(output), diagnostic) {
-			t.Fatalf("missing %q diagnostic: %s", diagnostic, output)
-		}
 	}
 }

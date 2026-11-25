@@ -3,7 +3,7 @@ module arkoren.dev/driver/gcp
 go 1.27
 
 require (
-	arkoren.dev/core v0.1.0
+	arkoren.dev/core v0.23.0
 	arkoren.dev/foundation/problem v0.1.0
 	cloud.google.com/go/auth v0.24.2
 	cloud.google.com/go/secretmanager v1.23.1

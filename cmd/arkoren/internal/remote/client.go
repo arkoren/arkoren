@@ -390,7 +390,8 @@ func (client *Client) transportError(ctx context.Context, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		timeout := time.Duration(client.requestTimeout.Load())
 
-		return fmt.Errorf("the inspector at %s did not answer within %s (raise -request-timeout): %w", client.Base, timeout, err)
+		return console.Fail(console.TypeUnreachable, []console.Step{{Text: "Raise --request-timeout, or check that the inspector is healthy"}},
+			"the inspector at %s did not answer within %s: %w", client.Base, timeout, err)
 	}
 
 	if failure, ok := errors.AsType[*net.OpError](err); ok && failure.Op == "dial" {

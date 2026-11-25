@@ -1,0 +1,113 @@
+package bootstrap
+
+import (
+	"arkoren.dev/ark/iam"
+	"arkoren.dev/core/application"
+	"arkoren.dev/core/http/router"
+{{- if .Jobs}}
+	"arkoren.dev/core/service/queue"
+{{- end}}
+{{- if .TwoFactor}}
+	"arkoren.dev/foundation/totp"
+{{- end}}
+)
+
+// IAM is the process's one identity module: password login, the sessions and
+// guard behind it, and every feature this provider enables. It reads the
+// database and cache through providers and publishes its events on the
+// application's bus. Each optional feature is configured by the fragment
+// provider that its callback receives, so a feature's settings live in one
+// small file. The module does no I/O when built; the Migrator provider adds
+// IAM.Migrations and the Migrate provider applies them at startup, and the
+// readiness check registered here fails until they have run.
+//
+// Sessions and counters live in the Cache provider. The default memory cache is
+// private to this process; use a shared cache driver before running more than
+// one process or replica. Behind a reverse proxy, set the client address source
+// with identity.ClientIP, and keep CSRF protection on every route a session can
+// reach.
+var IAM = application.Provide(func(compose *application.Composer) *iam.IAM {
+	events := compose.App().Events()
+
+	identity := compose.Must(iam.New(compose.Use(Database), compose.Use(Cache), func(identity *iam.Builder) {
+		identity.Events(events)
+{{- if .Jobs}}
+		identity.Queue(compose.Use(Dispatcher))
+{{- end}}
+{{- if .Reset}}
+		identity.Password(compose.Use(Hasher), compose.Use(PasswordReset))
+{{- else}}
+		identity.Password(compose.Use(Hasher))
+{{- end}}
+{{- if .Verification}}
+		identity.Directory(compose.Use(EmailVerification))
+{{- end}}
+{{- if .TwoFactor}}
+		identity.TwoFactor(totp.New("{{.Issuer}}"), compose.Use(TwoFactorKey))
+{{- end}}
+{{- if .Tokens}}
+		identity.Tokens(compose.Use(TokenScopes))
+{{- end}}
+{{- if .Permissions}}
+		identity.Permissions(compose.Use(Roles))
+{{- end}}
+{{- if .Google}}
+		identity.Provider(compose.Use(Google))
+{{- end}}
+{{- if .GitHub}}
+		identity.Provider(compose.Use(GitHub), compose.Use(GitHubSignUp))
+{{- end}}
+{{- if .Microsoft}}
+		identity.Provider(compose.Use(Microsoft))
+{{- end}}
+{{- if .Apple}}
+		identity.Provider(compose.Use(Apple))
+{{- end}}
+{{- if .OIDC}}
+		identity.Provider(compose.Use(OIDC))
+{{- end}}
+{{- if .Account}}
+		identity.Account(compose.Use(AccountView))
+{{- end}}
+	}))
+
+	compose.Check("iam", identity.Ping)
+
+	return identity
+})
+
+// IAMRouter mounts the identity routes under /auth on the shared router (so
+// POST /auth/login, GET /auth/sessions, GET /auth/github/callback and so on) and
+// returns the router that identifies users: it runs the session and
+// authenticator middleware before its routes. Routes that need the signed-in
+// user mount on this router instead of Router, and routes that must be signed in
+// add auth.Require to it. List it in the Compose of every process that serves HTTP,
+// before the providers whose routes need the user.
+var IAMRouter = application.Provide(func(compose *application.Composer) *router.Router {
+	identity := compose.Use(IAM)
+	routes := compose.Use(Router)
+
+	web := routes.With(identity.Middleware())
+	web.Group("/auth", identity.Register)
+
+	return web
+})
+{{- if .Jobs}}
+
+// IAMJobs registers the identity module's background jobs on the shared
+// consumer and returns it. The jobs send the module's emails (password reset
+// and email verification); the module stores them on the Dispatcher provider
+// from the request. List it, then Work, in the Compose of the process that sends
+// the emails: the server for a single process, a worker once the memory queue
+// is replaced by a networked driver. Deploy that process before enabling a new
+// email feature elsewhere, and list the queue iam.QueueName in any queue
+// restriction of the consumer.
+var IAMJobs = application.Provide(func(compose *application.Composer) *queue.Consumer {
+	identity := compose.Use(IAM)
+	consumer := compose.Use(Consumer)
+
+	compose.Require(identity.RegisterJobs(consumer))
+
+	return consumer
+})
+{{- end}}

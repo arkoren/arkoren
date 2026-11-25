@@ -69,13 +69,21 @@ func (composer *Composer) Must[T any](value T, err error) T {
 }
 
 // App returns the existing application's stable service handles and settings.
-// No dependency lookup or automatic construction occurs here. Conditional
+// No dependency lookup or automatic construction occurs here. When the
+// application is built from a root provider by [Run] or [Start], App is valid
+// only after that build: calling it from a provider the application depends on
+// panics with [ErrProviderCycle] naming the chain, because the application does
+// not exist yet. Conditional
 // wiring is a plain Go if on [Application.Debug] (the construction-time debug
 // flag) or [Application.Environment].
 //
 //	logger := composer.App().Logger()
 //	logger.InfoContext(composer.Context(), "wiring dependencies")
 func (composer *Composer) App() *Application {
+	if composer.application == nil {
+		panic(composer.cycleError(0, composer.building[0].name))
+	}
+
 	return composer.application
 }
 
@@ -165,6 +173,11 @@ func (composer *Composer) Run(fn func(context.Context) error) {
 // synchronous composition. Checks run once monitoring begins after Startup.
 // Empty names or nil callbacks panic with ErrNilFunc; duplicate names panic
 // with ErrDuplicateCheck and late registrations with ErrInvalidPhase.
+//
+// Checks do not keep the application alive: once every runner registered with
+// [Composer.Run] has returned, the application cancels the check monitor, waits
+// for it and ends, so a one-shot process with checks still exits. An
+// application with checks and no runners waits for its context or Shutdown.
 //
 //	composer.Check("database", connection.Ping)
 func (composer *Composer) Check(name string, fn func(context.Context) error) {

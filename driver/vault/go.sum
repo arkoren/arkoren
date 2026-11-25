@@ -1,9 +1,9 @@
-arkoren.dev/core v0.1.0 h1:zQKIKHeoPglOyAfNM1fsoVi4bG6/gLtbRrpmMYM/oa0=
-arkoren.dev/core v0.1.0/go.mod h1:09a4ff3ddb8VhE9wQgAGcIbIJWEBHk4Ltxyg1+muE20=
+arkoren.dev/core v0.23.0 h1:nQRlzgxBRUDupa1zVUvRSrPkWM2yL67PIz1Dp1zGorI=
+arkoren.dev/core v0.23.0/go.mod h1:H5uFjyorIJHE9sP6U91LCP4jN497itP0fLUd8Vm2H78=
 arkoren.dev/foundation/collection v0.1.0 h1:e3C0TK3ycMwSocA5bhIeqZdUInSSxPaz2yVUQPldAIc=
 arkoren.dev/foundation/collection v0.1.0/go.mod h1:mruUlD+0laXztFjDHOypPw02PSL3n6HPqShzl4V1L8E=
-arkoren.dev/foundation/key v0.1.0 h1:wetTqngc5utfMJXVeof4DpdcUZhgVR0w8hnt2qvGtyQ=
-arkoren.dev/foundation/key v0.1.0/go.mod h1:UhOg5Sl5wNW8LuU+U2teJu6KjBVH6TGDuh831huCGeM=
+arkoren.dev/foundation/key v0.2.0 h1:M26NZPhEWih/uZ0fP6AG/QprGL/QwPYpC8TSgwzXu7g=
+arkoren.dev/foundation/key v0.2.0/go.mod h1:UhOg5Sl5wNW8LuU+U2teJu6KjBVH6TGDuh831huCGeM=
 arkoren.dev/foundation/problem v0.1.0 h1:AJQAT1CvoKLwxlMbz86jeXtpAyEz27aCYenw5UeLRkg=
 arkoren.dev/foundation/problem v0.1.0/go.mod h1:GZKFE5BDsSNITvlBGqWmdq7hlkHOoQ8m4NYQS2fIQOI=
 arkoren.dev/foundation/validate v0.1.0 h1:CRd5PWg8p6/Z0DQcxskQkJ/9NEd27SikAsw5tlajJaU=

@@ -16,6 +16,8 @@ import (
 	"arkoren.dev/core/http/response"
 	"arkoren.dev/core/http/router"
 	"arkoren.dev/core/service/cache"
+	"arkoren.dev/core/service/mail"
+	"arkoren.dev/core/service/queue"
 	"arkoren.dev/foundation/query"
 
 	"arkoren.dev/ark/iam/internal/storage"
@@ -42,8 +44,13 @@ const (
 // query as "subject"; it is only trusted after the signature verified.
 const verifyPath = "/email/verify"
 
-// VerifyRequest is what [Builder.Verification]'s dispatch function receives, and
-// what [Directory.SendVerification] takes: the work of sending one verification
+// verifyJobName is the base name of the verification job; a named instance
+// appends its own name (see [storage.NewJob]).
+const verifyJobName = "iam-email-verification"
+
+// VerifyRequest is the payload of the verification job that a registration and
+// the resend route store on the [Builder.Queue] dispatcher, and what
+// [Directory.SendVerification] takes: the work of sending one verification
 // email. It is plain data with a JSON tag, so a queue job or a workflow input can
 // carry it as is.
 //
@@ -53,16 +60,15 @@ const verifyPath = "/email/verify"
 //
 // Example:
 //
-//	job := queue.NewJob[account.VerifyRequest]("send-verification")
-//	err := dispatcher.Dispatch(ctx, job, account.VerifyRequest{Subject: subject})
+//	err := directory.SendVerification(ctx, account.VerifyRequest{Subject: subject})
 type VerifyRequest struct {
 	// Subject is the user to verify. It comes from the application or the
 	// session, never from the text of a request.
 	Subject string `json:"subject"`
 }
 
-// VerifyMessage is what [Builder.Verification]'s deliver function receives to
-// write one verification email. Signed is a credential until it expires or the
+// VerifyMessage describes one verification email to the function of
+// [VerificationBuilder.Email]. Signed is a credential until it expires or the
 // user's email or verified state changes; never log it.
 //
 // Example:
@@ -103,18 +109,17 @@ func (message VerifyMessage) Link(base string) string {
 // Example:
 //
 //	if directory.VerificationEnabled() {
-//		web.Post("/email/verify", directory.VerifyHandler())
+//		web.Post("/email/verify", directory.VerifyHandler(), account.VerifyOperation)
 //	}
 func (directory *Directory) VerificationEnabled() bool {
 	return directory.signer != nil
 }
 
-// RequestVerification calls the dispatch function of [Builder.Verification]
-// with a [VerifyRequest] for subject, in the caller's request, which is how the
-// resend route and a registration ask for a verification email. The email is
-// sent later by the worker that runs [Directory.SendVerification]. It returns
-// the error of dispatch, or one wrapping [ErrInvalidConfig] without
-// [Builder.Verification].
+// RequestVerification stores a verification job for subject on the
+// [Builder.Queue] dispatcher, in the caller's request, which is how the resend
+// route and a registration ask for a verification email. The email is sent later
+// by the worker that runs [Directory.RegisterJobs]. It returns the dispatch
+// error, or one wrapping [ErrInvalidConfig] without [Builder.Verification].
 //
 // Example:
 //
@@ -125,11 +130,34 @@ func (directory *Directory) RequestVerification(ctx context.Context, subject str
 	if !directory.VerificationEnabled() {
 		return fmt.Errorf("%w: RequestVerification requires Builder.Verification", ErrInvalidConfig)
 	}
-	if err := directory.dispatch(ctx, VerifyRequest{Subject: subject}); err != nil {
+	if err := directory.dispatcher.Dispatch(ctx, directory.job, VerifyRequest{Subject: subject}); err != nil {
 		return fmt.Errorf("account: dispatch verification: %w", err)
 	}
 
 	return nil
+}
+
+// RegisterJobs registers the handler of the verification job on consumer, which
+// the worker process runs. It registers nothing, and returns nil, without
+// [Builder.Verification]. The job is named "iam-email-verification", with
+// "-<instance>" appended (underscores written as hyphens) for a named
+// [Builder.Instance], and runs on the queue "iam": a consumer restricted with
+// queue.ConsumerBuilder.Queues must list it. It returns an error wrapping
+// [queue.ErrDuplicateName] when the handler is already registered. Through the
+// facade, call IAM.RegisterJobs instead, which registers the jobs of every
+// enabled package.
+//
+// Example:
+//
+//	if err := directory.RegisterJobs(consumer); err != nil {
+//		return err
+//	}
+func (directory *Directory) RegisterJobs(consumer *queue.Consumer) error {
+	if !directory.VerificationEnabled() {
+		return nil
+	}
+
+	return consumer.Handle(directory.job, directory.SendVerification)
 }
 
 // verifyBinding is the state a verification link is bound to: the user's email
@@ -140,22 +168,23 @@ func verifyBinding(email string, verified bool) link.CallOption {
 }
 
 // SendVerification is the worker side of an email verification: it signs a link
-// bound to the user's current email and calls the deliver function of
-// [Builder.Verification] with the address stored with the user. A user who is
-// unknown (deleted since the request was dispatched) or who already verified
-// their email gets nothing and the call returns nil, so a retry never repeats
-// pointless work. The error of deliver is returned as is, so a queue retries;
-// because of that, deliver may run more than once for one request, and the links
-// of the attempts all work until the email is verified or changes, or they
-// expire. Without [Builder.Verification] it returns an error wrapping
-// [ErrInvalidConfig].
+// bound to the user's current email and sends the verification email through the
+// mailer of [Builder.Verification] to the address stored with the user. A user
+// who is unknown (deleted since the request was dispatched) or who already
+// verified their email gets nothing and the call returns nil, so a retry never
+// repeats pointless work. A mailer error is returned as is, so a queue retries;
+// because of that, one request may send more than once, and the links of the
+// attempts all work until the email is verified or changes, or they expire. An
+// email that fails validation (see [VerifyEmailFunc]) is returned wrapped with
+// [queue.Permanent], because retrying cannot fix it. Without
+// [Builder.Verification] it returns an error wrapping [ErrInvalidConfig].
 //
-// It has the shape func(context.Context, VerifyRequest) error, so it plugs into
-// a queue consumer or a workflow step directly.
+// It has the shape func(context.Context, VerifyRequest) error, so a workflow step
+// can use it directly; a queue worker uses [Directory.RegisterJobs].
 //
 // Example:
 //
-//	consumer.Handle(verifyJob, directory.SendVerification)
+//	err := directory.SendVerification(ctx, account.VerifyRequest{Subject: subject})
 func (directory *Directory) SendVerification(ctx context.Context, request VerifyRequest) error {
 	if !directory.VerificationEnabled() {
 		return fmt.Errorf("%w: SendVerification requires Builder.Verification", ErrInvalidConfig)
@@ -176,7 +205,26 @@ func (directory *Directory) SendVerification(ctx context.Context, request Verify
 		return fmt.Errorf("account: sign verification link: %w", err)
 	}
 
-	return directory.deliver(ctx, VerifyMessage{Address: row.Email, Signed: signed, ExpiresAt: time.Now().Add(directory.verifyTTL)})
+	message := VerifyMessage{Address: row.Email, Signed: signed, ExpiresAt: time.Now().Add(directory.verifyTTL)}
+	if _, err := directory.mailer.Send(ctx, directory.email(message, message.Link(directory.verifyURL))); err != nil {
+		if errors.Is(err, mail.ErrInvalidMessage) {
+			return queue.Permanent(fmt.Errorf("account: verification email: %w", err))
+		}
+
+		return fmt.Errorf("account: send verification email: %w", err)
+	}
+
+	return nil
+}
+
+// defaultVerifyEmail is the verification email when [VerificationBuilder.Email]
+// is not used: a plain-text message with the link and its expiry.
+func defaultVerifyEmail(message VerifyMessage, href string) mail.Message {
+	body := "Confirm your email address with the link below.\n\n" + href + "\n\nThe link works until " + message.ExpiresAt.UTC().Format(time.RFC1123) + " and only once. If you did not create an account, you can ignore this email."
+
+	return mail.NewMessage(mail.Recipients{To: []mail.Address{{Email: message.Address}}}, mail.Body{Text: body}, func(letter *mail.MessageBuilder) {
+		letter.Subject("Confirm your email address")
+	})
 }
 
 // Verify checks a signed verification link and marks the user's email
@@ -271,7 +319,7 @@ func (directory *Directory) verify(ctx context.Context, only, signed string) (st
 //
 // Example:
 //
-//	web.Post("/email/verify", directory.VerifyHandler())
+//	web.Post("/email/verify", directory.VerifyHandler(), account.VerifyOperation)
 func (directory *Directory) VerifyHandler() router.Handler {
 	if !directory.VerificationEnabled() {
 		panic("account: VerifyHandler requires Builder.Verification")
@@ -282,9 +330,7 @@ func (directory *Directory) VerifyHandler() router.Handler {
 		if err != nil {
 			return err
 		}
-		body, err := web.Decode[struct {
-			Token string `json:"token"`
-		}](r)
+		body, err := web.Parse(r, tokenSchema)
 		if err != nil {
 			return err
 		}
@@ -311,7 +357,7 @@ func (directory *Directory) VerifyHandler() router.Handler {
 //
 // Example:
 //
-//	web.Post("/email/verify/resend", directory.ResendHandler())
+//	web.Post("/email/verify/resend", directory.ResendHandler(), account.ResendOperation)
 func (directory *Directory) ResendHandler() router.Handler {
 	if !directory.VerificationEnabled() {
 		panic("account: ResendHandler requires Builder.Verification")

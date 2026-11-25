@@ -29,7 +29,7 @@ func TestKebabFlagBuildsSnakeCaseInputAndPreservesOrigin(t *testing.T) {
 		t.Fatalf("input = %+v", input)
 	}
 
-	if input.origins[0].pointer != "/fail_fast" || input.origins[0].label != "-fail-fast" {
+	if input.origins[0].pointer != "/fail_fast" || input.origins[0].label != "--fail-fast" {
 		t.Fatalf("origin = %+v", input.origins[0])
 	}
 }
@@ -101,7 +101,7 @@ func TestOperationHelpShowsKebabAlias(t *testing.T) {
 		Input: []byte(`{"type":"object","properties":{"fail_fast":{"type":"boolean"}}}`),
 	}, false)
 
-	if !strings.Contains(output.String(), "-fail_fast, -fail-fast") {
+	if !strings.Contains(output.String(), "--fail_fast, --fail-fast") {
 		t.Fatalf("help = %s", output.String())
 	}
 }

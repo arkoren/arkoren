@@ -3,8 +3,9 @@ package flow
 import (
 	"time"
 
-	"arkoren.dev/core/application"
 	"arkoren.dev/core/service/workflow"
+
+	"{{.Module}}/internal/{{.Feature}}"
 )
 
 // Input is the data a Flow run starts with. Replace it with the run's fields.
@@ -26,10 +27,20 @@ func run(ctx *workflow.Context, input Input) (Output, error) {
 	return Output{}, nil
 }
 
-// Workflows registers the {{.Feature}} workflows with the process's workflow
-// registry.
-//
-// TODO: the workflow engine is an application choice. Add a bootstrap provider
-// for it, obtain it here with compose.Use, and register Flow with
-// workflow.Handlers(Flow).
-func Workflows(compose *application.Composer) {}
+// Workflows is the {{.Feature}} feature's set of workflow definitions. A
+// workflow engine is built from definitions rather than registered on, so this
+// surface has no Register method: it hands them over with Definitions.
+type Workflows struct {
+	service *{{.Feature}}.Service
+}
+
+// NewWorkflows builds the workflows over service. It does no I/O.
+func NewWorkflows(service *{{.Feature}}.Service) *Workflows {
+	return &Workflows{service: service}
+}
+
+// Definitions returns the workflow definitions to pass to workflow.NewRegistry
+// or workflow.Handlers when the process builds its workflow engine.
+func (workflows *Workflows) Definitions() []workflow.Definition {
+	return []workflow.Definition{Flow}
+}

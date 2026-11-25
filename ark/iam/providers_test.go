@@ -15,6 +15,7 @@ import (
 
 	"arkoren.dev/ark/iam"
 	"arkoren.dev/ark/iam/federation"
+	"arkoren.dev/ark/iam/internal/apptest"
 )
 
 // federatedMethod is the method protocol modules record for an external login.
@@ -81,7 +82,7 @@ func (provider nativeProvider) NativeHandler(guard *auth.Guard, resolve auth.Res
 
 // callbackPath returns the callback of the fake provider for an identity.
 func callbackPath(name, subject, email string, verified bool) string {
-	path := "/auth/" + name + "/callback?sub=" + subject + "&email=" + email
+	path := "/" + name + "/callback?sub=" + subject + "&email=" + email
 	if verified {
 		path += "&verified=true"
 	}
@@ -215,7 +216,7 @@ func TestConnectFlowLinksAndListsAndDisconnects(t *testing.T) {
 		})
 		registerVerified(t, sys, sys.client, "ada@example.com")
 		connect := sys.client.Post("/connections/fake", "")
-		if connect.Status != http.StatusSeeOther || connect.Header.Get("Location") != "/auth/fake" {
+		if connect.Status != http.StatusSeeOther || connect.Header.Get("Location") != "/fake" {
 			t.Fatalf("connect = %d %q", connect.Status, connect.Header.Get("Location"))
 		}
 		if reply := sys.client.Do(http.MethodGet, callbackPath("fake", "g1", "", false), ""); reply.Status != http.StatusNoContent {
@@ -303,13 +304,13 @@ func TestNativeRoutesOnlyForNativeProviders(t *testing.T) {
 		method, path string
 		want         bool
 	}{
-		{http.MethodGet, "/auth/web", true},
-		{http.MethodGet, "/auth/web/callback", true},
-		{http.MethodPost, "/auth/web/callback", true},
-		{http.MethodGet, "/auth/web/nonce", false},
-		{http.MethodPost, "/auth/web/native", false},
-		{http.MethodGet, "/auth/phone/nonce", true},
-		{http.MethodPost, "/auth/phone/native", true},
+		{http.MethodGet, "/web", true},
+		{http.MethodGet, "/web/callback", true},
+		{http.MethodPost, "/web/callback", true},
+		{http.MethodGet, "/web/nonce", false},
+		{http.MethodPost, "/web/native", false},
+		{http.MethodGet, "/phone/nonce", true},
+		{http.MethodPost, "/phone/native", true},
 		{http.MethodGet, "/connections", true},
 		{http.MethodPost, "/connections/phone", true},
 		{http.MethodDelete, "/connections/abc", true},
@@ -349,7 +350,7 @@ func TestNewRejectsDuplicateProviderNames(t *testing.T) {
 }
 
 // TestProviderNamesMustBeOnePathSegment verifies New refuses a provider name
-// that is not one path segment, because the name is mounted as "/auth/<name>".
+// that is not one path segment, because the name is mounted as "/<name>".
 func TestProviderNamesMustBeOnePathSegment(t *testing.T) {
 	t.Parallel()
 
@@ -533,6 +534,44 @@ func TestInvitedUserIsClaimedByTheirFirstProviderLogin(t *testing.T) {
 		later.Do(http.MethodGet, callbackPath("fake", "g1", "", false), "")
 		if me := later.Do(http.MethodGet, "/whoami", ""); !strings.HasPrefix(me.Body, invited+"|") {
 			t.Fatalf("second login /me = %q, want the invited user %s", me.Body, invited)
+		}
+	})
+}
+
+// TestProviderRoutesFollowTheMountPrefix mounts the same identity under /auth
+// and checks that the provider routes sit below the prefix and that the connect
+// handler redirects to the login route beside it, read from the request.
+func TestProviderRoutesFollowTheMountPrefix(t *testing.T) {
+	t.Parallel()
+
+	eachDatabase(t, func(t *testing.T, db *database.Database, instance string) {
+		sys := newApp(t, db, instance, func(identity *iam.Builder) {
+			identity.Password(hasher(), registration)
+			identity.Provider(fakeProvider{name: "fake"}, signUp)
+		})
+		registerVerified(t, sys, sys.client, "ada@example.com")
+
+		mounted := router.New()
+		mounted.With(sys.identity.Middleware()).Group("/auth", sys.identity.Register)
+
+		for _, route := range [][2]string{
+			{http.MethodGet, "/auth/fake"}, {http.MethodGet, "/auth/fake/callback"}, {http.MethodPost, "/auth/connections/fake"},
+		} {
+			if !mounted.Has(route[0], route[1]) {
+				t.Fatalf("%s %s is not mounted", route[0], route[1])
+			}
+		}
+
+		browser := apptest.ServeRouter(t, mounted)
+
+		if login := browser.Post("/auth/login", `{"email":"ada@example.com","password":"correct horse"}`); login.Status != http.StatusNoContent {
+			t.Fatalf("login = %d %s", login.Status, login.Body)
+		}
+
+		connect := browser.Post("/auth/connections/fake", "")
+
+		if connect.Status != http.StatusSeeOther || connect.Header.Get("Location") != "/auth/fake" {
+			t.Fatalf("connect = %d %q, want 303 /auth/fake", connect.Status, connect.Header.Get("Location"))
 		}
 	})
 }

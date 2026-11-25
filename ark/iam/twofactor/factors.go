@@ -17,9 +17,9 @@ import (
 	"arkoren.dev/core/service/database"
 	"arkoren.dev/core/service/database/migrate"
 	"arkoren.dev/foundation/query"
-	"arkoren.dev/foundation/query/schema"
 	"arkoren.dev/foundation/totp"
 
+	"arkoren.dev/ark/iam/internal/migration"
 	"arkoren.dev/ark/iam/internal/storage"
 	"arkoren.dev/ark/iam/internal/throttle"
 )
@@ -179,27 +179,7 @@ func NewFactors(provider *auth.UserProvider, db *database.Database, store *cache
 //		return err
 //	}
 func (factors *Factors) Migrations() []migrate.Definition {
-	return storage.Group("twofactor", factors.instance).Migrations(
-		migrate.NewMigration("secrets-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(factors.secrets, func(table *schema.Table) {
-				table.String("subject", 255).Bytewise().Primary()
-				table.Text("secret")
-				table.BigInteger("last_step").Default(0)
-				table.BigInteger("confirmed_at").Default(0)
-			})))
-			migration.Down(migrate.Schema(schema.Drop(factors.secrets)))
-		}),
-		migrate.NewMigration("recovery-codes-create-table", func(migration *migrate.MigrationBuilder) {
-			migration.Up(migrate.Schema(schema.Create(factors.codes, func(table *schema.Table) {
-				table.String("subject", 255).Bytewise()
-				table.SmallInteger("slot")
-				table.String("code_hash", 64).Bytewise()
-				table.BigInteger("used_at").Default(0)
-				table.Primary("subject", "slot")
-			})))
-			migration.Down(migrate.Schema(schema.Drop(factors.codes)))
-		}),
-	)
+	return migration.TwoFactor(factors.instance)
 }
 
 // Ping verifies, read-only, that both tables exist. A missing table returns an

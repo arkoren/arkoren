@@ -8,7 +8,7 @@ generate a replacement key to repair missing startup configuration.
 For an existing validated `secret` and router `routes`:
 
 ```go
-signer, err := link.New(secret, func(signer *link.Builder) {
+signer, err := link.New(ring, func(signer *link.Builder) {
 	signer.Origin("https://app.example.com")
 })
 if err != nil {

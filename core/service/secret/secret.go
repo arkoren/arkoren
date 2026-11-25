@@ -2,7 +2,6 @@ package secret
 
 import (
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 
@@ -26,8 +25,38 @@ import (
 //	}
 var ErrNotFound = errors.New("secret not found")
 
+// ErrUnsupported identifies an operation the backend cannot perform, such as a
+// write to a read-only source (files, environment variables) or a payload the
+// backend cannot store (binary data in a text-only backend). Drivers wrap it so
+// callers can tell a missing capability from a missing secret with errors.Is.
+// An unsupported operation changes nothing.
+//
+// Example:
+//
+//	_, err := secrets.Put(ctx, "env:API_TOKEN", []byte(token))
+//	if errors.Is(err, secret.ErrUnsupported) {
+//		return fmt.Errorf("environment variables are read-only: %w", err)
+//	}
+var ErrUnsupported = errors.New("secret operation unsupported")
+
+// ErrUnbound identifies a binding definition (see [NewBinding]) whose key the
+// store cannot resolve: no [Builder.Bindings] lookup was configured, the key is
+// unset, or its value is empty. Bindings have no defaults, so an unbound
+// definition fails before any provider I/O. The error names the binding key,
+// never a reference or a secret value.
+//
+// Example:
+//
+//	password := secret.NewBinding[string]("DATABASE_PASSWORD")
+//	_, err := secrets.Get(ctx, password)
+//	if errors.Is(err, secret.ErrUnbound) {
+//		return fmt.Errorf("set DATABASE_PASSWORD to a secret reference: %w", err)
+//	}
+var ErrUnbound = errors.New("secret binding unbound")
+
 // Reference selects a logical secret by name and optionally a version.
-// Concrete versions are immutable within one existing logical secret, not
+// Drivers receive the name exactly as the caller gave it to the [Store]; a
+// secretmux driver first removes the "scheme:" prefix it routed on. Concrete versions are immutable within one existing logical secret, not
 // permanent identities for a reusable name; see Driver's lifetime rules.
 // Names follow provider syntax and versions are provider-issued selectors,
 // not redacted diagnostic values. Use a concrete version returned by a write
@@ -212,23 +241,28 @@ type Driver interface {
 }
 
 // Store provides typed retrieval and observed mutations over a driver.
-// It does not cache secrets or start observability services. Driver access
-// bypasses facade telemetry and mutation notifications. Construct it with New;
-// the zero Store has no driver and is not ready for operations.
+// Secrets are named by references, strings of the form "scheme:name" such as
+// "aws:billing/key", "file:/run/secrets/token" or "env:API_TOKEN". The Store
+// does not parse references: it hands them to its driver unchanged, and a
+// secretmux driver routes on the scheme. It does not cache secrets or start
+// observability services. Driver access bypasses facade telemetry and mutation
+// notifications. Construct it with New; the zero Store has no driver and is not
+// ready for operations.
 //
 // Example:
 //
 //	secrets := secret.New(driver)
-//	value, err := secrets.String(ctx, "api-token")
+//	token, err := secrets.Get(ctx, secret.NewSecret[string]("aws:billing/api-token"))
 //	if err != nil {
 //		return err
 //	}
-//	useCredential(value)
+//	useCredential(token)
 type Store struct {
 	// driver is the underlying contract implementation used for delegation.
 	driver Driver
 
-	// config is the detached construction snapshot of shared services.
+	// config is the detached construction snapshot of shared services and the
+	// bindings lookup.
 	config settings
 
 	// instruments reuses instruments for the currently resolved telemetry service.
@@ -306,21 +340,22 @@ func (store *Store) DriverAs[T any]() (T, bool) {
 	return unwrap.As[T](store.Driver())
 }
 
-// Raw retrieves the current unmodified bytes of name, owned by the caller.
+// Raw retrieves the current unmodified bytes of reference, owned by the caller.
+// It applies no decoding, so trailing newlines and non-UTF-8 bytes survive.
 // One span and metric observation cover the provider read, including failures;
-// no name, version, bytes, size, or native error text is recorded.
+// no reference, version, bytes, size, or native error text is recorded.
 //
 // Example:
 //
-//	data, err := secrets.Raw(ctx, "api-token")
+//	data, err := secrets.Raw(ctx, "file:/run/secrets/token")
 //	if err != nil {
 //		return err
 //	}
 //	useCredential(data)
-func (store *Store) Raw(ctx context.Context, name string) ([]byte, error) {
+func (store *Store) Raw(ctx context.Context, reference string) ([]byte, error) {
 	ctx, op := store.begin(ctx, "get")
 
-	value, err := store.driver.Get(ctx, Reference{Name: name})
+	value, err := store.driver.Get(ctx, Reference{Name: reference})
 	end(ctx, op, err)
 
 	if err != nil {
@@ -344,10 +379,10 @@ func (store *Store) Raw(ctx context.Context, name string) ([]byte, error) {
 //		return err
 //	}
 //	rememberVersion(written.Version)
-func (store *Store) Put(ctx context.Context, name string, value []byte) (Value, error) {
+func (store *Store) Put(ctx context.Context, reference string, value []byte) (Value, error) {
 	ctx, op := store.begin(ctx, "put")
 
-	written, err := store.driver.Put(ctx, name, value)
+	written, err := store.driver.Put(ctx, reference, value)
 	end(ctx, op, err)
 	store.mutated(ctx, "put", err)
 
@@ -364,10 +399,10 @@ func (store *Store) Put(ctx context.Context, name string, value []byte) (Value, 
 //	if err != nil {
 //		return err
 //	}
-func (store *Store) Update(ctx context.Context, name string, value []byte) (Value, error) {
+func (store *Store) Update(ctx context.Context, reference string, value []byte) (Value, error) {
 	ctx, op := store.begin(ctx, "update")
 
-	written, err := store.driver.Update(ctx, name, value)
+	written, err := store.driver.Update(ctx, reference, value)
 	end(ctx, op, err)
 	store.mutated(ctx, "update", err)
 
@@ -387,47 +422,34 @@ func (store *Store) Update(ctx context.Context, name string, value []byte) (Valu
 //	if err := secrets.Delete(ctx, "retired-api-token"); err != nil {
 //		return err
 //	}
-func (store *Store) Delete(ctx context.Context, name string) error {
+func (store *Store) Delete(ctx context.Context, reference string) error {
 	ctx, op := store.begin(ctx, "delete")
 
-	err := store.driver.Delete(ctx, name)
+	err := store.driver.Delete(ctx, reference)
+
 	end(ctx, op, err)
 	store.mutated(ctx, "delete", err)
 
 	return err
 }
 
-// String retrieves the current value of name as a string without UTF-8
-// validation. It shares Raw's single provider observation and returns provider
-// errors unchanged; string conversion adds no span, metric, or event.
+// Get resolves definition to a reference, reads its current bytes and decodes
+// them into T by the rules of [Secret]: a string loses one trailing newline and
+// must be valid UTF-8, []byte is copied, an [encoding.TextUnmarshaler] receives
+// the text without that newline, and anything else is decoded as JSON. A
+// binding definition looks its key up through [Builder.Bindings] first and
+// fails with [ErrUnbound] when it cannot. An already-canceled context takes
+// precedence over an invalid definition; both are rejected before provider I/O.
+//
+// Get shares [Store.Raw]'s single provider observation: a decode error returned
+// afterward does not turn a successful provider read into a telemetry failure.
+// Decode errors retain the reference and cause; handle them without logging
+// sensitive details. The raw bytes are cleared once decoded. Definitions do not
+// enforce a schema.
 //
 // Example:
 //
-//	token, err := secrets.String(ctx, "api-token")
-//	if err != nil {
-//		return err
-//	}
-//	useCredential(token)
-func (store *Store) String(ctx context.Context, name string) (string, error) {
-	value, err := store.Raw(ctx, name)
-
-	if err != nil {
-		return "", err
-	}
-
-	return string(value), nil
-}
-
-// Get retrieves the current value of definition and JSON-decodes it into T. It shares
-// Raw's single provider observation: a JSON decode error returned afterward does
-// not turn a successful provider read into a telemetry failure. Decode errors
-// retain the name and cause; handle them without logging sensitive details.
-// An already-canceled context takes precedence over an invalid definition;
-// both are rejected before provider I/O. Definitions do not enforce a schema.
-//
-// Example:
-//
-//	database := secret.NewSecret[map[string]string]("database")
+//	database := secret.NewSecret[map[string]string]("vault:app/database")
 //	config, err := secrets.Get(ctx, database)
 //	if err != nil {
 //		return err
@@ -442,14 +464,24 @@ func (store *Store) Get[T any](ctx context.Context, definition Secret[T]) (res T
 		return res, err
 	}
 
-	value, err := store.Raw(ctx, definition.name)
+	reference, err := definition.resolve(store.config.bindings)
 
 	if err != nil {
 		return res, err
 	}
 
-	if err := json.Unmarshal(value, &res); err != nil {
-		return res, fmt.Errorf("decode secret %q: %w", definition.name, err)
+	data, err := store.Raw(ctx, reference)
+
+	if err != nil {
+		return res, err
+	}
+
+	defer clear(data)
+
+	res, err = definition.decode(data)
+
+	if err != nil {
+		return res, fmt.Errorf("decode secret %q: %w", reference, err)
 	}
 
 	return res, nil

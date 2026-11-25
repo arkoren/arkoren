@@ -22,8 +22,9 @@ import (
 //
 //	identity.Provider(google) // an *oauthauth.Client
 type Provider interface {
-	// Name is the provider's name in mounted paths: "/auth/<name>" starts the
-	// login and "/auth/<name>/callback" finishes it. Names must be unique.
+	// Name is the provider's name in mounted paths: "/<name>" starts the login
+	// and "/<name>/callback" finishes it, below the prefix the routes are mounted
+	// at (a mount at "/auth" serves "/auth/<name>"). Names must be unique.
 	Name() string
 
 	// LoginHandler starts the login by redirecting to the provider.
@@ -36,8 +37,8 @@ type Provider interface {
 
 // NativeProvider is the extra capability of a [Provider] that also accepts an ID
 // token from a mobile app's own provider SDK (Google and Apple in ark/oauth). A
-// provider that implements it also gets "/auth/<name>/nonce" and
-// "/auth/<name>/native".
+// provider that implements it also gets "/<name>/nonce" and "/<name>/native",
+// below the mount prefix.
 //
 // Example:
 //
@@ -89,7 +90,7 @@ type ProviderBuilderFunc = func(*ProviderBuilder)
 // login must carry an email the provider proved, or it fails with
 // [federation.ErrEmailUnverified] (403) and creates nothing. It needs users
 // that can be created, which the built-in users always are; with [Builder.Users]
-// that has no [Users.Create], nothing could create the user: [New] ignores
+// that has no [UsersBuilder.Create], nothing could create the user: [New] ignores
 // SignUp, with one warning, and the provider logs in only known identities.
 //
 // Example:
@@ -106,7 +107,7 @@ func (login *ProviderBuilder) SignUp(enabled bool) *ProviderBuilder {
 // enabled. It runs before the facade's own creation and returns the new user's
 // subject, and its errors pass through to the client. Returning "" and no
 // error hands the identity on, so what it declines still gets the facade's
-// creation (a user made through [Users.Create], verified when the provider
+// creation (a user made through [UsersBuilder.Create], verified when the provider
 // proved the email). Calls add up in the order made until one returns a
 // subject. The facade never links by email, so the function must not return an
 // existing user. See [federation.Builder.Create].
@@ -164,7 +165,7 @@ type mountedProvider struct {
 
 // validateProviders rejects a nil provider, an empty name, a name with anything but
 // letters, digits, hyphens and underscores (it must be one safe path segment of
-// "/auth/<name>": the connect handler redirects there and the router would
+// "/<name>": the connect handler redirects there and the router would
 // reject or reinterpret a pattern with braces, slashes or dots), a name used
 // twice, since each name is a mounted path.
 func validateProviders(setups []providerSetup) error {
@@ -193,23 +194,37 @@ func validateProviders(setups []providerSetup) error {
 func (identity *IAM) registerProviders(r *router.Router) {
 	for _, mounted := range identity.providers {
 		provider := mounted.provider
-		base := "/auth/" + provider.Name()
-		r.Get(base, provider.LoginHandler())
-		r.Methods([]string{http.MethodGet, http.MethodPost}, base+"/callback", provider.CallbackHandler(identity.guard, mounted.resolve))
+		base := "/" + provider.Name()
+		r.Get(base, provider.LoginHandler(), ProviderLoginOperation)
+		r.Methods([]string{http.MethodGet, http.MethodPost}, base+"/callback", provider.CallbackHandler(identity.guard, mounted.resolve), ProviderCallbackOperation)
 		if native, ok := provider.(NativeProvider); ok {
-			r.Get(base+"/nonce", native.NonceHandler())
-			r.Post(base+"/native", native.NativeHandler(identity.guard, mounted.resolve))
+			r.Get(base+"/nonce", native.NonceHandler(), ProviderNonceOperation)
+			r.Post(base+"/native", native.NativeHandler(identity.guard, mounted.resolve), ProviderNativeOperation)
 		}
 	}
 }
 
 // connectTargets maps each provider name to the path that starts its login,
-// where the connect handler redirects.
-func (identity *IAM) connectTargets() map[string]string {
+// where the connect handler redirects: "<prefix>/<name>", with prefix the path
+// the routes are mounted at, taken from the request.
+func (identity *IAM) connectTargets(prefix string) map[string]string {
 	targets := make(map[string]string, len(identity.providers))
 	for _, mounted := range identity.providers {
-		targets[mounted.provider.Name()] = "/auth/" + mounted.provider.Name()
+		targets[mounted.provider.Name()] = prefix + "/" + mounted.provider.Name()
 	}
 
 	return targets
+}
+
+// mountPrefix returns the path the identity routes are mounted at, derived from
+// a request to "<prefix>/connections/<provider>": everything before the last
+// "/connections/" segment, which is empty for a mount at the root. A path
+// without the segment, from a handler registered on a custom path, has no
+// prefix.
+func mountPrefix(requestPath string) string {
+	if index := strings.LastIndex(requestPath, "/connections/"); index >= 0 {
+		return requestPath[:index]
+	}
+
+	return ""
 }

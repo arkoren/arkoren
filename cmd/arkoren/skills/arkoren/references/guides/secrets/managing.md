@@ -45,7 +45,10 @@ input := FixtureCredential{Token: "fixture"}
 payload, err := json.Marshal(input)
 ```
 
-After successful encoding, write it under a fresh name. Lowercase the random
+After successful encoding, write it under a fresh name. Writes take the same
+references as reads; behind a [`secretmux`](sources.md#routing-by-scheme) store,
+include the scheme (`aws:local-check-...`), and read-only sources such as files
+return `secret.ErrUnsupported`. Lowercase the random
 suffix with standard-library `strings` so it also fits flat provider naming:
 
 ```go

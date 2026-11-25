@@ -155,7 +155,7 @@ func TestSkillsInstallWorksOffline(t *testing.T) {
 
 // TestSkillsInstallIncludesStructureSkill checks the structure skill ships beside
 // the reference skill, in its own directory with its own manifest, and appears in
-// the result under related_skills.
+// the result's skills array.
 func TestSkillsInstallIncludesStructureSkill(t *testing.T) {
 	t.Parallel()
 
@@ -173,9 +173,7 @@ func TestSkillsInstallIncludesStructureSkill(t *testing.T) {
 	}
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
-	related, ok := document["related_skills"].(map[string]any)
-
-	if !ok || related["arkoren-structure"].(map[string]any)["state"] != "installed" {
+	if !strings.HasPrefix(document["summary"].(string), "Installed 2 skills (") || skillEntry(document, "arkoren-structure")["state"] != "installed" {
 		t.Fatalf("result = %v", document)
 	}
 }
@@ -264,7 +262,7 @@ func TestSkillsDryRunNeverCreatesDirectories(t *testing.T) {
 		t.Fatalf("dry-run wrote files: %v, %v", entries, err)
 	}
 
-	contains(t, env.Stdout.(*bytes.Buffer).String(), "SKILL.md", skill.SkillManifestName, `"conflicts": []`)
+	contains(t, env.Stdout.(*bytes.Buffer).String(), "SKILL.md", skill.SkillManifestName)
 }
 
 // TestSkillsFlagsBeforeSubcommand exercises inherited family flags without
@@ -280,7 +278,7 @@ func TestSkillsFlagsBeforeSubcommand(t *testing.T) {
 	}
 
 	contains(t, env.Stdout.(*bytes.Buffer).String(),
-		filepath.Join(env.Dir, ".claude/skills/arkoren"), "SKILL.md", `"conflicts": []`)
+		filepath.Join(env.Dir, ".claude/skills/arkoren"), "SKILL.md")
 
 	entries, err := os.ReadDir(env.Dir)
 
@@ -295,13 +293,17 @@ func TestSkillsStatusMissingNeverWrites(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	if err := runSkills(t.Context(), []string{"status"}, env); err != nil {
-		t.Fatal(err)
+	err := runSkills(t.Context(), []string{"status"}, env)
+
+	if exit, ok := errors.AsType[*console.ExitError](err); !ok || exit.Code != console.ExitFailure || exit.Err != nil {
+		t.Fatalf("missing skills must exit 1 after their report: %v", err)
 	}
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 
-	if document["state"] != "not installed" || document["bundled_revision"] == "" {
+	primary := skillEntry(document, "arkoren")
+
+	if document["summary"] != "arkoren skill is not installed" || primary["state"] != "not installed" || primary["bundled_revision"] == "" {
 		t.Fatalf("status = %v", document)
 	}
 
@@ -325,7 +327,7 @@ func TestSkillsInstallRejectsUnmanagedFiles(t *testing.T) {
 
 	err := runSkills(t.Context(), []string{"install"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	if !strings.Contains(err.Error(), "unmanaged") {
 		t.Fatal(err)
@@ -346,7 +348,7 @@ func TestSkillsUpdateRequiresManagedInstall(t *testing.T) {
 
 	err := runSkills(t.Context(), []string{"update"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	if !strings.Contains(err.Error(), "no managed installation") {
 		t.Fatal(err)
@@ -396,7 +398,7 @@ func TestSkillsHelpSkipsPathValidation(t *testing.T) {
 func TestSkillsInvalidArgumentsAreUsageErrors(t *testing.T) {
 	t.Parallel()
 
-	for _, args := range [][]string{nil, {"remove"}, {"install", "extra"}, {"install", "--force"}, {"status", "--dir="}} {
+	for _, args := range [][]string{{"remove"}, {"install", "extra"}, {"install", "--force"}, {"status", "--dir="}} {
 		env := scaffoldEnvironment(t)
 
 		requireNewUsage(t, runSkills(t.Context(), args, env))
@@ -427,13 +429,15 @@ func TestSkillsStatusReportsEditsWithoutFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if code := run(t.Context(), []string{"skills", "status", "--verbose"}, env); code != console.ExitOK {
+	if code := run(t.Context(), []string{"skills", "status", "--verbose"}, env); code != console.ExitFailure {
 		t.Fatalf("exit=%d: %s", code, env.Stderr)
 	}
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 
-	if len(document["modified_files"].([]any)) != 1 || document["installed_revision"] == "" || document["bundled_revision"] == "" {
+	primary := skillEntry(document, "arkoren")
+
+	if len(primary["modified_files"].([]any)) != 1 || primary["installed_revision"] == "" || primary["bundled_revision"] == "" {
 		t.Fatalf("status = %v", document)
 	}
 }
@@ -457,7 +461,7 @@ func TestSkillsUpdateDryRunPreservesInstalledRevision(t *testing.T) {
 		t.Fatalf("dry-run changed installed revision: %+v, %v", installed, err)
 	}
 
-	contains(t, env.Stdout.(*bytes.Buffer).String(), `"operation": "write"`, `"path": "SKILL.md"`, `"conflicts": []`)
+	contains(t, env.Stdout.(*bytes.Buffer).String(), `"action": "write"`, `"path": ".agents/skills/arkoren/SKILL.md"`)
 }
 
 // TestSkillsInstallDifferentRevisionRequiresExplicitUpdate avoids implicit upgrades.
@@ -470,9 +474,9 @@ func TestSkillsInstallDifferentRevisionRequiresExplicitUpdate(t *testing.T) {
 
 	err := runSkills(t.Context(), []string{"install"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
-	if !strings.Contains(err.Error(), "run arkoren skills update") {
+	if !strings.Contains(err.Error(), "another revision is installed") {
 		t.Fatal(err)
 	}
 }
@@ -546,7 +550,7 @@ func TestSkillsUpdateProtectsModifiedAPIPage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runSkills(t.Context(), []string{"update"}, env))
+	requireNewConflict(t, runSkills(t.Context(), []string{"update"}, env))
 
 	content, err := os.ReadFile(path)
 
@@ -565,4 +569,17 @@ func TestSkillsUpdateProtectsModifiedAPIPage(t *testing.T) {
 	if err != nil || string(content) != "old skill" {
 		t.Fatalf("conflict partially updated skill: %q, %v", content, err)
 	}
+}
+
+// skillEntry returns the named skill from a decoded skills result.
+func skillEntry(document map[string]any, name string) map[string]any {
+	skills, _ := document["skills"].([]any)
+
+	for _, entry := range skills {
+		if fields := entry.(map[string]any); fields["name"] == name {
+			return fields
+		}
+	}
+
+	return nil
 }

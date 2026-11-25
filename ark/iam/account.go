@@ -266,7 +266,7 @@ func (identity *IAM) Account(ctx context.Context) (AccountView, error) {
 //
 // Example:
 //
-//	web.Get("/account", identity.AccountHandler())
+//	web.Get("/account", identity.AccountHandler(), iam.AccountOperation)
 func (identity *IAM) AccountHandler() router.Handler {
 	need(identity.account != nil, "AccountHandler", "Builder.Account")
 

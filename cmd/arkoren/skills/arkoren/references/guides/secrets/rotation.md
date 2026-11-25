@@ -157,11 +157,13 @@ data or backups unreadable.
 Provision replacement material explicitly using the
 [key command workflow](../cli/keys.md), then load the stored representation as
 [typed key configuration](../keys/overview.md#load-configuration). For shared
-application keys, `key.ParseShared` from `arkoren.dev/foundation/key` parses the
-encoded representation; encryption drivers consume `key.Shared`, not the
-secret-store version string or unparsed text. Check read and parse errors before
-constructing a driver. Never generate a replacement because startup loading
-failed.
+application keys, read the secret as a `key.Ring[key.Shared]` from
+`arkoren.dev/foundation/key`: the store decodes the ring text for you, and
+encryption drivers consume the ring, not the secret-store version string or
+unparsed text. Check read and decode errors before constructing a driver. Never
+generate a replacement because startup loading failed. Add and promote keys with
+the [ring commands](../cli/keys.md#rotate-rings), which can read and write the ring
+through a pipe to the secrets manager.
 
 Follow [Encryption Keys](../encryption/keys.md) for previous-key configuration
 and [Storing Encrypted Data](../encryption/storing.md) for re-encryption.

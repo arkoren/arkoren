@@ -1,4 +1,13 @@
 package {{.Feature}}
 
-// Domain types and pure rules of the {{.Feature}} feature belong in this file.
-// Service, Store and the Default providers live in their own files beside it.
+import "errors"
+
+// Domain types, errors and pure rules of the {{.Feature}} feature belong in this
+// file. The feature is plain Go: it never imports the application package or
+// internal/bootstrap, and its constructors (NewStore, NewService) take their
+// dependencies as arguments. internal/bootstrap/{{.Feature}}.go wires them.
+
+// ErrNotFound reports a {{.Feature}} record that does not exist. It is a plain
+// domain error: each surface maps it to its own wire form, as a web child maps
+// it to a 404 problem in its problems.go.
+var ErrNotFound = errors.New("{{.Feature}}: not found")

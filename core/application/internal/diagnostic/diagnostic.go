@@ -49,8 +49,6 @@ type HealthCheckView struct {
 	Since time.Time `json:"since,omitzero"`
 	// CheckedAt is when the check last completed.
 	CheckedAt time.Time `json:"checked_at,omitzero"`
-	// Age formats the age of CheckedAt.
-	Age string `json:"age,omitzero"`
 }
 
 // healthInput permits an explicit check refresh instead of passive observation.
@@ -112,8 +110,7 @@ func (owner *Owner) diagnosticHealth(ctx context.Context, input healthInput) (He
 
 // healthCheck applies the app's explicit disclosure policy to failure text.
 func (owner *Owner) healthCheck(check health.Status) HealthCheckView {
-	item := HealthCheckView{Name: check.Name, Status: diagnostic.StatusOK, Since: check.Since,
-		CheckedAt: check.CheckedAt, Age: diagnostic.Age(time.Now(), check.CheckedAt)}
+	item := HealthCheckView{Name: check.Name, Status: diagnostic.StatusOK, Since: check.Since, CheckedAt: check.CheckedAt}
 
 	if check.Err != nil {
 		item.Status, item.Error = diagnostic.StatusFailing, reasonWithheld

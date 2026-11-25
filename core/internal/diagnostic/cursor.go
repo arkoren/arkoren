@@ -13,15 +13,19 @@ import (
 	"arkoren.dev/foundation/validate"
 )
 
-// Page contains a bounded cursor result. History snapshots may be truncated;
-// continuation pages instead report HasMore and never skip matching records.
+// Page contains a bounded cursor result. Truncated is the single signal that
+// more matching records exist than Items holds: a cursor-less snapshot omitted
+// older history, or a continuation page stopped at its limit and the next call
+// returns the rest without skipping a record.
 // Example: var page diagnostic.Page[string]; _ = page.Cursor
 type Page[T any] struct {
 	// Items contains records oldest first, never null.
 	// Example: for _, item := range page.Items { fmt.Println(item) }
 	Items []T `json:"items"`
-	// Truncated reports history omitted from a cursor-less snapshot.
-	// Example: if page.Truncated { fmt.Println("history bounded") }
+	// Truncated reports matching records beyond Items: history omitted from a
+	// cursor-less snapshot, or records left after a continuation page's limit
+	// (call again, without waiting, to drain them).
+	// Example: if page.Truncated { fmt.Println("more records exist") }
 	Truncated bool `json:"truncated"`
 	// Cursor is an opaque continuation token, including when Items is empty.
 	// Example: arguments.Cursor = page.Cursor
@@ -29,9 +33,6 @@ type Page[T any] struct {
 	// Dropped counts overwritten records, including uninspectable nonmatches.
 	// Example: if page.Dropped > 0 { fmt.Println("records lost") }
 	Dropped uint64 `json:"dropped"`
-	// HasMore means retained matching records remain after this page.
-	// Example: if page.HasMore { /* call again without waiting */ }
-	HasMore bool `json:"has_more"`
 	// InstanceChanged marks store replacement or reset; Cursor is a fresh tail.
 	// Example: if page.InstanceChanged { fmt.Println("capture restarted") }
 	InstanceChanged bool `json:"instance_changed"`
@@ -241,7 +242,7 @@ func scanPage[T, Out any](request CursorRequest, state Snapshot[T], feed Feed[T,
 		}
 
 		if len(page.Items) == request.Limit {
-			page.HasMore = true
+			page.Truncated = true
 			break
 		}
 

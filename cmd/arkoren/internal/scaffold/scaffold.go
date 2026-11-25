@@ -78,8 +78,10 @@ func Execute(ctx context.Context, options Options, inventory []files.File, env c
 	}
 
 	if len(conflicts) != 0 {
+		// A preview already printed its verdict; it only repeats the exit code
+		// the real run would end with.
 		if options.DryRun {
-			return &console.ExitError{Code: console.ExitUsage}
+			return &console.ExitError{Code: console.ExitCodeFor(console.TypeFileConflict), Type: console.TypeFileConflict}
 		}
 
 		return console.ConflictingPaths("create project", options.Folder, conflicts)
@@ -98,17 +100,27 @@ func Execute(ctx context.Context, options Options, inventory []files.File, env c
 	}
 
 	if !options.SkipTidy {
-		if err := tidy(ctx, options.Folder); err != nil {
+		if err := Tidy(ctx, options.Folder); err != nil {
 			return err
 		}
 	}
 
-	report := map[string]any{
-		"created": true, "destination": options.Folder, "module": options.Module, "file_count": len(inventory),
+	report := newResult{
+		Summary:     fmt.Sprintf("Created project %s in %s", options.Module, options.Folder),
+		Module:      options.Module,
+		Destination: options.Folder,
+		FileCount:   len(inventory),
+		NextSteps:   []console.Step{{Text: "Enter the project", Command: "cd " + console.Quote(options.Folder)}},
 	}
 
+	if options.SkipTidy {
+		report.NextSteps = append(report.NextSteps, console.Step{Text: "Fetch the dependencies", Command: "go mod tidy"})
+	}
+
+	report.NextSteps = append(report.NextSteps, console.Step{Text: "Start the application", Command: "make run"})
+
 	if env.Presentation.Verbose {
-		report["files"] = files.Paths(inventory)
+		report.Changes = newChanges(inventory)
 	}
 
 	return env.Result(report)
@@ -118,7 +130,7 @@ func Execute(ctx context.Context, options Options, inventory []files.File, env c
 // before rendering or filesystem access. It does not normalize user input.
 func validateNewOptions(options Options) error {
 	if options.Folder == "" {
-		return console.UsageError("new requires a destination (use . for the current directory); usage: arkoren new DIR [flags]")
+		return console.UsageError("missing argument DIR: new takes the destination directory, . for the current one")
 	}
 
 	if options.NoAgentFiles && options.SkillsDir != skill.DefaultSkillsDir {
@@ -197,7 +209,9 @@ func confirmNew(ctx context.Context, options Options, env console.Environment) e
 	}
 
 	if !env.InputTerminal {
-		return console.UsageError("destination is not empty; review it and pass --yes to approve without a terminal")
+		return console.Fail(console.TypeUsage,
+			[]console.Step{{Text: "Review the destination, then pass --yes to approve without a terminal"}},
+			"destination is not empty and input is not a terminal")
 	}
 
 	return askNew(ctx, options.Folder, env)

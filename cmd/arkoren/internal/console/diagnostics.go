@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 )
 
 // Default diagnostic limits keep incidental server context out of ordinary
@@ -42,27 +41,25 @@ func (failure *ConflictError) Error() string {
 	return fmt.Sprintf("cannot %s: %d conflicts; no files were written", failure.operation, len(failure.paths))
 }
 
-// ConflictingPaths returns the local usage failure without embedding its file
-// list in text. Verbose reporting exposes the retained paths as a JSON array.
+// ConflictingPaths returns the local [TypeFileConflict] failure without
+// embedding its file list in text. Verbose reporting exposes the retained paths as a JSON array.
 func ConflictingPaths(operation, destination string, paths []string) error {
-	return &ExitError{Code: ExitUsage, Err: &ConflictError{
+	return &ExitError{Code: ExitCodeFor(TypeFileConflict), Type: TypeFileConflict, Err: &ConflictError{
 		operation: operation, destination: destination, paths: slices.Clone(paths),
 	}}
 }
 
 // Report selects either a short conflict summary or the complete structured
-// path list. The original message is identical in both modes.
+// path list. The original message is identical in both modes; a caller that
+// wants every path offers a --verbose step.
 func (failure *ConflictError) Report(verbose bool) ErrorReport {
 	report := ErrorReport{
-		Message: failure.Error(), Type: "file_conflict", Destination: failure.destination,
+		Message: failure.Error(), Type: TypeFileConflict, Destination: failure.destination,
 		ConflictCount: len(failure.paths),
-		Hint:          "preserve existing files before resolving conflicts",
 	}
 
 	if verbose {
 		report.Conflicts = failure.paths
-	} else {
-		report.Hint += "; --verbose lists every conflict"
 	}
 
 	return report.Concise(verbose)
@@ -76,13 +73,9 @@ func (report ErrorReport) Concise(verbose bool) ErrorReport {
 	}
 
 	report.Message, report.Truncated = DiagnosticText(report.Message)
-	var shortened bool
-
-	report.Hint, shortened = DiagnosticText(report.Hint)
-	report.Truncated = report.Truncated || shortened
 
 	if len([]rune(report.Type)) > MaxDiagnosticRunes {
-		report.Type = ""
+		report.Type = TypeToolError
 		report.Truncated = true
 	}
 
@@ -91,17 +84,7 @@ func (report ErrorReport) Concise(verbose bool) ErrorReport {
 		report.DetailsOmitted = true
 	}
 
-	report = report.validationSummary()
-
-	if (report.Truncated || report.DetailsOmitted) && !strings.Contains(report.Hint, "--verbose") {
-		if report.Hint != "" {
-			report.Hint += "; "
-		}
-
-		report.Hint += "--verbose includes full diagnostics"
-	}
-
-	return report
+	return report.validationSummary()
 }
 
 // ConciseContext permits small, useful failure context but rejects large lists

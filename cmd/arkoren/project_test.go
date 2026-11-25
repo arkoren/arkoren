@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"arkoren.dev/cmd/arkoren/internal/console"
 	"arkoren.dev/cmd/arkoren/internal/remote"
@@ -308,6 +311,18 @@ func requireNewUsage(t *testing.T, err error) {
 	}
 }
 
+// requireNewConflict checks the file-conflict contract: a failure of type
+// file_conflict that exits 1, like every failure that is not usage or auth.
+func requireNewConflict(t *testing.T, err error) {
+	t.Helper()
+
+	exit, ok := errors.AsType[*console.ExitError](err)
+
+	if !ok || exit.Type != console.TypeFileConflict || exit.Code != console.ExitFailure {
+		t.Fatalf("error = %v, want a file conflict", err)
+	}
+}
+
 // TestNewDefaults checks the application files, agent bundle, and basename default.
 // No go command is invoked: ordinary scaffold tests remain fully offline.
 func TestNewDefaults(t *testing.T) {
@@ -326,14 +341,14 @@ func TestNewDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(module) != "module "+name+"\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.17.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
+	if string(module) != "module "+name+"\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.2.0\n\tarkoren.dev/core v0.23.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
 		t.Fatalf("go.mod = %q", module)
 	}
 
 	inventory := []string{
-		"cmd/server/main.go", "internal/bootstrap/listener.go", "internal/bootstrap/mcp.go",
-		"internal/bootstrap/router.go", "internal/welcome/web/routes.go",
-		"internal/bootstrap/app.go", "internal/bootstrap/logging.go", ".env", ".env.example", "go.mod", "README.md",
+		"cmd/server/main.go", "internal/bootstrap/server/app.go", "internal/bootstrap/server/compose.go", "internal/bootstrap/server.go", "internal/bootstrap/mcp.go",
+		"internal/bootstrap/router.go",
+		"internal/bootstrap/logging.go", ".env", ".env.example", "go.mod", "README.md",
 		"Dockerfile", "Makefile", ".dockerignore", ".gitignore", ".editorconfig",
 	}
 
@@ -403,7 +418,7 @@ func TestNewContainerFileCollisionsNeverOverwrite(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+		requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 		content, err := os.ReadFile(path)
 
@@ -430,7 +445,7 @@ func TestNewRequiresDestination(t *testing.T) {
 
 	requireNewUsage(t, err)
 
-	if !strings.Contains(err.Error(), "arkoren new DIR [flags]") || !strings.Contains(err.Error(), "use .") {
+	if !strings.Contains(err.Error(), "missing argument DIR") || !strings.Contains(err.Error(), "for the current one") {
 		t.Fatalf("missing destination guidance: %v", err)
 	}
 
@@ -491,7 +506,7 @@ func TestNewNamedDestinationDefaultsModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(content) != "module momentum\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.1.0\n\tarkoren.dev/core v0.17.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
+	if string(content) != "module momentum\n\ngo 1.27\n\nrequire (\n\tarkoren.dev/ark/mcp v0.2.0\n\tarkoren.dev/core v0.23.0\n\tgithub.com/joho/godotenv v1.5.1\n\tgithub.com/lmittmann/tint v1.2.1\n\tgithub.com/mattn/go-isatty v0.0.24\n)\n" {
 		t.Fatalf("go.mod = %q", content)
 	}
 }
@@ -549,7 +564,7 @@ func TestNewFlagsAroundDestination(t *testing.T) {
 
 	output := env.Stdout.(*bytes.Buffer).String()
 
-	contains(t, output, `"module": "example.com/hello"`, `"yes": true`, `"conflicts": []`)
+	contains(t, output, `"module": "example.com/hello"`, `"dry_run": true`, `"action": "create"`)
 
 	if strings.Contains(output, "AGENTS.md") {
 		t.Fatal("opt-out preview includes agent files")
@@ -582,11 +597,11 @@ func TestNewCustomFolderAndModule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(content), `"example.com/team/service/v2/internal/bootstrap"`) {
+	if !strings.Contains(string(content), `"example.com/team/service/v2/internal/bootstrap/server"`) {
 		t.Fatalf("wrong imports: %s", content)
 	}
 
-	content, err = os.ReadFile(filepath.Join(env.Dir, "nested/my-api/internal/bootstrap/app.go"))
+	content, err = os.ReadFile(filepath.Join(env.Dir, "nested/my-api/internal/bootstrap/server/app.go"))
 
 	if err != nil {
 		t.Fatal(err)
@@ -658,7 +673,7 @@ func TestNewCollisionNeverOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 	content, err := os.ReadFile(path)
 
@@ -693,8 +708,8 @@ func TestNewNonemptyRequiresTerminal(t *testing.T) {
 
 	requireNewUsage(t, err)
 
-	if !strings.Contains(err.Error(), "--yes") {
-		t.Fatalf("missing automation hint: %v", err)
+	if exit, ok := errors.AsType[*console.ExitError](err); !ok || len(exit.Steps) != 1 || !strings.Contains(exit.Steps[0].Text, "--yes") {
+		t.Fatalf("missing automation step: %v", err)
 	}
 }
 
@@ -843,7 +858,7 @@ func TestNewDryRunDoesNotPromptOrWrite(t *testing.T) {
 
 	output := env.Stdout.(*bytes.Buffer).String()
 	fragments := []string{
-		env.Dir, `"module":`, `"yes": false`, "go.mod", `"conflicts": []`,
+		env.Dir, `"module":`, `"dry_run": true`, "go.mod",
 	}
 
 	for _, fragment := range fragments {
@@ -872,7 +887,7 @@ func TestNewDryRunReportsCollisions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--dry-run", "--verbose"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--dry-run", "--verbose"}, env))
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 
@@ -892,8 +907,8 @@ func TestNewRejectsSymlinkDestinations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{"linked", "--yes"}, env))
-	requireNewUsage(t, runNew(t.Context(), []string{"linked/child", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{"linked", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{"linked/child", "--yes"}, env))
 }
 
 // TestNewRejectsSymlinkGeneratedParent detects an internal symlink during
@@ -907,7 +922,7 @@ func TestNewRejectsSymlinkGeneratedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 	if _, err := os.Stat(filepath.Join(env.Dir, "go.mod")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("preflight wrote go.mod: %v", err)
@@ -925,7 +940,7 @@ func TestNewRejectsDanglingGeneratedSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 }
 
 // TestNewRejectsApplicationSymlink extends no-overwrite protection to the
@@ -944,7 +959,7 @@ func TestNewRejectsApplicationSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requireNewUsage(t, runNew(t.Context(), []string{".", "--yes"}, env))
+	requireNewConflict(t, runNew(t.Context(), []string{".", "--yes"}, env))
 
 	if _, err := os.Stat(filepath.Join(env.Dir, "go.mod")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("preflight wrote go.mod: %v", err)
@@ -1013,7 +1028,7 @@ func TestNewChecksumCollisionRejectsBeforeWriting(t *testing.T) {
 	}
 
 	err := execute(t.Context(), []string{"new", ".", "--yes"}, env)
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	entries, err := os.ReadDir(env.Dir)
 
@@ -1077,6 +1092,7 @@ func testNewGeneratedProject(t *testing.T) {
 	}
 
 	testNewExecutableStartupFailure(t, destination)
+	testAddIAMGeneratedServer(t, env, destination)
 }
 
 // useCheckoutModules points the generated project's arkoren.dev modules at this
@@ -1103,7 +1119,8 @@ func useCheckoutModules(t *testing.T, destination string) {
 	replaced := string(module)
 
 	for _, name := range []string{
-		"core", "ark/mcp", "foundation/collection", "foundation/key", "foundation/problem", "foundation/query", "foundation/validate",
+		"core", "ark/iam", "ark/mcp", "ark/oauth", "driver/aes", "driver/argon2", "driver/sqlite",
+		"foundation/collection", "foundation/key", "foundation/problem", "foundation/query", "foundation/totp", "foundation/validate",
 	} {
 		replaced += fmt.Sprintf("\nreplace arkoren.dev/%s => %s\n", name, strconv.Quote(filepath.ToSlash(filepath.Join(checkout, name))))
 	}
@@ -1189,7 +1206,7 @@ func TestScaffoldPlanDryRunRejectsFileParent(t *testing.T) {
 
 	err := runNew(t.Context(), []string{"hello", "--skills-dir", "go.mod", "--dry-run", "--verbose"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 	conflicts := document["conflicts"].([]any)
@@ -1219,7 +1236,7 @@ func TestScaffoldPlanExecutionRejectsFileParent(t *testing.T) {
 
 	err := runNew(t.Context(), []string{"hello", "--skills-dir", "go.mod", "--yes"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	if !strings.Contains(err.Error(), "go.mod: generated file is also required as a directory") {
 		t.Fatalf("missing plan conflict: %v", err)
@@ -1240,9 +1257,9 @@ func TestScaffoldPlanExecutionRejectsNestedFileParent(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	err := runNew(t.Context(), []string{".", "--skills-dir", "internal/bootstrap/app.go", "--yes"}, env)
+	err := runNew(t.Context(), []string{".", "--skills-dir", "internal/bootstrap/logging.go", "--yes"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	entries, err := os.ReadDir(env.Dir)
 
@@ -1261,7 +1278,7 @@ func TestScaffoldPlanDryRunRejectsCaseFoldedFileParent(t *testing.T) {
 
 	err := runNew(t.Context(), []string{"hello", "--skills-dir", "GO.MOD", "--dry-run", "--verbose"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	document := (result{stdout: env.Stdout.(*bytes.Buffer).String()}).json(t)
 	conflicts := document["conflicts"].([]any)
@@ -1285,9 +1302,9 @@ func TestScaffoldPlanExecutionRejectsCaseFoldedNestedParent(t *testing.T) {
 
 	env := scaffoldEnvironment(t)
 
-	err := runNew(t.Context(), []string{"hello", "--skills-dir", "INTERNAL/BOOTSTRAP/APP.GO", "--yes"}, env)
+	err := runNew(t.Context(), []string{"hello", "--skills-dir", "INTERNAL/BOOTSTRAP/LOGGING.GO", "--yes"}, env)
 
-	requireNewUsage(t, err)
+	requireNewConflict(t, err)
 
 	entries, err := os.ReadDir(env.Dir)
 
@@ -1307,7 +1324,7 @@ func TestScaffoldPlanAllowsSharedDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, path := range []string{"internal/bootstrap/app.go", "internal/bootstrap/arkoren/SKILL.md"} {
+	for _, path := range []string{"internal/bootstrap/logging.go", "internal/bootstrap/arkoren/SKILL.md"} {
 		if _, err := os.Stat(filepath.Join(env.Dir, "hello", filepath.FromSlash(path))); err != nil {
 			t.Fatal(err)
 		}
@@ -1347,5 +1364,138 @@ func TestScaffoldPlanAllowsRootSkillsDirectory(t *testing.T) {
 
 	if err := runNew(t.Context(), []string{"hello", "--skills-dir", ".", "--dry-run"}, env); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// migrateCompose is the Compose of the migrate process the generated-project
+// test adds: the migrator's Up is its only runner, so the process ends when the
+// migrations finish.
+const migrateCompose = `package migrate
+
+import (
+	"arkoren.dev/core/application"
+
+	"example.com/hello/internal/bootstrap"
+)
+
+// Compose runs the pending migrations once.
+func Compose(compose *application.Composer) {
+	compose.Run(compose.Use(bootstrap.Migrator).Up)
+}
+`
+
+// testAddIAMGeneratedServer adds the identity module and a migrate process to
+// the generated project, builds both, and checks what a user sees without any
+// manual step: the migrate process exits 0 on its own, and the server started
+// from the project's .env answers POST /auth/login with 422 and GET
+// /auth/sessions with 401, the routes mounted under /auth.
+func testAddIAMGeneratedServer(t *testing.T, env console.Environment, destination string) {
+	t.Helper()
+
+	env.Dir = destination
+
+	for _, args := range [][]string{{"add", "ark", "iam", "--skip-tidy"}, {"add", "process", "migrate", "--skip-tidy"}} {
+		if err := execute(t.Context(), args, env); err != nil {
+			t.Fatalf("arkoren %v: %v", args, err)
+		}
+	}
+
+	compose := filepath.Join(destination, "internal/bootstrap/migrate/compose.go")
+
+	if err := os.WriteFile(compose, []byte(migrateCompose), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	binaries := t.TempDir()
+
+	for _, args := range [][]string{{"mod", "tidy"}, {"build", "-o", binaries, "./cmd/server", "./cmd/migrate"}} {
+		command := exec.CommandContext(t.Context(), "go", args...)
+		command.Dir = destination
+		command.Env = append(os.Environ(), "GOWORK=off")
+
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("go %v: %v\n%s", args, err, output)
+		}
+	}
+
+	// The binaries run in the project directory, so godotenv loads its .env.
+	migrate := exec.CommandContext(t.Context(), filepath.Join(binaries, "migrate"))
+	migrate.Dir = destination
+
+	if output, err := migrate.CombinedOutput(); err != nil {
+		t.Fatalf("migrate process did not exit 0: %v\n%s", err, output)
+	}
+
+	address := freeAddress(t)
+	server := exec.CommandContext(t.Context(), filepath.Join(binaries, "server"))
+	server.Dir = destination
+	server.Env = append(os.Environ(), "HTTP_ADDR="+address)
+
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		_ = server.Process.Kill() // The test is over: nothing is left to drain.
+		_ = server.Wait()         // The kill makes this report the signal, which is expected.
+	})
+
+	if status := requestUntilServed(t, http.MethodGet, "http://"+address+"/auth/sessions", ""); status != http.StatusUnauthorized {
+		t.Fatalf("GET /auth/sessions = %d, want 401", status)
+	}
+
+	if status := requestUntilServed(t, http.MethodPost, "http://"+address+"/auth/login", `{}`); status != http.StatusUnprocessableEntity {
+		t.Fatalf("POST /auth/login = %d, want 422", status)
+	}
+}
+
+// freeAddress returns a loopback address with a port nothing listens on now.
+func freeAddress(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	address := listener.Addr().String()
+
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return address
+}
+
+// requestUntilServed sends the request until the server accepts the connection,
+// for at most thirty seconds, and returns the status of the first answer.
+func requestUntilServed(t *testing.T, method, url, body string) int {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	for {
+		request, err := http.NewRequestWithContext(ctx, method, url, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		request.Header.Set("Content-Type", "application/json")
+
+		response, err := http.DefaultClient.Do(request)
+		if err == nil {
+			if err := response.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			return response.StatusCode
+		}
+
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s %s: no answer: %v", method, url, err)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }

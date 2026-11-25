@@ -28,8 +28,8 @@ AI host → MCP client → HTTP endpoint → typed operation
 `arkoren.dev/core/mcp` defines the last step: immutable tools that do not depend
 on a protocol SDK. Serving them is a separate task owned by the
 [MCP Server ark](../mcp-server/first-server.md), which registers selected
-definitions with the official Go MCP SDK and returns an `http.Handler` that your
-application mounts.
+definitions with the official Go MCP SDK and returns an endpoint whose route your
+application registers on its router.
 
 Defining tools does not require a model API key or a model conversation in your
 Go process. If your application needs to run the model itself, use

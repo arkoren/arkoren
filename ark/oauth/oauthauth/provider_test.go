@@ -221,15 +221,18 @@ func (driver gcmDriver) Encrypt(value []byte) ([]byte, error) {
 	return driver.aead.Seal(nonce, nonce, value, nil), nil
 }
 
-// Decrypt opens a value produced by Encrypt.
-func (driver gcmDriver) Decrypt(value []byte) ([]byte, error) {
+// Decrypt opens a value produced by Encrypt. The fake has a single key, so
+// previous is always false.
+func (driver gcmDriver) Decrypt(value []byte) ([]byte, bool, error) {
 	n := driver.aead.NonceSize()
 
 	if len(value) < n {
-		return nil, errors.New("ciphertext too short")
+		return nil, false, errors.New("ciphertext too short")
 	}
 
-	return driver.aead.Open(nil, value[:n], value[n:], nil)
+	plaintext, err := driver.aead.Open(nil, value[:n], value[n:], nil)
+
+	return plaintext, false, err
 }
 
 // testCipher returns an Encrypter over a fixed-key AES-GCM fake.

@@ -14,6 +14,25 @@
 //		return err
 //	}
 //
+// A process entry point can build the application from the composition graph
+// instead. The application is a [Provider], so its settings take handles such
+// as a log handler or telemetry from ordinary providers, and [Run] (or [Start],
+// which returns the started application) builds it, composes the process on the
+// same composer and runs it:
+//
+//	var App = application.Provide(func(compose *application.Composer) *application.Application {
+//		return application.New(func(app *application.Builder) {
+//			app.Telemetry(compose.Use(Telemetry))
+//		})
+//	})
+//
+//	err := application.Run(ctx, App, Compose)
+//
+// Cleanup registered by providers while the application is built is owned by
+// the application. [Composer.App] panics with [ErrProviderCycle] until the
+// build finishes; a failed build is reported once on stderr, since no
+// application logger exists yet.
+//
 // An [Application] is optional: the router, server, and services work
 // without one.
 // At the process entry point, [NewSignalContext] requests graceful shutdown on
@@ -80,6 +99,13 @@
 // through [Composer.Must] or [Composer.Require] caches nothing. Returning a
 // value does not start or stop it: register cleanup once, immediately after
 // acquisition, in the build function or constructor that owns the resource.
+//
+// A test replaces one provider's value with [Composer.Supply], which sets the
+// value without running the provider's build, so its startup, cleanup and checks
+// never register. The test passes [Start] a root provider that supplies the
+// values and then returns the production root through Use; the root is built
+// first, so a value is supplied before anything uses its provider. Supply panics
+// with [ErrInvalidPhase] once the provider is built or while it is building.
 //
 // Because Startup hooks run in registration order and Cleanup in reverse, a
 // provider that calls Use on its dependencies before registering its own

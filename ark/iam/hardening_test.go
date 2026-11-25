@@ -117,14 +117,14 @@ func TestOwnUsersNeedTheVerifiedHooks(t *testing.T) {
 		}
 		verified := func(context.Context, string) (bool, error) { return true, nil }
 		prove := func(context.Context, string) (bool, error) { return false, nil }
-		for name, own := range map[string]iam.Users{
-			"create without hooks": {Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate},
-			"only Verified":        {Provider: provider, Lookup: users.lookup, Rotate: users.rotate, Verified: verified},
-			"only ProveEmail":      {Provider: provider, Lookup: users.lookup, Rotate: users.rotate, ProveEmail: prove},
+		for name, configure := range map[string]iam.UsersBuilderFunc{
+			"create without hooks": func(own *iam.UsersBuilder) { own.Lookup(users.lookup).Create(users.create).Rotate(users.rotate) },
+			"only Verified":        func(own *iam.UsersBuilder) { own.Lookup(users.lookup).Rotate(users.rotate).Verification(verified, nil) },
+			"only ProveEmail":      func(own *iam.UsersBuilder) { own.Lookup(users.lookup).Rotate(users.rotate).Verification(nil, prove) },
 		} {
 			_, err := construct(newBox(t, wire{}), db, cache.New(memorycache.New()), func(identity *iam.Builder) {
 				identity.Instance(instance)
-				identity.Users(own)
+				identity.Users(provider, configure)
 				identity.Password(hasher(), registration)
 			})
 			if !errors.Is(err, iam.ErrInvalidConfig) {
