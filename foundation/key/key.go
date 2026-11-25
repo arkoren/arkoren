@@ -2,7 +2,9 @@ package key
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -172,6 +174,36 @@ func (secret Shared) Bytes() []byte {
 //	return os.WriteFile("encryption.key", []byte(material.Base64()), 0o600)
 func (secret Shared) Base64() string {
 	return base64.StdEncoding.EncodeToString(secret.Bytes())
+}
+
+// fingerprintDomain separates fingerprints from every other SHA-256 use of the
+// same key bytes. It is versioned so the scheme can change without ambiguity.
+const fingerprintDomain = "arkoren.dev/foundation/key/fingerprint/v1"
+
+// Fingerprint returns a lowercase hex SHA-256 over a fixed domain-separation
+// prefix followed by the raw key bytes. It identifies a key in logs, status
+// output and rotation checks without revealing it: the digest cannot be
+// reversed, and the prefix keeps it from matching a plain hash of the key
+// elsewhere. A zero value returns an empty string.
+//
+// Two keys have the same fingerprint only if their bytes are equal, so it is
+// safe to display and compare.
+//
+// Example:
+//
+//	material, err := key.GenerateShared()
+//	if err != nil {
+//		return err
+//	}
+//	fmt.Println(material.Fingerprint()) // 64 hex characters
+func (secret Shared) Fingerprint() string {
+	if secret.material == nil {
+		return ""
+	}
+
+	digest := sha256.Sum256([]byte(fingerprintDomain + *secret.material))
+
+	return hex.EncodeToString(digest[:])
 }
 
 // String redacts secret material in ordinary formatting.

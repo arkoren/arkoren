@@ -2,7 +2,9 @@ package key_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -252,5 +254,53 @@ func TestFormattingRedactsMaterial(t *testing.T) {
 		if err == nil || len(encoded) != 0 {
 			t.Fatalf("unexpected implicit serialization: %s, %v", encoded, err)
 		}
+	}
+}
+
+// TestSharedFingerprintIsDomainSeparatedSHA256 verifies the documented digest.
+func TestSharedFingerprintIsDomainSeparatedSHA256(t *testing.T) {
+	t.Parallel()
+
+	material, err := key.NewShared(bytes.Repeat([]byte{7}, 32))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	digest := sha256.Sum256(append([]byte("arkoren.dev/foundation/key/fingerprint/v1"), material.Bytes()...))
+
+	if material.Fingerprint() != hex.EncodeToString(digest[:]) {
+		t.Fatal("fingerprint does not match the documented construction")
+	}
+}
+
+// TestSharedFingerprintDiffersByKey verifies distinct keys have distinct fingerprints.
+func TestSharedFingerprintDiffersByKey(t *testing.T) {
+	t.Parallel()
+
+	first, second := mustShared(t), mustShared(t)
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("distinct keys share a fingerprint")
+	}
+}
+
+// TestSharedFingerprintHidesMaterial verifies the digest has the expected shape.
+func TestSharedFingerprintHidesMaterial(t *testing.T) {
+	t.Parallel()
+
+	material := mustShared(t)
+
+	if strings.Contains(material.Fingerprint(), material.Base64()) || len(material.Fingerprint()) != 64 {
+		t.Fatal("fingerprint has the wrong shape")
+	}
+}
+
+// TestSharedZeroFingerprintIsEmpty verifies a zero value has no fingerprint.
+func TestSharedZeroFingerprintIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	if (key.Shared{}).Fingerprint() != "" {
+		t.Fatal("zero fingerprint is not empty")
 	}
 }
