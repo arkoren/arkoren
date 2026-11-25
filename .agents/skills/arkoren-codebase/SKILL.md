@@ -969,6 +969,9 @@ category and brand spellings; changing those spellings for existing modules
 requires a new rendering schema. git-cliff still owns note generation and version
 selection; the planner supplies the display title as native context metadata.
 Keep `DRY RUN` in the preview summary, outside canonical notes.
+Plan schema 4 is schema 3 plus `release.EscapeHTML` on notes: the website importer
+rejects raw HTML, so unquoted placeholders such as `/<name>` from commit bodies are
+escaped outside code spans and fences. Schemas 1-3 stay byte-frozen for recovery.
 Schema 2 retains tag-shaped neutral headings through frozen `neutral.toml`;
 schema 1 retains frozen `historical.toml`, including its preview label.
 Recovery selects both note rendering and GitHub release titles from the recorded

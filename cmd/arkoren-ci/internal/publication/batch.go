@@ -38,7 +38,7 @@ type Batch struct {
 
 // NewBatch computes the signed-v1 plan digest without changing its wire shape.
 func NewBatch(plan release.Plan) (Batch, error) {
-	if plan.SchemaVersion != 1 && plan.SchemaVersion != 2 && plan.SchemaVersion != 3 {
+	if plan.SchemaVersion < 1 || plan.SchemaVersion > 4 {
 		return Batch{}, fmt.Errorf("unsupported release plan schema: %d", plan.SchemaVersion)
 	}
 	for _, entry := range plan.Modules {
