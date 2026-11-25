@@ -232,7 +232,7 @@ func TestReadableBatchAcceptsMatchingHeading(t *testing.T) {
 }
 
 func TestNewBatchRejectsUnknownPlanSchema(t *testing.T) {
-	if _, err := NewBatch(release.Plan{SchemaVersion: 4}); err == nil {
+	if _, err := NewBatch(release.Plan{SchemaVersion: 5}); err == nil {
 		t.Fatal("unknown rendering schema accepted")
 	}
 }

@@ -146,7 +146,7 @@ func TestPlanNotesAreNeutralButSummaryRemainsPreview(t *testing.T) {
 	commit(t, root, "fix: repair payload", map[string]string{"core/a.go": "fix"})
 	result := plan(t, root)
 	item := entry(t, result, "core")
-	if result.SchemaVersion != 3 ||
+	if result.SchemaVersion != 4 ||
 		!strings.HasPrefix(strings.TrimSpace(item.Notes), "## Core "+*item.NextVersion+"\n") ||
 		strings.Contains(item.Notes, "DRY RUN") {
 		t.Fatalf("canonical notes contain preview wording: %+v", result)

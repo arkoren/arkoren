@@ -46,7 +46,7 @@ type Entry struct {
 
 // Plan records proposals and their rendering schema, not canonical JSON bytes.
 type Plan struct {
-	// SchemaVersion selects notes: 1 is historical, 2 neutral, 3 readable names.
+	// SchemaVersion selects notes: 1 is historical, 2 neutral, 3 readable names, 4 readable names with raw HTML escaped.
 	SchemaVersion int `json:"schema_version"`
 	// DryRun is always true.
 	DryRun bool `json:"dry_run"`
@@ -100,7 +100,7 @@ func git(ctx context.Context, root string, args ...string) (string, error) {
 
 // Prepare calculates proposals from committed policy, history and native cliff.
 func Prepare(ctx context.Context, root, sha string, initial []string) (Plan, error) {
-	return prepare(ctx, root, sha, initial, false, 3)
+	return prepare(ctx, root, sha, initial, false, 4)
 }
 
 // PrepareHistorical reproduces schema-1 notes and historical module inventory.
@@ -117,7 +117,7 @@ func PrepareRecorded(ctx context.Context, root, sha string, schema int) (Plan, e
 
 // prepare keeps historical decoding an explicit operation, not a policy fallback.
 func prepare(ctx context.Context, root, sha string, initial []string, historical bool, schema int) (Plan, error) {
-	if schema != 1 && schema != 2 && schema != 3 {
+	if schema < 1 || schema > 4 {
 		return Plan{}, fmt.Errorf("unsupported release plan schema: %d", schema)
 	}
 	if !revision.MatchString(sha) {
