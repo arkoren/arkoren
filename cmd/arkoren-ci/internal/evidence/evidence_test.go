@@ -158,7 +158,7 @@ func TestCollectReadsEveryPageAndExactAttemptJobs(t *testing.T) {
 			latest.ID, latest.Attempt = 3, 2
 			return encode(t, []any{map[string]any{"workflow_runs": []evidence.Run{old}}, map[string]any{"workflow_runs": []evidence.Run{latest}}}), nil
 		}
-		if !strings.Contains(path, "/runs/3/attempts/2/jobs?per_page=100") {
+		if !strings.Contains(path, "/runs/3/attempts/2/jobs?per_page=30") {
 			t.Fatalf("wrong attempt path: %s", path)
 		}
 		return encode(t, []any{map[string]any{"jobs": []evidence.Job{}}, map[string]any{"jobs": []evidence.Job{{Name: "CI gate", SHA: sha, Status: "completed", Conclusion: "success"}, {Name: "website", SHA: sha, Status: "completed", Conclusion: "success"}}}}), nil
@@ -243,5 +243,73 @@ func TestCollectMalformedResponseIsSafe(t *testing.T) {
 	_, err := evidence.Collect(context.Background(), target(), func(context.Context, string) ([]byte, error) { return []byte(`secret-invalid-response`), nil }, evidence.Delay)
 	if err == nil || strings.Contains(fmt.Sprint(err), "secret") {
 		t.Fatalf("unsafe error: %v", err)
+	}
+}
+
+// flakyReader serves valid evidence but fails the jobs endpoint with failure for
+// the first failures calls, counting every jobs read in jobReads.
+func flakyReader(t *testing.T, failures int, failure error, jobReads *int) evidence.Reader {
+	t.Helper()
+	return func(_ context.Context, path string) ([]byte, error) {
+		if strings.Contains(path, "/runs?") {
+			workflow := "ci.yml"
+			if strings.Contains(path, "website.yml") {
+				workflow = "website.yml"
+			}
+			return encode(t, []any{map[string]any{"workflow_runs": []evidence.Run{run(workflow)}}}), nil
+		}
+		*jobReads++
+		if *jobReads <= failures {
+			return nil, failure
+		}
+		return []byte(`[{"jobs":[{"name":"CI gate","head_sha":"` + sha + `","status":"completed","conclusion":"success"}]},{"jobs":[{"name":"website","head_sha":"` + sha + `","status":"completed","conclusion":"success"}]}]`), nil
+	}
+}
+
+func TestCollectMergesJobsAcrossPages(t *testing.T) {
+	jobReads := 0
+	result, err := evidence.Collect(context.Background(), target(), flakyReader(t, 0, nil, &jobReads), func(context.Context, time.Duration) error { t.Fatal("unexpected wait"); return nil })
+	if err != nil || !result.Validated || result.Workflows["ci.yml"].Job != "CI gate" || result.Workflows["website.yml"].Job != "website" {
+		t.Fatalf("pages not merged: %+v %v", result, err)
+	}
+}
+
+func TestCollectRetriesTransientReadThenSucceeds(t *testing.T) {
+	jobReads := 0
+	var delays []time.Duration
+	wait := func(_ context.Context, duration time.Duration) error { delays = append(delays, duration); return nil }
+	result, err := evidence.Collect(context.Background(), target(), flakyReader(t, 3, errors.New("gh: HTTP 502: Bad Gateway"), &jobReads), wait)
+	if err != nil || !result.Validated || jobReads != 5 {
+		t.Fatalf("retry: reads=%d %v", jobReads, err)
+	}
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+	if fmt.Sprint(delays) != fmt.Sprint(want) {
+		t.Fatalf("backoff %v, want %v", delays, want)
+	}
+}
+
+func TestCollectRetryExhaustionReturnsLastError(t *testing.T) {
+	jobReads, waits := 0, 0
+	failure := errors.New("gh: HTTP 502: Bad Gateway")
+	_, err := evidence.Collect(context.Background(), target(), flakyReader(t, 100, failure, &jobReads), func(context.Context, time.Duration) error { waits++; return nil })
+	if !errors.Is(err, failure) || jobReads != 5 || waits != 4 || !strings.Contains(err.Error(), "read job metadata") {
+		t.Fatalf("exhaustion: reads=%d waits=%d %v", jobReads, waits, err)
+	}
+}
+
+func TestCollectDoesNotRetryClientError(t *testing.T) {
+	jobReads := 0
+	_, err := evidence.Collect(context.Background(), target(), flakyReader(t, 100, errors.New("gh: HTTP 404: Not Found"), &jobReads), func(context.Context, time.Duration) error { t.Fatal("client error retried"); return nil })
+	if err == nil || jobReads != 1 {
+		t.Fatalf("client error: reads=%d %v", jobReads, err)
+	}
+}
+
+func TestCollectRetryHonorsCancellation(t *testing.T) {
+	jobReads := 0
+	wait := func(context.Context, time.Duration) error { return context.Canceled }
+	_, err := evidence.Collect(context.Background(), target(), flakyReader(t, 100, errors.New("HTTP 502"), &jobReads), wait)
+	if !errors.Is(err, context.Canceled) || jobReads != 1 {
+		t.Fatalf("cancellation: reads=%d %v", jobReads, err)
 	}
 }
