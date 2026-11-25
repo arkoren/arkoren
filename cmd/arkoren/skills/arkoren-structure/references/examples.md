@@ -738,7 +738,7 @@ var Cache = application.Provide(func(compose *application.Composer) *cache.Cache
 })
 ```
 
-`internal/bootstrap/link_signer.go`
+`internal/bootstrap/secrets.go`
 
 ```go
 package bootstrap
@@ -747,20 +747,61 @@ import (
 	"os"
 
 	"arkoren.dev/core/application"
+	"arkoren.dev/core/service/secret"
+	"arkoren.dev/core/service/secret/envsecret"
+	"arkoren.dev/core/service/secret/filesecret"
+	"arkoren.dev/core/service/secret/secretmux"
+)
+
+// Secrets resolves the application's secrets from references of the form
+// scheme:name. The file source reads a local file, such as file:.secrets/link-key,
+// and the env source reads an environment variable, such as env:LINK_KEY_VALUE;
+// both are read-only and never write a secret. The store resolves bindings
+// through the process environment: a provider reads the binding LINK_KEY, whose
+// value in .env or the deployment is the reference of the secret, so moving a
+// secret to another source changes configuration and not code. A binding that is
+// unset or empty fails composition with secret.ErrUnbound, and no default is
+// invented. To read a secrets manager, register one more source with
+// sources.Source, such as awssecret or vaultsecret, and start and stop it with
+// compose.Startup and compose.Cleanup; the guides describe each driver.
+var Secrets = application.Provide(func(compose *application.Composer) *secret.Store {
+	driver := compose.Must(secretmux.New(func(sources *secretmux.Builder) {
+		sources.Source("file", filesecret.New())
+		sources.Source("env", envsecret.New(os.LookupEnv))
+	}))
+
+	return secret.New(driver, func(secrets *secret.Builder) {
+		secrets.Bindings(os.LookupEnv)
+	})
+})
+```
+
+`internal/bootstrap/link_signer.go`
+
+```go
+package bootstrap
+
+import (
+	"arkoren.dev/core/application"
 	"arkoren.dev/core/http/link"
+	"arkoren.dev/core/service/secret"
 	"arkoren.dev/foundation/key"
 )
 
 // LinkSigner signs the links the application emails, such as password reset and
-// email verification. It loads a 32-byte shared key from the file named by
-// LINK_KEY_FILE; create one with `arkoren key generate shared --out FILE`.
-// Reserve the key for links: it is not an encryption key, and rotating it ends
-// every link already sent. Composition fails when the file is missing or invalid,
-// and the application never generates a key to replace a missing one.
+// email verification. It resolves the binding LINK_KEY through the Secrets
+// provider to a key ring: one 32-byte key, or several separated by commas with
+// the current key first. The development default is file:.secrets/link-key;
+// create the file with `arkoren key generate shared --out .secrets/link-key`.
+// Reserve the ring for links: it is not an encryption key, and removing a key
+// from it ends the links that key signed. Composition fails when the binding is
+// unset or the secret is missing or invalid, and the application never generates
+// a key to replace a missing one.
 var LinkSigner = application.Provide(func(compose *application.Composer) *link.Signer {
-	secret := compose.Must(key.LoadShared(os.Getenv("LINK_KEY_FILE")))
+	secrets := compose.Use(Secrets)
+	ring := compose.Must(secrets.Get(compose.Context(), secret.NewBinding[key.Ring[key.Shared]]("LINK_KEY")))
 
-	return compose.Must(link.New(secret))
+	return compose.Must(link.New(ring))
 })
 ```
 
@@ -770,23 +811,26 @@ var LinkSigner = application.Provide(func(compose *application.Composer) *link.S
 package bootstrap
 
 import (
-	"os"
-
 	"arkoren.dev/core/application"
 	"arkoren.dev/core/service/crypto"
+	"arkoren.dev/core/service/secret"
 	"arkoren.dev/driver/aes/aescrypto"
 	"arkoren.dev/foundation/key"
 )
 
-// TwoFactorKey encrypts the stored two-factor secrets with AES. It loads a
-// 32-byte shared key from the file named by TWO_FACTOR_KEY_FILE; create one with
-// `arkoren key generate shared --out FILE`. Reserve the key for these secrets:
-// losing or replacing it makes every enrolled authenticator unusable. Composition
-// fails when the file is missing or invalid, and the application never generates
-// a key to replace a missing one.
+// TwoFactorKey encrypts the stored two-factor secrets with AES. It resolves the
+// binding TWO_FACTOR_KEY through the Secrets provider to a key ring: one 32-byte
+// key, or several separated by commas with the current key first. The
+// development default is file:.secrets/two-factor-key; create the file with
+// `arkoren key generate shared --out .secrets/two-factor-key`. Reserve the ring
+// for these secrets: dropping a key that encrypted an enrolled authenticator
+// makes it unusable, so retire old keys only after the data they protect is
+// gone. Composition fails when the binding is unset or the secret is missing or
+// invalid, and the application never generates a key to replace a missing one.
 var TwoFactorKey = application.Provide(func(compose *application.Composer) *crypto.Encrypter {
-	secret := compose.Must(key.LoadShared(os.Getenv("TWO_FACTOR_KEY_FILE")))
-	driver := compose.Must(aescrypto.New(secret))
+	secrets := compose.Use(Secrets)
+	ring := compose.Must(secrets.Get(compose.Context(), secret.NewBinding[key.Ring[key.Shared]]("TWO_FACTOR_KEY")))
+	driver := compose.Must(aescrypto.New(ring))
 	compose.Cleanup(driver.Stop)
 
 	return compose.Must(crypto.New(driver))
@@ -799,23 +843,27 @@ var TwoFactorKey = application.Provide(func(compose *application.Composer) *cryp
 package bootstrap
 
 import (
-	"os"
-
 	"arkoren.dev/core/application"
 	"arkoren.dev/core/service/crypto"
+	"arkoren.dev/core/service/secret"
 	"arkoren.dev/driver/aes/aescrypto"
 	"arkoren.dev/foundation/key"
 )
 
 // OAuthKey seals the login cookies of the OAuth sign-in clients with AES. It
-// loads a 32-byte shared key from the file named by OAUTH_KEY_FILE; create one
-// with `arkoren key generate shared --out FILE`. Every process and replica that
-// serves the callback must load the same key, or a login started on one fails on
-// another. Composition fails when the file is missing or invalid, and the
-// application never generates a key to replace a missing one.
+// resolves the binding OAUTH_KEY through the Secrets provider to a key ring: one
+// 32-byte key, or several separated by commas with the current key first. The
+// development default is file:.secrets/oauth-key; create the file with
+// `arkoren key generate shared --out .secrets/oauth-key`. Every process and
+// replica that serves the callback must resolve the same ring, or a login
+// started on one fails on another; keys after the first still open cookies
+// sealed before a rotation. Composition fails when the binding is unset or the
+// secret is missing or invalid, and the application never generates a key to
+// replace a missing one.
 var OAuthKey = application.Provide(func(compose *application.Composer) *crypto.Encrypter {
-	secret := compose.Must(key.LoadShared(os.Getenv("OAUTH_KEY_FILE")))
-	driver := compose.Must(aescrypto.New(secret))
+	secrets := compose.Use(Secrets)
+	ring := compose.Must(secrets.Get(compose.Context(), secret.NewBinding[key.Ring[key.Shared]]("OAUTH_KEY")))
+	driver := compose.Must(aescrypto.New(ring))
 	compose.Cleanup(driver.Stop)
 
 	return compose.Must(crypto.New(driver))
@@ -1443,12 +1491,12 @@ func (driver inbox) Send(ctx context.Context, message mail.Message) (mail.Receip
 	return receipt, err
 }
 
-// writeKeys creates one shared key file per purpose and points the environment
-// variables the providers read at them.
+// writeKeys creates one shared key file per purpose and points the binding
+// variables the Secrets provider resolves at them.
 func writeKeys(t *testing.T) {
 	t.Helper()
 
-	for _, variable := range []string{"LINK_KEY_FILE", "TWO_FACTOR_KEY_FILE", "OAUTH_KEY_FILE"} {
+	for _, variable := range []string{"LINK_KEY", "TWO_FACTOR_KEY", "OAUTH_KEY"} {
 		secret, err := key.GenerateShared()
 		if err != nil {
 			t.Fatal(err)
@@ -1460,7 +1508,7 @@ func writeKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		t.Setenv(variable, path)
+		t.Setenv(variable, "file:"+path)
 	}
 }
 

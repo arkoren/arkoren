@@ -31,7 +31,10 @@ Uppercase operands below are values you supply, not literal words.
 | `arkoren map [--text]` | Print processes with their `Compose` statements, providers by file, features and migrations from source. |
 | `arkoren skills install\|update\|status [flags]` | Manage the CLI's bundled documentation offline. |
 | `arkoren key generate KIND --out FILE` | Generate `shared`, `signing`, or `exchange` private material. |
-| `arkoren key check KIND FILE` | Validate stored key material without exporting it; exit 1 if it is invalid. |
+| `arkoren key check KIND FILE` | Validate stored key material without exporting it; a shared `FILE` (or `-`) is a ring and lists fingerprints. Exit 1 if it is invalid. |
+| `arkoren key rotate [--stage] FILE` | Add a new shared key to a ring as current, or with `--stage` as the last previous key. |
+| `arkoren key promote FINGERPRINT FILE` | Make the ring key with that fingerprint prefix (12 digits or more) current. |
+| `arkoren key retire FINGERPRINT FILE` | Remove a previous key from a ring; the current key is refused. |
 | `arkoren key public signing\|exchange FILE [--format pem]` | Export SPKI public-key PEM. |
 | `arkoren key public signing FILE --format vapid` | Export a VAPID public key. |
 | `arkoren certificate root generate --name NAME --cert FILE --key FILE` | Generate a root CA pair without installing trust. |
@@ -197,7 +200,7 @@ that reader.
 | Ordinary local or remote result, including `--version` | Text on a terminal; otherwise, or with `--json`, one JSON document. |
 | `--follow` | Compact NDJSON records and loss notices on the same stdout stream. |
 | Help and interactive confirmation | Text. |
-| `key public` and `key generate --out -` | Raw PEM or base64, not JSON strings. |
+| `key public`, `key generate --out -` and `key rotate\|promote\|retire -` | Raw PEM or ring text, not JSON strings. |
 | Errors | On stderr: text on a terminal, otherwise, or with `--json`, JSON with an `error` object and top-level `next_steps`. |
 | Trust warning before mutation | On stderr even with `--yes`: text on a terminal, otherwise JSON with a top-level `warnings` array. |
 
@@ -280,7 +283,8 @@ prints paths under the working directory relative to it; JSON keeps both exact.
 | `skills install\|update` | `dry_run` (previews), `ok` (only `false`, for a preview that would fail) and `skills`, one entry per skill with `name`, `state`, `directory`, `installed_revision`, `bundled_revision`, `modified_file_count`. Conflicts of a failing preview are `problems` with `next_steps`. The summary counts the files; verbose adds `modified_files` and a `create`, `write` or `remove` change per file. |
 | `skills status` | `ok`, `skills` as above, `problems` (an empty array when `ok`) and `next_steps` that install or update. |
 | `key generate` to file | `kind`, and a `create` change for the absolute `path`; no private contents. |
-| `key check` | `ok`, `kind`, absolute `path`, `problems`. |
+| `key check` | `ok`, `kind`, absolute `path`, for a valid shared ring its `keys` (`fingerprint`, `current`), and `problems`. |
+| `key rotate`, `promote`, `retire` | `kind`, the `keys` of the resulting ring and `next_steps`; for a file an `edit` change for the absolute `path`, with the report on stdout. With `FILE -` stdout is the raw ring and the report goes to stderr. |
 | Certificate generation | `changes` creating the certificate and the private key; for a root, a `warnings` entry that system trust is unchanged and `next_steps` including the trust command. |
 | `certificate check` | `ok`, `certificate`, optional `key` and `key_matched`, `not_checked` (`expiry`, `trust`) and `problems` naming the `cert` or `key` field. |
 | Root trust/untrust | `action`, `target`, `sha256`. |

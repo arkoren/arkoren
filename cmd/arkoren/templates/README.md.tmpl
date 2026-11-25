@@ -65,10 +65,11 @@ downloads and compiled packages across source changes. Use Docker Buildx with
 `--platform` to build for another Linux architecture. Pin base images by digest
 when you need reproducible production builds.
 
-`.gitignore` excludes local environment files, workspace settings, and build/test
-output, but keeps `.env.example` and `go.sum`. `.dockerignore` also excludes local
-environment files and Git/editor metadata from the build context; pass runtime
-configuration explicitly rather than baking secrets into the image.
+`.gitignore` excludes local environment files, the `.secrets/` directory,
+workspace settings, and build/test output, but keeps `.env.example` and `go.sum`.
+`.dockerignore` also excludes local environment files, `.secrets/`, and Git/editor
+metadata from the build context; pass runtime configuration explicitly rather than
+baking secrets into the image.
 
 ## HTTP and lifecycle
 
@@ -118,7 +119,11 @@ The CLI creates `.env` with private access: mode 0600 on POSIX, or a protected
 current-user-only DACL on Windows, before writing its contents. Keep it out of
 version control; commit `.env.example`, which has debug disabled. Neither file needs
 secrets for this starter. Generate independent keys with `arkoren key generate`
-only when your application needs encryption or signing.
+only when your application needs encryption or signing. Modules added with
+`arkoren add ark` resolve their keys through a `Secrets` provider: `.env` holds a
+binding such as `LINK_KEY=file:.secrets/link-key`, which names where the key ring
+lives, and `.secrets/` stays out of version control. Rotate a ring with
+`arkoren key rotate`.
 
 - `GET /` serves `app.WelcomeHandler()`, a public HTML welcome page registered
   in `internal/bootstrap/router.go`. Remove it once the application serves its

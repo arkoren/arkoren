@@ -1,23 +1,26 @@
 package bootstrap
 
 import (
-	"os"
-
 	"arkoren.dev/core/application"
 	"arkoren.dev/core/service/crypto"
+	"arkoren.dev/core/service/secret"
 	"arkoren.dev/driver/aes/aescrypto"
 	"arkoren.dev/foundation/key"
 )
 
-// TwoFactorKey encrypts the stored two-factor secrets with AES. It loads a
-// 32-byte shared key from the file named by TWO_FACTOR_KEY_FILE; create one with
-// `arkoren key generate shared --out FILE`. Reserve the key for these secrets:
-// losing or replacing it makes every enrolled authenticator unusable. Composition
-// fails when the file is missing or invalid, and the application never generates
-// a key to replace a missing one.
+// TwoFactorKey encrypts the stored two-factor secrets with AES. It resolves the
+// binding TWO_FACTOR_KEY through the Secrets provider to a key ring: one 32-byte
+// key, or several separated by commas with the current key first. The
+// development default is file:.secrets/two-factor-key; create the file with
+// `arkoren key generate shared --out .secrets/two-factor-key`. Reserve the ring
+// for these secrets: dropping a key that encrypted an enrolled authenticator
+// makes it unusable, so retire old keys only after the data they protect is
+// gone. Composition fails when the binding is unset or the secret is missing or
+// invalid, and the application never generates a key to replace a missing one.
 var TwoFactorKey = application.Provide(func(compose *application.Composer) *crypto.Encrypter {
-	secret := compose.Must(key.LoadShared(os.Getenv("TWO_FACTOR_KEY_FILE")))
-	driver := compose.Must(aescrypto.New(secret))
+	secrets := compose.Use(Secrets)
+	ring := compose.Must(secrets.Get(compose.Context(), secret.NewBinding[key.Ring[key.Shared]]("TWO_FACTOR_KEY")))
+	driver := compose.Must(aescrypto.New(ring))
 	compose.Cleanup(driver.Stop)
 
 	return compose.Must(crypto.New(driver))

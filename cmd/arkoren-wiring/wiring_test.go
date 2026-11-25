@@ -144,9 +144,14 @@ func TestOwnUsersThroughAccessUsers(t *testing.T) {
 		t.Fatalf("NewUserProvider: %v", err)
 	}
 	sys := newSystemWith(t, false, true, func(identity *iam.Builder) {
-		identity.Users(iam.Users{Provider: provider, Lookup: users.lookup, Create: users.create, Rotate: users.rotate,
-			Verified:   func(context.Context, string) (bool, error) { return true, nil },
-			ProveEmail: func(context.Context, string) (bool, error) { return false, nil },
+		identity.Users(provider, func(accounts *iam.UsersBuilder) {
+			accounts.Lookup(users.lookup)
+			accounts.Create(users.create)
+			accounts.Rotate(users.rotate)
+			accounts.Verification(
+				func(context.Context, string) (bool, error) { return true, nil },
+				func(context.Context, string) (bool, error) { return false, nil },
+			)
 		})
 	})
 	for _, definition := range sys.identity.Migrations() {
@@ -174,9 +179,9 @@ func socialLogin(t *testing.T, sys *system, b *browser, subject, email string) r
 	t.Helper()
 
 	sys.provider.as(subject, email)
-	state, nonce := authorize(t, b, "/auth/google")
+	state, nonce := authorize(t, b, "/google")
 
-	return b.get("/auth/google/callback?state=" + state + "&code=" + nonce)
+	return b.get("/google/callback?state=" + state + "&code=" + nonce)
 }
 
 // TestSocialLoginWithoutSignUpIsRefused runs the provider login with sign-up
@@ -216,7 +221,7 @@ func TestSocialLoginThenConnect(t *testing.T) {
 
 	ada := sys.browser.device()
 	register(t, sys, ada)
-	if connect := ada.post("/connections/google", ""); connect.status != http.StatusSeeOther || connect.header.Get("Location") != "/auth/google" {
+	if connect := ada.post("/connections/google", ""); connect.status != http.StatusSeeOther || connect.header.Get("Location") != "/google" {
 		t.Fatalf("connect = %d %q", connect.status, connect.header.Get("Location"))
 	}
 	if r := socialLogin(t, sys, ada, "g2", "someone-else@example.com"); r.status >= 400 {
@@ -241,9 +246,9 @@ func TestNativeLoginThenDeviceTokenThenMe(t *testing.T) {
 
 	sys := newSystem(t)
 	phone := sys.browser.device()
-	nonce := field(t, phone.get("/auth/google/nonce").body, "nonce")
+	nonce := field(t, phone.get("/google/nonce").body, "nonce")
 	idToken := sys.provider.token(nativeAudience, "g7", "ada@example.com", nonce)
-	native := phone.post("/auth/google/native", `{"id_token":"`+idToken+`"}`)
+	native := phone.post("/google/native", `{"id_token":"`+idToken+`"}`)
 	if native.status != http.StatusNoContent {
 		t.Fatalf("native login = %d %s", native.status, native.body)
 	}
@@ -281,8 +286,8 @@ func TestSilentReloginNotFreshForTOTPUser(t *testing.T) {
 	secret, _ := enableTOTP(t, sys.browser)
 	sys.provider.as("g3", "ada@example.com")
 	sys.browser.post("/connections/google", "")
-	state, nonce := authorize(t, sys.browser, "/auth/google")
-	if r := sys.browser.get("/auth/google/callback?state=" + state + "&code=" + nonce); r.status >= 400 {
+	state, nonce := authorize(t, sys.browser, "/google")
+	if r := sys.browser.get("/google/callback?state=" + state + "&code=" + nonce); r.status >= 400 {
 		t.Fatalf("connecting callback = %d %s", r.status, r.body)
 	}
 
@@ -290,8 +295,8 @@ func TestSilentReloginNotFreshForTOTPUser(t *testing.T) {
 	if r := sys.browser.do(http.MethodDelete, "/two-factor", ""); r.status != http.StatusForbidden || !strings.Contains(r.body, `"otp"`) {
 		t.Fatalf("stale proof = %d %s, want 403 listing otp", r.status, r.body)
 	}
-	state, nonce = authorize(t, sys.browser, "/auth/google")
-	if r := sys.browser.get("/auth/google/callback?state=" + state + "&code=" + nonce); r.status >= 400 {
+	state, nonce = authorize(t, sys.browser, "/google")
+	if r := sys.browser.get("/google/callback?state=" + state + "&code=" + nonce); r.status >= 400 {
 		t.Fatalf("silent login = %d %s", r.status, r.body)
 	}
 	if r := sys.browser.do(http.MethodDelete, "/two-factor", ""); r.status != http.StatusForbidden {

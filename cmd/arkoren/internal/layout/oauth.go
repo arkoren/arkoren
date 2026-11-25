@@ -29,13 +29,17 @@ type oauthClient struct {
 	signUp string
 }
 
+// appleKeyBinding is the variable whose value references the ECDSA P-256 key
+// Apple issued, which only the Apple client resolves.
+const appleKeyBinding = "APPLE_KEY"
+
 // oauthClients lists the providers `add ark oauth` supports, in the order the
 // usage message presents them.
 var oauthClients = []oauthClient{
 	{name: "google", identifier: "Google", credentials: []string{"CLIENT_ID", "CLIENT_SECRET"}},
 	{name: "github", identifier: "GitHub", credentials: []string{"CLIENT_ID", "CLIENT_SECRET"}, signUp: "GitHubSignUp"},
 	{name: "microsoft", identifier: "Microsoft", credentials: []string{"CLIENT_ID", "CLIENT_SECRET"}},
-	{name: "apple", identifier: "Apple", credentials: []string{"CLIENT_ID", "TEAM_ID", "KEY_ID", "KEY_FILE"}},
+	{name: "apple", identifier: "Apple", credentials: []string{"CLIENT_ID", "TEAM_ID", "KEY_ID"}},
 	{name: "oidc", identifier: "OIDC", credentials: []string{"ISSUER_URL", "CLIENT_ID", "CLIENT_SECRET"}},
 }
 
@@ -75,7 +79,7 @@ func (client oauthClient) variable(suffix string) string {
 // redirect returns the default of the client's redirect URL variable: its
 // callback route below the /auth mount on the server at baseURL.
 func (client oauthClient) redirect(baseURL string) envVariable {
-	return envVariable{client.variable("REDIRECT_URL"), baseURL + "/auth/" + client.name + "/callback"}
+	return envVariable{name: client.variable("REDIRECT_URL"), value: baseURL + "/auth/" + client.name + "/callback"}
 }
 
 // providers returns the bootstrap providers one identity.Provider call passes
@@ -103,8 +107,10 @@ func (client oauthClient) steps(baseURL string) []console.Step {
 
 	switch client.name {
 	case "apple":
-		steps = append(steps, console.Step{Text: "Set APPLE_KEY_FILE to the .p8 signing key Apple issued for your Services ID and check it with " +
-			"`arkoren key check signing FILE`; `arkoren key generate signing --out apple.key` creates a throwaway key for local tests"})
+		file := bindingFile(appleKeyBinding)
+
+		steps = append(steps, console.Step{Text: "Save the .p8 signing key Apple issued for your Services ID as " + file + ", which " + appleKeyBinding + "=file:" + file +
+			" names in .env, and check it with `arkoren key check signing " + file + "`; `arkoren key generate signing --out " + file + "` creates a throwaway key for local tests"})
 	case "microsoft":
 		steps = append(steps, console.Step{Text: "Set MICROSOFT_TENANT to a tenant ID, organizations or consumers to restrict who may sign in; it defaults to common"})
 	}
@@ -143,7 +149,6 @@ func (project *Project) AddOAuth(providers []string, templates fs.FS) (*Plan, er
 	}
 
 	plan := &Plan{}
-	writesKey := !project.declares("internal/bootstrap", "OAuthKey")
 
 	for _, client := range clients {
 		if err := project.renderOAuth(plan, templates, client); err != nil {
@@ -151,7 +156,9 @@ func (project *Project) AddOAuth(providers []string, templates fs.FS) (*Plan, er
 		}
 	}
 
-	if err := project.renderPrerequisites(plan, templates, []arkPrerequisite{{"OAuthKey", "oauth_key"}}); err != nil {
+	written, err := project.renderPrerequisites(plan, templates, []arkPrerequisite{secretsPrerequisite, {"OAuthKey", "oauth_key", "OAUTH_KEY"}})
+
+	if err != nil {
 		return nil, err
 	}
 
@@ -162,13 +169,17 @@ func (project *Project) AddOAuth(providers []string, templates fs.FS) (*Plan, er
 	}
 
 	baseURL, err := project.planEnv(plan, func(baseURL string) []envVariable {
-		variables := make([]envVariable, len(clients))
+		var variables []envVariable
 
-		for index, client := range clients {
-			variables[index] = client.redirect(baseURL)
+		for _, client := range clients {
+			variables = append(variables, client.redirect(baseURL))
+
+			if client.name == "apple" {
+				variables = append(variables, bindingVariable(appleKeyBinding))
+			}
 		}
 
-		return variables
+		return append(variables, bindings(written)...)
 	})
 
 	if err != nil {
@@ -179,10 +190,7 @@ func (project *Project) AddOAuth(providers []string, templates fs.FS) (*Plan, er
 		plan.Steps = append(plan.Steps, client.steps(baseURL)...)
 	}
 
-	if writesKey {
-		plan.Steps = append(plan.Steps, keyStep("OAuthKey", "OAUTH_KEY_FILE", "oauth.key"))
-	}
-
+	plan.Steps = append(plan.Steps, keySteps(written)...)
 	plan.Steps = append(plan.Steps, closing)
 
 	return plan, project.planRequires(plan)

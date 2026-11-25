@@ -26,6 +26,7 @@ instead separates the private key that signs from the public key that verifies.
 | Type | Material | Use |
 | --- | --- | --- |
 | `key.Shared` | Exactly 32 secret bytes | Symmetric encryption or shared-secret signing, with no public counterpart. |
+| `key.Ring[key.Shared]` | One or more `Shared` keys, current first | What link signers, cursor codecs and AES or ChaCha20 drivers take, so a key can rotate. |
 | `key.Signing` | ECDSA P-256 private identity | Signatures verified with the matching public key. |
 | `key.Exchange` | X25519 private identity | Key agreement inside an existing authenticated protocol. |
 
@@ -132,6 +133,43 @@ preserve OS error causes, so a missing file can match `os.ErrNotExist` instead.
 Validation errors do not include key contents or input-derived parser diagnostics.
 Do not log the source configuration when reporting a failure.
 
+## Key Rings
+
+Every consumer of a shared key takes a **ring**: the key that signs or encrypts
+new data first, then the previous keys that still verify or decrypt older data.
+A ring of one key is the ordinary case, and the file written by
+`arkoren key generate shared` is one.
+
+The text form is padded standard base64 keys separated by commas on one line,
+current first:
+
+```text
+Zm9v...current...=,YmFy...previous...=
+```
+
+Parse it with `key.ParseRing[key.Shared]`, where the type argument is required,
+or build one with `key.NewRing(current, previous...)`. Parsing ignores
+whitespace around the text and each entry, one trailing newline included, and
+fails with `key.ErrInvalid` for an empty entry, a duplicate key, an embedded line
+break or a key that is not exactly 32 bytes. `Current()` returns the first key,
+`Previous()` the rest, and `Len()` counts them. `Ring` also implements
+`encoding.TextUnmarshaler`, so a [secret store](../secrets/overview.md#decoding-rules)
+can read one into a `key.Ring[key.Shared]` directly. `Shared.Fingerprint()` returns
+a domain-separated SHA-256 digest in lowercase hex that identifies a key without
+revealing it; the CLI prints it for every key in a ring.
+
+Load the ring a generated application resolves through a binding, with a secret
+store named `secrets`:
+
+```go
+linkKeys := secret.NewBinding[key.Ring[key.Shared]]("LINK_KEY")
+ring, err := secrets.Get(ctx, linkKeys)
+```
+
+`LINK_KEY=file:.secrets/link-key` in `.env` selects the file, and a deployment can
+point the same binding at a secrets manager. See
+[Generated Applications](../secrets/sources.md#generated-applications).
+
 ## Export Material
 
 Before exporting a key passed in by another component, check its `Err()` result.
@@ -191,17 +229,38 @@ protocol from the key containers.
 
 ## Rotate Keys
 
-The application owns persistence, deployment, and rotation. Loading a new file
-does not update an already constructed consumer. Keep the intended material
-consistent across replicas serving the same purpose, and coordinate replacement
-with the consumer's compatibility rules.
+The application owns persistence, deployment, and rotation. Loading a new ring
+does not update an already constructed consumer: a process resolves its ring when
+it starts, so a new ring takes effect after a restart or deployment. Keep the
+intended ring consistent across replicas serving the same purpose.
 
-Retain previous encryption keys while stored values or backups need them; follow
-[encryption rotation](../encryption/keys.md#rotating-keys) for the rollout and
-re-encryption sequence. Replacing a link or cursor secret can invalidate issued
-values; plan around their lifetime and the consumer's supported key handling.
-VAPID replacement requires [subscription migration](../push/vapid-keys.md#rotating-identity),
-not merely a different private key on the server.
+Rotate a shared key in four deployments, so no instance ever meets a key it
+cannot read:
+
+1. **Stage.** `arkoren key rotate --stage FILE` appends a new key as a previous
+   key. It changes nothing for signing or encryption yet.
+2. **Deploy.** Roll the staged ring out to every instance. From now on every
+   instance can verify and decrypt with the new key.
+3. **Promote.** `arkoren key promote FINGERPRINT FILE` makes the new key current,
+   and a second deployment starts signing and encrypting with it. Instances still
+   on the staged ring keep working, because they already accept the new key.
+4. **Retire.** Once no value protected only by the old key remains, such as links
+   past their lifetime or records re-encrypted under the new key,
+   `arkoren key retire FINGERPRINT FILE` removes it, and a last deployment ships the
+   smaller ring.
+
+Without staging, `arkoren key rotate FILE` puts the new key first at once. That is
+safe only when a deployment replaces every instance together, or when an instance
+that signs or encrypts with the new key before others have it may be rejected
+for a short time. See the [command reference](../cli/keys.md#rotate-rings) for the
+file and pipe forms.
+
+Follow [encryption rotation](../encryption/keys.md#rotating-keys) for the
+re-encryption sequence, and retain previous encryption keys while stored values
+or backups need them. Removing a link or cursor key invalidates the values it
+signed; plan around their lifetime. VAPID replacement requires
+[subscription migration](../push/vapid-keys.md#rotating-identity), not merely a
+different private key on the server.
 
 For constructors, formats, and exports, see the
 [`key` API reference](https://pkg.go.dev/arkoren.dev/foundation/key).

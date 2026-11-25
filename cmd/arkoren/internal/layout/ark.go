@@ -24,14 +24,18 @@ import (
 // using the version the release plan proposes. Core is not listed: the project's
 // own core requirement, set by `arkoren new`, already provides it.
 var modulePins = map[string]string{
-	"arkoren.dev/ark/iam":         "v0.6.1",
-	"arkoren.dev/ark/oauth":       "v0.8.0",
-	"arkoren.dev/driver/aes":      "v0.1.0",
+	"arkoren.dev/ark/iam":         "v0.8.0",
+	"arkoren.dev/ark/oauth":       "v0.9.0",
+	"arkoren.dev/driver/aes":      "v0.2.0",
 	"arkoren.dev/driver/argon2":   "v0.1.0",
 	"arkoren.dev/driver/sqlite":   "v0.1.0",
-	"arkoren.dev/foundation/key":  "v0.1.1",
+	"arkoren.dev/foundation/key":  "v0.2.0",
 	"arkoren.dev/foundation/totp": "v0.2.0",
 }
+
+// secretsDir is the project directory, kept out of version control, where the
+// key files named by the generated bindings live, such as .secrets/link-key.
+const secretsDir = ".secrets"
 
 // IAMFeatures lists the values `arkoren add ark iam --with` accepts, in the order
 // the generated code presents them.
@@ -66,12 +70,57 @@ var iamFragments = []iamFragment{
 
 // arkPrerequisite is a shared provider that generated files use through
 // compose.Use and that `add ark` writes when internal/bootstrap does not declare
-// it yet: the provider name and its file, which is also its template below
-// add/ark/provider.
+// it yet: the provider name, its file, which is also its template below
+// add/ark/provider, and, for a provider that resolves a key ring through the
+// Secrets provider, the binding variable it reads, such as LINK_KEY.
 type arkPrerequisite struct {
 	provider string
 	file     string
+	binding  string
 }
+
+// bindingFile returns the file name of the default key file of a binding
+// variable: LINK_KEY is .secrets/link-key.
+func bindingFile(binding string) string {
+	return secretsDir + "/" + strings.ToLower(strings.ReplaceAll(binding, "_", "-"))
+}
+
+// bindingVariable returns the .env line of a key binding: the variable set to a
+// file reference below [secretsDir]. It holds the reference, never key material.
+func bindingVariable(binding string) envVariable {
+	return envVariable{name: binding, value: "file:" + bindingFile(binding), example: true}
+}
+
+// bindings returns the key binding variables of the prerequisites written.
+func bindings(written []arkPrerequisite) []envVariable {
+	var variables []envVariable
+
+	for _, prerequisite := range written {
+		if prerequisite.binding != "" {
+			variables = append(variables, bindingVariable(prerequisite.binding))
+		}
+	}
+
+	return variables
+}
+
+// keySteps returns one step per key binding in written: the command that
+// creates its file.
+func keySteps(written []arkPrerequisite) []console.Step {
+	var steps []console.Step
+
+	for _, prerequisite := range written {
+		if prerequisite.binding != "" {
+			steps = append(steps, keyStep(prerequisite.provider, prerequisite.binding))
+		}
+	}
+
+	return steps
+}
+
+// secretsPrerequisite is the Secrets provider, which every key provider uses
+// to resolve its binding.
+var secretsPrerequisite = arkPrerequisite{"Secrets", "secrets", ""}
 
 // IAMOptions selects what [Project.AddIAM] creates.
 type IAMOptions struct {
@@ -155,17 +204,21 @@ func (selection iamSelection) providers() []string {
 // prerequisites returns the shared providers the generated code uses, in
 // dependency order.
 func (selection iamSelection) prerequisites() []arkPrerequisite {
-	required := []arkPrerequisite{{"Database", "database"}, {"Cache", "cache"}, {"Hasher", "hasher"}}
+	required := []arkPrerequisite{{"Database", "database", ""}, {"Cache", "cache", ""}, {"Hasher", "hasher", ""}}
+
+	if selection.jobs() || selection.has("two-factor") {
+		required = append(required, secretsPrerequisite)
+	}
 
 	if selection.jobs() {
 		required = append(required,
-			arkPrerequisite{"LinkSigner", "link_signer"}, arkPrerequisite{"Mailer", "mailer"},
-			arkPrerequisite{"Queue", "queue"}, arkPrerequisite{"Dispatcher", "dispatcher"},
-			arkPrerequisite{"Consumer", "consumer"}, arkPrerequisite{"Work", "work"})
+			arkPrerequisite{"LinkSigner", "link_signer", "LINK_KEY"}, arkPrerequisite{"Mailer", "mailer", ""},
+			arkPrerequisite{"Queue", "queue", ""}, arkPrerequisite{"Dispatcher", "dispatcher", ""},
+			arkPrerequisite{"Consumer", "consumer", ""}, arkPrerequisite{"Work", "work", ""})
 	}
 
 	if selection.has("two-factor") {
-		required = append(required, arkPrerequisite{"TwoFactorKey", "two_factor_key"})
+		required = append(required, arkPrerequisite{"TwoFactorKey", "two_factor_key", "TWO_FACTOR_KEY"})
 	}
 
 	return required
@@ -174,22 +227,24 @@ func (selection iamSelection) prerequisites() []arkPrerequisite {
 // environment returns the .env variables the selection can default safely,
 // given the local base URL of the server: DATABASE_URL when database says
 // the command writes the Database provider, the reset and verification page
-// addresses, and the redirect URL of each declared sign-in client. Secrets and
-// key paths are never defaulted.
-func (selection iamSelection) environment(database bool) func(baseURL string) []envVariable {
+// addresses, the redirect URL of each declared sign-in client and the key
+// bindings of the providers written (variables, as [bindings] returns them),
+// which hold file references and never key material. Secrets are never
+// defaulted.
+func (selection iamSelection) environment(database bool, keys []envVariable) func(baseURL string) []envVariable {
 	return func(baseURL string) []envVariable {
-		var variables []envVariable
+		variables := slices.Clone(keys)
 
 		if database {
-			variables = append(variables, envVariable{"DATABASE_URL", "file:app.db"})
+			variables = append(variables, envVariable{name: "DATABASE_URL", value: "file:app.db"})
 		}
 
 		if selection.has("reset") {
-			variables = append(variables, envVariable{"PASSWORD_RESET_URL", baseURL + "/reset-password"})
+			variables = append(variables, envVariable{name: "PASSWORD_RESET_URL", value: baseURL + "/reset-password"})
 		}
 
 		if selection.has("verification") {
-			variables = append(variables, envVariable{"EMAIL_VERIFY_URL", baseURL + "/verify-email"})
+			variables = append(variables, envVariable{name: "EMAIL_VERIFY_URL", value: baseURL + "/verify-email"})
 		}
 
 		for _, client := range selection.clients {
@@ -201,20 +256,17 @@ func (selection iamSelection) environment(database bool) func(baseURL string) []
 }
 
 // steps lists what only the reader can do before the server starts, then the
-// command that starts it: the key files the selection loads, and notes on email
-// delivery. The environment, migrations and routes need no step.
-func (selection iamSelection) steps() []console.Step {
-	var steps []console.Step
+// command that starts it: the key files of the providers written (written, as
+// [Project.renderIAM] returns them), and notes on email delivery. The
+// environment, migrations and routes need no step.
+func (selection iamSelection) steps(written []arkPrerequisite) []console.Step {
+	steps := keySteps(written)
 
 	if selection.jobs() {
-		steps = append(steps, keyStep("LinkSigner", "LINK_KEY_FILE", "link.key"),
+		steps = append(steps,
 			console.Step{Text: "IAMJobs sends the emails in the process whose Compose lists it; with the memory queue that is the process that serves HTTP, " +
 				"so move IAMJobs and Work to a worker when you swap the Queue driver, and deploy workers before enabling a new email feature"},
 			console.Step{Text: "Replace the logging Mailer with a delivering driver before production"})
-	}
-
-	if selection.has("two-factor") {
-		steps = append(steps, keyStep("TwoFactorKey", "TWO_FACTOR_KEY_FILE", "two-factor.key"))
 	}
 
 	return append(steps, console.Step{
@@ -223,12 +275,16 @@ func (selection iamSelection) steps() []console.Step {
 	})
 }
 
-// keyStep tells how to provision the key file one provider loads: the command
-// creates it, and the reader then points variable at it. The path is never
-// written to .env, and the file stays out of version control.
-func keyStep(provider, variable, file string) console.Step {
+// keyStep tells how to provision the key file one provider resolves: the
+// command creates the one-key ring that binding already references in .env and
+// .env.example. The file stays out of version control, and every process
+// resolves the same ring.
+func keyStep(provider, binding string) console.Step {
+	file := bindingFile(binding)
+
 	return console.Step{
-		Text:    "Create the " + provider + " key, then set " + variable + "=" + file + " in .env; every process loads the same file, which stays out of version control",
+		Text: "Create the " + provider + " key ring that " + binding + "=file:" + file + " names in .env; every process resolves the same ring, " +
+			"and " + secretsDir + "/ stays out of version control",
 		Command: "arkoren key generate shared --out " + file,
 	}
 }
@@ -289,7 +345,9 @@ func (project *Project) AddIAM(options IAMOptions, templates fs.FS) (*Plan, erro
 	plan := &Plan{}
 	writesDatabase := !project.declares("internal/bootstrap", "Database")
 
-	if err := project.renderIAM(plan, templates, selection); err != nil {
+	written, err := project.renderIAM(plan, templates, selection)
+
+	if err != nil {
 		return nil, err
 	}
 
@@ -303,11 +361,11 @@ func (project *Project) AddIAM(options IAMOptions, templates fs.FS) (*Plan, erro
 		return nil, err
 	}
 
-	if _, err := project.planEnv(plan, selection.environment(writesDatabase)); err != nil {
+	if _, err := project.planEnv(plan, selection.environment(writesDatabase, bindings(written))); err != nil {
 		return nil, err
 	}
 
-	plan.Steps = append(plan.Steps, selection.steps()...)
+	plan.Steps = append(plan.Steps, selection.steps(written)...)
 
 	return plan, project.planRequires(plan)
 }
@@ -389,17 +447,18 @@ func (project *Project) planIAMUses(plan *Plan, selection iamSelection, routes, 
 }
 
 // renderIAM appends to plan iam.go, the fragment files of the selection and the
-// shared providers it needs that internal/bootstrap lacks.
-func (project *Project) renderIAM(plan *Plan, templates fs.FS, selection iamSelection) error {
+// shared providers it needs that internal/bootstrap lacks, and returns those
+// providers.
+func (project *Project) renderIAM(plan *Plan, templates fs.FS, selection iamSelection) ([]arkPrerequisite, error) {
 	data := selection.data(project.name())
 
 	if err := project.render(plan, templates, "add/ark/iam/iam.go", "internal/bootstrap/iam.go", data); err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, fragment := range selection.fragments() {
 		if err := project.render(plan, templates, "add/ark/"+fragment.template+".go", "internal/bootstrap/"+fragment.file+".go", data); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -407,19 +466,24 @@ func (project *Project) renderIAM(plan *Plan, templates fs.FS, selection iamSele
 }
 
 // renderPrerequisites appends to plan the file of every shared provider in
-// required that internal/bootstrap does not declare yet.
-func (project *Project) renderPrerequisites(plan *Plan, templates fs.FS, required []arkPrerequisite) error {
+// required that internal/bootstrap does not declare yet, and returns the
+// providers it wrote, in order.
+func (project *Project) renderPrerequisites(plan *Plan, templates fs.FS, required []arkPrerequisite) ([]arkPrerequisite, error) {
+	var written []arkPrerequisite
+
 	for _, prerequisite := range required {
 		if project.declares("internal/bootstrap", prerequisite.provider) {
 			continue
 		}
 
 		if err := project.render(plan, templates, "add/ark/provider/"+prerequisite.file+".go", "internal/bootstrap/"+prerequisite.file+".go", nil); err != nil {
-			return err
+			return nil, err
 		}
+
+		written = append(written, prerequisite)
 	}
 
-	return nil
+	return written, nil
 }
 
 // planUses plans the insertion of the bootstrap providers into the Compose of

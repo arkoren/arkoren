@@ -100,6 +100,57 @@ fallback would read the wrong secret. The binding key is a setting name, not a
 secret, but the reference it resolves to can reveal your provider layout, so keep
 both out of public output.
 
+## Generated Applications
+
+`arkoren add ark iam` and `arkoren add ark oauth` write a `Secrets` provider to
+`internal/bootstrap/secrets.go` when a provider they generate needs a key. It
+registers the `file` and `env` sources and resolves bindings from the process
+environment:
+
+```go
+var Secrets = application.Provide(func(compose *application.Composer) *secret.Store {
+	driver := compose.Must(secretmux.New(func(sources *secretmux.Builder) {
+		sources.Source("file", filesecret.New())
+		sources.Source("env", envsecret.New(os.LookupEnv))
+	}))
+
+	return secret.New(driver, func(secrets *secret.Builder) {
+		secrets.Bindings(os.LookupEnv)
+	})
+})
+```
+
+Each key provider reads one binding with `compose.Use(Secrets)`, such as
+`LINK_KEY`, `OAUTH_KEY`, `TWO_FACTOR_KEY` or `APPLE_KEY`. The command writes the
+bindings to `.env` and `.env.example` as `file:.secrets/` references:
+
+```sh
+LINK_KEY=file:.secrets/link-key
+```
+
+Create the file with `arkoren key generate shared --out .secrets/link-key`. The
+generated `.gitignore` and `.dockerignore` exclude `.secrets/`, and a project
+created by an older version needs that line added by hand. Composition fails with
+`secret.ErrUnbound` when a binding is unset, and with the source's error when the
+file is missing or invalid; nothing generates a key to replace a missing one.
+Every process that resolves a binding, including workers and one-shot commands,
+loads `.env` the same way.
+
+To read a ring from a secrets manager, change only the binding value, after
+registering the source in `Secrets`:
+
+```sh
+LINK_KEY=aws:billing/link-key
+```
+
+The generated provider registers neither `aws` nor `vault`: the CLI does not add
+secrets-manager drivers. Install the driver, construct it as the
+[driver guide](drivers.md) shows and add it with `sources.Source("aws", driver)`.
+A driver with a lifecycle, such as Vault, needs `compose.Startup(driver.Start)` and
+`compose.Cleanup(driver.Stop)` in `Secrets` before the store is used. Keep a ring
+in the manager as one secret whose text is the comma-separated ring, and rotate it
+with the [ring commands](../cli/keys.md#rotate-rings).
+
 ## Testing
 
 `memorysecret` is a driver, so a test can register it under a scheme (for example

@@ -21,7 +21,7 @@ func TestAddOAuthWritesTheClientProvider(t *testing.T) {
 	plan, err := project.AddOAuth([]string{"google"}, templates)
 	apply(t, project, plan, err)
 
-	if !slices.Equal(created(plan), []string{"internal/bootstrap/google.go", "internal/bootstrap/oauth_key.go"}) {
+	if !slices.Equal(created(plan), []string{"internal/bootstrap/google.go", "internal/bootstrap/secrets.go", "internal/bootstrap/oauth_key.go"}) {
 		t.Fatalf("plan creates %v", created(plan))
 	}
 
@@ -30,19 +30,19 @@ func TestAddOAuthWritesTheClientProvider(t *testing.T) {
 		t.Fatalf("google.go:\n%s", google)
 	}
 
-	if !slices.Equal(plan.Requires, []string{"arkoren.dev/ark/oauth@v0.8.0", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/foundation/key@v0.1.1"}) {
+	if !slices.Equal(plan.Requires, []string{"arkoren.dev/ark/oauth@v0.9.0", "arkoren.dev/driver/aes@v0.2.0", "arkoren.dev/foundation/key@v0.2.0"}) {
 		t.Fatalf("requires = %v", plan.Requires)
 	}
 
-	if inserted := edited(plan, ".env"); !slices.Equal(inserted, []string{"GOOGLE_REDIRECT_URL=http://127.0.0.1:8080/auth/google/callback"}) {
+	if inserted := edited(plan, ".env"); !slices.Equal(inserted, []string{"GOOGLE_REDIRECT_URL=http://127.0.0.1:8080/auth/google/callback", "OAUTH_KEY=file:.secrets/oauth-key"}) {
 		t.Fatalf(".env lines = %v", inserted)
 	}
 
 	notes := stepTexts(plan.Steps)
 
 	for _, want := range []string{
-		"http://127.0.0.1:8080/auth/google/callback", "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET", "OAUTH_KEY_FILE=oauth.key",
-		"arkoren key generate shared --out oauth.key", "arkoren add ark iam",
+		"http://127.0.0.1:8080/auth/google/callback", "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET", "OAUTH_KEY=file:.secrets/oauth-key",
+		"arkoren key generate shared --out .secrets/oauth-key", "arkoren add ark iam",
 	} {
 		if !strings.Contains(notes, want) {
 			t.Fatalf("notes miss %q:\n%s", want, notes)
@@ -69,7 +69,7 @@ func TestAddOAuthWritesEveryProvider(t *testing.T) {
 		"github":    {"oauthauth.GitHub()", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "GITHUB_REDIRECT_URL"},
 		"microsoft": {"oauthauth.Microsoft(tenant)", `cmp.Or(os.Getenv("MICROSOFT_TENANT"), "common")`, "MICROSOFT_CLIENT_SECRET", "MICROSOFT_REDIRECT_URL"},
 		"apple": {
-			"oauthauth.Apple(os.Getenv(\"APPLE_TEAM_ID\"), os.Getenv(\"APPLE_KEY_ID\"), signing)", "key.LoadSigning(os.Getenv(\"APPLE_KEY_FILE\"))",
+			"oauthauth.Apple(os.Getenv(\"APPLE_TEAM_ID\"), os.Getenv(\"APPLE_KEY_ID\"), signing)", "secret.NewBinding[key.Signing](\"APPLE_KEY\")",
 			"APPLE_CLIENT_ID", "APPLE_REDIRECT_URL",
 		},
 		"oidc": {"oauthauth.OIDC(os.Getenv(\"OIDC_ISSUER_URL\"))", `client.Name("oidc")`, "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_REDIRECT_URL"},
@@ -110,7 +110,7 @@ func TestAddOAuthWritesEveryProvider(t *testing.T) {
 
 	notes := stepTexts(plan.Steps)
 
-	if !strings.Contains(notes, "arkoren key check signing FILE") || !strings.Contains(notes, "MICROSOFT_TENANT") {
+	if !strings.Contains(notes, "arkoren key check signing .secrets/apple-key") || !strings.Contains(notes, "MICROSOFT_TENANT") {
 		t.Fatalf("notes:\n%s", notes)
 	}
 
@@ -210,7 +210,7 @@ func TestAddOAuthKeepsDotenvVariables(t *testing.T) {
 	plan, err := project.AddOAuth([]string{"google", "github"}, templates)
 	apply(t, project, plan, err)
 
-	want := "HTTP_ADDR=:9090\nGOOGLE_REDIRECT_URL=https://app.example.com/auth/google/callback\nGITHUB_REDIRECT_URL=http://localhost:9090/auth/github/callback\n"
+	want := "HTTP_ADDR=:9090\nGOOGLE_REDIRECT_URL=https://app.example.com/auth/google/callback\nGITHUB_REDIRECT_URL=http://localhost:9090/auth/github/callback\nOAUTH_KEY=file:.secrets/oauth-key\n"
 
 	if env := read(t, root, ".env"); env != want {
 		t.Fatalf(".env = %q, want %q", env, want)
@@ -235,7 +235,7 @@ func TestAddOAuthCreatesMissingDotenv(t *testing.T) {
 		t.Fatalf("plan creates %v, want .env", created(plan))
 	}
 
-	if env := read(t, root, ".env"); env != "GOOGLE_REDIRECT_URL=http://localhost:8080/auth/google/callback\n" {
+	if env := read(t, root, ".env"); env != "GOOGLE_REDIRECT_URL=http://localhost:8080/auth/google/callback\nOAUTH_KEY=file:.secrets/oauth-key\n" {
 		t.Fatalf(".env = %q", env)
 	}
 }
@@ -262,4 +262,70 @@ func TestAddOAuthRefusesBadProviders(t *testing.T) {
 
 	_, err = load(t, root).AddOAuth([]string{"github"}, templates)
 	requireUsage(t, err, "internal/bootstrap already declares GitHub")
+}
+
+// TestAddOAuthWritesKeyBindingsToBothEnvFiles points the key bindings at files
+// below .secrets in .env and .env.example, and keeps the redirect default out of
+// the example.
+func TestAddOAuthWritesKeyBindingsToBothEnvFiles(t *testing.T) {
+	t.Parallel()
+
+	project := load(t, scaffoldProject(t))
+	plan, err := project.AddOAuth([]string{"apple"}, templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"APPLE_REDIRECT_URL=http://127.0.0.1:8080/auth/apple/callback", "APPLE_KEY=file:.secrets/apple-key", "OAUTH_KEY=file:.secrets/oauth-key"}
+
+	if inserted := edited(plan, ".env"); !slices.Equal(inserted, want) {
+		t.Fatalf(".env lines = %v, want %v", inserted, want)
+	}
+
+	if inserted := edited(plan, ".env.example"); !slices.Equal(inserted, want[1:]) {
+		t.Fatalf(".env.example lines = %v, want %v", inserted, want[1:])
+	}
+}
+
+// TestAddOAuthResolvesAppleKeyThroughSecrets writes the Secrets provider the key
+// providers use and no key file variable.
+func TestAddOAuthResolvesAppleKeyThroughSecrets(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	project := load(t, root)
+	plan, err := project.AddOAuth([]string{"apple"}, templates)
+	apply(t, project, plan, err)
+
+	secrets := read(t, root, "internal/bootstrap/secrets.go")
+
+	for _, want := range []string{"var Secrets = application.Provide(", `sources.Source("file", filesecret.New())`, "secrets.Bindings(os.LookupEnv)"} {
+		if !strings.Contains(secrets, want) {
+			t.Fatalf("secrets.go misses %q:\n%s", want, secrets)
+		}
+	}
+
+	for _, name := range []string{"apple", "oauth_key"} {
+		if source := read(t, root, "internal/bootstrap/"+name+".go"); strings.Contains(source, "_KEY_FILE") || !strings.Contains(source, "compose.Use(Secrets)") {
+			t.Fatalf("%s.go does not resolve through Secrets:\n%s", name, source)
+		}
+	}
+}
+
+// TestAddOAuthSkipsSecretsTheProjectDeclares leaves an existing Secrets
+// provider alone.
+func TestAddOAuthSkipsSecretsTheProjectDeclares(t *testing.T) {
+	t.Parallel()
+
+	root := scaffoldProject(t)
+	writeFile(t, root, "internal/bootstrap/secrets.go", "package bootstrap\n\nvar Secrets = 1\n")
+
+	plan, err := load(t, root).AddOAuth([]string{"google"}, templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if slices.Contains(created(plan), "internal/bootstrap/secrets.go") {
+		t.Fatalf("plan creates %v, want the existing Secrets kept", created(plan))
+	}
 }

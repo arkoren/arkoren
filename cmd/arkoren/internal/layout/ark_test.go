@@ -253,8 +253,8 @@ func TestAddIAMPinsTheModulesItImports(t *testing.T) {
 	}
 
 	want := []string{
-		"arkoren.dev/ark/iam@v0.6.1", "arkoren.dev/driver/aes@v0.1.0", "arkoren.dev/driver/argon2@v0.1.0",
-		"arkoren.dev/driver/sqlite@v0.1.0", "arkoren.dev/foundation/key@v0.1.1", "arkoren.dev/foundation/totp@v0.2.0",
+		"arkoren.dev/ark/iam@v0.8.0", "arkoren.dev/driver/aes@v0.2.0", "arkoren.dev/driver/argon2@v0.1.0",
+		"arkoren.dev/driver/sqlite@v0.1.0", "arkoren.dev/foundation/key@v0.2.0", "arkoren.dev/foundation/totp@v0.2.0",
 	}
 
 	if !slices.Equal(plan.Requires, want) {
@@ -269,7 +269,7 @@ func TestAddIAMPinsTheModulesItImports(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if slices.Contains(plan.Requires, "arkoren.dev/ark/iam@v0.6.1") || !slices.Contains(plan.Requires, "arkoren.dev/driver/sqlite@v0.1.0") {
+	if slices.Contains(plan.Requires, "arkoren.dev/ark/iam@v0.8.0") || !slices.Contains(plan.Requires, "arkoren.dev/driver/sqlite@v0.1.0") {
 		t.Fatalf("requires = %v, want the missing modules only", plan.Requires)
 	}
 }
@@ -450,8 +450,8 @@ func TestAddIAMReportsOnlyWhatTheReaderMustDo(t *testing.T) {
 	notes := stepTexts(plan.Steps)
 
 	for _, want := range []string{
-		"LINK_KEY_FILE=link.key", "arkoren key generate shared --out link.key", "TWO_FACTOR_KEY_FILE=two-factor.key",
-		"arkoren key generate shared --out two-factor.key", "worker", "make run",
+		"LINK_KEY=file:.secrets/link-key", "arkoren key generate shared --out .secrets/link-key", "TWO_FACTOR_KEY=file:.secrets/two-factor-key",
+		"arkoren key generate shared --out .secrets/two-factor-key", "worker", "make run",
 	} {
 		if !strings.Contains(notes, want) {
 			t.Fatalf("notes miss %q:\n%s", want, notes)

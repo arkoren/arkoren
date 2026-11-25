@@ -90,8 +90,8 @@ func TestAddArkTextOutputNumbersNextSteps(t *testing.T) {
 
 	for _, fragment := range []string{
 		"→ Would add ark iam\n\nChanges\n  create ",
-		"\n  require  arkoren.dev/ark/iam@v0.6.1\n",
-		"\n\nNext steps\n  1. Create the LinkSigner key, then set LINK_KEY_FILE=link.key in .env;",
+		"\n  require  arkoren.dev/ark/iam@v0.8.0\n",
+		"\n\nNext steps\n  1. Create the LinkSigner key ring that LINK_KEY=file:.secrets/link-key names in .env;",
 		"\n  5. Start the server: ",
 	} {
 		if !strings.Contains(got, fragment) {
@@ -189,10 +189,14 @@ func TestKeyCheckTextOutputNamesTheKey(t *testing.T) {
 
 	got := terminalText(t, env, "key", "check", "shared", "k.key")
 
-	want := `✓ Valid shared key
+	want := `✓ Valid shared key ring
 
 Kind  shared
 Path  k.key
+
+Keys
+  FINGERPRINT   CURRENT
+  REV  true
 `
 
 	if got != want {
@@ -569,9 +573,9 @@ func TestBareGroupsPrintHelp(t *testing.T) {
 func TestUnknownSubcommandIsUsageError(t *testing.T) {
 	t.Parallel()
 
-	got := terminalError(t, scaffoldEnvironment(t), "key", "rotate")
+	got := terminalError(t, scaffoldEnvironment(t), "key", "sign")
 
-	requireText(t, got, `✗ unknown command "rotate" for arkoren key: accepted commands are generate, check, public
+	requireText(t, got, `✗ unknown command "sign" for arkoren key: accepted commands are generate, check, public, rotate, promote, retire
 
 Type  usage
 
