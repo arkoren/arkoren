@@ -4,6 +4,7 @@ package evidence
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -190,9 +191,60 @@ type Reader func(context.Context, string) ([]byte, error)
 // Wait owns the bounded polling delay and is replaceable by tests without sleep.
 type Wait func(context.Context, time.Duration) error
 
+// jobsPageSize is the page size for job metadata reads. GitHub answers HTTP 502
+// for the attempt jobs endpoint at per_page=100 on large (60+ job) runs, either
+// deterministically or intermittently, while smaller pages succeed. gh
+// --paginate follows every page and decodeJobs merges them, so a smaller size
+// only costs extra requests. The workflow runs listing keeps per_page=100: it
+// returns small run records for one SHA (a handful of rows) and has not failed.
+const jobsPageSize = 30
+
+// readAttempts bounds how often one metadata read is tried before failing.
+const readAttempts = 5
+
+// readBackoff is the delay before the second attempt; it doubles per retry up to
+// maxReadBackoff.
+const readBackoff = 2 * time.Second
+
+// maxReadBackoff caps the doubling retry delay.
+const maxReadBackoff = 16 * time.Second
+
+// clientError matches gh's "HTTP 4xx" diagnostics, which are deterministic.
+var clientError = regexp.MustCompile(`HTTP 4\d\d`)
+
+// retrying wraps read so transient failures (HTTP 5xx, network or subprocess
+// errors) are retried up to readAttempts times with doubling backoff that honors
+// ctx through wait. HTTP 4xx other than 429 are deterministic and returned at
+// once. When attempts are exhausted the last error is returned, wrapped.
+func retrying(read Reader, wait Wait) Reader {
+	return func(ctx context.Context, path string) ([]byte, error) {
+		delay := readBackoff
+		for attempt := 1; ; attempt++ {
+			data, err := read(ctx, path)
+			if err == nil {
+				return data, nil
+			}
+			message := err.Error()
+			permanent := clientError.MatchString(message) && !strings.Contains(message, "HTTP 429")
+			if permanent || ctx.Err() != nil {
+				return nil, err
+			}
+			if attempt == readAttempts {
+				return nil, fmt.Errorf("after %d attempts: %w", attempt, err)
+			}
+			if waitErr := wait(ctx, delay); waitErr != nil {
+				return nil, errors.Join(err, waitErr)
+			}
+			delay = min(delay*2, maxReadBackoff)
+		}
+	}
+}
+
 // Collect refreshes both workflow identities on every poll and uses exact-attempt
-// jobs. The caller owns the total deadline; no stale partial result is retained.
+// jobs. Every metadata read is retried on transient failure. The caller owns the
+// total deadline; no stale partial result is retained.
 func Collect(ctx context.Context, target Target, read Reader, wait Wait) (Result, error) {
+	read = retrying(read, wait)
 	for {
 		if err := ctx.Err(); err != nil {
 			return Result{}, fmt.Errorf("timed out waiting for exact-SHA CI gate AND website: %s: %w", target.SHA, err)
@@ -218,7 +270,7 @@ func Collect(ctx context.Context, target Target, read Reader, wait Wait) (Result
 			if run == nil || run.Status != "completed" {
 				continue
 			}
-			data, err = read(ctx, fmt.Sprintf("repos/%s/actions/runs/%d/attempts/%d/jobs?per_page=100", target.Repository, run.ID, run.Attempt))
+			data, err = read(ctx, fmt.Sprintf("repos/%s/actions/runs/%d/attempts/%d/jobs?per_page=%d", target.Repository, run.ID, run.Attempt, jobsPageSize))
 
 			if err != nil {
 				return Result{}, fmt.Errorf("read job metadata: %w", err)
