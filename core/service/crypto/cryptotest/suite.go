@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"arkoren.dev/core/service/crypto"
+	"arkoren.dev/foundation/key"
 )
 
 // Option changes one conformance suite setting.
@@ -23,6 +24,18 @@ func WithForeignDriver(newForeign func(t *testing.T) crypto.Driver) Option {
 	}
 }
 
+// WithRing supplies a factory that builds a driver from a key ring: the
+// ring's current key encrypts, and its previous keys only decrypt. It enables
+// the rotation checks: ciphertext made under an old key must decrypt through a
+// driver whose ring lists that key as previous, and Decrypt must report so.
+// The suite generates the keys itself. Drivers such as aescrypto.New(ring)
+// and chacha20crypto.New(ring) are factories of this shape.
+func WithRing(newRing func(t *testing.T, ring key.Ring[key.Shared]) crypto.Driver) Option {
+	return func(s *suite) {
+		s.newRing = newRing
+	}
+}
+
 // suite holds the settings and driver factory of one [Run].
 type suite struct {
 	// newDriver creates the driver under test.
@@ -30,26 +43,37 @@ type suite struct {
 
 	// newForeign optionally creates a driver with a different key.
 	newForeign func(t *testing.T) crypto.Driver
+
+	// newRing optionally creates a driver from a key ring.
+	newRing func(t *testing.T, ring key.Ring[key.Shared]) crypto.Driver
 }
 
 // Run checks that the drivers created by newDriver follow the [crypto.Driver]
 // contract: values round-trip, encryption is randomized, tampered, truncated,
 // or foreign ciphertext fails with [crypto.ErrInvalidCiphertext], inputs are
-// left intact, and closed drivers return [crypto.ErrEncrypterClosed].
+// left intact, closed drivers return [crypto.ErrEncrypterClosed], and Decrypt
+// reports previous as false for ciphertext made with the current key.
 //
 // newDriver is called once per subtest and must return drivers sharing the
-// same key.
+// same key. [WithRing] adds the rotation checks, and [WithForeignDriver] the
+// wrong-key check.
 //
 // # Example
 //
 //	func TestDriver(t *testing.T) {
 //		cryptotest.Run(t, func(t *testing.T) crypto.Driver {
-//			driver, err := aes.New(key)
+//			driver, err := aescrypto.New(ring)
 //			if err != nil {
 //				t.Fatal(err)
 //			}
 //			return driver
-//		})
+//		}, cryptotest.WithRing(func(t *testing.T, ring key.Ring[key.Shared]) crypto.Driver {
+//			driver, err := aescrypto.New(ring)
+//			if err != nil {
+//				t.Fatal(err)
+//			}
+//			return driver
+//		}))
 //	}
 func Run(t *testing.T, newDriver func(t *testing.T) crypto.Driver, opts ...Option) {
 	s := &suite{newDriver: newDriver}
@@ -65,6 +89,7 @@ func Run(t *testing.T, newDriver func(t *testing.T) crypto.Driver, opts ...Optio
 	t.Run("TamperDetection", s.testTamperDetection)
 	t.Run("Truncated", s.testTruncated)
 	t.Run("ForeignKey", s.testForeignKey)
+	t.Run("RingRotation", s.testRingRotation)
 	t.Run("InputUntouched", s.testInputUntouched)
 	t.Run("Closed", s.testClosed)
 	t.Run("Concurrent", s.testConcurrent)
@@ -90,10 +115,10 @@ func (suite *suite) testRoundTrip(t *testing.T) {
 	for _, size := range []int{1, 15, 16, 17, 1000, 1 << 16} {
 		plaintext := bytes.Repeat([]byte{'x'}, size)
 
-		decrypted, err := driver.Decrypt(mustEncrypt(t, driver, plaintext))
+		decrypted, previous, err := driver.Decrypt(mustEncrypt(t, driver, plaintext))
 
-		if err != nil || !bytes.Equal(decrypted, plaintext) {
-			t.Errorf("round trip of %d bytes = %d bytes, %v", size, len(decrypted), err)
+		if err != nil || previous || !bytes.Equal(decrypted, plaintext) {
+			t.Errorf("round trip of %d bytes = %d bytes, previous %v, %v", size, len(decrypted), previous, err)
 		}
 	}
 }
@@ -103,7 +128,7 @@ func (suite *suite) testEmptyPlaintext(t *testing.T) {
 	driver := suite.newDriver(t)
 
 	for _, plaintext := range [][]byte{nil, {}} {
-		decrypted, err := driver.Decrypt(mustEncrypt(t, driver, plaintext))
+		decrypted, _, err := driver.Decrypt(mustEncrypt(t, driver, plaintext))
 
 		if err != nil || len(decrypted) != 0 {
 			t.Errorf("round trip of empty value = %q, %v", decrypted, err)
@@ -133,7 +158,7 @@ func (suite *suite) testRandomized(t *testing.T) {
 func (suite *suite) testSharedKey(t *testing.T) {
 	encrypted := mustEncrypt(t, suite.newDriver(t), []byte("shared"))
 
-	decrypted, err := suite.newDriver(t).Decrypt(encrypted)
+	decrypted, _, err := suite.newDriver(t).Decrypt(encrypted)
 
 	if err != nil || string(decrypted) != "shared" {
 		t.Fatalf("Decrypt() = %q, %v", decrypted, err)
@@ -179,15 +204,76 @@ func (suite *suite) testForeignKey(t *testing.T) {
 	assertInvalidCiphertext(t, suite.newDriver(t), encrypted, "foreign ciphertext")
 }
 
+// mustRing builds a ring of freshly generated keys, current first.
+func mustRing(t *testing.T, count int) (key.Ring[key.Shared], []key.Shared) {
+	t.Helper()
+
+	keys := make([]key.Shared, count)
+
+	for index := range keys {
+		generated, err := key.GenerateShared()
+
+		if err != nil {
+			t.Fatalf("GenerateShared() error = %v", err)
+		}
+
+		keys[index] = generated
+	}
+
+	ring, err := key.NewRing(keys[0], keys[1:]...)
+
+	if err != nil {
+		t.Fatalf("NewRing() error = %v", err)
+	}
+
+	return ring, keys
+}
+
+// testRingRotation verifies a driver built from a ring decrypts ciphertext
+// made under a previous key and reports it, while its own ciphertext reports
+// the current key, and a driver without the old key rejects old ciphertext.
+func (suite *suite) testRingRotation(t *testing.T) {
+	if suite.newRing == nil {
+		t.Skip("no ring factory supplied")
+	}
+
+	rotated, keys := mustRing(t, 2)
+	oldRing, err := key.NewRing(keys[1])
+
+	if err != nil {
+		t.Fatalf("NewRing() error = %v", err)
+	}
+
+	oldDriver := suite.newRing(t, oldRing)
+	newDriver := suite.newRing(t, rotated)
+	oldCiphertext := mustEncrypt(t, oldDriver, []byte("written before rotation"))
+
+	plaintext, previous, err := newDriver.Decrypt(oldCiphertext)
+
+	if err != nil || !previous || string(plaintext) != "written before rotation" {
+		t.Errorf("Decrypt(old ciphertext) = %q, %v, %v, want plaintext, true, nil", plaintext, previous, err)
+	}
+
+	newCiphertext := mustEncrypt(t, newDriver, []byte("written after rotation"))
+
+	plaintext, previous, err = newDriver.Decrypt(newCiphertext)
+
+	if err != nil || previous || string(plaintext) != "written after rotation" {
+		t.Errorf("Decrypt(new ciphertext) = %q, %v, %v, want plaintext, false, nil", plaintext, previous, err)
+	}
+
+	assertInvalidCiphertext(t, oldDriver, newCiphertext, "ciphertext of a key the driver does not hold")
+}
+
 // assertInvalidCiphertext fails t unless Decrypt rejects value with
 // crypto.ErrInvalidCiphertext.
 func assertInvalidCiphertext(t *testing.T, driver crypto.Driver, value []byte, format string, args ...any) {
 	t.Helper()
 
-	plaintext, err := driver.Decrypt(value)
+	plaintext, previous, err := driver.Decrypt(value)
 
-	if !errors.Is(err, crypto.ErrInvalidCiphertext) || plaintext != nil {
-		t.Errorf("Decrypt(%s) = %q, %v, want nil, ErrInvalidCiphertext", fmt.Sprintf(format, args...), plaintext, err)
+	if !errors.Is(err, crypto.ErrInvalidCiphertext) || plaintext != nil || previous {
+		t.Errorf("Decrypt(%s) = %q, %v, %v, want nil, false, ErrInvalidCiphertext", fmt.Sprintf(format, args...), plaintext, previous, err)
 	}
 }
 
@@ -206,7 +292,7 @@ func (suite *suite) testInputUntouched(t *testing.T) {
 
 	clear(plaintext)
 
-	decrypted, err := driver.Decrypt(mustEncrypt(t, driver, original))
+	decrypted, _, err := driver.Decrypt(mustEncrypt(t, driver, original))
 
 	if err != nil || !bytes.Equal(decrypted, original) {
 		t.Fatalf("Decrypt() = %q, %v", decrypted, err)
@@ -214,7 +300,7 @@ func (suite *suite) testInputUntouched(t *testing.T) {
 
 	snapshot := bytes.Clone(encrypted)
 
-	if _, err := driver.Decrypt(encrypted); err != nil {
+	if _, _, err := driver.Decrypt(encrypted); err != nil {
 		t.Fatal(err)
 	}
 
@@ -224,7 +310,7 @@ func (suite *suite) testInputUntouched(t *testing.T) {
 
 	clear(decrypted)
 
-	if again, err := driver.Decrypt(encrypted); err != nil || !bytes.Equal(again, original) {
+	if again, _, err := driver.Decrypt(encrypted); err != nil || !bytes.Equal(again, original) {
 		t.Errorf("Decrypt result aliases ciphertext or earlier plaintext: %q, %v", again, err)
 	}
 }
@@ -250,7 +336,7 @@ func (suite *suite) testClosed(t *testing.T) {
 		t.Errorf("Encrypt() after Stop error = %v, want ErrEncrypterClosed", err)
 	}
 
-	if _, err := driver.Decrypt(encrypted); !errors.Is(err, crypto.ErrEncrypterClosed) {
+	if _, _, err := driver.Decrypt(encrypted); !errors.Is(err, crypto.ErrEncrypterClosed) {
 		t.Errorf("Decrypt() after Stop error = %v, want ErrEncrypterClosed", err)
 	}
 }
@@ -263,7 +349,7 @@ func (suite *suite) testConcurrent(t *testing.T) {
 
 	for range 8 {
 		group.Go(func() {
-			decrypted, err := driver.Decrypt(mustEncrypt(t, driver, []byte("secret")))
+			decrypted, _, err := driver.Decrypt(mustEncrypt(t, driver, []byte("secret")))
 
 			if err != nil || string(decrypted) != "secret" {
 				t.Errorf("round trip = %q, %v", decrypted, err)

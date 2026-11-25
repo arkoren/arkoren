@@ -6,10 +6,11 @@
 // unsubscribe, file downloads, and password reset, where the recipient holds
 // the only proof of authorization. Build one [Signer] with [New] at startup and
 // share it: it is immutable and safe for concurrent use.
-// Load a key.Shared with key.LoadShared or key.ParseShared before construction.
+// Load a key.Ring with key.ParseRing[key.Shared], or build one with key.NewRing
+// from key.Shared values, before construction.
 //
 //	signer, err := link.New(
-//		secret,
+//		ring,
 //		func(signer *link.Builder) {
 //			signer.Origin("https://app.example.com")
 //		},
@@ -86,7 +87,7 @@
 // change; [Middleware] only checks. A password reset shows its form on GET,
 // which any valid link may do, and burns the link on POST:
 //
-//	signer, err := link.New(secret, func(signer *link.Builder) {
+//	signer, err := link.New(ring, func(signer *link.Builder) {
 //		signer.Cache(cache.New(memorycache.New()))
 //	})
 //	if err != nil {
@@ -202,21 +203,22 @@
 //
 // # Secrets and rotation
 //
-// Every secret is a validated key.Shared of exactly [MinSecretLength] bytes.
-// New rejects zero values with [ErrInvalidSecret]. The package derives its MAC
-// key with HKDF-SHA256; still provision separate material for unrelated purposes.
+// [New] takes a key.Ring of validated key.Shared values, each exactly
+// [MinSecretLength] bytes. New rejects the zero Ring with [ErrInvalidSecret].
+// The package derives its MAC keys with HKDF-SHA256; still provision separate
+// material for unrelated purposes.
 //
-// To rotate, move the old secret to [Builder.Previous] and pass a new
-// secret to [New]. New links use the new secret, and links signed with the old
-// one still verify. Drop the old secret after the longest lifetime of the links
-// it signed; for permanent links, dropping it invalidates them.
+// To rotate, build a ring whose current key is the new one and whose previous
+// keys are the old ones. New links use the current key, and links signed with
+// a previous key still verify ([Inspection].Previous reports them, so they can be
+// re-issued). Drop a previous key after the longest lifetime of the links it
+// signed; for permanent links, dropping it invalidates them.
 //
-//	link.New(
-//		newSecret,
-//		func(signer *link.Builder) {
-//			signer.Previous(oldSecret)
-//		},
-//	)
+//	ring, err := key.NewRing(newKey, oldKey)
+//	if err != nil {
+//		return err
+//	}
+//	signer, err := link.New(ring)
 //
 // # Ignored query parameters
 //
@@ -224,7 +226,7 @@
 // them in [Builder.IgnoreQuery] so they may be added, changed, or removed
 // without invalidating the link:
 //
-//	link.New(secret, func(signer *link.Builder) {
+//	link.New(ring, func(signer *link.Builder) {
 //		signer.IgnoreQuery("utm_source", "utm_medium")
 //	})
 //

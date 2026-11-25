@@ -17,11 +17,12 @@ This page builds on the facade from [IAM Overview](overview.md#building-the-faca
 
 ## Creating a Link Signer
 
-Signed links need a persistent 32-byte shared key. Load a [provisioned key](../keys/overview.md) with `key` from `arkoren.dev/foundation/key` and pass it to `link.New` from `arkoren.dev/core/http/link`:
+Signed links need a persistent 32-byte shared key. Parse a [provisioned key](../keys/overview.md) into a `key.Ring` with `key` from `arkoren.dev/foundation/key` and pass it to `link.New` from `arkoren.dev/core/http/link`:
 
 ```go
-secret, err := key.LoadShared("link-key.key")
-signer, err := link.New(secret)
+text, err := os.ReadFile("link-key.key")
+ring, err := key.ParseRing[key.Shared](string(text))
+signer, err := link.New(ring)
 ```
 
 > [!WARNING]

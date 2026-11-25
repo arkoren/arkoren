@@ -5,7 +5,6 @@ import (
 
 	"arkoren.dev/core/event"
 	"arkoren.dev/core/service/cache"
-	"arkoren.dev/foundation/key"
 )
 
 // BuilderFunc edits one signer draft synchronously. Callbacks run directly once
@@ -17,7 +16,7 @@ import (
 //	var policy link.BuilderFunc = func(signer *link.Builder) {
 //		signer.Origin("https://app.example.com")
 //	}
-//	signer, err := link.New(secret, policy)
+//	signer, err := link.New(ring, policy)
 //	if err != nil {
 //		return err
 //	}
@@ -26,7 +25,7 @@ type BuilderFunc = func(*Builder)
 
 // Config is a printable signer-settings record retained for redacted logging.
 // It is not a constructor input; configure [New] with [Builder] callbacks.
-// Formatting omits service pointers and replaces previous secrets with a marker.
+// Formatting omits service pointers.
 //
 // Example:
 //
@@ -40,15 +39,6 @@ type Config struct {
 	//	record := link.Config{Origin: "https://app.example.com"}
 	//	logger.InfoContext(ctx, "link settings", "settings", record)
 	Origin string
-
-	// PreviousSecrets still verify links during secret rotation. Each must be
-	// exactly [MinSecretLength] bytes. The default, none, accepts only
-	// links signed with the current secret.
-	//
-	// Example:
-	//	record := link.Config{PreviousSecrets: []key.Shared{previous}}
-	//	slog.Info("link settings", "settings", record)
-	PreviousSecrets []key.Shared
 
 	// IgnoreQuery names query parameters excluded from the signature. They may
 	// be added, changed, or removed without invalidating a link. The names
@@ -84,19 +74,13 @@ type Config struct {
 // settings holds the private completed signer settings.
 type settings Config
 
-// cloneSecrets copies the list of immutable key values. The publication copy
-// prevents a retained construction draft from replacing previous keys.
-func cloneSecrets(secrets []key.Shared) []key.Shared {
-	return slices.Clone(secrets)
-}
-
 // Builder configures New before publication. Callbacks run directly
 // once, synchronously in order on one fresh draft; nil entries panic. Retaining
 // the draft cannot change published settings. Methods return the same draft.
 //
 // Example:
 //
-//	signer, err := link.New(secret, func(signer *link.Builder) {
+//	signer, err := link.New(ring, func(signer *link.Builder) {
 //		signer.Origin("https://app.example.com")
 //	})
 //	if err != nil {
@@ -120,7 +104,6 @@ func newSettings(configure ...BuilderFunc) settings {
 
 	config := signer.settings
 
-	config.PreviousSecrets = cloneSecrets(config.PreviousSecrets)
 	config.IgnoreQuery = slices.Clone(config.IgnoreQuery)
 
 	return config
@@ -134,7 +117,7 @@ func newSettings(configure ...BuilderFunc) settings {
 //
 // Example:
 //
-//	signer, err := link.New(secret, func(signer *link.Builder) {
+//	signer, err := link.New(ring, func(signer *link.Builder) {
 //		signer.Origin("https://app.example.com")
 //	})
 //	if err != nil {
@@ -143,28 +126,6 @@ func newSettings(configure ...BuilderFunc) settings {
 //	_ = signer
 func (signer *Builder) Origin(origin string) *Builder {
 	signer.settings.Origin = origin
-
-	return signer
-}
-
-// Previous sets the shared keys that still verify links during rotation.
-// Each must contain exactly [MinSecretLength] bytes. The default, none, accepts only
-// links signed with the current secret.
-//
-// The setting replaces the previous value on this construction draft.
-// Publication keeps independent settings; functions and services stay shared.
-//
-// Example:
-//
-//	signer, err := link.New(secret, func(signer *link.Builder) {
-//		signer.Previous(previousSecret)
-//	})
-//	if err != nil {
-//		return err
-//	}
-//	_ = signer
-func (signer *Builder) Previous(secrets ...key.Shared) *Builder {
-	signer.settings.PreviousSecrets = cloneSecrets(secrets)
 
 	return signer
 }
@@ -179,7 +140,7 @@ func (signer *Builder) Previous(secrets ...key.Shared) *Builder {
 //
 // Example:
 //
-//	signer, err := link.New(secret, func(signer *link.Builder) {
+//	signer, err := link.New(ring, func(signer *link.Builder) {
 //		signer.IgnoreQuery("utm_source")
 //	})
 //	if err != nil {
@@ -200,7 +161,7 @@ func (signer *Builder) IgnoreQuery(names ...string) *Builder {
 //
 // Example:
 //
-//	signer, err := link.New(secret, func(signer *link.Builder) {
+//	signer, err := link.New(ring, func(signer *link.Builder) {
 //		signer.Events(event.New())
 //	})
 //	if err != nil {
@@ -223,7 +184,7 @@ func (signer *Builder) Events(bus *event.Bus) *Builder {
 //
 // Example:
 //
-//	signer, err := link.New(secret, func(signer *link.Builder) {
+//	signer, err := link.New(ring, func(signer *link.Builder) {
 //		signer.Cache(cache.New(memorycache.New()))
 //	})
 //	if err != nil {

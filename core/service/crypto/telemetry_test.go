@@ -28,7 +28,7 @@ func (panickingCrypto) Encrypt([]byte) ([]byte, error) {
 }
 
 // Decrypt panics without producing plaintext or an ordinary error.
-func (panickingCrypto) Decrypt([]byte) ([]byte, error) {
+func (panickingCrypto) Decrypt([]byte) ([]byte, bool, error) {
 	panic(driverPanic)
 }
 
@@ -346,8 +346,8 @@ func (driver failedCrypto) Encrypt([]byte) ([]byte, error) {
 }
 
 // Decrypt returns the configured failure without observing its input.
-func (driver failedCrypto) Decrypt([]byte) ([]byte, error) {
-	return nil, driver.err
+func (driver failedCrypto) Decrypt([]byte) ([]byte, bool, error) {
+	return nil, false, driver.err
 }
 
 // TestCryptoMetricsAllKeysFailPreservesPrimary verifies one final failure,

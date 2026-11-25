@@ -7,35 +7,24 @@ import (
 	"arkoren.dev/foundation/key"
 )
 
-// TestSignerSettingsDetachSecretsAndLists checks capture and publication copies,
-// including nested secret bytes that remain reachable from a retained draft.
-func TestSignerSettingsDetachSecretsAndLists(t *testing.T) {
+// TestSignerSettingsDetachLists checks capture and publication copies of the
+// ignored query names that remain reachable from a retained draft.
+func TestSignerSettingsDetachLists(t *testing.T) {
 	t.Parallel()
-
-	previous := []byte("0123456789abcdef0123456789abcdef")
-
-	material, err := key.NewShared(previous)
-
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	names := []string{"utm_source"}
 	var retained *Builder
 	config := newSettings(func(signer *Builder) {
 		retained = signer
-		signer.Previous(material)
 		signer.IgnoreQuery(names...)
 
-		previous[0] = 'x'
 		names[0] = "changed"
 	})
 
-	retained.settings.PreviousSecrets[0] = key.Shared{}
 	retained.settings.IgnoreQuery[0] = "changed again"
 	retained.Origin("https://changed.example.com")
 
-	if string(config.PreviousSecrets[0].Bytes()) != "0123456789abcdef0123456789abcdef" || config.IgnoreQuery[0] != "utm_source" {
+	if config.IgnoreQuery[0] != "utm_source" {
 		t.Fatal("published settings alias inputs or retained draft")
 	}
 }
@@ -47,7 +36,7 @@ func TestSignerValidationFollowsAllCallbacks(t *testing.T) {
 
 	calls := 0
 
-	_, err := New(key.Shared{}, func(signer *Builder) {
+	_, err := New(key.Ring[key.Shared]{}, func(signer *Builder) {
 		calls++
 		signer.Origin("invalid")
 	}, func(signer *Builder) {
@@ -61,7 +50,7 @@ func TestSignerValidationFollowsAllCallbacks(t *testing.T) {
 }
 
 // signingFixture creates validated material for construction-only scenarios.
-func signingFixture(t *testing.T) key.Shared {
+func signingFixture(t *testing.T) key.Ring[key.Shared] {
 	t.Helper()
 
 	material, err := key.NewShared([]byte("current secret current secret 32"))
@@ -70,7 +59,13 @@ func signingFixture(t *testing.T) key.Shared {
 		t.Fatal(err)
 	}
 
-	return material
+	ring, err := key.NewRing(material)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return ring
 }
 
 // TestConstructionCallbacksRunOnceInOrder checks the public constructor, identical

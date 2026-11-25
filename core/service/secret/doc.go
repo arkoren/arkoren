@@ -1,25 +1,66 @@
 // Package secret provides versioned secret contracts, typed retrieval, and
-// observed mutations. Wrap a Driver with New; Raw, String, and Get read the
-// current value, while Put, Update, and Delete delegate mutation semantics.
-// Get takes an immutable Secret definition binding the name to its decoding type;
-// raw version selection remains available through Driver.Get and Reference.
-// Definitions neither cache values nor enforce schemas across deployments.
-// Optional immutable Namespace definitions compose related literal names with a
-// required provider-appropriate separator, including empty for concatenation.
+// observed mutations. Wrap a Driver with New; Get reads and decodes the current
+// value of a definition, Raw reads its bytes, and Put, Update, and Delete
+// delegate mutation semantics.
+//
+// # References
+//
+// A secret is named by a reference, a string "scheme:name" such as
+// "aws:billing/key", "vault:app/db", "file:/run/secrets/token" or
+// "env:API_TOKEN". There is no "?field" or "?version" syntax. The Store never
+// parses a reference: it passes it to the driver, and the secretmux package
+// splits it at the first colon to pick the driver registered for the scheme.
+// Raw driver calls take a [Reference], whose Name is that string (without the
+// scheme once secretmux has routed it) and whose Version is a provider-issued
+// selector.
+//
+// # Definitions
+//
+// Get takes an immutable [Secret] definition binding a reference to the Go type
+// its payload decodes into. [NewSecret] declares a static reference;
+// [NewBinding] declares a key that the store resolves at each Get through the
+// lookup given to [Builder.Bindings] (usually os.LookupEnv), so a deployment
+// chooses the backend by setting DATABASE_PASSWORD=aws:prod/db. A binding must
+// be bound: an unset key or empty value fails with [ErrUnbound], and there are
+// no defaults. Optional immutable [Namespace] definitions compose related
+// literal references with a required provider-appropriate separator, including
+// empty for concatenation; their generic Secret method picks each leaf's type.
 // Subnamespace joins with the parent separator before child policies change
 // future joins; Derive keeps settings without reapplying defaults. Invalid
 // ancestors remain invalid through children and leaves. Namespaces have no
 // provider isolation, schema registration, or bulk-operation semantics.
+// Definitions neither cache values nor enforce schemas across deployments.
 //
 // Example:
 //
-//	credentials := secret.NewNamespace[map[string]string]("production", "/")
-//	database := credentials.Subnamespace("database").Secret("credentials")
+//	secrets := secret.New(driver, func(secrets *secret.Builder) {
+//		secrets.Bindings(os.LookupEnv)
+//	})
+//	credentials := secret.NewNamespace("vault:production", "/")
+//	database := credentials.Subnamespace("database").Secret[map[string]string]("credentials")
 //	config, err := secrets.Get(ctx, database)
 //	if err != nil {
 //		return err
 //	}
 //	useCredential(config["password"])
+//
+// # Decoding
+//
+// Drivers carry bytes only; decoding belongs to the definition's type. A
+// string must be valid UTF-8 and loses one trailing "\n" or "\r\n"; a []byte is
+// a copy; a type whose pointer implements [encoding.TextUnmarshaler] (such as
+// key.Shared or key.Ring) receives the text without that one newline; anything
+// else is decoded as JSON with encoding/json/v2. A named string type is not a
+// string here and decodes as a JSON string. Decode errors never contain the
+// payload.
+//
+// # Backends
+//
+// Backends differ in what they store. A driver that cannot perform an
+// operation, such as a write to a read-only source (files, environment
+// variables) or a binary payload to a text-only backend, returns an error
+// wrapping [ErrUnsupported] and changes nothing. A missing secret is
+// [ErrNotFound]. The secrettest suite expresses these capabilities as options.
 //
 // # Version lifetime
 //
@@ -40,12 +81,12 @@
 //
 // Each provider operation emits a "secret get", "secret put", "secret update",
 // or "secret delete" span plus arkoren.secret.operations and
-// arkoren.secret.operation.duration (seconds). String and typed Get share Raw's
-// single provider observation. JSON decode failures occur after that observation
+// arkoren.secret.operation.duration (seconds). Raw and typed Get share a single
+// provider observation. Decode failures and unbound bindings occur outside it
 // and do not turn a successful provider read into a telemetry failure.
 // Nil Builder.Telemetry follows telemetry.Default per call. Disabled telemetry
 // records nothing. Attributes contain only operation and bounded error class:
-// names, versions, payloads, sizes, and native error types/text are omitted.
+// references, versions, payloads, sizes, and native error types/text are omitted.
 //
 // Builder.Events opts into best-effort MutationSucceeded and MutationFailed
 // notifications for facade writes only; nil disables them. These are observed
@@ -59,7 +100,7 @@
 //	secrets := secret.New(driver, func(secrets *secret.Builder) {
 //		secrets.Events(bus)
 //	})
-//	token, err := secrets.String(ctx, "api-token")
+//	token, err := secrets.Get(ctx, secret.NewSecret[string]("aws:api-token"))
 //	if err != nil {
 //		return err
 //	}

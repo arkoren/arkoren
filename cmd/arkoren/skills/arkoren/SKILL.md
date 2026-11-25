@@ -240,6 +240,7 @@ opaque to inference.
 #### Secrets
 
 - [Secrets Overview](references/guides/secrets/overview.md): Load private application credentials through a secret store without confusing storage with runtime configuration.
+- [References and Sources](references/guides/secrets/sources.md): Route secret references to files, environment variables, and managed providers, and let each deployment choose where a secret lives.
 - [Secrets Drivers](references/guides/secrets/drivers.md): Choose and configure a secret provider with explicit payload, permission, retention, and lifecycle boundaries.
 - [Managing Secrets](references/guides/secrets/managing.md): Write versioned values, verify retained versions, observe facade outcomes, and retire secrets without mistaking deletion for rotation.
 - [Secret Rotation](references/guides/secrets/rotation.md): Coordinate credential replacement, consumer refresh, verification overlap, and retained encryption material.

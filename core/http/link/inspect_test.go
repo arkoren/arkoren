@@ -13,7 +13,7 @@ import (
 // ExampleSigner_Inspect shows reading verified link metadata without exposing
 // the signature in the resulting application URL.
 func ExampleSigner_Inspect() {
-	signer, err := link.New(secret)
+	signer, err := link.New(ringOf(secret))
 
 	if err != nil {
 		fmt.Println(err)

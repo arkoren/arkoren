@@ -2,6 +2,18 @@
 // facade for typed values. It uses its primary driver for encryption and tries
 // configured previous drivers in order for decryption, allowing gradual rotation.
 //
+// # Rotation
+//
+// Two mechanisms signal that stored ciphertext should be re-encrypted. A driver
+// built from a key.Ring (the AES and ChaCha20 drivers take one) encrypts with
+// the ring's current key and decrypts with the current key or any previous key;
+// its Decrypt reports previous when a previous key authenticated the value.
+// That is how a key of one cipher is rotated. [Builder.Previous] adds whole
+// older drivers, for moving between ciphers or parameters; success in one of
+// them is also a previous result. DecryptWithRotation and
+// DecryptRawWithRotation return the combined signal: when it is true, encrypt
+// the plaintext with the Encrypter and persist the replacement.
+//
 // Construction policies run directly once in order on a fresh Builder. Nil
 // entries panic; expanded nil/empty slices supply no edits. Previous appends
 // copied driver interfaces; the live drivers themselves remain shared. New
