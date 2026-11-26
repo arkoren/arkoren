@@ -344,8 +344,14 @@ The body is the published GitHub body verbatim after replacing CRLF and bare CR
 with LF. No trimming, final-newline insertion, Unicode normalization, link rewriting,
 or prose editing occurs. Null GitHub bodies become empty bodies. The deterministic
 frontmatter is followed by one newline after its closing fence; everything after
-that newline belongs to the body. Correct notes on GitHub, rerun sync, review
-the resulting diff, and merge through the normal website checks. An unchanged
+that newline belongs to the body. Published bodies must stay equal to the notes
+signed in their tags: the publisher and the notes workflow's `release notes audit`
+step refuse an edited body (naming its tag and both SHA-256 digests), and the
+publisher then blocks every later publication. Fix notes for future releases in
+the planner instead. To correct a published body, first merge a reviewed entry
+pinning the new body's exact SHA-256 in `../.github/release-corrections.json`,
+then set exactly those bytes with `gh release edit TAG --notes-file FILE`, rerun
+sync, review the resulting diff, and merge through the normal website checks. An unchanged
 rerun changes no bytes; `releases:check` exits nonzero if confirmed records differ.
 Neither command deletes older files missing from an API response.
 
@@ -361,7 +367,10 @@ Release bodies are untrusted input. Loading never compiles Markdown as MDX or
 executes expressions, imports, shell text, or raw HTML. The shared
 `renderReleaseBody` helper parses Markdown and rejects raw HTML and active or
 ambiguous URL schemes rather than silently altering published text. If notes
-fail that gate, correct the GitHub body and retry. Code fences containing HTML
+fail that gate, the error names the release; correct it through a pinned
+correction as described above, never by a plain edit. Plan schema 4 escapes raw
+HTML and unsafe autolinks before signing; other unsafe links in commit messages
+still fail here. Code fences containing HTML
 remain inert code. The reader uses this helper, **not** Astro's
 trusted-author `render()` pipeline or MDX. Stored relative Markdown links stay
 unchanged; rendering resolves them from the module directory at the peeled commit

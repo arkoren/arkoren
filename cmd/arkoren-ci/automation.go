@@ -165,6 +165,14 @@ func notesCommand(ctx context.Context, client github.Client, mode, manifest, out
 			return err
 		}
 		return emit(stdout, map[string]bool{"verified": true, "writes": false})
+	case "audit":
+		// Read-only drift check before importing bodies into the website.
+		trust := filepath.Join(client.Root, ".github/release-signing.allowed-signers")
+		count, err := publication.Audit(ctx, client, trust)
+		if err != nil {
+			return err
+		}
+		return emit(stdout, map[string]any{"releases": count, "drift": false})
 	case "inspect", "publish":
 		state := notes.State{}
 		if err := readState(manifest, &state); err != nil {
@@ -189,7 +197,7 @@ func notesCommand(ctx context.Context, client github.Client, mode, manifest, out
 		}
 		return emit(stdout, map[string]string{"message": message})
 	default:
-		return fmt.Errorf("notes phase must be prepare, inspect, verify or publish")
+		return fmt.Errorf("notes phase must be prepare, audit, inspect, verify or publish")
 	}
 }
 

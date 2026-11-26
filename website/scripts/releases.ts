@@ -19,6 +19,7 @@ import {
   releaseSchema,
   serializeRelease,
   type ReleaseData,
+  UnsafeReleaseError,
 } from "../src/lib/releases/content.ts";
 
 /** Read-only GitHub namespace; callers cannot select another host or repository. */
@@ -109,7 +110,16 @@ export function collectReleases(options: { source: ReleaseSource; modules: reado
     ) {
       throw new Error("release target_commitish disagrees with peeled tag commit");
     }
-    records.push({ data, text: serializeRelease(data, release.body ?? ""), path: `${id}.md` });
+    let text: string;
+    try {
+      text = serializeRelease(data, release.body ?? "");
+    } catch (error) {
+      // The identity is validated above, so naming it cannot echo remote text.
+      if (error instanceof UnsafeReleaseError)
+        throw new UnsafeReleaseError(`${id}: ${error.message}`);
+      throw error;
+    }
+    records.push({ data, text, path: `${id}.md` });
   }
   return records.sort((a, b) => a.path.localeCompare(b.path, "en"));
 }
@@ -184,11 +194,16 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   try {
     main();
   } catch (error) {
-    /** Remote schema values and process output can contain secrets; don't echo them. */
+    /**
+     * Remote schema values and process output can contain secrets; don't echo
+     * them. Unsafe-body errors hold only a fixed diagnostic and a validated tag.
+     */
     console.error(
       error instanceof z.ZodError
         ? "invalid published release metadata; check canonical module, tag, timestamp and Git object fields"
-        : "release sync failed; check GitHub read access, canonical release identities, Markdown safety and managed file permissions (no remote error text is logged)",
+        : error instanceof UnsafeReleaseError
+          ? error.message
+          : "release sync failed; check GitHub read access, canonical release identities, Markdown safety and managed file permissions (no remote error text is logged)",
     );
     process.exitCode = 1;
   }
