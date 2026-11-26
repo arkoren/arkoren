@@ -71,13 +71,15 @@ func encodeVaultData(value []byte) (map[string]any, error) {
 // decodeVaultData returns the payload bytes of a KV v2 response. An object with
 // exactly one member, "value", holding a string is a wrapped text payload and
 // yields that string's bytes; every other object is returned as compact JSON
-// with sorted keys, so object formatting may differ from the write.
+// with sorted keys at every nesting level, so object formatting may differ from
+// the write while equal data always yields equal bytes.
 func decodeVaultData(data map[string]any) ([]byte, error) {
 	if text, ok := data[textField].(string); ok && len(data) == 1 {
 		return []byte(text), nil
 	}
 
-	return json.Marshal(data)
+	// json/v2 writes map members in randomized order unless asked not to.
+	return json.Marshal(data, json.Deterministic(true))
 }
 
 // validateVaultNumbers visits every numeric token, including nested objects and

@@ -7,6 +7,8 @@ import "encoding/json/v2"
 // object envelope.
 // Implementations remain shared by clients and registered handlers and must
 // support their concurrent use. Use the same encoding in both processes.
+// Replayed orchestration encodes inputs again, so equal values should encode to
+// equal bytes.
 //
 //	var codec workflow.Codec = workflow.JSON{}
 //	client := workflow.NewClient(driver, func(client *workflow.ClientBuilder) {
@@ -32,7 +34,9 @@ type Codec interface {
 //	_ = data
 type JSON struct{}
 
-// Marshal encodes v with encoding/json/v2.
+// Marshal encodes v with encoding/json/v2, writing map keys in sorted order:
+// orchestration code is replayed, so an equal input must encode to equal bytes.
+// A type with its own MarshalJSON method must keep its output stable itself.
 // Unsupported values return the JSON encoder's error rather than a payload.
 //
 //	data, err := (workflow.JSON{}).Marshal(map[string]string{"greeting": "welcome"})
@@ -41,7 +45,7 @@ type JSON struct{}
 //	}
 //	_ = data
 func (JSON) Marshal(v any) ([]byte, error) {
-	return json.Marshal(v)
+	return json.Marshal(v, json.Deterministic(true))
 }
 
 // Unmarshal decodes data with encoding/json/v2.

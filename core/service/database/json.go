@@ -84,6 +84,9 @@ func (jsonValue *JSON[T]) Scan(src any) error {
 // an encoding error wrapped with database context. Encoding uses JSON v2's nil
 // container defaults, not legacy null-map/null-slice behavior. The returned
 // string is a document, including "null" for a nil pointer, never SQL NULL.
+// Map keys are written in sorted order, so equal values produce equal text for
+// databases that compare stored documents byte for byte; a type with its own
+// MarshalJSON method must keep its output stable itself.
 //
 // Example:
 //
@@ -93,7 +96,7 @@ func (jsonValue *JSON[T]) Scan(src any) error {
 //	}
 //	_ = value // The string "[]".
 func (jsonValue JSON[T]) Value() (driver.Value, error) {
-	data, err := json.Marshal(jsonValue.V)
+	data, err := json.Marshal(jsonValue.V, json.Deterministic(true))
 
 	if err != nil {
 		return nil, fmt.Errorf("database: encode JSON: %w", err)

@@ -111,7 +111,9 @@ request handling.
 ## Input Encoding
 
 Exact `string` and `[]byte` values use their raw bytes. Other values, including
-defined string or slice types, are JSON-encoded before hashing or checking.
+defined string or slice types, are JSON-encoded before hashing or checking,
+with map keys in sorted order so equal maps produce the same input. A type with
+its own `MarshalJSON` method must keep its output stable.
 Use the same encoding on both paths; explicitly convert a defined password type
 to `string` if raw password bytes are intended. `HashRaw` and `CheckRaw` accept
 bytes directly.

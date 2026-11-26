@@ -6,7 +6,9 @@
 // within one existing logical secret, Update and Delete on missing secrets,
 // copy semantics and cancellation. Drivers move bytes only, so the payload
 // scenarios write UTF-8 text, a JSON object and arbitrary binary bytes and
-// expect each to read back exactly. Version checks read the first payload after
+// expect each to read back exactly. The JSON object is compact, sorted at every
+// nesting level, large enough that unsorted re-encoding cannot reproduce it by
+// chance, and read repeatedly. Version checks read the first payload after
 // a later Put and after Update, before deletion. Passing verifies these shared
 // behaviors, not identical provider retention, name availability, or resource
 // identities.

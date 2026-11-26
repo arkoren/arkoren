@@ -885,6 +885,15 @@ in attributes (`arkoren.<component>.<field>`).
 - JSON is `encoding/json/v2`. Prefer `cmp.Or`, type switches, `maps.Clone`,
   `slices.Clone`, `strings.CutPrefix`, `strings.SplitSeq` over hand-written loops
   and single-use helpers. Guard clauses, no `else` after `return`.
+- json/v2 writes map members in random order. Pass `json.Deterministic(true)`
+  whenever the bytes matter beyond one decode: returned as a documented payload,
+  compared, hashed, signed, used as a key, cursor, ETag or deduplication input,
+  re-encoded under replay, or written to exported or golden output. That
+  includes `any` and generic values (they may hold maps) and raw JSON embedded
+  in a deterministic document, which the outer option does not reorder. A
+  `MarshalJSON` method that calls `json.Marshal` drops the caller's option;
+  prefer `MarshalJSONTo`. Test with several keys over repeated encodings: one
+  run, or a few keys, can pass by chance.
 - CLI output follows the shapes in [CLI output shapes](#cli-output-shapes).
 - Value types holding maps or slices return modified copies; copy caller-owned
   input before keeping it and internal state before returning it.

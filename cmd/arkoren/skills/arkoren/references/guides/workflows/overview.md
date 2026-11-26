@@ -130,7 +130,9 @@ signal name, so declare signals at startup too.
 
 The registry snapshots definitions and policies, not the services captured by
 their functions. Client and worker must agree on names, payload types, and codec.
-Custom codecs must produce valid JSON and support concurrent use. Set them on
+Custom codecs must produce valid JSON and support concurrent use. Replayed
+orchestration encodes inputs again, so a codec should return the same bytes for
+equal values; the default codec sorts map keys. Set codecs on
 both `RegistryBuilder.Codec` and `ClientBuilder.Codec`; configuring one role does
 not configure the other.
 

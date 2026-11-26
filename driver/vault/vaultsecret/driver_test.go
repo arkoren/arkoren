@@ -168,6 +168,35 @@ func TestClientGetReturnsJSONData(t *testing.T) {
 	}
 }
 
+// TestClientGetReturnsSortedJSON pins the documented compact, key-sorted
+// encoding of native KV data at every nesting level. Go randomizes map
+// iteration, so the data carries many keys and is read repeatedly: an encoder
+// that does not sort cannot pass by chance.
+func TestClientGetReturnsSortedJSON(t *testing.T) {
+	t.Parallel()
+
+	client := vaultsecret.NewFrom(vaultClient{
+		secret: &api.KVSecret{
+			Data: map[string]any{
+				"h": "8", "g": "7", "f": "6", "e": "5", "d": "4", "c": "3", "b": "2",
+				"a": map[string]any{
+					"z": 1, "y": true, "x": nil, "w": "w", "v": "v", "u": "u",
+					"t": []any{map[string]any{"s": "s", "r": "r", "q": "q", "p": "p", "o": "o", "n": "n"}},
+				},
+			},
+		},
+	})
+
+	want := `{"a":{"t":[{"n":"n","o":"o","p":"p","q":"q","r":"r","s":"s"}],"u":"u","v":"v","w":"w","x":null,"y":true,"z":1},` +
+		`"b":"2","c":"3","d":"4","e":"5","f":"6","g":"7","h":"8"}`
+
+	for range 20 {
+		contents := getVaultSecret(t, client, t.Context(), "api/config")
+
+		assertVaultData(t, contents.Data, []byte(want))
+	}
+}
+
 // TestClientGetMapsNilSecret verifies that Get maps a nil Vault secret.
 func TestClientGetMapsNilSecret(t *testing.T) {
 	t.Parallel()
