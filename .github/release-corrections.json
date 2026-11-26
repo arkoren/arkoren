@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "corrections": [
+    {
+      "tag": "ark/iam/v0.6.1",
+      "body_sha256": "6e3f0071c4c579cae4c481f21cb91f9acf00bbdfd2f1e5c98aba480fbe8a0db2",
+      "reason": "Raw-HTML placeholders such as <name> wrapped in code spans so the website importer accepts the notes (edited 2026-11-25)."
+    },
+    {
+      "tag": "cmd/arkoren/v0.30.0",
+      "body_sha256": "65786f4c05fafd526e3bac7ddf3b12faed44214cd51b6a3c42396143dbc73ae4",
+      "reason": "Raw-HTML placeholders such as <name> wrapped in code spans so the website importer accepts the notes (edited 2026-11-25)."
+    },
+    {
+      "tag": "cmd/arkoren/v0.36.0",
+      "body_sha256": "1175583bc0583db7ed73b4f48872012fdf08ba5f7c11dc8c78c9bd6de6905929",
+      "reason": "Raw-HTML placeholders such as <name> wrapped in code spans so the website importer accepts the notes (edited 2026-11-25)."
+    },
+    {
+      "tag": "cmd/arkoren/v0.37.1",
+      "body_sha256": "6dfa1324fdb2f6884fb0f582ced826b09342995683176900fb495f64c9fef065",
+      "reason": "Raw-HTML placeholders such as <name> wrapped in code spans so the website importer accepts the notes (edited 2026-11-25)."
+    },
+    {
+      "tag": "core/v0.22.0",
+      "body_sha256": "749cbc844ce8e9de83fe9d4b6957d1e5a57cfb9d923f36e31951881f6c61133d",
+      "reason": "Raw-HTML placeholders such as <name> wrapped in code spans so the website importer accepts the notes (edited 2026-11-25)."
+    },
+    {
+      "tag": "core/v0.22.1",
+      "body_sha256": "91f1047d8282dce2bd211906230689449eece626e532f0d971bce984d1e039a5",
+      "reason": "Raw-HTML placeholders such as <name> wrapped in code spans so the website importer accepts the notes (edited 2026-11-25)."
+    }
+  ]
+}

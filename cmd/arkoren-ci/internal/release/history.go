@@ -131,7 +131,7 @@ func prepareEntry(ctx context.Context, root, sha string, module repository.Modul
 	if baseline == nil || next != baseline.version {
 		entry.NextVersion = &next
 		entry.SkipReason = nil
-		if parser.schema == 3 {
+		if parser.schema >= 3 {
 			contextJSON, err = titledContext(contextJSON, Title(module.Directory, next))
 			if err != nil {
 				return Entry{}, err
@@ -141,6 +141,9 @@ func prepareEntry(ctx context.Context, root, sha string, module repository.Modul
 
 		if err != nil {
 			return Entry{}, err
+		}
+		if parser.schema >= 4 {
+			entry.Notes = EscapeHTML(entry.Notes)
 		}
 	}
 

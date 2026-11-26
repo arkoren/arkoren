@@ -969,6 +969,13 @@ category and brand spellings; changing those spellings for existing modules
 requires a new rendering schema. git-cliff still owns note generation and version
 selection; the planner supplies the display title as native context metadata.
 Keep `DRY RUN` in the preview summary, outside canonical notes.
+Plan schema 4 is schema 3 plus `release.EscapeHTML` on notes: the website importer
+rejects raw HTML, so unquoted placeholders such as `/<name>` from commit bodies are
+escaped outside code spans (which may wrap onto continuation lines, never across
+blocks) and fences; it errs toward escaping (indented lines too) and escapes
+autolinks other than HTTP(S)/mailto. Schemas 1-3 stay byte-frozen for recovery;
+schema 4 freezes when its first batch is signed, so later output changes need a
+new schema.
 Schema 2 retains tag-shaped neutral headings through frozen `neutral.toml`;
 schema 1 retains frozen `historical.toml`, including its preview label.
 Recovery selects both note rendering and GitHub release titles from the recorded
@@ -1020,7 +1027,18 @@ recreating, so a same-SHA rerun resumes. A complete release
 set is the durable completion checkpoint: every public build passed before any
 release in that batch was created. Missing releases resume from signed annotations
 even when the current planner sees nothing unreleased. Existing differing
-notes/flags stop instead of being overwritten. A public verification failure
+notes/flags stop instead of being overwritten: prepare checks every existing
+release of every signed batch, completed or not, and reports all conflicts with
+tag, field and remedy. A plain edit of a release body therefore blocks all later
+publication. The only accepted body drift is a reviewed
+`.github/release-corrections.json` entry (schema 1: tag, `body_sha256` of the exact
+API body, reason), read from the executing main checkout; created releases always
+carry the signed notes, and an entry naming no published signed release is an
+error. Pin first, then `gh release edit TAG --notes-file FILE` with those exact
+bytes, so no blocking window opens. `release notes audit` runs the same check
+read-only before the notes import (full-history checkout), surfacing an edit on
+its `release.edited` event. The website importer names the failing release and
+this remedy; never tell maintainers to edit release bodies directly. A public verification failure
 preserves versions and retries those same versions; it is not a new bump.
 
 Version-tag immutability remains non-bypassable in ruleset `26273278` (update,

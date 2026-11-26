@@ -15,6 +15,21 @@ import (
 // binary is a payload that is neither UTF-8 nor JSON.
 var binary = []byte{0, 1, 0xff, '\n', 0x80}
 
+// document is the JSON object payload of the round-trip scenarios. It is
+// compact with keys sorted at every nesting level, so it is also the exact form
+// a [WithJSONObjectValues] backend returns. It carries many keys, nested
+// objects and an array of objects so that a driver which rebuilds the object
+// from a Go map without sorting cannot return these bytes by chance. Values
+// avoid numbers and characters that JSON encoders spell differently.
+const document = `{"a":"1","b":"2","c":"3","d":"4","e":"5","f":"6",` +
+	`"nested":{"deeper":{"k":"k","l":"l","m":"m","n":"n","o":"o","p":"p"},"u":"u","v":"v","w":"w","x":"x","y":"y","z":"z"},` +
+	`"password":"p","replicas":[{"g":"g","h":"h","i":"i","j":"j","q":"q","r":"r"}],"user":"u"}`
+
+// documentReads is how often a scenario reads [document] back. Go randomizes
+// map iteration on every pass, so each read is another chance to catch an
+// unstable encoding.
+const documentReads = 5
+
 // defaultMissingVersion is a version no driver has issued, in the numeric form
 // used by memory, Vault and Google Secret Manager.
 const defaultMissingVersion = "999999"
@@ -333,7 +348,8 @@ func creating(t *testing.T, s suite) {
 
 // payloads covers what a driver may carry: UTF-8 text, a JSON object and, unless
 // the backend is text-only, arbitrary bytes. Drivers move bytes only, so each
-// payload must read back exactly as written, including a trailing newline.
+// payload must read back exactly as written, including a trailing newline. The
+// JSON object, [document], must read back identically every time.
 func payloads(t *testing.T, s suite) {
 	if !s.config.jsonObject {
 		s.sub(t, "TextRoundTrip", func(t *testing.T, e env) {
@@ -345,10 +361,12 @@ func payloads(t *testing.T, s suite) {
 	}
 
 	s.sub(t, "JSONRoundTrip", func(t *testing.T, e env) {
-		want := []byte(`{"password":"p","user":"u"}`)
+		want := []byte(document)
 		write(t, e, want)
 
-		wantData(t, "Get", current(t, e), want)
+		for range documentReads {
+			wantData(t, "Get", current(t, e), want)
+		}
 	})
 
 	if s.config.text {
@@ -593,10 +611,12 @@ func readOnly(t *testing.T, s suite) {
 	t.Run("ReadsSeededJSON", func(t *testing.T) {
 		t.Parallel()
 
-		want := []byte(`{"password":"p","user":"u"}`)
+		want := []byte(document)
 		driver, reference := seeded(t, want)
 
-		wantData(t, "Get", read(t, driver, reference), want)
+		for range documentReads {
+			wantData(t, "Get", read(t, driver, reference), want)
+		}
 	})
 
 	if !s.config.text {

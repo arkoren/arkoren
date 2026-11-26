@@ -38,7 +38,7 @@ type Batch struct {
 
 // NewBatch computes the signed-v1 plan digest without changing its wire shape.
 func NewBatch(plan release.Plan) (Batch, error) {
-	if plan.SchemaVersion != 1 && plan.SchemaVersion != 2 && plan.SchemaVersion != 3 {
+	if plan.SchemaVersion < 1 || plan.SchemaVersion > 4 {
 		return Batch{}, fmt.Errorf("unsupported release plan schema: %d", plan.SchemaVersion)
 	}
 	for _, entry := range plan.Modules {
@@ -250,8 +250,11 @@ func Recorded(ctx context.Context, root, trust string) ([]Batch, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := approvedAtSHA(ctx, root, batch.Plan); err != nil {
-			return nil, err
+		// Tags of one batch share its plan: check that plan's inventory once.
+		if _, seen := batches[batch.Digest]; !seen {
+			if err := approvedAtSHA(ctx, root, batch.Plan); err != nil {
+				return nil, err
+			}
 		}
 		batches[batch.Digest], members[name] = batch, batch.Digest
 	}

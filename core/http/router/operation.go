@@ -345,7 +345,8 @@ func (operation *OperationBuilder) Security(name string, scopes ...string) *Oper
 }
 
 // Example adds a named request-body example for an existing representation.
-// The JSON encoding is captured immediately; encoding failures are sticky.
+// The JSON encoding is captured immediately, with sorted map keys so exported
+// documents stay byte-stable; encoding failures are sticky.
 // Examples are descriptive and are not validated against schemas.
 //
 // Example:
@@ -362,7 +363,7 @@ func (operation *OperationBuilder) Example(media, name string, value any) *Opera
 		return operation
 	}
 
-	data, err := json.Marshal(value)
+	data, err := json.Marshal(value, json.Deterministic(true))
 	operation.fail(err)
 
 	examples, ok := representation["examples"].(map[string]any)

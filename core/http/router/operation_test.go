@@ -409,3 +409,29 @@ func TestOpenAPISecurityRequiresExplicitSchemes(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 }
+
+// TestOpenAPIExampleSortsMapKeys keeps exported documents byte-stable between
+// builds and processes: examples are captured as raw JSON, which the sorted
+// document export does not reorder. Each round declares a fresh route.
+func TestOpenAPIExampleSortsMapKeys(t *testing.T) {
+	t.Parallel()
+
+	example := map[string]string{"f": "6", "e": "5", "d": "4", "c": "3", "b": "2", "a": "1"}
+
+	for range 20 {
+		routes := router.New()
+		routes.Post("/users", metadataHandler, func(operation *router.OperationBuilder) {
+			operation.JSONBody(router.RawSchema(`true`)).Example("application/json", "user", example)
+		})
+
+		data, err := routes.OpenAPI("Users", "1")
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !bytes.Contains(data, []byte(`{"a":"1","b":"2","c":"3","d":"4","e":"5","f":"6"}`)) {
+			t.Fatalf("example keys are not sorted: %s", data)
+		}
+	}
+}
