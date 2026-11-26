@@ -275,24 +275,29 @@ test("robots permits public crawlers and advertises the generated sitemap", () =
   assert.ok(existsSync(resolve(dist, new URL(sitemap).pathname.slice(1))));
 });
 
-test("documentation breadcrumbs match the visible navigation and resolve to real anchors", (t) => {
-  const window = new Window();
-  t.after(() => window.close());
+test("documentation breadcrumbs match the visible navigation and resolve to real anchors", async () => {
   for (const { file, html } of contentPages().filter(
     ({ file }) => file === "docs.html" || file.startsWith("docs/"),
   )) {
     const items = required(
       graph(html).find((node) => node["@type"] === "BreadcrumbList"),
     ).itemListElement;
-    window.document.body.innerHTML = html;
-    const nav = required(window.document.querySelector('nav[aria-label="Breadcrumb"]'));
-    const labels = [...nav.querySelectorAll("li")].map((item) => required(item.textContent));
-    assert.deepEqual(
-      labels,
-      items.map((item) => item.name),
-      file,
-    );
-    assert.equal(nav.querySelectorAll('[aria-current="page"]').length, 1, file);
+    // One Window per page: happy-dom caches every selector result on the
+    // document, so a reused Window keeps all earlier pages in memory.
+    const window = new Window();
+    try {
+      window.document.body.innerHTML = html;
+      const nav = required(window.document.querySelector('nav[aria-label="Breadcrumb"]'));
+      const labels = [...nav.querySelectorAll("li")].map((item) => required(item.textContent));
+      assert.deepEqual(
+        labels,
+        items.map((item) => item.name),
+        file,
+      );
+      assert.equal(nav.querySelectorAll('[aria-current="page"]').length, 1, file);
+    } finally {
+      await window.happyDOM.close();
+    }
     for (const item of items) {
       const url = new URL(item.item);
       const target = readFileSync(htmlFile(url), "utf8");

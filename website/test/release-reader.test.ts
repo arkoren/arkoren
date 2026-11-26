@@ -142,11 +142,15 @@ test("each verified record has one linked canonical detail, exact command and sa
     assert.ok(sitemap.includes("https://arkoren.dev/changelog<"));
     for (const entry of entries) {
       const links = releaseLinks(entry.data);
-      window.document.documentElement.innerHTML = readFileSync(
+      // One Window per release: happy-dom caches every selector result on the
+      // document, so a reused Window keeps all earlier pages in memory, and
+      // the release history only grows.
+      const detail = new Window();
+      detail.document.documentElement.innerHTML = readFileSync(
         new URL(`${links.route.slice(1)}.html`, root),
         "utf8",
       );
-      const document = window.document;
+      const document = detail.document;
       assert.equal(
         required(document.querySelector('link[rel="canonical"]')).getAttribute("href"),
         `https://arkoren.dev${links.route}`,
@@ -186,6 +190,7 @@ test("each verified record has one linked canonical detail, exact command and sa
           document.querySelector('script[type="application/ld+json"]'),
         ).textContent.includes("BlogPosting"),
       );
+      detail.happyDOM.abort();
     }
   } finally {
     window.happyDOM.abort();

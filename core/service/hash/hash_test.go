@@ -239,3 +239,25 @@ func TestTypedHashKeepsByteSliceValue(t *testing.T) {
 		t.Fatalf("password = %q, hashed = %q", password, hashed)
 	}
 }
+
+// TestHashMapEncodesSortedKeys protects password-style verification of values
+// holding maps: Check must hand the driver the same bytes Hash did, or an equal
+// value mismatches at random. Repetition defeats Go's randomized map iteration.
+func TestHashMapEncodesSortedKeys(t *testing.T) {
+	t.Parallel()
+
+	hasher := hash.New(identity{})
+	value := map[string]int{"f": 6, "e": 5, "d": 4, "c": 3, "b": 2, "a": 1}
+
+	for range 20 {
+		stored, err := hasher.Hash(value)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if want := `{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6}`; string(stored) != want {
+			t.Fatalf("hashed bytes = %s, want %s", stored, want)
+		}
+	}
+}

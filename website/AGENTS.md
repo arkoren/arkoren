@@ -32,6 +32,13 @@ checks with pixel snapshots or class-name assertions. Keep browser coverage to
 representative journeys; add a case for a distinct failure, not each cosmetic
 variation. Fixture builds must isolate output and caches from the working site.
 
+Tests that walk built pages use one happy-dom `Window` per page and close it.
+happy-dom caches every selector result on the document, so a reused Window keeps
+every earlier page in memory, even after `innerHTML` is replaced. The
+`node --test` scripts in `package.json` cap the heap at 1024 MB, well above their
+needs and far below what such a leak reaches: on "heap out of memory", fix the
+retention instead of raising the cap.
+
 Run `npm run fmt`, `npm run check`, `npm run build`, and `npm test` before delivery. Browser
 setup and focused commands are in README.md. Report checks not run as unverified;
 do not weaken an assertion merely to make a broken user journey pass.

@@ -80,9 +80,7 @@ test("documentation pages have one title and matching mobile and desktop content
 });
 
 /** A missing or malformed comparison must not publish as an unrecognized prose table. */
-test("every service drivers page publishes an accessible compatibility matrix", (t) => {
-  const window = new Window();
-  t.after(() => window.close());
+test("every service drivers page publishes an accessible compatibility matrix", async () => {
   const guides = resolve(references, "guides");
   const sources = readdirSync(guides, { recursive: true, encoding: "utf8" }).filter((name) => {
     if (!name.endsWith(".md") || name === "core-concepts/facades-and-drivers.md") return false;
@@ -93,6 +91,9 @@ test("every service drivers page publishes an accessible compatibility matrix", 
   });
   assert.ok(sources.length > 0);
   for (const source of sources) {
+    // One Window per page: happy-dom caches every selector result on the
+    // document, so a reused Window keeps all earlier pages in memory.
+    const window = new Window();
     window.document.body.innerHTML = readFileSync(
       resolve(dist, "docs/guides", source.replace(/\.md$/, ".html")),
       "utf8",
@@ -147,6 +148,7 @@ test("every service drivers page publishes an accessible compatibility matrix", 
         }
       }
     }
+    await window.happyDOM.close();
   }
 });
 

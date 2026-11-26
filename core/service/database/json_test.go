@@ -180,3 +180,24 @@ func TestJSONZeroPointerUsesJSONNull(t *testing.T) {
 		t.Fatalf("Value = %v, %v; want null string", value, err)
 	}
 }
+
+// TestJSONValueSortsMapKeys pins that equal values produce equal column text, so
+// a query comparing a stored document with an encoded argument can match.
+// Repetition defeats Go's randomized map iteration order.
+func TestJSONValueSortsMapKeys(t *testing.T) {
+	t.Parallel()
+
+	value := database.JSON[map[string]int]{V: map[string]int{"f": 6, "e": 5, "d": 4, "c": 3, "b": 2, "a": 1}}
+
+	for range 20 {
+		got, err := value.Value()
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if want := `{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6}`; got != want {
+			t.Fatalf("Value() = %v, want %s", got, want)
+		}
+	}
+}

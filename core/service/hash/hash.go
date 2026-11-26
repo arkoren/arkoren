@@ -181,7 +181,9 @@ func (hasher *Hasher) DriverAs[T any]() (T, bool) {
 // Hash hashes value. Exact string and []byte values use their raw bytes, so
 // Hash("secret") and HashRaw([]byte("secret")) use the same password bytes,
 // although fresh salts make their stored hashes different. Other types,
-// including named string or slice types, are JSON-encoded first. Check with
+// including named string or slice types, are JSON-encoded first, with map keys
+// sorted so equal values encode to equal bytes (a type with its own MarshalJSON
+// method must keep its output stable itself). Check with
 // the same encoding or explicitly convert a named value to string or []byte
 // when raw-byte behavior is intended. bcrypt drivers reject inputs over 72
 // encoded bytes. Hash zeroes its own encoded copy after hashing, never value.
@@ -306,7 +308,8 @@ func (hasher *Hasher) NeedsRehash(valueHash []byte) (needed bool) {
 }
 
 // encode uses raw bytes only for exact string and []byte dynamic types;
-// named string/slice types and other values use JSON. The successful result
+// named string/slice types and other values use JSON with sorted map keys,
+// because Check must reproduce Hash's bytes. The successful result
 // is caller-owned storage that can be cleared without touching value; a nil
 // []byte input remains nil. JSON encoding errors propagate to Hash or Check
 // before the driver is called.
@@ -317,6 +320,6 @@ func encode[T any](value T) ([]byte, error) {
 	case []byte:
 		return bytes.Clone(typed), nil
 	default:
-		return json.Marshal(value)
+		return json.Marshal(value, json.Deterministic(true))
 	}
 }
