@@ -401,7 +401,7 @@ test("unsafe content in a later publication cannot partially update earlier note
           ],
         ]),
       }),
-    /raw HTML/,
+    /^Error: core\/v0\.2\.4: release Markdown contains raw HTML; .*release\.EscapeHTML.*\.github\/release-corrections\.json before editing it$/,
   );
   assert.deepEqual(readFileSync(join(root, "core/v0.2.3.md")), before);
 });

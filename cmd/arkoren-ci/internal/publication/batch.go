@@ -250,8 +250,11 @@ func Recorded(ctx context.Context, root, trust string) ([]Batch, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := approvedAtSHA(ctx, root, batch.Plan); err != nil {
-			return nil, err
+		// Tags of one batch share its plan: check that plan's inventory once.
+		if _, seen := batches[batch.Digest]; !seen {
+			if err := approvedAtSHA(ctx, root, batch.Plan); err != nil {
+				return nil, err
+			}
 		}
 		batches[batch.Digest], members[name] = batch, batch.Digest
 	}

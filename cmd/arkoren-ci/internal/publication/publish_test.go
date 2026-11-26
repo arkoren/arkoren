@@ -224,7 +224,7 @@ func TestCreatedReleaseConflictFailsAtBound(t *testing.T) {
 		fake := &releaseFake{t: t, entry: entry, body: "foreign"}
 		start := time.Now()
 		err := PublishReleases(context.Background(), fake.client(), batch)
-		if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		if err == nil || !strings.Contains(err.Error(), "created release core/v0.1.1: body differs") {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if elapsed := time.Since(start); elapsed != 223*time.Second || fake.creates != 1 {
@@ -289,7 +289,7 @@ func TestReadableReleaseRejectsLegacyTitle(t *testing.T) {
 	version := "v0.1.1"
 	entry := release.Entry{Directory: "core", NextVersion: &version, Notes: "\n## Core v0.1.1\n"}
 	item := Release{Tag: "core/v0.1.1", Name: "core/v0.1.1", Body: entry.Notes, Prerelease: true}
-	if err := item.Check(entry, 3); err == nil {
+	if err := item.Check(entry, 3, ""); err == nil {
 		t.Fatal("raw tag title adopted for a readable batch")
 	}
 }

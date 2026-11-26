@@ -22,7 +22,7 @@ const usage = `Usage: arkoren-ci inventory [--repo DIRECTORY] [--commit FULL_SHA
        arkoren-ci release plan --sha FULL_SHA --output DIRECTORY [--repo ROOT] [--evidence FILE] [--initial-module ROOT] [--historical-v1]
        arkoren-ci release evidence --output FILE [--repo ROOT]
         arkoren-ci release tool
-        arkoren-ci release notes prepare|inspect|verify|publish [--manifest FILE] [--output FILE] [--repo ROOT]
+        arkoren-ci release notes prepare|audit|inspect|verify|publish [--manifest FILE] [--output FILE] [--repo ROOT]
         arkoren-ci release publish prepare|preflight|tags|verify|releases [--manifest FILE] [--output FILE] [--verification FILE] [--repo ROOT]
         arkoren-ci release policy check [--locked] [--output FILE] [--repo ROOT]
         arkoren-ci release policy activate --output NEW_DIRECTORY [--repo ROOT]

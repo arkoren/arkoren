@@ -28,7 +28,8 @@ type Release struct {
 	// Tag is the module-prefixed version; Name follows the recorded plan schema.
 	Tag  string `json:"tag_name"`
 	Name string `json:"name"`
-	// Body must equal the exact original git-cliff notes.
+	// Body must equal the exact original git-cliff notes signed in the tag, or
+	// the exact body a reviewed [Correction] pins for this tag.
 	Body string `json:"body"`
 	// Draft must remain false and Prerelease true.
 	Draft      bool `json:"draft"`
@@ -37,13 +38,51 @@ type Release struct {
 	Assets []any `json:"assets"`
 }
 
-// Check refuses conflicting existing releases; it never edits or adopts them.
-func (item Release) Check(entry release.Entry, schema int) error {
-	if item.Tag != TagName(entry) || item.Name != ReleaseName(entry, schema) || item.Body != entry.Notes || item.Draft || !item.Prerelease || len(item.Assets) != 0 {
-		return fmt.Errorf("existing release conflicts with immutable approved plan; never overwrite")
+// overwrite is the remedy shared by every release conflict: the publisher reads
+// existing releases and never edits, deletes or adopts them.
+const overwrite = "published releases are never overwritten"
+
+// Check compares an existing release with its signed plan entry and schema and
+// returns an error naming the tag, the first differing field and the remedy.
+// It never edits or adopts the release.
+//
+// corrected is the reviewed body digest pinned for this tag in
+// [CorrectionsFile], or empty. When set, the body may equal either the signed
+// notes or exactly the body with that SHA-256 (see [BodyDigest]); every other
+// field must still match. Pass empty for a release this run just created, which
+// must carry the signed notes.
+//
+// Example:
+//
+//	if err := item.Check(entry, batch.Plan.SchemaVersion, corrected[TagName(entry)]); err != nil {
+//		return err // "release core/v0.1.1: body differs ..."
+//	}
+func (item Release) Check(entry release.Entry, schema int, corrected string) error {
+	tag := TagName(entry)
+	name := ReleaseName(entry, schema)
+	switch {
+	case item.Tag != tag:
+		return fmt.Errorf("release %s: tag_name is %q; %s", tag, item.Tag, overwrite)
+	case item.Name != name:
+		return fmt.Errorf("release %s: name %q differs from signed plan title %q; %s: restore the title on GitHub", tag, item.Name, name, overwrite)
+	case item.Draft || !item.Prerelease:
+		return fmt.Errorf("release %s: draft=%t prerelease=%t, signed plan requires draft=false prerelease=true; %s: restore the flags on GitHub", tag, item.Draft, item.Prerelease, overwrite)
+	case len(item.Assets) != 0:
+		return fmt.Errorf("release %s: has %d assets, module releases have none; %s: remove the assets on GitHub", tag, len(item.Assets), overwrite)
+	case item.Body == entry.Notes:
+		return nil
+	}
+	published := BodyDigest(item.Body)
+	if published == corrected {
+		return nil
+	}
+	pinned := ""
+	if corrected != "" {
+		pinned = fmt.Sprintf(", pinned correction sha256 %s", corrected)
 	}
 
-	return nil
+	return fmt.Errorf("release %s: body differs from the notes in its signed tag (signed sha256 %s, published sha256 %s%s); %s: restore the signed notes on GitHub, or review the edit and pin the published sha256 for %s in %s",
+		tag, BodyDigest(entry.Notes), published, pinned, overwrite, tag, CorrectionsFile)
 }
 
 // errDuplicateRelease reports a listing that contains one tag twice, which
@@ -211,6 +250,9 @@ func Validate(ctx context.Context, root, trust, main string, batch Batch) error 
 }
 
 // Prepare discovers pending signed batches and new genuine proposals read-only.
+// Before selecting batches it requires every existing release of every signed batch
+// to match its plan, apart from bodies pinned in [CorrectionsFile] (see [Drift]),
+// and reports all such conflicts in one error.
 func Prepare(ctx context.Context, client github.Client, trust, sha string) (Manifest, error) {
 	main, err := mainSHA(ctx, client)
 	if err != nil {
@@ -231,6 +273,15 @@ func Prepare(ctx context.Context, client github.Client, trust, sha string) (Mani
 	if err != nil {
 		return Manifest{}, err
 	}
+	corrected, err := Corrections(client.Root)
+	if err != nil {
+		return Manifest{}, err
+	}
+	// Every existing release of every signed batch is checked, completed or not:
+	// an unreviewed edit blocks publication until it is restored or pinned.
+	if err := Drift(history, known, corrected); err != nil {
+		return Manifest{}, err
+	}
 	manifest := Manifest{Candidate: sha, Batches: []Batch{}}
 	for _, batch := range history {
 		if sha != main && batch.Plan.SHA != sha {
@@ -242,14 +293,8 @@ func Prepare(ctx context.Context, client github.Client, trust, sha string) (Mani
 			if err != nil {
 				return Manifest{}, err
 			}
-			if present == "" {
+			if _, ok := known[TagName(entry)]; present == "" || !ok {
 				missing = true
-			}
-			item, ok := known[TagName(entry)]
-			if !ok {
-				missing = true
-			} else if err := item.Check(entry, batch.Plan.SchemaVersion); err != nil {
-				return Manifest{}, err
 			}
 		}
 		if missing || batch.Plan.SHA == sha {
@@ -341,9 +386,14 @@ func ValidateManifest(ctx context.Context, client github.Client, trust string, m
 // re-read with bounded backoff (see [confirmation], about 3m43s) until each
 // matches the plan. Confirmation is read-only: exhaustion fails without
 // recreating, editing or deleting anything, and a rerun of the same SHA finds
-// the releases and resumes idempotently.
+// the releases and resumes idempotently. An existing release may carry a body
+// pinned in [CorrectionsFile] under client.Root; a created one never may.
 func PublishReleases(ctx context.Context, client github.Client, batch Batch) error {
 	existing, err := releases(ctx, client)
+	if err != nil {
+		return err
+	}
+	corrected, err := Corrections(client.Root)
 	if err != nil {
 		return err
 	}
@@ -351,8 +401,8 @@ func PublishReleases(ctx context.Context, client github.Client, batch Batch) err
 	for _, entry := range batch.Proposals() {
 		name := TagName(entry)
 		if item, ok := existing[name]; ok {
-			if err := item.Check(entry, batch.Plan.SchemaVersion); err != nil {
-				return fmt.Errorf("%s: %w", name, err)
+			if err := item.Check(entry, batch.Plan.SchemaVersion, corrected[name]); err != nil {
+				return err
 			}
 			continue
 		}
@@ -398,8 +448,8 @@ func confirm(ctx context.Context, client github.Client, schema int, created []re
 			if !ok {
 				last = fmt.Errorf("created release %s not yet visible", name)
 				next = append(next, entry)
-			} else if err := item.Check(entry, schema); err != nil {
-				last = fmt.Errorf("created release %s: %w", name, err)
+			} else if err := item.Check(entry, schema, ""); err != nil {
+				last = fmt.Errorf("created %w", err)
 				next = append(next, entry)
 			}
 		}

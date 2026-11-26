@@ -108,11 +108,25 @@ export function normalizeReleaseBody(body: string): string {
   return body.replace(/\r\n?/g, "\n");
 }
 
-/** Reject active content using parsed Markdown nodes, not source heuristics. */
+/**
+ * A release body that fails the inert-Markdown gate. Its message is a fixed
+ * diagnostic plus, once imported, the validated release identity, never remote
+ * text, so the sync command may print it.
+ */
+export class UnsafeReleaseError extends Error {}
+
+/**
+ * Reject active content using parsed Markdown nodes, not source heuristics.
+ * Published bodies must stay equal to the notes signed in their tags, so the
+ * remedy is never a plain edit of the GitHub release (the publisher would then
+ * refuse every later publication).
+ */
 const inertReleaseMarkdown = defineMdastPlugin({
   name: "inert-release-markdown",
   html() {
-    throw new Error("release Markdown contains raw HTML; correct the GitHub body before syncing");
+    throw new UnsafeReleaseError(
+      "release Markdown contains raw HTML; fix new notes in the planner (release.EscapeHTML), and for a published release pin the corrected body's sha256 in .github/release-corrections.json before editing it",
+    );
   },
   link(node) {
     validateReleaseLink(node.url);
@@ -129,10 +143,10 @@ const inertReleaseMarkdown = defineMdastPlugin({
 function validateReleaseLink(url: string): void {
   const compact = url.replace(/[\u0000-\u0020\u007f]/g, "");
   if (/^[a-z][a-z0-9+.-]*:/i.test(compact) && !/^(https?:|mailto:)/i.test(compact)) {
-    throw new Error("release Markdown contains an unsafe URL scheme");
+    throw new UnsafeReleaseError("release Markdown contains an unsafe URL scheme");
   }
   if (compact.startsWith("//") || compact.includes("\\")) {
-    throw new Error("release Markdown contains an ambiguous URL");
+    throw new UnsafeReleaseError("release Markdown contains an ambiguous URL");
   }
 }
 
