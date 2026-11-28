@@ -54,7 +54,7 @@ jobs:
           GOWORK=off go -C cmd/arkoren-ci build -o "$RUNNER_TEMP/arkoren-ci" .
           echo "cliff=$("$RUNNER_TEMP/arkoren-ci" release tool | jq -r .git_cliff)" >> "$GITHUB_OUTPUT"
       - name: Install checksum-pinned planner
-        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c
         with:
           tool: git-cliff@${{ steps.maintenance.outputs.cliff }}
           checksum: 'true'
@@ -64,7 +64,7 @@ jobs:
         run: '"$RUNNER_TEMP/arkoren-ci" release publish prepare --output "$RUNNER_TEMP/publication.json"'
         env:
           GH_TOKEN: ${{ github.token }}
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         if: steps.prepare.outputs.changed == 'true' || inputs.preflight-only == true
         id: tag-app
         with:
@@ -103,7 +103,7 @@ jobs:
         run: '"$RUNNER_TEMP/arkoren-ci" release publish verify --manifest "$RUNNER_TEMP/publication.json" --output "$RUNNER_TEMP/public-verification.json"'
         env:
           GH_TOKEN: ${{ github.token }}
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         if: steps.prepare.outputs.changed == 'true' && inputs.preflight-only != true
         id: release-app
         with:
