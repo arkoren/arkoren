@@ -28,10 +28,10 @@
   "dependencies": {
     "@astrojs/markdown-satteri": "^0.4.10",
     "@astrojs/mdx": "^8.1.6",
-    "@astrojs/sitemap": "^3.7.5",
+    "@astrojs/sitemap": "^3.7.6",
     "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4.3.5",
-    "astro": "^7.4.12",
+    "astro": "^7.4.13",
     "satori": "^0.63.2",
     "satteri": "^0.11.7",
     "tailwindcss": "^4.3.3",
@@ -49,10 +49,10 @@
     "@playwright/test": "^1.65.1",
     "@types/three": "^0.187.0",
     "happy-dom": "^21.0.4",
-    "oxfmt": "^0.79.0",
+    "oxfmt": "^0.80.0",
     "pagefind": "^1.6.0",
     "typescript": "^6.0.3",
-    "wrangler": "^4.164.0"
+    "wrangler": "^4.168.0"
   },
   "overrides": {
     "satori": {
